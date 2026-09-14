@@ -1,6 +1,5 @@
 import re
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -86,25 +85,36 @@ class UpdateChecker(QThread):
             self.check_failed.emit(str(exc))
 
 
-def download_and_launch_installer(asset_url, asset_name):
-    """Download the installer to a temporary file, launch it, and return its path."""
-    if not asset_url:
-        raise ValueError("The update does not contain an installer download URL.")
+class InstallerDownloader(QThread):
+    finished = Signal(str)
+    failed = Signal(str)
 
-    suffix = Path(asset_name or "NekoTrack-Setup.exe").suffix or ".exe"
-    temp_path = Path(tempfile.gettempdir()) / f"NekoTrack-update{suffix}"
+    def __init__(self, asset_url, asset_name, parent=None):
+        super().__init__(parent)
+        self.asset_url = asset_url
+        self.asset_name = asset_name
 
-    with requests.get(
-        asset_url,
-        headers={"Accept": "application/octet-stream"},
-        stream=True,
-        timeout=30,
-    ) as response:
-        response.raise_for_status()
-        with temp_path.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=1024 * 256):
-                if chunk:
-                    handle.write(chunk)
+    def run(self):
+        try:
+            if not self.asset_url:
+                raise ValueError("The update does not contain an installer download URL.")
 
-    subprocess.Popen([str(temp_path)], close_fds=True)
-    return temp_path
+            suffix = Path(self.asset_name or "NekoTrack-Setup.exe").suffix or ".exe"
+            temp_path = Path(tempfile.gettempdir()) / f"NekoTrack-update{suffix}"
+
+            with requests.get(
+                self.asset_url,
+                headers={"Accept": "application/octet-stream"},
+                stream=True,
+                timeout=30,
+            ) as response:
+                response.raise_for_status()
+                with temp_path.open("wb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 256):
+                        if chunk:
+                            handle.write(chunk)
+
+            subprocess.Popen([str(temp_path)], close_fds=True)
+            self.finished.emit(str(temp_path))
+        except Exception as exc:
+            self.failed.emit(str(exc))
