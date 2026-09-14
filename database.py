@@ -61,7 +61,7 @@ def initialize_database():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS work_staff (
             work_id INTEGER NOT NULL, person_id INTEGER NOT NULL, role TEXT NOT NULL,
-            PRIMARY KEY (work_id, person_id, role), FOREIGN KEY (work_id) REFERENCES work_staff.person_id, FOREIGN KEY (person_id) REFERENCES people(id)
+            PRIMARY KEY (work_id, person_id, role), FOREIGN KEY (work_id) REFERENCES works(id), FOREIGN KEY (person_id) REFERENCES people(id)
         )
     """)
     columns = cursor.execute("PRAGMA table_info(works)").fetchall()
