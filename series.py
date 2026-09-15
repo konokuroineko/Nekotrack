@@ -63,9 +63,9 @@ def _bundle_summary(members):
         if fmt in {"TV", "TV_SHORT"}:
             logical_seasons.add(_season_group_key(member))
         elif fmt == "OVA":
-            episodes = member.get("episodes") if hasattr(member, "get") else member["episodes"]
-            # AniList can represent multiple OVAs as one OVA entry with N episodes.
-            counts["OVAs"] += max(1, int(episodes or 0))
+            # Count AniList OVA entries, not their episode totals. One OVA entry
+            # can legitimately contain multiple episodes.
+            counts["OVAs"] += 1
         elif fmt == "ONA":
             counts["ONAs"] += 1
         elif fmt == "MOVIE":
