@@ -13,7 +13,7 @@ def _series_key(title):
     value = re.sub(r"\s*[:\-–—]?\s*(the\s+)?final\s+season(?:\s+part\s+\d+)?\s*$", "", value)
     value = re.sub(r"\s*[:\-–—]?\s*(?:season|series)\s*(?:\d+|[ivx]+)(?:\s+part\s+\d+)?\s*$", "", value)
     value = re.sub(r"\s*[:\-–—]?\s*(?:part|cour)\s*\d+\s*$", "", value)
-    value = re.sub(r"\s+(?:ii|iii|iv|v|vi|2nd|3rd|4th|5th)\s*(?:season)?\s*$", "", value)
+    value = re.sub(r"\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\s*(?:season)?\s*$", "", value)
     value = re.sub(r"\s+\d+$", "", value)
     return re.sub(r"[^a-z0-9]+", " ", value).strip()
 
@@ -30,21 +30,63 @@ def _series_group_key(item):
     return _media_type(item), _series_key(title)
 
 
+def _season_group_key(item):
+    """Return a logical season identifier, treating split parts/cours as one season."""
+    title = _title_text(item).lower()
+
+    if re.search(r"\bfinal\s+season\b", title):
+        return "final"
+
+    ordinal = re.search(r"\b(\d+)(?:st|nd|rd|th)\s+season\b", title)
+    if ordinal:
+        return f"season-{int(ordinal.group(1))}"
+
+    numbered = re.search(r"\bseason\s*(\d+)\b", title)
+    if numbered:
+        return f"season-{int(numbered.group(1))}"
+
+    roman = re.search(r"\b(?:season|series)\s+(i|ii|iii|iv|v|vi)\b", title)
+    if roman:
+        values = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
+        return f"season-{values[roman.group(1)]}"
+
+    # A TV entry without a season marker is normally the first/main season.
+    return "season-1"
+
+
 def _bundle_summary(members):
     counts = defaultdict(int)
+    logical_seasons = set()
+
     for member in members:
         fmt = str(member.get("format") or "").upper() if hasattr(member, "get") else str(member["format"] or "").upper()
         if fmt in {"TV", "TV_SHORT"}:
-            counts["seasons"] += 1
-        elif fmt == "OVA": counts["OVAs"] += 1
-        elif fmt == "ONA": counts["ONAs"] += 1
-        elif fmt == "MOVIE": counts["movies"] += 1
-        elif fmt == "SPECIAL": counts["specials"] += 1
-        elif fmt == "MUSIC": counts["music"] += 1
-        elif fmt: counts[fmt.lower()] += 1
-        else: counts["entries"] += 1
+            logical_seasons.add(_season_group_key(member))
+        elif fmt == "OVA":
+            episodes = member.get("episodes") if hasattr(member, "get") else member["episodes"]
+            # AniList can represent multiple OVAs as one OVA entry with N episodes.
+            counts["OVAs"] += max(1, int(episodes or 0))
+        elif fmt == "ONA":
+            counts["ONAs"] += 1
+        elif fmt == "MOVIE":
+            counts["movies"] += 1
+        elif fmt == "SPECIAL":
+            counts["specials"] += 1
+        elif fmt == "MUSIC":
+            counts["music"] += 1
+        elif fmt:
+            counts[fmt.lower()] += 1
+        else:
+            counts["entries"] += 1
+
+    if logical_seasons:
+        counts["seasons"] = len(logical_seasons)
+
     order = ["seasons", "OVAs", "ONAs", "movies", "specials", "music"]
-    return " · ".join([f"{counts[key]} {key}" for key in order if counts[key]] + [f"{count} {key}" for key, count in counts.items() if key not in order])
+    return " · ".join(
+        [f"{counts[key]} {key}" for key in order if counts[key]]
+        + [f"{count} {key}" for key, count in counts.items() if key not in order]
+    )
 
 
 def _title_text(item):
@@ -89,6 +131,7 @@ def _discover_related(items, max_nodes=80):
                     item["format"] = details.get("format") or item.get("format")
                     item["title"] = details.get("title") or item.get("title") or {}
                     item["coverImage"] = details.get("coverImage") or item.get("coverImage") or {}
+                    item["episodes"] = details.get("episodes") or item.get("episodes")
             except Exception:
                 pass
 
@@ -174,33 +217,58 @@ def group_media_results(results):
 
 
 def _relation_data_for(ids):
-    if not ids: return []
-    placeholders = ",".join("?" for _ in ids); relation_types = ",".join(repr(value) for value in SERIES_RELATIONS); connection = get_connection()
-    rows = connection.execute(f"SELECT source_id, target_id, relation_type FROM work_relations WHERE relation_type IN ({relation_types}) AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))", [*ids, *ids]).fetchall(); connection.close(); return rows
+    if not ids:
+        return []
+    placeholders = ",".join("?" for _ in ids)
+    relation_types = ",".join(repr(value) for value in SERIES_RELATIONS)
+    connection = get_connection()
+    rows = connection.execute(
+        f"SELECT source_id, target_id, relation_type FROM work_relations WHERE relation_type IN ({relation_types}) AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
+        [*ids, *ids],
+    ).fetchall()
+    connection.close()
+    return rows
 
 
 def sync_library_relations():
     rows = list(get_all_library())
-    if len(rows) < 2: return False
-    ids = {int(row["id"]) for row in rows}; existing_rows = _relation_data_for(ids); existing = {int(row["source_id"]) for row in existing_rows} | {int(row["target_id"]) for row in existing_rows}; missing = ids - existing - _relation_sync_checked_ids; changed = False
+    if len(rows) < 2:
+        return False
+    ids = {int(row["id"]) for row in rows}
+    existing_rows = _relation_data_for(ids)
+    existing = {int(row["source_id"]) for row in existing_rows} | {int(row["target_id"]) for row in existing_rows}
+    missing = ids - existing - _relation_sync_checked_ids
+    changed = False
     for work_id in missing:
         try:
-            details = get_media_details(work_id); _relation_sync_checked_ids.add(work_id)
-            if details: save_anime(details); changed = True
-        except Exception: continue
+            details = get_media_details(work_id)
+            _relation_sync_checked_ids.add(work_id)
+            if details:
+                save_anime(details)
+                changed = True
+        except Exception:
+            continue
     return changed
 
 
 def get_library_series():
     rows = list(get_all_library())
-    if not rows: return []
-    ids = {int(row["id"]) for row in rows}; parent = {work_id: work_id for work_id in ids}
+    if not rows:
+        return []
+    ids = {int(row["id"]) for row in rows}
+    parent = {work_id: work_id for work_id in ids}
+
     def find(work_id):
-        while parent[work_id] != work_id: parent[work_id] = parent[parent[work_id]]; work_id = parent[work_id]
+        while parent[work_id] != work_id:
+            parent[work_id] = parent[parent[work_id]]
+            work_id = parent[work_id]
         return work_id
+
     def union(left, right):
         left, right = find(left), find(right)
-        if left != right: parent[right] = left
+        if left != right:
+            parent[right] = left
+
     for relation in _relation_data_for(ids):
         source_id, target_id = int(relation["source_id"]), int(relation["target_id"])
         if source_id in ids and target_id in ids:
@@ -208,6 +276,7 @@ def get_library_series():
             target = next((row for row in rows if int(row["id"]) == target_id), None)
             if source is not None and target is not None and _media_type(source) == _media_type(target):
                 union(source_id, target_id)
+
     by_key = {}
     for row in rows:
         key = _series_group_key(row)
@@ -217,10 +286,21 @@ def get_library_series():
                 union(work_id, by_key[key])
             else:
                 by_key[key] = work_id
+
     groups = defaultdict(list)
-    for row in rows: groups[find(int(row["id"]))].append(row)
+    for row in rows:
+        groups[find(int(row["id"]))].append(row)
+
     result = []
     for members in groups.values():
-        members.sort(key=lambda row: (row["start_year"] is None, row["start_year"] or 9999, row["id"])); group = dict(members[0]); statuses = {row["status"] for row in members}
-        group["status"] = "Watching" if "Watching" in statuses else "Completed" if statuses and statuses == {"Completed"} else "Planning"; group["_series_count"] = len(members); group["_series_members"] = members; group["_series_episode_total"] = sum(int(row["episodes"] or 0) for row in members); group["_series_progress"] = sum(int(row["progress_episodes"] or 0) for row in members); group["_bundle_summary"] = _bundle_summary(members); result.append(group)
+        members.sort(key=lambda row: (row["start_year"] is None, row["start_year"] or 9999, row["id"]))
+        group = dict(members[0])
+        statuses = {row["status"] for row in members}
+        group["status"] = "Watching" if "Watching" in statuses else "Completed" if statuses and statuses == {"Completed"} else "Planning"
+        group["_series_count"] = len(members)
+        group["_series_members"] = members
+        group["_series_episode_total"] = sum(int(row["episodes"] or 0) for row in members)
+        group["_series_progress"] = sum(int(row["progress_episodes"] or 0) for row in members)
+        group["_bundle_summary"] = _bundle_summary(members)
+        result.append(group)
     return result
