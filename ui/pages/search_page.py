@@ -74,7 +74,38 @@ class SearchPage(QWidget):
         type_label = QLabel("TYPE"); type_label.setObjectName("typeLabel")
         type_label.setStyleSheet(f"font-size: 10px; font-weight: 800; color: {COLORS['muted']}; letter-spacing: 1.5px; padding: 0; background: transparent; border: none;")
         type_row.addWidget(type_label, 0, Qt.AlignVCenter)
-        self.media_filter = QComboBox(); self.media_filter.addItems(["Anime", "Manga", "Novels"]); self.media_filter.setMinimumWidth(130)
+        self.media_filter = QComboBox(); self.media_filter.setObjectName("mediaFilter"); self.media_filter.addItems(["Anime", "Manga", "Novels"]); self.media_filter.setMinimumWidth(130)
+        radius = 12
+        self.media_filter.setStyleSheet(f"""
+            QComboBox#mediaFilter {{
+                background: {COLORS['surface']};
+                border: 1px solid {COLORS['border']};
+                border-radius: {radius}px;
+                color: {COLORS['primary']};
+                padding: 10px 30px 10px 12px;
+            }}
+            QComboBox#mediaFilter:hover {{
+                border-color: {COLORS['border_hover']};
+            }}
+            QComboBox#mediaFilter:focus {{
+                border-color: {COLORS['accent']};
+            }}
+            QComboBox#mediaFilter::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 26px;
+                border: none;
+                background: transparent;
+                border-top-right-radius: {radius}px;
+                border-bottom-right-radius: {radius}px;
+            }}
+            QComboBox#mediaFilter QAbstractItemView {{
+                background: {COLORS['surface']};
+                border: 1px solid {COLORS['border']};
+                color: {COLORS['primary']};
+                selection-background-color: {COLORS['surface_hover']};
+            }}
+        """)
         type_row.addWidget(self.media_filter); type_row.addStretch(); panel.addLayout(type_row); root.addWidget(search_panel)
 
         result_head = QHBoxLayout()
