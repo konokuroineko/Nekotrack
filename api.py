@@ -136,55 +136,78 @@ def _media_fields(include_details=False):
     """
 
 
-def search_anime(search, page=1, per_page=20, media_type="ANIME", media_format=None):
-    """Search AniList for anime, manga, or novel media."""
+def search_anime(
+    search,
+    page=1,
+    per_page=20,
+    media_type="ANIME",
+    media_format=None,
+    status=None,
+    season=None,
+    year=None,
+    sort=None,
+):
+    """Search AniList for anime, manga, or novel media with optional filters."""
     if media_type not in {"ANIME", "MANGA"}:
         raise ValueError("media_type must be ANIME or MANGA")
 
-    if media_type == "ANIME":
-        query = """
-        query ($search: String, $page: Int, $perPage: Int) {
-            Page(page: $page, perPage: $perPage) {
-                pageInfo {
-                    currentPage
-                    lastPage
-                    hasNextPage
-                }
-                media(search: $search, type: ANIME) {
-                    %s
-                }
+    query = """
+    query (
+        $search: String,
+        $page: Int,
+        $perPage: Int,
+        $type: MediaType,
+        $format: MediaFormat,
+        $formatFilter: [MediaFormat],
+        $status: MediaStatus,
+        $season: MediaSeason,
+        $seasonYear: Int,
+        $year: String,
+        $sort: [MediaSort]
+    ) {
+        Page(page: $page, perPage: $perPage) {
+            pageInfo {
+                currentPage
+                lastPage
+                hasNextPage
+            }
+            media(
+                search: $search,
+                type: $type,
+                format: $format,
+                format_in: $formatFilter,
+                status: $status,
+                season: $season,
+                seasonYear: $seasonYear,
+                startDate_like: $year,
+                sort: $sort
+            ) {
+                %s
             }
         }
-        """ % _media_fields(include_details=False)
-        variables = {
-            "search": search,
-            "page": page,
-            "perPage": per_page,
-        }
-    else:
-        if media_format not in {None, "MANGA", "NOVEL", "ONE_SHOT"}:
-            raise ValueError("Invalid manga media_format")
+    }
+    """ % _media_fields(include_details=False)
 
-        query = """
-        query ($search: String, $page: Int, $perPage: Int, $format: MediaFormat) {
-            Page(page: $page, perPage: $perPage) {
-                pageInfo {
-                    currentPage
-                    lastPage
-                    hasNextPage
-                }
-                media(search: $search, type: MANGA, format: $format) {
-                    %s
-                }
-            }
-        }
-        """ % _media_fields(include_details=False)
-        variables = {
-            "search": search,
-            "page": page,
-            "perPage": per_page,
-            "format": media_format,
-        }
+    if media_type == "MANGA" and media_format not in {None, "MANGA", "NOVEL", "ONE_SHOT"}:
+        raise ValueError("Invalid manga media_format")
+
+    if media_type == "ANIME" and media_format is not None:
+        if media_format not in {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC"}:
+            raise ValueError("Invalid anime media_format")
+
+    variables = {
+        "search": search,
+        "page": page,
+        "perPage": per_page,
+        "type": media_type,
+        "format": media_format,
+        "formatFilter": [format_filter] if format_filter else None,
+        "status": status,
+        "season": season,
+        "seasonYear": int(year) if season and year else None,
+        "year": str(year) if year and not season else None,
+        "sort": [sort] if sort else None,
+    }
 
     data = anilist_request(query, variables)
     return data["Page"]
