@@ -1,5 +1,5 @@
 from PySide6.QtCore import QObject, QThread, Qt, Signal
-from PySide6.QtWidgets import QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from api import search_anime
 from series import group_media_results
@@ -64,18 +64,72 @@ class SearchPage(QWidget):
 
         search_panel = QFrame()
         search_panel.setStyleSheet(f"QFrame {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 16px; }}")
-        panel = QVBoxLayout(search_panel); panel.setContentsMargins(12, 12, 12, 12); panel.setSpacing(10)
+        panel = QVBoxLayout(search_panel); panel.setContentsMargins(12, 12, 12, 12); panel.setSpacing(12)
         bar = QHBoxLayout(); bar.setSpacing(8)
         self.search = QLineEdit(); self.search.setPlaceholderText("Title, character, franchise..."); self.search.setMinimumHeight(46); self.search.setClearButtonEnabled(True)
         self.search_button = QPushButton("Search"); self.search_button.setMinimumHeight(46); self.search_button.setMinimumWidth(100)
         bar.addWidget(self.search, 1); bar.addWidget(self.search_button); panel.addLayout(bar)
 
         type_row = QHBoxLayout()
-        type_label = QLabel("TYPE"); type_label.setObjectName("typeLabel")
-        type_label.setStyleSheet(f"font-size: 10px; font-weight: 800; color: {COLORS['muted']}; letter-spacing: 1.5px; padding: 0; background: transparent; border: none;")
+        type_label = QLabel("TYPE")
+        type_label.setObjectName("typeLabel")
+        type_label.setStyleSheet(f"font-size: 10px; font-weight: 800; color: {COLORS['muted']}; letter-spacing: 1.5px; padding: 0 4px 0 2px; background: transparent; border: none;")
         type_row.addWidget(type_label, 0, Qt.AlignVCenter)
-        self.media_filter = QComboBox(); self.media_filter.addItems(["Anime", "Manga", "Novels"]); self.media_filter.setMinimumWidth(130)
-        type_row.addWidget(self.media_filter); type_row.addStretch(); panel.addLayout(type_row); root.addWidget(search_panel)
+
+        type_switch = QFrame()
+        type_switch.setObjectName("typeSwitch")
+        type_switch.setStyleSheet(f"""
+            QFrame#typeSwitch {{
+                background: {COLORS['background']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 11px;
+            }}
+            QPushButton#typeButton {{
+                background: transparent;
+                color: {COLORS['secondary']};
+                border: none;
+                border-radius: 8px;
+                padding: 8px 16px;
+                min-width: 72px;
+                min-height: 32px;
+                font-size: 12px;
+                font-weight: 700;
+            }}
+            QPushButton#typeButton:hover {{
+                background: {COLORS['surface_hover']};
+                color: {COLORS['primary']};
+            }}
+            QPushButton#typeButton:checked {{
+                background: {COLORS['accent']};
+                color: #111318;
+            }}
+            QPushButton#typeButton:checked:hover {{
+                background: {COLORS['accent_hover']};
+                color: #111318;
+            }}
+        """)
+        type_switch_layout = QHBoxLayout(type_switch)
+        type_switch_layout.setContentsMargins(4, 4, 4, 4)
+        type_switch_layout.setSpacing(2)
+
+        self.media_filter = QButtonGroup(self)
+        self.media_filter.setExclusive(True)
+        self.media_buttons = {}
+        for label in ("Anime", "Manga", "Novels"):
+            button = QPushButton(label)
+            button.setObjectName("typeButton")
+            button.setCheckable(True)
+            button.setCursor(Qt.PointingHandCursor)
+            self.media_filter.addButton(button)
+            self.media_buttons[label] = button
+            type_switch_layout.addWidget(button)
+            button.clicked.connect(lambda checked=False, value=label: self.media_filter_clicked(value))
+        self.media_buttons["Anime"].setChecked(True)
+
+        type_row.addWidget(type_switch, 0, Qt.AlignVCenter)
+        type_row.addStretch()
+        panel.addLayout(type_row)
+        root.addWidget(search_panel)
 
         result_head = QHBoxLayout()
         self.results_title = QLabel("Ready to search")
@@ -86,13 +140,16 @@ class SearchPage(QWidget):
         self.grid_container = QWidget(); self.grid_layout = QGridLayout(self.grid_container); self.grid_layout.setContentsMargins(4, 4, 4, 20); self.grid_layout.setHorizontalSpacing(22); self.grid_layout.setVerticalSpacing(30)
         self.results_scroll.setWidget(self.grid_container); self.results_scroll.scroll_to_bottom.connect(self.load_more_results); root.addWidget(self.results_scroll, 1)
 
-        self.search_button.clicked.connect(self.search_clicked); self.search.returnPressed.connect(self.search_clicked); self.media_filter.currentIndexChanged.connect(self.media_filter_changed)
+        self.search_button.clicked.connect(self.search_clicked); self.search.returnPressed.connect(self.search_clicked)
 
-    def media_filter_changed(self):
-        if self.current_search: self.search_clicked()
+    def media_filter_clicked(self, label):
+        if self.current_search and not self.is_loading:
+            self.search_clicked()
 
     def selected_media_filter(self):
-        return {"Anime": ("ANIME", None), "Manga": ("MANGA", "MANGA"), "Novels": ("MANGA", "NOVEL")}[self.media_filter.currentText()]
+        selected = self.media_filter.checkedButton()
+        label = selected.text() if selected else "Anime"
+        return {"Anime": ("ANIME", None), "Manga": ("MANGA", "MANGA"), "Novels": ("MANGA", "NOVEL")}[label]
 
     def search_clicked(self):
         text = self.search.text().strip()
