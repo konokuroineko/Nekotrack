@@ -147,6 +147,8 @@ def search_anime(
     season=None,
     year=None,
     sort=None,
+    min_score=None,
+    genre=None,
 ):
     """Search AniList for anime, manga, or novel media with optional filters."""
     if media_type not in {"ANIME", "MANGA"}:
@@ -164,7 +166,9 @@ def search_anime(
         $season: MediaSeason,
         $seasonYear: Int,
         $year: String,
-        $sort: [MediaSort]
+        $sort: [MediaSort],
+        $minScore: Int,
+        $genre: String
     ) {
         Page(page: $page, perPage: $perPage) {
             pageInfo {
@@ -181,7 +185,9 @@ def search_anime(
                 season: $season,
                 seasonYear: $seasonYear,
                 startDate_like: $year,
-                sort: $sort
+                sort: $sort,
+                averageScore_greater: $minScore,
+                genre: $genre
             ) {
                 %s
             }
@@ -199,6 +205,32 @@ def search_anime(
     if format_filter and format_filter not in {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC", "MANGA", "NOVEL", "ONE_SHOT"}:
         raise ValueError("Invalid format_filter")
 
+    if status and status not in {"FINISHED", "RELEASING", "NOT_YET_RELEASED", "CANCELLED", "HIATUS"}:
+        raise ValueError("Invalid status")
+
+    if season and season not in {"WINTER", "SPRING", "SUMMER", "FALL"}:
+        raise ValueError("Invalid season")
+
+    if sort and sort not in {
+        "SEARCH_MATCH",
+        "POPULARITY_DESC",
+        "POPULARITY",
+        "SCORE_DESC",
+        "SCORE",
+        "START_DATE_DESC",
+        "START_DATE",
+        "END_DATE_DESC",
+        "END_DATE",
+        "TITLE_ROMAJI",
+        "TITLE_ROMAJI_DESC",
+        "UPDATED_AT_DESC",
+        "ID_DESC",
+    }:
+        raise ValueError("Invalid sort")
+
+    if min_score is not None and not 0 <= int(min_score) <= 100:
+        raise ValueError("min_score must be between 0 and 100")
+
     variables = {
         "search": search,
         "page": page,
@@ -211,6 +243,8 @@ def search_anime(
         "seasonYear": int(year) if season and year else None,
         "year": str(year) if year and not season else None,
         "sort": [sort] if sort else None,
+        "minScore": int(min_score) if min_score is not None else None,
+        "genre": genre.strip() if genre else None,
     }
 
     data = anilist_request(query, variables)
