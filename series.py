@@ -20,16 +20,13 @@ def _series_key(title):
 
 def _media_type(item):
     """Return the AniList media type used to keep series bundles separate."""
-    if hasattr(item, "get"):
-        value = item.get("type")
-    else:
-        value = item["type"]
+    value = item.get("type") if hasattr(item, "get") else item["type"]
     return str(value or "UNKNOWN").upper()
 
 
 def _series_group_key(item):
-    """Group by normalized title *and* media type (ANIME/MANGA/NOVEL)."""
-    title = _title_text(item) if isinstance(item, dict) else item["title"]
+    """Group by normalized title and media type, never across media types."""
+    title = _title_text(item) if hasattr(item, "get") else item["title"]
     return _media_type(item), _series_key(title)
 
 
@@ -51,7 +48,7 @@ def _bundle_summary(members):
 
 
 def _title_text(item):
-    title = item.get("title") or {}
+    title = item.get("title") or {} if hasattr(item, "get") else item["title"] or {}
     return title.get("english") or title.get("romaji") or title.get("native") or "" if isinstance(title, dict) else str(title)
 
 
@@ -59,35 +56,94 @@ def _search_relation_edges(item):
     return (item.get("relations") or {}).get("edges", [])
 
 
-def group_media_results(results):
-    """Group search hits and directly related series entries without mixing media types."""
-    if not results: return []
-    original_ids = {int(item["id"]) for item in results}
-    members = list(results)
-    known_ids = set(original_ids)
-    for item in results:
+def _related_placeholder(node):
+    return {
+        "id": int(node["id"]),
+        "type": node.get("type"),
+        "format": node.get("format"),
+        "title": node.get("title") or {},
+        "coverImage": node.get("coverImage") or {},
+        "_related_only": True,
+    }
+
+
+def _discover_related(items, max_nodes=80):
+    """Recursively discover connected same-media series entries through AniList relations."""
+    discovered = list(items)
+    known_ids = {int(item["id"]) for item in discovered}
+    queue = list(discovered)
+    fetched_ids = set()
+
+    while queue and len(discovered) < max_nodes:
+        item = queue.pop(0)
+        item_group = _media_type(item)
+        item_id = int(item["id"])
+
+        if item_id not in fetched_ids:
+            fetched_ids.add(item_id)
+            try:
+                details = get_media_details(item_id)
+                if details:
+                    item["relations"] = details.get("relations") or {}
+                    item["type"] = details.get("type") or item.get("type")
+                    item["format"] = details.get("format") or item.get("format")
+                    item["title"] = details.get("title") or item.get("title") or {}
+                    item["coverImage"] = details.get("coverImage") or item.get("coverImage") or {}
+            except Exception:
+                pass
+
         for edge in _search_relation_edges(item):
-            if edge.get("relationType") not in SERIES_RELATIONS: continue
-            node = edge.get("node") or {}; target_id = node.get("id")
-            if not target_id or int(target_id) in known_ids: continue
-            members.append({"id": int(target_id), "type": node.get("type"), "format": node.get("format"), "title": node.get("title") or {}, "coverImage": node.get("coverImage") or {}, "_related_only": True})
-            known_ids.add(int(target_id))
-    ids = {int(item["id"]) for item in members}; parent = {item_id: item_id for item_id in ids}
+            if edge.get("relationType") not in SERIES_RELATIONS:
+                continue
+            node = edge.get("node") or {}
+            target_id = node.get("id")
+            if not target_id:
+                continue
+            target_id = int(target_id)
+            if target_id in known_ids or _media_type(node) != item_group:
+                continue
+            related = _related_placeholder(node)
+            known_ids.add(target_id)
+            discovered.append(related)
+            queue.append(related)
+
+    return discovered
+
+
+def group_media_results(results):
+    """Group search hits into separate Anime, Manga, and Novel series bundles."""
+    if not results:
+        return []
+
+    original_ids = {int(item["id"]) for item in results}
+    members = _discover_related(results)
+    ids = {int(item["id"]) for item in members}
+    parent = {item_id: item_id for item_id in ids}
+
     def find(item_id):
         while parent[item_id] != item_id:
-            parent[item_id] = parent[parent[item_id]]; item_id = parent[item_id]
+            parent[item_id] = parent[parent[item_id]]
+            item_id = parent[item_id]
         return item_id
+
     def union(left, right):
         left, right = find(left), find(right)
-        if left != right: parent[right] = left
+        if left != right:
+            parent[right] = left
+
     for item in members:
         item_id = int(item["id"])
         for edge in _search_relation_edges(item):
+            if edge.get("relationType") not in SERIES_RELATIONS:
+                continue
             target = edge.get("node") or {}
             target_id = target.get("id")
-            if edge.get("relationType") in SERIES_RELATIONS and target_id and int(target_id) in ids:
-                if _media_type(item) == _media_type(target):
-                    union(item_id, int(target_id))
+            if not target_id:
+                continue
+            target_id = int(target_id)
+            if target_id in ids and _media_type(item) == _media_type(target):
+                union(item_id, target_id)
+
     by_key = {}
     for item in members:
         key = _series_group_key(item)
@@ -97,14 +153,24 @@ def group_media_results(results):
                 union(item_id, by_key[key])
             else:
                 by_key[key] = item_id
+
     groups = defaultdict(list)
-    for item in members: groups[find(int(item["id"]))].append(item)
-    first_position = {int(item["id"]): i for i, item in enumerate(results)}; grouped = []
+    for item in members:
+        groups[find(int(item["id"]))].append(item)
+
+    first_position = {int(item["id"]): i for i, item in enumerate(results)}
+    grouped = []
     for group_members in groups.values():
         group_members.sort(key=lambda item: ((item.get("startDate") or {}).get("year") is None, (item.get("startDate") or {}).get("year") or 9999, int(item["id"])))
-        visible = [item for item in group_members if int(item["id"]) in original_ids]; representative = dict(visible[0] if visible else group_members[0])
-        representative["_series_count"] = len(group_members); representative["_series_members"] = group_members; representative["_bundle_summary"] = _bundle_summary(group_members); grouped.append((min(first_position.get(int(item["id"]), 10**9) for item in group_members), representative))
-    grouped.sort(key=lambda pair: pair[0]); return [item for _, item in grouped]
+        visible = [item for item in group_members if int(item["id"]) in original_ids]
+        representative = dict(visible[0] if visible else group_members[0])
+        representative["_series_count"] = len(group_members)
+        representative["_series_members"] = group_members
+        representative["_bundle_summary"] = _bundle_summary(group_members)
+        grouped.append((min(first_position.get(int(item["id"]), 10**9) for item in group_members), representative))
+
+    grouped.sort(key=lambda pair: pair[0])
+    return [item for _, item in grouped]
 
 
 def _relation_data_for(ids):
