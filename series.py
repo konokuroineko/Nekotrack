@@ -4,7 +4,7 @@ import re
 from api import get_media_details
 from database import get_all_library, get_connection, save_anime
 
-SERIES_RELATIONS = {"PREQUEL", "SEQUEL", "PARENT", "SIDE_STORY", "SUMMARY", "FULL_STORY"}
+SERIES_RELATIONS = {"PREQUEL", "SEQUEL", "PARENT", "SIDE_STORY", "SUMMARY", "FULL_STORY", "SPIN_OFF"}
 _relation_sync_checked_ids = set()
 
 
