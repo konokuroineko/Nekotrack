@@ -142,6 +142,7 @@ def search_anime(
     per_page=20,
     media_type="ANIME",
     media_format=None,
+    format_filter=None,
     status=None,
     season=None,
     year=None,
@@ -194,6 +195,9 @@ def search_anime(
     if media_type == "ANIME" and media_format is not None:
         if media_format not in {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC"}:
             raise ValueError("Invalid anime media_format")
+
+    if format_filter and format_filter not in {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC", "MANGA", "NOVEL", "ONE_SHOT"}:
+        raise ValueError("Invalid format_filter")
 
     variables = {
         "search": search,
