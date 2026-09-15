@@ -18,6 +18,21 @@ def _series_key(title):
     return re.sub(r"[^a-z0-9]+", " ", value).strip()
 
 
+def _media_type(item):
+    """Return the AniList media type used to keep series bundles separate."""
+    if hasattr(item, "get"):
+        value = item.get("type")
+    else:
+        value = item["type"]
+    return str(value or "UNKNOWN").upper()
+
+
+def _series_group_key(item):
+    """Group by normalized title *and* media type (ANIME/MANGA/NOVEL)."""
+    title = _title_text(item) if isinstance(item, dict) else item["title"]
+    return _media_type(item), _series_key(title)
+
+
 def _bundle_summary(members):
     counts = defaultdict(int)
     for member in members:
@@ -45,7 +60,7 @@ def _search_relation_edges(item):
 
 
 def group_media_results(results):
-    """Group search hits and directly related series entries."""
+    """Group search hits and directly related series entries without mixing media types."""
     if not results: return []
     original_ids = {int(item["id"]) for item in results}
     members = list(results)
@@ -68,13 +83,20 @@ def group_media_results(results):
     for item in members:
         item_id = int(item["id"])
         for edge in _search_relation_edges(item):
-            target_id = (edge.get("node") or {}).get("id")
-            if edge.get("relationType") in SERIES_RELATIONS and target_id and int(target_id) in ids: union(item_id, int(target_id))
-    by_title = {}
+            target = edge.get("node") or {}
+            target_id = target.get("id")
+            if edge.get("relationType") in SERIES_RELATIONS and target_id and int(target_id) in ids:
+                if _media_type(item) == _media_type(target):
+                    union(item_id, int(target_id))
+    by_key = {}
     for item in members:
-        key = _series_key(_title_text(item))
-        if key:
-            item_id = int(item["id"]); union(item_id, by_title[key]) if key in by_title else by_title.setdefault(key, item_id)
+        key = _series_group_key(item)
+        item_id = int(item["id"])
+        if key[1]:
+            if key in by_key:
+                union(item_id, by_key[key])
+            else:
+                by_key[key] = item_id
     groups = defaultdict(list)
     for item in members: groups[find(int(item["id"]))].append(item)
     first_position = {int(item["id"]): i for i, item in enumerate(results)}; grouped = []
@@ -115,11 +137,20 @@ def get_library_series():
         if left != right: parent[right] = left
     for relation in _relation_data_for(ids):
         source_id, target_id = int(relation["source_id"]), int(relation["target_id"])
-        if source_id in ids and target_id in ids: union(source_id, target_id)
-    by_title = {}
+        if source_id in ids and target_id in ids:
+            source = next((row for row in rows if int(row["id"]) == source_id), None)
+            target = next((row for row in rows if int(row["id"]) == target_id), None)
+            if source is not None and target is not None and _media_type(source) == _media_type(target):
+                union(source_id, target_id)
+    by_key = {}
     for row in rows:
-        key = _series_key(row["title"])
-        if key: union(int(row["id"]), by_title[key]) if key in by_title else by_title.setdefault(key, int(row["id"]))
+        key = _series_group_key(row)
+        if key[1]:
+            work_id = int(row["id"])
+            if key in by_key:
+                union(work_id, by_key[key])
+            else:
+                by_key[key] = work_id
     groups = defaultdict(list)
     for row in rows: groups[find(int(row["id"]))].append(row)
     result = []
