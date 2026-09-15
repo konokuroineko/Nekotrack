@@ -9,9 +9,11 @@ from ui.widgets.work_card import WorkCard
 
 class InfiniteScrollArea(QScrollArea):
     scroll_to_bottom = Signal()
+
     def __init__(self):
         super().__init__()
         self.verticalScrollBar().valueChanged.connect(self._check)
+
     def _check(self):
         bar = self.verticalScrollBar()
         if bar.value() >= bar.maximum() - 120:
@@ -21,10 +23,15 @@ class InfiniteScrollArea(QScrollArea):
 class SearchWorker(QObject):
     finished = Signal(object)
     error = Signal(str)
-    def __init__(self, search_text, page, media_type, media_format):
+
+    def __init__(self, search_text, page, media_type, media_format, filters):
         super().__init__()
-        self.search_text, self.page = search_text, page
-        self.media_type, self.media_format = media_type, media_format
+        self.search_text = search_text
+        self.page = page
+        self.media_type = media_type
+        self.media_format = media_format
+        self.filters = filters
+
     def run(self):
         try:
             self.finished.emit(search_anime(
@@ -32,6 +39,7 @@ class SearchWorker(QObject):
                 self.page,
                 media_type=self.media_type,
                 media_format=self.media_format,
+                **self.filters,
             ))
         except Exception as error:
             self.error.emit(str(error))
@@ -39,6 +47,7 @@ class SearchWorker(QObject):
 
 class SearchPage(QWidget):
     anime_selected = Signal(object)
+
     def __init__(self, add_to_library):
         super().__init__()
         self.add_to_library = add_to_library
@@ -65,16 +74,17 @@ class SearchPage(QWidget):
         search_panel = QFrame()
         search_panel.setStyleSheet(f"QFrame {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 16px; }}")
         panel = QVBoxLayout(search_panel); panel.setContentsMargins(12, 12, 12, 12); panel.setSpacing(10)
+
         bar = QHBoxLayout(); bar.setSpacing(8)
         self.search = QLineEdit(); self.search.setPlaceholderText("Title, character, franchise..."); self.search.setMinimumHeight(46); self.search.setClearButtonEnabled(True)
         self.search_button = QPushButton("Search"); self.search_button.setMinimumHeight(46); self.search_button.setMinimumWidth(100)
         bar.addWidget(self.search, 1); bar.addWidget(self.search_button); panel.addLayout(bar)
 
-        type_row = QHBoxLayout()
+        type_row = QHBoxLayout(); type_row.setSpacing(8)
         type_label = QLabel("TYPE"); type_label.setObjectName("typeLabel")
         type_label.setStyleSheet(f"font-size: 10px; font-weight: 800; color: {COLORS['muted']}; letter-spacing: 1.5px; padding: 0; background: transparent; border: none;")
         type_row.addWidget(type_label, 0, Qt.AlignVCenter)
-        self.media_filter = QComboBox(); self.media_filter.setObjectName("mediaFilter"); self.media_filter.addItems(["Anime", "Manga", "Novels"]); self.media_filter.setMinimumWidth(130)
+        self.media_filter = QComboBox(); self.media_filter.setObjectName("mediaFilter"); self.media_filter.addItems(["Anime", "Manga", "Novels"]); self.media_filter.setMinimumWidth(130); self.media_filter.setFixedHeight(40)
         radius = 12
         self.media_filter.setStyleSheet(f"""
             QComboBox#mediaFilter {{
@@ -82,14 +92,10 @@ class SearchPage(QWidget):
                 border: 1px solid {COLORS['border']};
                 border-radius: {radius}px;
                 color: {COLORS['primary']};
-                padding: 10px 30px 10px 12px;
+                padding: 6px 30px 6px 12px;
             }}
-            QComboBox#mediaFilter:hover {{
-                border-color: {COLORS['border_hover']};
-            }}
-            QComboBox#mediaFilter:focus {{
-                border-color: {COLORS['accent']};
-            }}
+            QComboBox#mediaFilter:hover {{ border-color: {COLORS['border_hover']}; }}
+            QComboBox#mediaFilter:focus {{ border-color: {COLORS['accent']}; }}
             QComboBox#mediaFilter::drop-down {{
                 subcontrol-origin: padding;
                 subcontrol-position: top right;
@@ -106,11 +112,38 @@ class SearchPage(QWidget):
                 selection-background-color: {COLORS['surface_hover']};
             }}
         """)
-        type_row.addWidget(self.media_filter); type_row.addStretch(); panel.addLayout(type_row); root.addWidget(search_panel)
+        type_row.addWidget(self.media_filter, 0, Qt.AlignVCenter)
+        self.filters_button = QPushButton("Filters")
+        self.filters_button.setFixedHeight(40); self.filters_button.setMinimumWidth(82)
+        type_row.addWidget(self.filters_button, 0, Qt.AlignVCenter)
+        type_row.addStretch(); panel.addLayout(type_row)
+
+        self.filters_panel = QFrame(); self.filters_panel.setVisible(False)
+        self.filters_panel.setStyleSheet(f"QFrame {{ background: {COLORS['background']}; border: 1px solid {COLORS['border']}; border-radius: 12px; }} QLabel {{ background: transparent; border: none; }}")
+        filters_layout = QGridLayout(self.filters_panel); filters_layout.setContentsMargins(12, 12, 12, 12); filters_layout.setHorizontalSpacing(10); filters_layout.setVerticalSpacing(5)
+
+        self.format_filter = self._make_combo(["All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music"])
+        self.status_filter = self._make_combo(["All", "Finished", "Releasing", "Not Yet Released", "Cancelled", "Hiatus"])
+        self.season_filter = self._make_combo(["All", "Winter", "Spring", "Summer", "Fall"])
+        self.year_filter = QLineEdit(); self.year_filter.setPlaceholderText("e.g. 2024"); self.year_filter.setFixedHeight(38)
+        self.min_score_filter = QComboBox(); self.min_score_filter.addItems(["Any score", "50+", "60+", "70+", "80+", "90+"]); self.min_score_filter.setFixedHeight(38)
+        self.sort_filter = self._make_combo(["Relevance", "Popularity", "Score", "Newest", "Oldest", "Title A–Z", "Title Z–A"])
+        self.genre_filter = QLineEdit(); self.genre_filter.setPlaceholderText("e.g. Action"); self.genre_filter.setFixedHeight(38)
+
+        fields = [
+            ("Format", self.format_filter, 0, 0), ("Status", self.status_filter, 0, 1), ("Season", self.season_filter, 0, 2), ("Year", self.year_filter, 0, 3),
+            ("Minimum score", self.min_score_filter, 1, 0), ("Sort", self.sort_filter, 1, 1), ("Genre", self.genre_filter, 1, 2),
+        ]
+        for label_text, widget, row, col in fields:
+            label = QLabel(label_text); label.setStyleSheet(f"font-size: 10px; font-weight: 700; color: {COLORS['muted']}; padding-left: 2px;")
+            filters_layout.addWidget(label, row * 2, col); filters_layout.addWidget(widget, row * 2 + 1, col)
+
+        self.clear_filters_button = QPushButton("Clear filters"); self.clear_filters_button.setFixedHeight(38)
+        filters_layout.addWidget(self.clear_filters_button, 3, 0, 1, 3, Qt.AlignLeft)
+        panel.addWidget(self.filters_panel); root.addWidget(search_panel)
 
         result_head = QHBoxLayout()
-        self.results_title = QLabel("Ready to search")
-        self.results_title.setStyleSheet(f"font-size: 15px; font-weight: 750; color: {COLORS['primary']};")
+        self.results_title = QLabel("Ready to search"); self.results_title.setStyleSheet(f"font-size: 15px; font-weight: 750; color: {COLORS['primary']};")
         result_head.addWidget(self.results_title); result_head.addStretch(); root.addLayout(result_head)
 
         self.results_scroll = InfiniteScrollArea(); self.results_scroll.setWidgetResizable(True); self.results_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding); self.results_scroll.setFrameShape(QFrame.NoFrame)
@@ -118,12 +151,41 @@ class SearchPage(QWidget):
         self.results_scroll.setWidget(self.grid_container); self.results_scroll.scroll_to_bottom.connect(self.load_more_results); root.addWidget(self.results_scroll, 1)
 
         self.search_button.clicked.connect(self.search_clicked); self.search.returnPressed.connect(self.search_clicked); self.media_filter.currentIndexChanged.connect(self.media_filter_changed)
+        self.filters_button.clicked.connect(self.toggle_filters); self.clear_filters_button.clicked.connect(self.clear_filters)
+        self._refresh_format_filter()
+
+    def _make_combo(self, items):
+        combo = QComboBox(); combo.addItems(items); combo.setFixedHeight(38); return combo
+
+    def toggle_filters(self):
+        visible = not self.filters_panel.isVisible(); self.filters_panel.setVisible(visible); self.filters_button.setText("Hide filters" if visible else "Filters")
+
+    def _refresh_format_filter(self):
+        self.format_filter.clear()
+        if self.current_media_type == "ANIME":
+            self.format_filter.addItems(["All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music"]); self.format_filter.setEnabled(True)
+        else:
+            self.format_filter.addItems(["Fixed by type"]); self.format_filter.setEnabled(False)
 
     def media_filter_changed(self):
-        if self.current_search: self.search_clicked()
+        self.current_media_type, self.current_media_format = self.selected_media_filter(); self._refresh_format_filter()
+        if self.current_search and not self.is_loading: self.search_clicked()
 
     def selected_media_filter(self):
         return {"Anime": ("ANIME", None), "Manga": ("MANGA", "MANGA"), "Novels": ("MANGA", "NOVEL")}[self.media_filter.currentText()]
+
+    def selected_filters(self):
+        format_map = {"TV": "TV", "TV Short": "TV_SHORT", "Movie": "MOVIE", "OVA": "OVA", "ONA": "ONA", "Special": "SPECIAL", "Music": "MUSIC"}
+        status_map = {"Finished": "FINISHED", "Releasing": "RELEASING", "Not Yet Released": "NOT_YET_RELEASED", "Cancelled": "CANCELLED", "Hiatus": "HIATUS"}
+        season_map = {"Winter": "WINTER", "Spring": "SPRING", "Summer": "SUMMER", "Fall": "FALL"}
+        sort_map = {"Relevance": "SEARCH_MATCH", "Popularity": "POPULARITY_DESC", "Score": "SCORE_DESC", "Newest": "START_DATE_DESC", "Oldest": "START_DATE", "Title A–Z": "TITLE_ROMAJI", "Title Z–A": "TITLE_ROMAJI_DESC"}
+        year = self.year_filter.text().strip(); year = year if year.isdigit() and len(year) == 4 else None
+        min_score = self.min_score_filter.currentText(); min_score = int(min_score[:-1]) if min_score.endswith("+") else None
+        return {"format_filter": format_map.get(self.format_filter.currentText()), "status": status_map.get(self.status_filter.currentText()), "season": season_map.get(self.season_filter.currentText()), "year": year, "sort": sort_map.get(self.sort_filter.currentText()), "min_score": min_score, "genre": self.genre_filter.text().strip() or None}
+
+    def clear_filters(self):
+        self.format_filter.setCurrentIndex(0); self.status_filter.setCurrentIndex(0); self.season_filter.setCurrentIndex(0); self.year_filter.clear(); self.min_score_filter.setCurrentIndex(0); self.sort_filter.setCurrentIndex(0); self.genre_filter.clear()
+        if self.current_search and not self.is_loading: self.search_clicked()
 
     def search_clicked(self):
         text = self.search.text().strip()
@@ -136,7 +198,7 @@ class SearchPage(QWidget):
             self.is_loading = True; self.start_search(self.current_search, self.current_page + 1)
 
     def start_search(self, text, page):
-        thread = QThread(); worker = SearchWorker(text, page, self.current_media_type, self.current_media_format); worker.moveToThread(thread); thread.started.connect(worker.run)
+        thread = QThread(); worker = SearchWorker(text, page, self.current_media_type, self.current_media_format, self.selected_filters()); worker.moveToThread(thread); thread.started.connect(worker.run)
         worker.finished.connect(self.search_finished); worker.error.connect(self.search_error); worker.finished.connect(thread.quit); worker.error.connect(thread.quit); thread.finished.connect(worker.deleteLater); thread.finished.connect(thread.deleteLater)
         self.threads.append(thread); self.workers.append(worker); thread.start()
 
@@ -145,20 +207,15 @@ class SearchPage(QWidget):
         new_results = data["media"]
         if self.current_page == 1: self.raw_results = []
         self.raw_results.extend(new_results)
-
         grouped = group_media_results(self.raw_results)
         self.results_title.setText(f"{len(self.raw_results)} entries · {len(grouped)} series · page {self.current_page}")
-        if not grouped and self.current_page == 1:
-            self.show_message("No results found"); return
-
+        if not grouped and self.current_page == 1: self.show_message("No results found"); return
         self._render_grouped(grouped)
 
     def _render_grouped(self, grouped):
         self.clear_results()
         for anime in grouped:
-            card = WorkCard(anime, mode="search", add_callback=self.add_to_library)
-            card.clicked.connect(self.anime_selected)
-            self.grid_layout.addWidget(card)
+            card = WorkCard(anime, mode="search", add_callback=self.add_to_library); card.clicked.connect(self.anime_selected); self.grid_layout.addWidget(card)
         self._reflow_cards()
 
     def search_error(self, message):
@@ -167,14 +224,12 @@ class SearchPage(QWidget):
         elif "(429)" in message: text = "AniList is rate-limiting requests.\nPlease try again shortly."
         elif "(5" in message[:20]: text = "AniList is having server problems.\nPlease try again later."
         else: text = f"Search failed.\n{message}"
-        self.results_title.setText("Search unavailable"); self.show_message(text)
-        retry = QPushButton("Try again"); retry.clicked.connect(self.search_clicked); self.grid_layout.addWidget(retry, 1, 0)
+        self.results_title.setText("Search unavailable"); self.show_message(text); retry = QPushButton("Try again"); retry.clicked.connect(self.search_clicked); self.grid_layout.addWidget(retry, 1, 0)
 
     def show_message(self, text):
         panel = QFrame(); panel.setStyleSheet(f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 18px;")
         box = QVBoxLayout(panel); box.setContentsMargins(35, 60, 35, 60)
-        label = QLabel(text); label.setAlignment(Qt.AlignCenter); label.setWordWrap(True); label.setStyleSheet(f"color: {COLORS['secondary']}; font-size: 14px; border: none;")
-        box.addWidget(label); self.grid_layout.addWidget(panel, 0, 0, 1, 4)
+        label = QLabel(text); label.setAlignment(Qt.AlignCenter); label.setWordWrap(True); label.setStyleSheet(f"color: {COLORS['secondary']}; font-size: 14px; border: none;"); box.addWidget(label); self.grid_layout.addWidget(panel, 0, 0, 1, 4)
 
     def clear_results(self):
         while self.grid_layout.count():
