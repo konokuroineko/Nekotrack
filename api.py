@@ -200,11 +200,10 @@ def search_anime(
     elif clean_search and effective_sort is None:
         effective_sort = "SEARCH_MATCH"
 
-    # Only include active GraphQL arguments and variables. Passing inactive
-    # filters as null can trigger AniList's "illegal operator and value
-    # combinations" error with otherwise valid filter requests.
+    # Only include active GraphQL arguments and variables. Page and perPage
+    # are always used, so their variable declarations are always required.
     argument_lines = []
-    variable_lines = []
+    variable_lines = ["$page: Int", "$perPage: Int"]
     variables = {"page": page, "perPage": per_page}
 
     if clean_search:
@@ -261,8 +260,8 @@ def search_anime(
         argument_lines.append("tag_in: $tags")
         variables["tags"] = [tag.strip()]
 
-    variable_block = ",\n        ".join(variable_lines)
     argument_block = ",\n                ".join(argument_lines)
+    variable_block = ",\n        ".join(variable_lines)
 
     query = f"""
     query ({variable_block}) {{
