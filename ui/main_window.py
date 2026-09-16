@@ -155,6 +155,8 @@ class MainWindow(QMainWindow):
         normal_geometry = self.normalGeometry()
         self.setUpdatesEnabled(False)
         try:
+            if hasattr(self, "search_page"):
+                self.search_page.shutdown_workers()
             self.navigation_buttons = {}
             self.setup_ui()
             self.navigation.show(current_page)
