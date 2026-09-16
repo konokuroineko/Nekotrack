@@ -92,14 +92,13 @@ class WorkCard(QFrame):
         title_font = QFont(self.font())
         title_font.setPointSize(get("font_size"))
         title_font.setWeight(760)
-        title_height = QFontMetrics(title_font).lineSpacing() * 2
+        title_metrics = QFontMetrics(title_font)
+        title_height = title_metrics.lineSpacing() * 2
         title = QLabel(self._fit_title_to_two_lines(full_title, card_width - 12, title_font))
         title.setObjectName("title")
         title.setWordWrap(False)
         title.setFont(title_font)
         title.setFixedHeight(title_height)
-        title.setMinimumHeight(title_height)
-        title.setMaximumHeight(title_height)
         title.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         title.setToolTip(full_title)
         root.addWidget(title)
@@ -134,42 +133,45 @@ class WorkCard(QFrame):
 
     @staticmethod
     def _fit_title_to_two_lines(text, width, font):
-        """Wrap a title to two complete lines, then elide the second line."""
+        """Fit a title to exactly two visual lines; ellipsize only when a third line is needed."""
         text = " ".join(str(text).split())
         if not text:
             return ""
 
         metrics = QFontMetrics(font)
         words = text.split()
-        lines = []
-        current = ""
+        first = ""
+        second = ""
+        remainder_start = 0
 
-        for word in words:
-            candidate = word if not current else f"{current} {word}"
+        for index, word in enumerate(words):
+            candidate = word if not first else f"{first} {word}"
             if metrics.horizontalAdvance(candidate) <= width:
-                current = candidate
-                continue
-
-            if current:
-                lines.append(current)
-                current = word
+                first = candidate
+                remainder_start = index + 1
             else:
-                lines.append(metrics.elidedText(word, Qt.TextElideMode.ElideRight, width))
-                current = ""
+                break
 
-            if len(lines) == 2:
-                return "\n".join(lines[:1] + [metrics.elidedText("", Qt.TextElideMode.ElideRight, width)])
+        if remainder_start >= len(words):
+            return first
 
-        if current:
-            lines.append(current)
+        for index in range(remainder_start, len(words)):
+            word = words[index]
+            candidate = word if not second else f"{second} {word}"
+            if metrics.horizontalAdvance(candidate) <= width:
+                second = candidate
+                continue
+            remainder_start = index
+            break
+        else:
+            remainder_start = len(words)
 
-        if len(lines) <= 2:
-            return "\n".join(lines)
+        if remainder_start < len(words):
+            # The second line must represent everything that did not fit, but remain one line.
+            remaining = " ".join(words[remainder_start - len(words[remainder_start:]) if False else remainder_start:])
+            second = metrics.elidedText(second + (" " if second else "") + remaining, Qt.TextElideMode.ElideRight, width)
 
-        first = lines[0]
-        remainder = " ".join(lines[1:])
-        second = metrics.elidedText(remainder, Qt.TextElideMode.ElideRight, width)
-        return f"{first}\n{second}"
+        return f"{first}\n{second}" if second else f"{first}\n{metrics.elidedText(' '.join(words[remainder_start:]), Qt.TextElideMode.ElideRight, width)}"
 
     def _value(self, key):
         if hasattr(self.work, "get"):
