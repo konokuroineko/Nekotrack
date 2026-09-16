@@ -154,47 +154,6 @@ def search_anime(
     if media_type not in {None, "ANIME", "MANGA"}:
         raise ValueError("media_type must be None, ANIME, or MANGA")
 
-    query = """
-    query (
-        $search: String,
-        $page: Int,
-        $perPage: Int,
-        $type: MediaType,
-        $format: MediaFormat,
-        $formatFilter: [MediaFormat],
-        $status: MediaStatus,
-        $season: MediaSeason,
-        $seasonYear: Int,
-        $year: String,
-        $sort: [MediaSort],
-        $minScore: Int,
-        $genre: String
-    ) {
-        Page(page: $page, perPage: $perPage) {
-            pageInfo {
-                currentPage
-                lastPage
-                hasNextPage
-            }
-            media(
-                search: $search,
-                type: $type,
-                format: $format,
-                format_in: $formatFilter,
-                status: $status,
-                season: $season,
-                seasonYear: $seasonYear,
-                startDate_like: $year,
-                sort: $sort,
-                averageScore_greater: $minScore,
-                genre: $genre
-            ) {
-                %s
-            }
-        }
-    }
-    """ % _media_fields(include_details=False)
-
     if media_type == "MANGA" and media_format not in {None, "MANGA", "NOVEL", "ONE_SHOT"}:
         raise ValueError("Invalid manga media_format")
 
@@ -202,7 +161,8 @@ def search_anime(
         if media_format not in {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC"}:
             raise ValueError("Invalid anime media_format")
 
-    if format_filter and format_filter not in {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC", "MANGA", "NOVEL", "ONE_SHOT"}:
+    valid_formats = {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC", "MANGA", "NOVEL", "ONE_SHOT"}
+    if format_filter and format_filter not in valid_formats:
         raise ValueError("Invalid format_filter")
 
     if status and status not in {"FINISHED", "RELEASING", "NOT_YET_RELEASED", "CANCELLED", "HIATUS"}:
@@ -231,25 +191,74 @@ def search_anime(
     if min_score is not None and not 0 <= int(min_score) <= 100:
         raise ValueError("min_score must be between 0 and 100")
 
+    # AniList treats format_in as the multi-format filter. Do not send
+    # format and format_in together: some combinations are rejected with
+    # "illegal operator and value combinations".
+    effective_formats = None
+    if format_filter:
+        effective_formats = [format_filter]
+    elif media_format:
+        effective_formats = [media_format]
+
+    # Relevance sorting requires an actual text search. Browsing with
+    # filters uses popularity when no explicit sort was requested.
     clean_search = search.strip() if search else None
     effective_sort = sort
     if not clean_search and effective_sort == "SEARCH_MATCH":
         effective_sort = "POPULARITY_DESC"
+
+    query = """
+    query (
+        $search: String,
+        $page: Int,
+        $perPage: Int,
+        $type: MediaType,
+        $formatFilter: [MediaFormat],
+        $status: MediaStatus,
+        $season: MediaSeason,
+        $seasonYear: Int,
+        $year: String,
+        $sort: [MediaSort],
+        $minScore: Int,
+        $genres: [String]
+    ) {
+        Page(page: $page, perPage: $perPage) {
+            pageInfo {
+                currentPage
+                lastPage
+                hasNextPage
+            }
+            media(
+                search: $search,
+                type: $type,
+                format_in: $formatFilter,
+                status: $status,
+                season: $season,
+                seasonYear: $seasonYear,
+                startDate_like: $year,
+                sort: $sort,
+                averageScore_greater: $minScore,
+                genre_in: $genres
+            ) {
+                %s
+            }
+        }
+    }
+    """ % _media_fields(include_details=False)
 
     variables = {
         "search": clean_search,
         "page": page,
         "perPage": per_page,
         "type": media_type,
-        "format": media_format,
-        "formatFilter": [format_filter] if format_filter else None,
+        "formatFilter": effective_formats,
         "status": status,
         "season": season,
         "seasonYear": int(year) if season and year else None,
         "year": str(year) if year and not season else None,
         "sort": [effective_sort] if effective_sort else None,
         "minScore": int(min_score) if min_score is not None else None,
-        "genre": genre.strip() if genre else None,
+        "genres": [genre.strip()] if genre and genre.strip() else None,
     }
 
     data = anilist_request(query, variables)
