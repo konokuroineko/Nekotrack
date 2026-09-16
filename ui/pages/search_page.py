@@ -90,6 +90,7 @@ class SearchWorker(QObject):
 
 class SeriesEnrichmentWorker(QObject):
     finished = Signal(int, object)
+    error = Signal(int, str)
 
     def __init__(self, results, stop_event, generation):
         super().__init__()
@@ -98,14 +99,17 @@ class SeriesEnrichmentWorker(QObject):
         self.generation = generation
 
     def run(self):
-        grouped = group_media_results(
-            self.results,
-            enrich=True,
-            max_requests=8,
-            delay=1.1,
-            stop_event=self.stop_event,
-        )
-        self.finished.emit(self.generation, grouped)
+        try:
+            grouped = group_media_results(
+                self.results,
+                enrich=True,
+                max_requests=8,
+                delay=1.1,
+                stop_event=self.stop_event,
+            )
+            self.finished.emit(self.generation, grouped)
+        except Exception as error:
+            self.error.emit(self.generation, str(error))
 
 
 class SearchPage(QWidget):
@@ -294,13 +298,13 @@ class SearchPage(QWidget):
         worker.error.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(lambda t=thread: self._search_thread_finished(t))
-        self.threads.append(thread); self.workers.append(worker); thread.start()
+        self.threads.append(thread)
+        self.workers.append(worker)
+        thread.start()
 
     def _search_thread_finished(self, thread):
         if thread in self.threads:
             self.threads.remove(thread)
-        if thread in self.workers:
-            pass
         thread.deleteLater()
 
     def search_finished(self, data):
@@ -330,7 +334,9 @@ class SearchPage(QWidget):
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self.enrichment_finished)
+        worker.error.connect(self.enrichment_error)
         worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(lambda t=thread: self._enrichment_thread_finished(t))
         self.enrichment_thread = thread
@@ -353,10 +359,13 @@ class SearchPage(QWidget):
             self.enrichment_thread = None
             self.enrichment_worker = None
             self.enrichment_stop = None
+        if thread.isRunning():
+            thread.quit()
+            return
         thread.deleteLater()
 
     def enrichment_finished(self, generation, grouped):
-        if generation != self.enrichment_generation:
+        if generation != self.enrichment_generation or not self.has_searched:
             return
         if not self.raw_results:
             return
@@ -376,10 +385,44 @@ class SearchPage(QWidget):
         else:
             self.enrichment_scheduled = False
 
+    def enrichment_error(self, generation, message):
+        if generation != self.enrichment_generation or not self.has_searched:
+            return
+        self.enrichment_scheduled = False
+        if "(429)" in message:
+            self.results_title.setText(f"{len(self.raw_results)} entries · relation enrichment paused (rate limit)")
+        else:
+            self.results_title.setText(f"{len(self.raw_results)} entries · relation enrichment unavailable")
+
     def _resume_enrichment(self):
         self.enrichment_scheduled = False
         if self.has_searched and self.raw_results:
             self._start_enrichment()
+
+    def shutdown_workers(self):
+        """Stop background search/enrichment work before this page is destroyed."""
+        self.has_searched = False
+        self.enrichment_generation += 1
+        if self.enrichment_stop is not None:
+            self.enrichment_stop.set()
+        enrichment_thread = self.enrichment_thread
+        if enrichment_thread is not None and enrichment_thread.isRunning():
+            enrichment_thread.quit()
+            enrichment_thread.wait()
+        self.enrichment_thread = None
+        self.enrichment_worker = None
+        self.enrichment_stop = None
+
+        for thread in list(self.threads):
+            if thread.isRunning():
+                thread.quit()
+                thread.wait()
+        self.threads.clear()
+        self.workers.clear()
+
+    def closeEvent(self, event):
+        self.shutdown_workers()
+        super().closeEvent(event)
 
     def _render_grouped(self, grouped):
         self.clear_results()
@@ -435,7 +478,7 @@ class SearchPage(QWidget):
         cards = []
         for i in range(self.grid_layout.count()):
             widget = self.grid_layout.itemAt(i).widget()
-            if isinstance(widget, (WorkCard, SkeletonCard)): cards.append(widget)
+            if isinstance(widget, WorkCard): cards.append(widget)
         for card in cards: self.grid_layout.removeWidget(card)
         columns = max(1, self.results_scroll.viewport().width() // 230); columns = min(columns, max(1, len(cards)))
         for col in range(columns): self.grid_layout.setColumnStretch(col, 1)
