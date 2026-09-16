@@ -284,7 +284,7 @@ class SearchPage(QWidget):
             self.start_search(self.current_search, self.current_page + 1)
 
     def start_search(self, text, page):
-        thread = QThread()
+        thread = QThread(self)
         worker = SearchWorker(text, page, self.current_media_type, self.current_media_format, self.selected_filters())
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
@@ -293,8 +293,15 @@ class SearchPage(QWidget):
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread: self._search_thread_finished(t))
         self.threads.append(thread); self.workers.append(worker); thread.start()
+
+    def _search_thread_finished(self, thread):
+        if thread in self.threads:
+            self.threads.remove(thread)
+        if thread in self.workers:
+            pass
+        thread.deleteLater()
 
     def search_finished(self, data):
         self.search_button.setEnabled(True); self.is_loading = False
@@ -318,25 +325,35 @@ class SearchPage(QWidget):
         generation = self.enrichment_generation
         stop_event = Event()
         self.enrichment_stop = stop_event
-        thread = QThread()
+        thread = QThread(self)
         worker = SeriesEnrichmentWorker(list(self.raw_results), stop_event, generation)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self.enrichment_finished)
         worker.finished.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread: self._enrichment_thread_finished(t))
         self.enrichment_thread = thread
         self.enrichment_worker = worker
         thread.start()
 
     def _stop_enrichment(self):
+        thread = self.enrichment_thread
         if self.enrichment_stop is not None:
             self.enrichment_stop.set()
-        self.enrichment_stop = None
-        self.enrichment_worker = None
-        self.enrichment_thread = None
         self.enrichment_scheduled = False
+        if thread is not None and thread.isRunning():
+            return
+        self.enrichment_thread = None
+        self.enrichment_worker = None
+        self.enrichment_stop = None
+
+    def _enrichment_thread_finished(self, thread):
+        if self.enrichment_thread is thread:
+            self.enrichment_thread = None
+            self.enrichment_worker = None
+            self.enrichment_stop = None
+        thread.deleteLater()
 
     def enrichment_finished(self, generation, grouped):
         if generation != self.enrichment_generation:
@@ -351,9 +368,6 @@ class SearchPage(QWidget):
         )
         self.results_title.setText(f"{len(self.raw_results)} entries · {len(current_grouped)} series")
         self._render_grouped(current_grouped)
-        self.enrichment_worker = None
-        self.enrichment_thread = None
-        self.enrichment_stop = None
 
         if self.enrichment_passes < 1:
             self.enrichment_passes += 1
@@ -418,14 +432,13 @@ class SearchPage(QWidget):
         super().resizeEvent(event); self._reflow_cards()
 
     def _reflow_cards(self):
-        widgets = []
+        cards = []
         for i in range(self.grid_layout.count()):
             widget = self.grid_layout.itemAt(i).widget()
-            if isinstance(widget, (WorkCard, SkeletonCard)):
-                widgets.append(widget)
-        for widget in widgets: self.grid_layout.removeWidget(widget)
-        columns = max(1, self.results_scroll.viewport().width() // 230); columns = min(columns, max(1, len(widgets)))
+            if isinstance(widget, (WorkCard, SkeletonCard)): cards.append(widget)
+        for card in cards: self.grid_layout.removeWidget(card)
+        columns = max(1, self.results_scroll.viewport().width() // 230); columns = min(columns, max(1, len(cards)))
         for col in range(columns): self.grid_layout.setColumnStretch(col, 1)
-        for i, widget in enumerate(widgets):
-            row = i // columns; row_count = min(columns, len(widgets) - row * columns); start_col = (columns - row_count) // 2
-            self.grid_layout.addWidget(widget, row, start_col + (i % columns), Qt.AlignHCenter)
+        for i, card in enumerate(cards):
+            row = i // columns; row_count = min(columns, len(cards) - row * columns); start_col = (columns - row_count) // 2
+            self.grid_layout.addWidget(card, row, start_col + (i % columns), Qt.AlignHCenter)
