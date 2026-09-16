@@ -94,27 +94,16 @@ class WorkCard(QFrame):
         title_font.setWeight(QFont.Weight.Bold)
         title_metrics = QFontMetrics(title_font)
         fitted_title = self._fit_title_to_two_lines(full_title, card_width - 12, title_font)
-        title_line_count = max(1, fitted_title.count("\n") + 1)
         title = QLabel(fitted_title)
         title.setObjectName("title")
         title.setWordWrap(False)
         title.setFont(title_font)
-        # Use the font's actual glyph box instead of lineSpacing(), so a one-line
-        # title does not leave leading underneath it before the bundle indicator.
-        title_height = (
-            title_metrics.height()
-            if title_line_count == 1
-            else title_metrics.lineSpacing() * (title_line_count - 1) + title_metrics.height()
-        )
-        title.setFixedHeight(title_height)
+        # Every card reserves the same two-line title area, keeping one-line
+        # titles the same height as two-line titles.
+        title.setFixedHeight(title_metrics.lineSpacing() * 2)
         title.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         title.setMargin(0)
         title.setToolTip(full_title)
-
-        title_block = QVBoxLayout()
-        title_block.setContentsMargins(0, 0, 0, 0)
-        title_block.setSpacing(0)
-        title_block.addWidget(title)
 
         series_count = self._value("_series_count")
         summary = self._value("_bundle_summary")
@@ -123,20 +112,29 @@ class WorkCard(QFrame):
         except (TypeError, ValueError):
             has_bundle = False
 
+        # The normal title->metadata gap and the bundle indicator row use the
+        # exact same vertical height. Bundle cards therefore stay the same
+        # height as non-bundle cards without an extra empty row around the
+        # indicator.
         series_font = QFont(self.font())
         series_font.setPointSize(10)
         series_font.setWeight(QFont.Weight.Bold)
+        series_height = QFontMetrics(series_font).height()
+
+        content = QVBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(0 if has_bundle else series_height)
+        content.addWidget(title)
+
         if has_bundle:
             series_info = QLabel(str(summary or f"{int(series_count)} entries"))
             series_info.setObjectName("seriesInfo")
             series_info.setFont(series_font)
-            series_info.setFixedHeight(QFontMetrics(series_font).height())
-            series_info.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            series_info.setFixedHeight(series_height)
+            series_info.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             series_info.setMargin(0)
             series_info.setToolTip(str(summary or ""))
-            title_block.addWidget(series_info)
-
-        root.addLayout(title_block)
+            content.addWidget(series_info)
 
         meta_parts = []
         fmt = self._value("format")
@@ -154,7 +152,9 @@ class WorkCard(QFrame):
             meta = QLabel("  ·  ".join(meta_parts))
             meta.setObjectName("meta")
             meta.setMargin(0)
-            root.addWidget(meta)
+            content.addWidget(meta)
+
+        root.addLayout(content)
 
         add_button = None
         if mode == "search":
@@ -168,13 +168,13 @@ class WorkCard(QFrame):
         self.adjustSize()
         target_height = (
             self.cover.height()
-            + 2 * title_metrics.lineSpacing()
-            + (QFontMetrics(series_font).height() if has_bundle else 0)
+            + (2 * title_metrics.lineSpacing())
+            + series_height
             + (meta.sizeHint().height() if meta is not None else 0)
             + (add_button.sizeHint().height() if add_button is not None else 0)
             + root.contentsMargins().top()
             + root.contentsMargins().bottom()
-            + root.spacing() * (2 + (1 if meta is not None else 0) + (1 if add_button is not None else 0))
+            + root.spacing() * (1 + (1 if add_button is not None else 0))
         )
         self.setFixedHeight(target_height)
 
