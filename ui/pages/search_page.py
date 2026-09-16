@@ -52,11 +52,12 @@ class SearchPage(QWidget):
         super().__init__()
         self.add_to_library = add_to_library
         self.current_search = ""
-        self.current_media_type = "ANIME"
+        self.current_media_type = None
         self.current_media_format = None
         self.current_page = 1
         self.has_next_page = False
         self.is_loading = False
+        self.has_searched = False
         self.threads, self.workers = [], []
         self.raw_results = []
 
@@ -76,70 +77,37 @@ class SearchPage(QWidget):
         panel = QVBoxLayout(search_panel); panel.setContentsMargins(12, 12, 12, 12); panel.setSpacing(10)
 
         bar = QHBoxLayout(); bar.setSpacing(8)
-        self.search = QLineEdit(); self.search.setPlaceholderText("Title, character, franchise..."); self.search.setMinimumHeight(46); self.search.setClearButtonEnabled(True)
+        self.search = QLineEdit(); self.search.setPlaceholderText("Title, character, franchise... (optional)"); self.search.setMinimumHeight(46); self.search.setClearButtonEnabled(True)
         self.search_button = QPushButton("Search"); self.search_button.setMinimumHeight(46); self.search_button.setMinimumWidth(100)
         bar.addWidget(self.search, 1); bar.addWidget(self.search_button); panel.addLayout(bar)
 
-        type_row = QHBoxLayout(); type_row.setSpacing(8)
-        type_label = QLabel("TYPE"); type_label.setObjectName("typeLabel")
-        type_label.setStyleSheet(f"font-size: 10px; font-weight: 800; color: {COLORS['muted']}; letter-spacing: 1.5px; padding: 0; background: transparent; border: none;")
-        type_row.addWidget(type_label, 0, Qt.AlignVCenter)
-        self.media_filter = QComboBox(); self.media_filter.setObjectName("mediaFilter"); self.media_filter.addItems(["Anime", "Manga", "Novels"]); self.media_filter.setMinimumWidth(130); self.media_filter.setFixedHeight(40)
-        radius = 12
-        self.media_filter.setStyleSheet(f"""
-            QComboBox#mediaFilter {{
-                background: {COLORS['surface']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {radius}px;
-                color: {COLORS['primary']};
-                padding: 6px 30px 6px 12px;
-            }}
-            QComboBox#mediaFilter:hover {{ border-color: {COLORS['border_hover']}; }}
-            QComboBox#mediaFilter:focus {{ border-color: {COLORS['accent']}; }}
-            QComboBox#mediaFilter::drop-down {{
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 26px;
-                border: none;
-                background: transparent;
-                border-top-right-radius: {radius}px;
-                border-bottom-right-radius: {radius}px;
-            }}
-            QComboBox#mediaFilter QAbstractItemView {{
-                background: {COLORS['surface']};
-                border: 1px solid {COLORS['border']};
-                color: {COLORS['primary']};
-                selection-background-color: {COLORS['surface_hover']};
-            }}
-        """)
-        type_row.addWidget(self.media_filter, 0, Qt.AlignVCenter)
         self.filters_button = QPushButton("Filters")
         self.filters_button.setFixedHeight(40); self.filters_button.setMinimumWidth(82)
-        type_row.addWidget(self.filters_button, 0, Qt.AlignVCenter)
-        type_row.addStretch(); panel.addLayout(type_row)
+        panel.addWidget(self.filters_button, 0, Qt.AlignLeft)
 
         self.filters_panel = QFrame(); self.filters_panel.setVisible(False)
         self.filters_panel.setStyleSheet(f"QFrame {{ background: {COLORS['background']}; border: 1px solid {COLORS['border']}; border-radius: 12px; }} QLabel {{ background: transparent; border: none; }}")
         filters_layout = QGridLayout(self.filters_panel); filters_layout.setContentsMargins(12, 12, 12, 12); filters_layout.setHorizontalSpacing(10); filters_layout.setVerticalSpacing(5)
 
+        self.media_filter = self._make_combo(["All", "Anime", "Manga", "Novels"])
         self.format_filter = self._make_combo(["All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music"])
         self.status_filter = self._make_combo(["All", "Finished", "Releasing", "Not Yet Released", "Cancelled", "Hiatus"])
         self.season_filter = self._make_combo(["All", "Winter", "Spring", "Summer", "Fall"])
         self.year_filter = QLineEdit(); self.year_filter.setPlaceholderText("e.g. 2024"); self.year_filter.setFixedHeight(38)
         self.min_score_filter = QComboBox(); self.min_score_filter.addItems(["Any score", "50+", "60+", "70+", "80+", "90+"]); self.min_score_filter.setFixedHeight(38)
         self.sort_filter = self._make_combo(["Relevance", "Popularity", "Score", "Newest", "Oldest", "Title A–Z", "Title Z–A"])
-        self.genre_filter = QLineEdit(); self.genre_filter.setPlaceholderText("e.g. Action"); self.genre_filter.setFixedHeight(38)
+        self.genre_filter = QLineEdit(); self.genre_filter.setPlaceholderText("e.g. Isekai"); self.genre_filter.setFixedHeight(38)
 
         fields = [
-            ("Format", self.format_filter, 0, 0), ("Status", self.status_filter, 0, 1), ("Season", self.season_filter, 0, 2), ("Year", self.year_filter, 0, 3),
-            ("Minimum score", self.min_score_filter, 1, 0), ("Sort", self.sort_filter, 1, 1), ("Genre", self.genre_filter, 1, 2),
+            ("Type", self.media_filter, 0, 0), ("Format", self.format_filter, 0, 1), ("Status", self.status_filter, 0, 2), ("Season", self.season_filter, 0, 3),
+            ("Year", self.year_filter, 1, 0), ("Minimum score", self.min_score_filter, 1, 1), ("Sort", self.sort_filter, 1, 2), ("Genre", self.genre_filter, 1, 3),
         ]
         for label_text, widget, row, col in fields:
             label = QLabel(label_text); label.setStyleSheet(f"font-size: 10px; font-weight: 700; color: {COLORS['muted']}; padding-left: 2px;")
             filters_layout.addWidget(label, row * 2, col); filters_layout.addWidget(widget, row * 2 + 1, col)
 
         self.clear_filters_button = QPushButton("Clear filters"); self.clear_filters_button.setFixedHeight(38)
-        filters_layout.addWidget(self.clear_filters_button, 3, 0, 1, 3, Qt.AlignLeft)
+        filters_layout.addWidget(self.clear_filters_button, 4, 0, 1, 4, Qt.AlignLeft)
         panel.addWidget(self.filters_panel); root.addWidget(search_panel)
 
         result_head = QHBoxLayout()
@@ -150,7 +118,8 @@ class SearchPage(QWidget):
         self.grid_container = QWidget(); self.grid_layout = QGridLayout(self.grid_container); self.grid_layout.setContentsMargins(4, 4, 4, 20); self.grid_layout.setHorizontalSpacing(22); self.grid_layout.setVerticalSpacing(30)
         self.results_scroll.setWidget(self.grid_container); self.results_scroll.scroll_to_bottom.connect(self.load_more_results); root.addWidget(self.results_scroll, 1)
 
-        self.search_button.clicked.connect(self.search_clicked); self.search.returnPressed.connect(self.search_clicked); self.media_filter.currentIndexChanged.connect(self.media_filter_changed)
+        self.search_button.clicked.connect(self.search_clicked); self.search.returnPressed.connect(self.search_clicked)
+        self.media_filter.currentIndexChanged.connect(self.media_filter_changed)
         self.filters_button.clicked.connect(self.toggle_filters); self.clear_filters_button.clicked.connect(self.clear_filters)
         self._refresh_format_filter()
 
@@ -161,21 +130,33 @@ class SearchPage(QWidget):
         visible = not self.filters_panel.isVisible(); self.filters_panel.setVisible(visible); self.filters_button.setText("Hide filters" if visible else "Filters")
 
     def _refresh_format_filter(self):
+        current = self.format_filter.currentText()
+        self.format_filter.blockSignals(True)
         self.format_filter.clear()
         if self.current_media_type == "ANIME":
-            self.format_filter.addItems(["All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music"]); self.format_filter.setEnabled(True)
+            items = ["All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music"]
+        elif self.current_media_type == "MANGA":
+            items = ["All", "Manga", "Novel", "One Shot"]
         else:
-            self.format_filter.addItems(["Fixed by type"]); self.format_filter.setEnabled(False)
+            items = ["All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music", "Manga", "Novel", "One Shot"]
+        self.format_filter.addItems(items)
+        if current in items:
+            self.format_filter.setCurrentText(current)
+        else:
+            self.format_filter.setCurrentIndex(0)
+        self.format_filter.setEnabled(True)
+        self.format_filter.blockSignals(False)
 
     def media_filter_changed(self):
-        self.current_media_type, self.current_media_format = self.selected_media_filter(); self._refresh_format_filter()
-        if self.current_search and not self.is_loading: self.search_clicked()
+        self.current_media_type, self.current_media_format = self.selected_media_filter()
+        self._refresh_format_filter()
+        if self.has_searched and not self.is_loading: self.search_clicked()
 
     def selected_media_filter(self):
-        return {"Anime": ("ANIME", None), "Manga": ("MANGA", "MANGA"), "Novels": ("MANGA", "NOVEL")}[self.media_filter.currentText()]
+        return {"All": (None, None), "Anime": ("ANIME", None), "Manga": ("MANGA", "MANGA"), "Novels": ("MANGA", "NOVEL")}[self.media_filter.currentText()]
 
     def selected_filters(self):
-        format_map = {"TV": "TV", "TV Short": "TV_SHORT", "Movie": "MOVIE", "OVA": "OVA", "ONA": "ONA", "Special": "SPECIAL", "Music": "MUSIC"}
+        format_map = {"TV": "TV", "TV Short": "TV_SHORT", "Movie": "MOVIE", "OVA": "OVA", "ONA": "ONA", "Special": "SPECIAL", "Music": "MUSIC", "Manga": "MANGA", "Novel": "NOVEL", "One Shot": "ONE_SHOT"}
         status_map = {"Finished": "FINISHED", "Releasing": "RELEASING", "Not Yet Released": "NOT_YET_RELEASED", "Cancelled": "CANCELLED", "Hiatus": "HIATUS"}
         season_map = {"Winter": "WINTER", "Spring": "SPRING", "Summer": "SUMMER", "Fall": "FALL"}
         sort_map = {"Relevance": "SEARCH_MATCH", "Popularity": "POPULARITY_DESC", "Score": "SCORE_DESC", "Newest": "START_DATE_DESC", "Oldest": "START_DATE", "Title A–Z": "TITLE_ROMAJI", "Title Z–A": "TITLE_ROMAJI_DESC"}
@@ -184,17 +165,17 @@ class SearchPage(QWidget):
         return {"format_filter": format_map.get(self.format_filter.currentText()), "status": status_map.get(self.status_filter.currentText()), "season": season_map.get(self.season_filter.currentText()), "year": year, "sort": sort_map.get(self.sort_filter.currentText()), "min_score": min_score, "genre": self.genre_filter.text().strip() or None}
 
     def clear_filters(self):
-        self.format_filter.setCurrentIndex(0); self.status_filter.setCurrentIndex(0); self.season_filter.setCurrentIndex(0); self.year_filter.clear(); self.min_score_filter.setCurrentIndex(0); self.sort_filter.setCurrentIndex(0); self.genre_filter.clear()
-        if self.current_search and not self.is_loading: self.search_clicked()
+        self.media_filter.setCurrentIndex(0); self._refresh_format_filter(); self.status_filter.setCurrentIndex(0); self.season_filter.setCurrentIndex(0); self.year_filter.clear(); self.min_score_filter.setCurrentIndex(0); self.sort_filter.setCurrentIndex(0); self.genre_filter.clear()
+        if self.has_searched and not self.is_loading: self.search_clicked()
 
     def search_clicked(self):
         text = self.search.text().strip()
-        if not text or self.is_loading: return
-        self.current_search = text; self.current_media_type, self.current_media_format = self.selected_media_filter(); self.current_page = 1; self.has_next_page = False; self.raw_results = []
-        self.clear_results(); self.results_title.setText(f"Searching for “{text}”"); self.search_button.setEnabled(False); self.is_loading = True; self.start_search(text, 1)
+        if self.is_loading: return
+        self.current_search = text; self.current_media_type, self.current_media_format = self.selected_media_filter(); self.current_page = 1; self.has_next_page = False; self.raw_results = []; self.has_searched = True
+        self.clear_results(); self.results_title.setText(f"Browsing AniList" if not text else f"Searching for “{text}”"); self.search_button.setEnabled(False); self.is_loading = True; self.start_search(text, 1)
 
     def load_more_results(self):
-        if self.current_search and self.has_next_page and not self.is_loading:
+        if self.has_searched and self.has_next_page and not self.is_loading:
             self.is_loading = True; self.start_search(self.current_search, self.current_page + 1)
 
     def start_search(self, text, page):
