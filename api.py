@@ -151,7 +151,7 @@ def search_anime(
     genre=None,
     tag=None,
 ):
-    """Search AniList for anime, manga, or novel media with optional filters."""
+    """Search or browse AniList media with optional filters."""
     if media_type not in {None, "ANIME", "MANGA"}:
         raise ValueError("media_type must be None, ANIME, or MANGA")
 
@@ -162,7 +162,10 @@ def search_anime(
         if media_format not in {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC"}:
             raise ValueError("Invalid anime media_format")
 
-    valid_formats = {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC", "MANGA", "NOVEL", "ONE_SHOT"}
+    valid_formats = {
+        "TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC",
+        "MANGA", "NOVEL", "ONE_SHOT",
+    }
     if format_filter and format_filter not in valid_formats:
         raise ValueError("Invalid format_filter")
 
@@ -173,92 +176,110 @@ def search_anime(
         raise ValueError("Invalid season")
 
     if sort and sort not in {
-        "ID",
-        "ID_DESC",
-        "TITLE_ROMAJI",
-        "TITLE_ROMAJI_DESC",
-        "START_DATE",
-        "START_DATE_DESC",
-        "END_DATE",
-        "END_DATE_DESC",
-        "SCORE",
-        "SCORE_DESC",
-        "POPULARITY",
-        "POPULARITY_DESC",
-        "UPDATED_AT",
-        "UPDATED_AT_DESC",
-        "SEARCH_MATCH",
+        "ID", "ID_DESC", "TITLE_ROMAJI", "TITLE_ROMAJI_DESC",
+        "START_DATE", "START_DATE_DESC", "END_DATE", "END_DATE_DESC",
+        "SCORE", "SCORE_DESC", "POPULARITY", "POPULARITY_DESC",
+        "UPDATED_AT", "UPDATED_AT_DESC", "SEARCH_MATCH",
     }:
         raise ValueError("Invalid sort")
 
     if min_score is not None and not 0 <= int(min_score) <= 100:
         raise ValueError("min_score must be between 0 and 100")
 
-    effective_formats = [format_filter] if format_filter else None
-    if media_format and not format_filter:
+    clean_search = search.strip() if search else None
+
+    effective_formats = None
+    if format_filter:
+        effective_formats = [format_filter]
+    elif media_format:
         effective_formats = [media_format]
 
-    clean_search = search.strip() if search else None
     effective_sort = sort
     if not clean_search and effective_sort == "SEARCH_MATCH":
         effective_sort = "POPULARITY_DESC"
+    elif clean_search and effective_sort is None:
+        effective_sort = "SEARCH_MATCH"
 
-    query = """
-    query (
-        $search: String,
-        $page: Int,
-        $perPage: Int,
-        $type: MediaType,
-        $formatFilter: [MediaFormat],
-        $status: MediaStatus,
-        $season: MediaSeason,
-        $seasonYear: Int,
-        $year: String,
-        $sort: [MediaSort],
-        $minScore: Int,
-        $genres: [String],
-        $tags: [String]
-    ) {
-        Page(page: $page, perPage: $perPage) {
-            pageInfo {
+    # Only include active GraphQL arguments and variables. Passing inactive
+    # filters as null can trigger AniList's "illegal operator and value
+    # combinations" error with otherwise valid filter requests.
+    argument_lines = []
+    variable_lines = []
+    variables = {"page": page, "perPage": per_page}
+
+    if clean_search:
+        variable_lines.append("$search: String")
+        argument_lines.append("search: $search")
+        variables["search"] = clean_search
+
+    if media_type:
+        variable_lines.append("$type: MediaType")
+        argument_lines.append("type: $type")
+        variables["type"] = media_type
+
+    if effective_formats:
+        variable_lines.append("$formatFilter: [MediaFormat]")
+        argument_lines.append("format_in: $formatFilter")
+        variables["formatFilter"] = effective_formats
+
+    if status:
+        variable_lines.append("$status: MediaStatus")
+        argument_lines.append("status: $status")
+        variables["status"] = status
+
+    if season:
+        variable_lines.append("$season: MediaSeason")
+        argument_lines.append("season: $season")
+        variables["season"] = season
+
+    if season and year:
+        variable_lines.append("$seasonYear: Int")
+        argument_lines.append("seasonYear: $seasonYear")
+        variables["seasonYear"] = int(year)
+    elif year:
+        variable_lines.append("$year: String")
+        argument_lines.append("startDate_like: $year")
+        variables["year"] = str(year)
+
+    if effective_sort:
+        variable_lines.append("$sort: [MediaSort]")
+        argument_lines.append("sort: $sort")
+        variables["sort"] = [effective_sort]
+
+    if min_score is not None:
+        variable_lines.append("$minScore: Int")
+        argument_lines.append("averageScore_greater: $minScore")
+        variables["minScore"] = int(min_score)
+
+    if genre and genre.strip():
+        variable_lines.append("$genres: [String]")
+        argument_lines.append("genre_in: $genres")
+        variables["genres"] = [genre.strip()]
+
+    if tag and tag.strip():
+        variable_lines.append("$tags: [String]")
+        argument_lines.append("tag_in: $tags")
+        variables["tags"] = [tag.strip()]
+
+    variable_block = ",\n        ".join(variable_lines)
+    argument_block = ",\n                ".join(argument_lines)
+
+    query = f"""
+    query ({variable_block}) {{
+        Page(page: $page, perPage: $perPage) {{
+            pageInfo {{
                 currentPage
                 lastPage
                 hasNextPage
-            }
+            }}
             media(
-                search: $search,
-                type: $type,
-                format_in: $formatFilter,
-                status: $status,
-                season: $season,
-                seasonYear: $seasonYear,
-                startDate_like: $year,
-                sort: $sort,
-                averageScore_greater: $minScore,
-                genre_in: $genres,
-                tag_in: $tags
-            ) {
-                %s
-            }
-        }
-    }
-    """ % _media_fields(include_details=False)
-
-    variables = {
-        "search": clean_search,
-        "page": page,
-        "perPage": per_page,
-        "type": media_type,
-        "formatFilter": effective_formats,
-        "status": status,
-        "season": season,
-        "seasonYear": int(year) if season and year else None,
-        "year": str(year) if year and not season else None,
-        "sort": [effective_sort] if effective_sort else None,
-        "minScore": int(min_score) if min_score is not None else None,
-        "genres": [genre.strip()] if genre and genre.strip() else None,
-        "tags": [tag.strip()] if tag and tag.strip() else None,
-    }
+                {argument_block}
+            ) {{
+                {_media_fields(include_details=False)}
+            }}
+        }}
+    }}
+    """
 
     data = anilist_request(query, variables)
     return data["Page"]
