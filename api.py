@@ -200,8 +200,6 @@ def search_anime(
     elif clean_search and effective_sort is None:
         effective_sort = "SEARCH_MATCH"
 
-    # Only include active GraphQL arguments and variables. Page and perPage
-    # are always used, so their variable declarations are always required.
     argument_lines = []
     variable_lines = ["$page: Int", "$perPage: Int"]
     variables = {"page": page, "perPage": per_page}
@@ -282,6 +280,37 @@ def search_anime(
 
     data = anilist_request(query, variables)
     return data["Page"]
+
+
+def get_media_relations(media_id):
+    """Fetch only the lightweight relation data used by series grouping."""
+    query = """
+    query ($id: Int) {
+        Media(id: $id) {
+            id
+            type
+            format
+            title { romaji english native }
+            coverImage { large }
+            episodes
+            relations {
+                edges {
+                    relationType
+                    node {
+                        id
+                        type
+                        format
+                        title { romaji english native }
+                        coverImage { large }
+                        episodes
+                    }
+                }
+            }
+        }
+    }
+    """
+    data = anilist_request(query, {"id": media_id})
+    return data["Media"]
 
 
 def get_media_details(media_id):
