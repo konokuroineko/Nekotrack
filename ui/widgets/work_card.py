@@ -98,10 +98,18 @@ class WorkCard(QFrame):
         title.setObjectName("title")
         title.setWordWrap(False)
         title.setFont(title_font)
-        title.setFixedHeight(title_metrics.lineSpacing() * max(1, fitted_title.count("\n") + 1))
+        title_line_count = max(1, fitted_title.count("\n") + 1)
+        title.setFixedHeight(title_metrics.lineSpacing() * title_line_count)
         title.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         title.setToolTip(full_title)
-        root.addWidget(title)
+
+        # Keep the title and bundle indicator in one zero-spacing block.
+        # This removes the artificial gap between them while preserving the
+        # normal 8px spacing before/after the whole text block.
+        title_block = QVBoxLayout()
+        title_block.setContentsMargins(0, 0, 0, 0)
+        title_block.setSpacing(0)
+        title_block.addWidget(title)
 
         series_count = self._value("_series_count")
         summary = self._value("_bundle_summary")
@@ -110,18 +118,19 @@ class WorkCard(QFrame):
         except (TypeError, ValueError):
             has_bundle = False
 
-        series_info = None
+        series_font = QFont(self.font())
+        series_font.setPointSize(10)
+        series_font.setWeight(QFont.Weight.Bold)
         if has_bundle:
-            series_font = QFont(self.font())
-            series_font.setPointSize(10)
-            series_font.setWeight(QFont.Weight.Bold)
             series_info = QLabel(str(summary or f"{int(series_count)} entries"))
             series_info.setObjectName("seriesInfo")
             series_info.setFont(series_font)
             series_info.setFixedHeight(QFontMetrics(series_font).lineSpacing())
             series_info.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             series_info.setToolTip(str(summary or ""))
-            root.addWidget(series_info)
+            title_block.addWidget(series_info)
+
+        root.addLayout(title_block)
 
         meta_parts = []
         fmt = self._value("format")
@@ -160,7 +169,7 @@ class WorkCard(QFrame):
             + (add_button.sizeHint().height() if add_button is not None else 0)
             + root.contentsMargins().top()
             + root.contentsMargins().bottom()
-            + root.spacing() * ((1 if title else 0) + (1 if has_bundle else 0) + (1 if meta is not None else 0) + (1 if add_button is not None else 0) + 1)
+            + root.spacing() * (2 + (1 if meta is not None else 0) + (1 if add_button is not None else 0))
         )
         self.setFixedHeight(target_height)
 
