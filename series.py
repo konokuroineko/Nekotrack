@@ -19,52 +19,58 @@ def _series_key(title):
 
 
 def _media_type(item):
-    """Return the AniList media type used to keep series bundles separate."""
     value = item.get("type") if hasattr(item, "get") else item["type"]
     return str(value or "UNKNOWN").upper()
 
 
+def _media_family(item):
+    """Keep Anime, Manga, Novel, and One Shot as separate grouping families."""
+    media_type = _media_type(item)
+    fmt = item.get("format") if hasattr(item, "get") else item["format"]
+    fmt = str(fmt or "").upper()
+    if media_type == "MANGA":
+        if fmt == "NOVEL":
+            return "NOVEL"
+        if fmt == "ONE_SHOT":
+            return "ONE_SHOT"
+        return "MANGA"
+    return media_type
+
+
+def _same_media_family(left, right):
+    return _media_family(left) == _media_family(right)
+
+
 def _series_group_key(item):
-    """Group by normalized title and media type, never across media types."""
     title = _title_text(item) if hasattr(item, "get") else item["title"]
-    return _media_type(item), _series_key(title)
+    return _media_family(item), _series_key(title)
 
 
 def _season_group_key(item):
-    """Return a logical season identifier, treating split parts/cours as one season."""
     title = _title_text(item).lower()
-
     if re.search(r"\bfinal\s+season\b", title):
         return "final"
-
     ordinal = re.search(r"\b(\d+)(?:st|nd|rd|th)\s+season\b", title)
     if ordinal:
         return f"season-{int(ordinal.group(1))}"
-
     numbered = re.search(r"\bseason\s*(\d+)\b", title)
     if numbered:
         return f"season-{int(numbered.group(1))}"
-
     roman = re.search(r"\b(?:season|series)\s+(i|ii|iii|iv|v|vi)\b", title)
     if roman:
         values = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
         return f"season-{values[roman.group(1)]}"
-
-    # A TV entry without a season marker is normally the first/main season.
     return "season-1"
 
 
 def _bundle_summary(members):
     counts = defaultdict(int)
     logical_seasons = set()
-
     for member in members:
         fmt = str(member.get("format") or "").upper() if hasattr(member, "get") else str(member["format"] or "").upper()
         if fmt in {"TV", "TV_SHORT"}:
             logical_seasons.add(_season_group_key(member))
         elif fmt == "OVA":
-            # Count AniList OVA entries, not their episode totals. One OVA entry
-            # can legitimately contain multiple episodes.
             counts["OVAs"] += 1
         elif fmt == "ONA":
             counts["ONAs"] += 1
@@ -78,10 +84,8 @@ def _bundle_summary(members):
             counts[fmt.lower()] += 1
         else:
             counts["entries"] += 1
-
     if logical_seasons:
         counts["seasons"] = len(logical_seasons)
-
     order = ["seasons", "OVAs", "ONAs", "movies", "specials", "music"]
     return " · ".join(
         [f"{counts[key]} {key}" for key in order if counts[key]]
@@ -110,17 +114,13 @@ def _related_placeholder(node):
 
 
 def _discover_related(items, max_nodes=80):
-    """Recursively discover connected same-media series entries through AniList relations."""
     discovered = list(items)
     known_ids = {int(item["id"]) for item in discovered}
     queue = list(discovered)
     fetched_ids = set()
-
     while queue and len(discovered) < max_nodes:
         item = queue.pop(0)
-        item_group = _media_type(item)
         item_id = int(item["id"])
-
         if item_id not in fetched_ids:
             fetched_ids.add(item_id)
             try:
@@ -134,7 +134,7 @@ def _discover_related(items, max_nodes=80):
                     item["episodes"] = details.get("episodes") or item.get("episodes")
             except Exception:
                 pass
-
+        item_family = _media_family(item)
         for edge in _search_relation_edges(item):
             if edge.get("relationType") not in SERIES_RELATIONS:
                 continue
@@ -143,21 +143,19 @@ def _discover_related(items, max_nodes=80):
             if not target_id:
                 continue
             target_id = int(target_id)
-            if target_id in known_ids or _media_type(node) != item_group:
+            if target_id in known_ids or _media_family(node) != item_family:
                 continue
             related = _related_placeholder(node)
             known_ids.add(target_id)
             discovered.append(related)
             queue.append(related)
-
     return discovered
 
 
 def group_media_results(results):
-    """Group search hits into separate Anime, Manga, and Novel series bundles."""
+    """Group search hits into separate media-family series bundles."""
     if not results:
         return []
-
     original_ids = {int(item["id"]) for item in results}
     members = _discover_related(results)
     ids = {int(item["id"]) for item in members}
@@ -184,7 +182,7 @@ def group_media_results(results):
             if not target_id:
                 continue
             target_id = int(target_id)
-            if target_id in ids and _media_type(item) == _media_type(target):
+            if target_id in ids and _same_media_family(item, target):
                 union(item_id, target_id)
 
     by_key = {}
@@ -211,7 +209,6 @@ def group_media_results(results):
         representative["_series_members"] = group_members
         representative["_bundle_summary"] = _bundle_summary(group_members)
         grouped.append((min(first_position.get(int(item["id"]), 10**9) for item in group_members), representative))
-
     grouped.sort(key=lambda pair: pair[0])
     return [item for _, item in grouped]
 
@@ -274,7 +271,7 @@ def get_library_series():
         if source_id in ids and target_id in ids:
             source = next((row for row in rows if int(row["id"]) == source_id), None)
             target = next((row for row in rows if int(row["id"]) == target_id), None)
-            if source is not None and target is not None and _media_type(source) == _media_type(target):
+            if source is not None and target is not None and _same_media_family(source, target):
                 union(source_id, target_id)
 
     by_key = {}
