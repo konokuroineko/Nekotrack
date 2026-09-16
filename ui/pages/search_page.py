@@ -1,11 +1,10 @@
 from threading import Event
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, QTimer
-from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from api import search_anime
-from series import group_media_results, has_pending_relation_enrichment
+from series import group_media_results
 from ui.preferences import get
 from ui.theme import COLORS
 from ui.widgets.work_card import WorkCard
@@ -33,6 +32,7 @@ class SkeletonCard(QFrame):
         cover_height = round(card_size * 284 / 210)
         self.setFixedSize(card_width, cover_height + 112)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.setObjectName("skeleton")
         self.setStyleSheet(f"""
             QFrame#skeleton {{
                 background: transparent;
@@ -45,7 +45,6 @@ class SkeletonCard(QFrame):
                 border-radius: {get('corner_radius')}px;
             }}
         """)
-        self.setObjectName("skeleton")
         root = QVBoxLayout(self)
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(8)
@@ -90,12 +89,13 @@ class SearchWorker(QObject):
 
 
 class SeriesEnrichmentWorker(QObject):
-    finished = Signal(object)
+    finished = Signal(int, object)
 
-    def __init__(self, results, stop_event):
+    def __init__(self, results, stop_event, generation):
         super().__init__()
         self.results = results
         self.stop_event = stop_event
+        self.generation = generation
 
     def run(self):
         grouped = group_media_results(
@@ -105,7 +105,7 @@ class SeriesEnrichmentWorker(QObject):
             delay=1.1,
             stop_event=self.stop_event,
         )
-        self.finished.emit(grouped)
+        self.finished.emit(self.generation, grouped)
 
 
 class SearchPage(QWidget):
@@ -127,6 +127,7 @@ class SearchPage(QWidget):
         self.enrichment_stop = None
         self.enrichment_scheduled = False
         self.enrichment_generation = 0
+        self.enrichment_passes = 0
         self.raw_results = []
 
         root = QVBoxLayout(self)
@@ -263,6 +264,7 @@ class SearchPage(QWidget):
         if self.is_loading: return
         self._stop_enrichment()
         self.enrichment_generation += 1
+        self.enrichment_passes = 0
         self.current_search = text
         self.current_media_type, self.current_media_format = self.selected_media_filter()
         self.current_page = 1
@@ -311,14 +313,13 @@ class SearchPage(QWidget):
         self._start_enrichment()
 
     def _start_enrichment(self):
-        if not self.raw_results or self.enrichment_thread is not None and self.enrichment_thread.isRunning():
+        if not self.raw_results or (self.enrichment_thread is not None and self.enrichment_thread.isRunning()):
             return
         generation = self.enrichment_generation
         stop_event = Event()
         self.enrichment_stop = stop_event
         thread = QThread()
-        worker = SeriesEnrichmentWorker(list(self.raw_results), stop_event)
-        worker._generation = generation
+        worker = SeriesEnrichmentWorker(list(self.raw_results), stop_event, generation)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self.enrichment_finished)
@@ -337,23 +338,25 @@ class SearchPage(QWidget):
         self.enrichment_thread = None
         self.enrichment_scheduled = False
 
-    def enrichment_finished(self, grouped):
-        thread = self.enrichment_thread
-        worker = self.enrichment_worker
-        generation = getattr(worker, "_generation", self.enrichment_generation) if worker else self.enrichment_generation
+    def enrichment_finished(self, generation, grouped):
         if generation != self.enrichment_generation:
             return
         if not self.raw_results:
             return
-        current_grouped = group_media_results(self.raw_results)
-        if grouped:
-            current_grouped = grouped
+
+        current_grouped = group_media_results(
+            self.raw_results,
+            enrich=True,
+            max_requests=0,
+        )
         self.results_title.setText(f"{len(self.raw_results)} entries · {len(current_grouped)} series")
         self._render_grouped(current_grouped)
         self.enrichment_worker = None
         self.enrichment_thread = None
         self.enrichment_stop = None
-        if has_pending_relation_enrichment(self.raw_results) and not self.enrichment_scheduled:
+
+        if self.enrichment_passes < 1:
+            self.enrichment_passes += 1
             self.enrichment_scheduled = True
             QTimer.singleShot(1300, self._resume_enrichment)
         else:
