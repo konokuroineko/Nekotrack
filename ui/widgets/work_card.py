@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QUrl
-from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
+from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QFontMetrics
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout, QSizePolicy
 
@@ -87,12 +87,18 @@ class WorkCard(QFrame):
         self.cover = CoverFrame(get("card_size"))
         root.addWidget(self.cover, 0, Qt.AlignHCenter)
         self._load_cover()
-        title = QLabel(self._title())
+
+        full_title = self._title()
+        title = QLabel(self._fit_title_to_two_lines(full_title, card_width - 12))
         title.setObjectName("title")
         title.setWordWrap(True)
+        title.setFixedHeight(42)
+        title.setMinimumHeight(42)
         title.setMaximumHeight(42)
-        title.setToolTip(title.text())
+        title.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        title.setToolTip(full_title)
         root.addWidget(title)
+
         series_count = self._value("_series_count")
         summary = self._value("_bundle_summary")
         if series_count and int(series_count) > 1:
@@ -120,6 +126,45 @@ class WorkCard(QFrame):
             add_button.setCursor(Qt.PointingHandCursor)
             add_button.clicked.connect(self._add_clicked)
             root.addWidget(add_button)
+
+    @staticmethod
+    def _fit_title_to_two_lines(text, width):
+        """Wrap a title to at most two lines and ellipsize the second line when needed."""
+        text = " ".join(str(text).split())
+        if not text:
+            return ""
+        font_metrics = QFontMetrics(QLabel().font())
+        space_width = font_metrics.horizontalAdvance(" ")
+        words = text.split(" ")
+        lines = []
+        current = ""
+
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            if font_metrics.horizontalAdvance(candidate) <= width:
+                current = candidate
+                continue
+
+            if current:
+                lines.append(current)
+                current = word
+            else:
+                current = font_metrics.elidedText(word, Qt.TextElideMode.ElideRight, width)
+                lines.append(current)
+                current = ""
+
+            if len(lines) == 2:
+                break
+
+        if len(lines) < 2 and current:
+            lines.append(current)
+        elif len(lines) == 2 and current and lines[-1] != current:
+            lines[1] = font_metrics.elidedText(f"{lines[1]} {current}", Qt.TextElideMode.ElideRight, width)
+
+        if len(lines) >= 2 and " ".join(lines) != text:
+            lines[1] = font_metrics.elidedText(lines[1], Qt.TextElideMode.ElideRight, width)
+
+        return "\n".join(lines[:2])
 
     def _value(self, key):
         if hasattr(self.work, "get"):
