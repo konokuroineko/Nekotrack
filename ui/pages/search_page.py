@@ -136,7 +136,10 @@ class SearchPage(QWidget):
         if self.current_media_type == "ANIME":
             items = ["All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music"]
         elif self.current_media_type == "MANGA":
-            items = ["All", "Manga", "Novel", "One Shot"]
+            if self.current_media_format == "NOVEL":
+                items = ["All", "Novel"]
+            else:
+                items = ["All", "Manga", "One Shot"]
         else:
             items = ["All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music", "Manga", "Novel", "One Shot"]
         self.format_filter.addItems(items)
@@ -172,7 +175,7 @@ class SearchPage(QWidget):
         text = self.search.text().strip()
         if self.is_loading: return
         self.current_search = text; self.current_media_type, self.current_media_format = self.selected_media_filter(); self.current_page = 1; self.has_next_page = False; self.raw_results = []; self.has_searched = True
-        self.clear_results(); self.results_title.setText(f"Browsing AniList" if not text else f"Searching for “{text}”"); self.search_button.setEnabled(False); self.is_loading = True; self.start_search(text, 1)
+        self.clear_results(); self.results_title.setText("Browsing AniList" if not text else f"Searching for “{text}”"); self.search_button.setEnabled(False); self.is_loading = True; self.start_search(text, 1)
 
     def load_more_results(self):
         if self.has_searched and self.has_next_page and not self.is_loading:
