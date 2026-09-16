@@ -140,7 +140,7 @@ def search_anime(
     search,
     page=1,
     per_page=20,
-    media_type="ANIME",
+    media_type=None,
     media_format=None,
     format_filter=None,
     status=None,
@@ -150,9 +150,9 @@ def search_anime(
     min_score=None,
     genre=None,
 ):
-    """Search AniList for anime, manga, or novel media with optional filters."""
-    if media_type not in {"ANIME", "MANGA"}:
-        raise ValueError("media_type must be ANIME or MANGA")
+    """Search or browse AniList media with optional filters."""
+    if media_type not in {None, "ANIME", "MANGA"}:
+        raise ValueError("media_type must be None, ANIME, or MANGA")
 
     query = """
     query (
@@ -202,6 +202,10 @@ def search_anime(
         if media_format not in {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC"}:
             raise ValueError("Invalid anime media_format")
 
+    if media_type is None and media_format is not None:
+        if media_format not in {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC", "MANGA", "NOVEL", "ONE_SHOT"}:
+            raise ValueError("Invalid media_format")
+
     if format_filter and format_filter not in {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC", "MANGA", "NOVEL", "ONE_SHOT"}:
         raise ValueError("Invalid format_filter")
 
@@ -232,7 +236,7 @@ def search_anime(
         raise ValueError("min_score must be between 0 and 100")
 
     variables = {
-        "search": search,
+        "search": search.strip() or None if isinstance(search, str) else search,
         "page": page,
         "perPage": per_page,
         "type": media_type,
