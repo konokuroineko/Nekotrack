@@ -24,23 +24,27 @@ class SearchWorker(QObject):
     finished = Signal(object)
     error = Signal(str)
 
-    def __init__(self, search_text, page, media_type, media_format, filters):
+    def __init__(self, search_text, page, media_type, media_format, filters, existing_results):
         super().__init__()
         self.search_text = search_text
         self.page = page
         self.media_type = media_type
         self.media_format = media_format
         self.filters = filters
+        self.existing_results = existing_results
 
     def run(self):
         try:
-            self.finished.emit(search_anime(
+            data = search_anime(
                 self.search_text,
                 self.page,
                 media_type=self.media_type,
                 media_format=self.media_format,
                 **self.filters,
-            ))
+            )
+            combined_results = self.existing_results + data["media"]
+            grouped = group_media_results(combined_results)
+            self.finished.emit((data, grouped))
         except Exception as error:
             self.error.emit(str(error))
 
@@ -211,16 +215,24 @@ class SearchPage(QWidget):
             self.start_search(self.current_search, self.current_page + 1)
 
     def start_search(self, text, page):
-        thread = QThread(); worker = SearchWorker(text, page, self.current_media_type, self.current_media_format, self.selected_filters()); worker.moveToThread(thread); thread.started.connect(worker.run)
-        worker.finished.connect(self.search_finished); worker.error.connect(self.search_error); worker.finished.connect(thread.quit); worker.error.connect(thread.quit); thread.finished.connect(worker.deleteLater); thread.finished.connect(thread.deleteLater)
+        thread = QThread()
+        worker = SearchWorker(text, page, self.current_media_type, self.current_media_format, self.selected_filters(), list(self.raw_results))
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self.search_finished)
+        worker.error.connect(self.search_error)
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
         self.threads.append(thread); self.workers.append(worker); thread.start()
 
-    def search_finished(self, data):
+    def search_finished(self, result):
+        data, grouped = result
         self.search_button.setEnabled(True); self.is_loading = False; self.current_page = data["pageInfo"]["currentPage"]; self.has_next_page = data["pageInfo"]["hasNextPage"]
         new_results = data["media"]
         if self.current_page == 1: self.raw_results = []
         self.raw_results.extend(new_results)
-        grouped = group_media_results(self.raw_results)
         self.results_title.setText(f"{len(self.raw_results)} entries · {len(grouped)} series · page {self.current_page}")
         if not grouped and self.current_page == 1: self.show_message("No results found"); return
         self._render_grouped(grouped)
