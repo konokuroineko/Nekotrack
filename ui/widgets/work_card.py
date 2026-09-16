@@ -94,12 +94,11 @@ class WorkCard(QFrame):
         title_font.setWeight(QFont.Weight.Bold)
         title_metrics = QFontMetrics(title_font)
         fitted_title = self._fit_title_to_two_lines(full_title, card_width - 12, title_font)
-        title_line_count = max(1, fitted_title.count("\n") + 1)
         title = QLabel(fitted_title)
         title.setObjectName("title")
         title.setWordWrap(False)
         title.setFont(title_font)
-        title.setFixedHeight(title_metrics.lineSpacing() * title_line_count)
+        title.setFixedHeight(title_metrics.lineSpacing() * max(1, fitted_title.count("\n") + 1))
         title.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         title.setToolTip(full_title)
         root.addWidget(title)
@@ -110,6 +109,8 @@ class WorkCard(QFrame):
             has_bundle = int(series_count or 0) > 1
         except (TypeError, ValueError):
             has_bundle = False
+
+        series_info = None
         if has_bundle:
             series_font = QFont(self.font())
             series_font.setPointSize(10)
@@ -121,6 +122,7 @@ class WorkCard(QFrame):
             series_info.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             series_info.setToolTip(str(summary or ""))
             root.addWidget(series_info)
+
         meta_parts = []
         fmt = self._value("format")
         year = self._value("start_year") or (self._value("startDate") or {}).get("year")
@@ -131,16 +133,36 @@ class WorkCard(QFrame):
         score = self._value("averageScore")
         if mode == "search" and score:
             meta_parts.append(f"★ {score}")
+
+        meta = None
         if meta_parts:
             meta = QLabel("  ·  ".join(meta_parts))
             meta.setObjectName("meta")
             root.addWidget(meta)
+
+        add_button = None
         if mode == "search":
             add_button = QPushButton("+  Add to Library")
             add_button.setObjectName("add")
             add_button.setCursor(Qt.PointingHandCursor)
             add_button.clicked.connect(self._add_clicked)
             root.addWidget(add_button)
+
+        # Keep every card the same height as the maximum two-line-title layout.
+        # Any unused height is placed after the content, never between title/series/meta.
+        root.addStretch(1)
+        self.adjustSize()
+        target_height = (
+            self.cover.height()
+            + 2 * title_metrics.lineSpacing()
+            + (QFontMetrics(series_font).lineSpacing() if has_bundle else 0)
+            + (meta.sizeHint().height() if meta is not None else 0)
+            + (add_button.sizeHint().height() if add_button is not None else 0)
+            + root.contentsMargins().top()
+            + root.contentsMargins().bottom()
+            + root.spacing() * ((1 if title else 0) + (1 if has_bundle else 0) + (1 if meta is not None else 0) + (1 if add_button is not None else 0) + 1)
+        )
+        self.setFixedHeight(target_height)
 
     @staticmethod
     def _fit_title_to_two_lines(text, width, font):
