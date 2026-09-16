@@ -1,11 +1,14 @@
 from collections import defaultdict
 import re
+import time
 
-from api import get_media_details
+from api import get_media_details, get_media_relations
 from database import get_all_library, get_connection, save_anime
 
 SERIES_RELATIONS = {"PREQUEL", "SEQUEL", "PARENT", "SIDE_STORY", "SUMMARY", "FULL_STORY", "SPIN_OFF"}
 _relation_sync_checked_ids = set()
+_relation_cache = {}
+_relation_cache_failures = set()
 
 
 def _series_key(title):
@@ -42,7 +45,7 @@ def _same_media_family(left, right):
 
 
 def _series_group_key(item):
-    title = _title_text(item) if hasattr(item, "get") else item["title"]
+    title = _title_text(item)
     return _media_family(item), _series_key(title)
 
 
@@ -109,32 +112,71 @@ def _related_placeholder(node):
         "format": node.get("format"),
         "title": node.get("title") or {},
         "coverImage": node.get("coverImage") or {},
+        "episodes": node.get("episodes"),
         "_related_only": True,
+        "_relations_loaded": False,
     }
 
 
-def _discover_related(items, max_nodes=80):
+def _apply_relation_details(item, details):
+    if not details:
+        return
+    item["relations"] = details.get("relations") or {}
+    item["type"] = details.get("type") or item.get("type")
+    item["format"] = details.get("format") or item.get("format")
+    item["title"] = details.get("title") or item.get("title") or {}
+    item["coverImage"] = details.get("coverImage") or item.get("coverImage") or {}
+    item["episodes"] = details.get("episodes") if details.get("episodes") is not None else item.get("episodes")
+    item["_relations_loaded"] = True
+
+
+def _cache_relation_details(media_id):
+    media_id = int(media_id)
+    if media_id in _relation_cache:
+        return _relation_cache[media_id]
+    if media_id in _relation_cache_failures:
+        return None
+    try:
+        details = get_media_relations(media_id)
+    except Exception:
+        _relation_cache_failures.add(media_id)
+        return None
+    _relation_cache[media_id] = details or {}
+    return _relation_cache[media_id]
+
+
+def _discover_related(items, max_nodes=80, max_requests=0, delay=1.0, stop_event=None):
+    """Expand direct search relations immediately and fetch deeper relations slowly in background."""
     discovered = list(items)
     known_ids = {int(item["id"]) for item in discovered}
     queue = list(discovered)
-    fetched_ids = set()
+    requests_used = 0
+
     while queue and len(discovered) < max_nodes:
+        if stop_event is not None and stop_event.is_set():
+            break
         item = queue.pop(0)
         item_id = int(item["id"])
-        if item_id not in fetched_ids:
-            fetched_ids.add(item_id)
-            try:
-                details = get_media_details(item_id)
+
+        relations_loaded = bool(item.get("_relations_loaded")) if hasattr(item, "get") else False
+        if not relations_loaded and not _search_relation_edges(item):
+            cached = _relation_cache.get(item_id)
+            if cached is not None:
+                _apply_relation_details(item, cached)
+                relations_loaded = True
+            elif requests_used < max_requests:
+                if requests_used and delay > 0:
+                    time.sleep(delay)
+                if stop_event is not None and stop_event.is_set():
+                    break
+                details = _cache_relation_details(item_id)
+                requests_used += 1
                 if details:
-                    item["relations"] = details.get("relations") or {}
-                    item["type"] = details.get("type") or item.get("type")
-                    item["format"] = details.get("format") or item.get("format")
-                    item["title"] = details.get("title") or item.get("title") or {}
-                    item["coverImage"] = details.get("coverImage") or item.get("coverImage") or {}
-                    item["episodes"] = details.get("episodes") or item.get("episodes")
-            except Exception:
-                pass
-        item_family = _media_family(item)
+                    _apply_relation_details(item, details)
+                    relations_loaded = True
+                else:
+                    continue
+
         for edge in _search_relation_edges(item):
             if edge.get("relationType") not in SERIES_RELATIONS:
                 continue
@@ -143,22 +185,19 @@ def _discover_related(items, max_nodes=80):
             if not target_id:
                 continue
             target_id = int(target_id)
-            if target_id in known_ids or _media_family(node) != item_family:
+            if target_id in known_ids or _media_family(node) != _media_family(item):
                 continue
             related = _related_placeholder(node)
             known_ids.add(target_id)
             discovered.append(related)
             queue.append(related)
-    return discovered
+
+    return discovered, requests_used
 
 
-def group_media_results(results):
-    """Group search hits into separate media-family series bundles."""
-    if not results:
-        return []
+def _group_discovered(results, discovered):
     original_ids = {int(item["id"]) for item in results}
-    members = _discover_related(results)
-    ids = {int(item["id"]) for item in members}
+    ids = {int(item["id"]) for item in discovered}
     parent = {item_id: item_id for item_id in ids}
 
     def find(item_id):
@@ -172,7 +211,7 @@ def group_media_results(results):
         if left != right:
             parent[right] = left
 
-    for item in members:
+    for item in discovered:
         item_id = int(item["id"])
         for edge in _search_relation_edges(item):
             if edge.get("relationType") not in SERIES_RELATIONS:
@@ -186,7 +225,7 @@ def group_media_results(results):
                 union(item_id, target_id)
 
     by_key = {}
-    for item in members:
+    for item in discovered:
         key = _series_group_key(item)
         item_id = int(item["id"])
         if key[1]:
@@ -196,7 +235,7 @@ def group_media_results(results):
                 by_key[key] = item_id
 
     groups = defaultdict(list)
-    for item in members:
+    for item in discovered:
         groups[find(int(item["id"]))].append(item)
 
     first_position = {int(item["id"]): i for i, item in enumerate(results)}
@@ -211,6 +250,47 @@ def group_media_results(results):
         grouped.append((min(first_position.get(int(item["id"]), 10**9) for item in group_members), representative))
     grouped.sort(key=lambda pair: pair[0])
     return [item for _, item in grouped]
+
+
+def group_media_results(results, enrich=False, max_requests=0, delay=1.0, stop_event=None):
+    """Group results instantly, optionally expanding deeper relation chains in the background."""
+    if not results:
+        return []
+    discovered, _ = _discover_related(
+        results,
+        max_requests=max_requests if enrich else 0,
+        delay=delay,
+        stop_event=stop_event,
+    )
+    return _group_discovered(results, discovered)
+
+
+def has_pending_relation_enrichment(results):
+    """Return whether known relation placeholders still have uncached relation data."""
+    seen = set()
+    queue = list(results)
+    while queue:
+        item = queue.pop(0)
+        item_id = int(item["id"])
+        if item_id in seen:
+            continue
+        seen.add(item_id)
+        if item.get("_relations_loaded"):
+            edges = _search_relation_edges(item)
+        else:
+            cached = _relation_cache.get(item_id)
+            if cached:
+                edges = (cached.get("relations") or {}).get("edges", [])
+            elif item.get("_related_only"):
+                return True
+            else:
+                edges = _search_relation_edges(item)
+        for edge in edges:
+            if edge.get("relationType") in SERIES_RELATIONS:
+                node = edge.get("node") or {}
+                if node.get("id") and int(node["id"]) not in seen and node.get("id") not in _relation_cache:
+                    queue.append(_related_placeholder(node))
+    return False
 
 
 def _relation_data_for(ids):
