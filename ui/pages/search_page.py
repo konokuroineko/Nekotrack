@@ -1,8 +1,12 @@
-from PySide6.QtCore import QObject, QThread, Qt, Signal
+from threading import Event
+
+from PySide6.QtCore import QObject, QThread, Qt, Signal, QTimer
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from api import search_anime
-from series import group_media_results
+from series import group_media_results, has_pending_relation_enrichment
+from ui.preferences import get
 from ui.theme import COLORS
 from ui.widgets.work_card import WorkCard
 
@@ -20,18 +24,56 @@ class InfiniteScrollArea(QScrollArea):
             self.scroll_to_bottom.emit()
 
 
+class SkeletonCard(QFrame):
+    """Lightweight result placeholder shown while AniList work is in flight."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        card_size = get("card_size")
+        card_width = card_size + 8
+        cover_height = round(card_size * 284 / 210)
+        self.setFixedSize(card_width, cover_height + 112)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.setStyleSheet(f"""
+            QFrame#skeleton {{
+                background: transparent;
+                border: 2px solid {COLORS['border']};
+                border-radius: {get('corner_radius') + 2}px;
+            }}
+            QFrame#skeletonFill {{
+                background: {COLORS['surface_hover']};
+                border: 1px solid {COLORS['border']};
+                border-radius: {get('corner_radius')}px;
+            }}
+        """)
+        self.setObjectName("skeleton")
+        root = QVBoxLayout(self)
+        root.setContentsMargins(4, 4, 4, 4)
+        root.setSpacing(8)
+
+        cover = QFrame(); cover.setObjectName("skeletonFill"); cover.setFixedSize(card_size, cover_height)
+        root.addWidget(cover, 0, Qt.AlignHCenter)
+
+        title_line_1 = QFrame(); title_line_1.setObjectName("skeletonFill"); title_line_1.setFixedHeight(9); title_line_1.setFixedWidth(max(80, card_width - 26))
+        title_line_2 = QFrame(); title_line_2.setObjectName("skeletonFill"); title_line_2.setFixedHeight(9); title_line_2.setFixedWidth(max(55, card_width - 70))
+        root.addWidget(title_line_1)
+        root.addWidget(title_line_2)
+
+        meta = QFrame(); meta.setObjectName("skeletonFill"); meta.setFixedHeight(8); meta.setFixedWidth(max(70, card_width - 90))
+        root.addWidget(meta)
+        root.addStretch(1)
+
+
 class SearchWorker(QObject):
     finished = Signal(object)
     error = Signal(str)
 
-    def __init__(self, search_text, page, media_type, media_format, filters, existing_results):
+    def __init__(self, search_text, page, media_type, media_format, filters):
         super().__init__()
         self.search_text = search_text
         self.page = page
         self.media_type = media_type
         self.media_format = media_format
         self.filters = filters
-        self.existing_results = existing_results
 
     def run(self):
         try:
@@ -42,11 +84,28 @@ class SearchWorker(QObject):
                 media_format=self.media_format,
                 **self.filters,
             )
-            combined_results = self.existing_results + data["media"]
-            grouped = group_media_results(combined_results)
-            self.finished.emit((data, grouped))
+            self.finished.emit(data)
         except Exception as error:
             self.error.emit(str(error))
+
+
+class SeriesEnrichmentWorker(QObject):
+    finished = Signal(object)
+
+    def __init__(self, results, stop_event):
+        super().__init__()
+        self.results = results
+        self.stop_event = stop_event
+
+    def run(self):
+        grouped = group_media_results(
+            self.results,
+            enrich=True,
+            max_requests=8,
+            delay=1.1,
+            stop_event=self.stop_event,
+        )
+        self.finished.emit(grouped)
 
 
 class SearchPage(QWidget):
@@ -63,6 +122,11 @@ class SearchPage(QWidget):
         self.is_loading = False
         self.has_searched = False
         self.threads, self.workers = [], []
+        self.enrichment_thread = None
+        self.enrichment_worker = None
+        self.enrichment_stop = None
+        self.enrichment_scheduled = False
+        self.enrichment_generation = 0
         self.raw_results = []
 
         root = QVBoxLayout(self)
@@ -197,13 +261,15 @@ class SearchPage(QWidget):
     def search_clicked(self):
         text = self.search.text().strip()
         if self.is_loading: return
+        self._stop_enrichment()
+        self.enrichment_generation += 1
         self.current_search = text
         self.current_media_type, self.current_media_format = self.selected_media_filter()
         self.current_page = 1
         self.has_next_page = False
         self.raw_results = []
         self.has_searched = True
-        self.clear_results()
+        self.show_skeletons(12)
         self.results_title.setText("Browsing AniList" if not text else f"Searching for “{text}”")
         self.search_button.setEnabled(False)
         self.is_loading = True
@@ -211,12 +277,13 @@ class SearchPage(QWidget):
 
     def load_more_results(self):
         if self.has_searched and self.has_next_page and not self.is_loading:
+            self.show_skeletons(8, append=True)
             self.is_loading = True
             self.start_search(self.current_search, self.current_page + 1)
 
     def start_search(self, text, page):
         thread = QThread()
-        worker = SearchWorker(text, page, self.current_media_type, self.current_media_format, self.selected_filters(), list(self.raw_results))
+        worker = SearchWorker(text, page, self.current_media_type, self.current_media_format, self.selected_filters())
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self.search_finished)
@@ -227,15 +294,75 @@ class SearchPage(QWidget):
         thread.finished.connect(thread.deleteLater)
         self.threads.append(thread); self.workers.append(worker); thread.start()
 
-    def search_finished(self, result):
-        data, grouped = result
-        self.search_button.setEnabled(True); self.is_loading = False; self.current_page = data["pageInfo"]["currentPage"]; self.has_next_page = data["pageInfo"]["hasNextPage"]
+    def search_finished(self, data):
+        self.search_button.setEnabled(True); self.is_loading = False
+        self.current_page = data["pageInfo"]["currentPage"]
+        self.has_next_page = data["pageInfo"]["hasNextPage"]
         new_results = data["media"]
-        if self.current_page == 1: self.raw_results = []
+        if self.current_page == 1:
+            self.raw_results = []
         self.raw_results.extend(new_results)
+
+        grouped = group_media_results(self.raw_results)
         self.results_title.setText(f"{len(self.raw_results)} entries · {len(grouped)} series · page {self.current_page}")
-        if not grouped and self.current_page == 1: self.show_message("No results found"); return
+        if not grouped and self.current_page == 1:
+            self.clear_results(); self.show_message("No results found"); return
         self._render_grouped(grouped)
+        self._start_enrichment()
+
+    def _start_enrichment(self):
+        if not self.raw_results or self.enrichment_thread is not None and self.enrichment_thread.isRunning():
+            return
+        generation = self.enrichment_generation
+        stop_event = Event()
+        self.enrichment_stop = stop_event
+        thread = QThread()
+        worker = SeriesEnrichmentWorker(list(self.raw_results), stop_event)
+        worker._generation = generation
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self.enrichment_finished)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self.enrichment_thread = thread
+        self.enrichment_worker = worker
+        thread.start()
+
+    def _stop_enrichment(self):
+        if self.enrichment_stop is not None:
+            self.enrichment_stop.set()
+        self.enrichment_stop = None
+        self.enrichment_worker = None
+        self.enrichment_thread = None
+        self.enrichment_scheduled = False
+
+    def enrichment_finished(self, grouped):
+        thread = self.enrichment_thread
+        worker = self.enrichment_worker
+        generation = getattr(worker, "_generation", self.enrichment_generation) if worker else self.enrichment_generation
+        if generation != self.enrichment_generation:
+            return
+        if not self.raw_results:
+            return
+        current_grouped = group_media_results(self.raw_results)
+        if grouped:
+            current_grouped = grouped
+        self.results_title.setText(f"{len(self.raw_results)} entries · {len(current_grouped)} series")
+        self._render_grouped(current_grouped)
+        self.enrichment_worker = None
+        self.enrichment_thread = None
+        self.enrichment_stop = None
+        if has_pending_relation_enrichment(self.raw_results) and not self.enrichment_scheduled:
+            self.enrichment_scheduled = True
+            QTimer.singleShot(1300, self._resume_enrichment)
+        else:
+            self.enrichment_scheduled = False
+
+    def _resume_enrichment(self):
+        self.enrichment_scheduled = False
+        if self.has_searched and self.raw_results:
+            self._start_enrichment()
 
     def _render_grouped(self, grouped):
         self.clear_results()
@@ -244,12 +371,35 @@ class SearchPage(QWidget):
         self._reflow_cards()
 
     def search_error(self, message):
-        self.search_button.setEnabled(True); self.is_loading = False; self.clear_results()
+        self.search_button.setEnabled(True); self.is_loading = False
+        rate_limited = "(429)" in message
+        if self.raw_results and rate_limited:
+            self.has_next_page = False
+            self.clear_skeletons()
+            grouped = group_media_results(self.raw_results)
+            self._render_grouped(grouped)
+            self.results_title.setText(f"{len(self.raw_results)} entries · {len(grouped)} series · AniList rate limit reached")
+            return
+        self.clear_results()
         if "(403)" in message and "temporarily disabled" in message.lower(): text = "AniList is temporarily unavailable.\nYour offline library still works."
-        elif "(429)" in message: text = "AniList is rate-limiting requests.\nPlease try again shortly."
+        elif rate_limited: text = "AniList is rate-limiting requests.\nPlease try again shortly."
         elif "(5" in message[:20]: text = "AniList is having server problems.\nPlease try again later."
         else: text = f"Search failed.\n{message}"
         self.results_title.setText("Search unavailable"); self.show_message(text); retry = QPushButton("Try again"); retry.clicked.connect(self.search_clicked); self.grid_layout.addWidget(retry, 1, 0)
+
+    def show_skeletons(self, count, append=False):
+        if not append:
+            self.clear_results()
+        for _ in range(count):
+            self.grid_layout.addWidget(SkeletonCard())
+        self._reflow_cards()
+
+    def clear_skeletons(self):
+        for i in range(self.grid_layout.count() - 1, -1, -1):
+            widget = self.grid_layout.itemAt(i).widget()
+            if isinstance(widget, SkeletonCard):
+                self.grid_layout.takeAt(i)
+                widget.deleteLater()
 
     def show_message(self, text):
         panel = QFrame(); panel.setStyleSheet(f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 18px;")
@@ -265,13 +415,14 @@ class SearchPage(QWidget):
         super().resizeEvent(event); self._reflow_cards()
 
     def _reflow_cards(self):
-        cards = []
+        widgets = []
         for i in range(self.grid_layout.count()):
             widget = self.grid_layout.itemAt(i).widget()
-            if isinstance(widget, WorkCard): cards.append(widget)
-        for card in cards: self.grid_layout.removeWidget(card)
-        columns = max(1, self.results_scroll.viewport().width() // 230); columns = min(columns, max(1, len(cards)))
+            if isinstance(widget, (WorkCard, SkeletonCard)):
+                widgets.append(widget)
+        for widget in widgets: self.grid_layout.removeWidget(widget)
+        columns = max(1, self.results_scroll.viewport().width() // 230); columns = min(columns, max(1, len(widgets)))
         for col in range(columns): self.grid_layout.setColumnStretch(col, 1)
-        for i, card in enumerate(cards):
-            row = i // columns; row_count = min(columns, len(cards) - row * columns); start_col = (columns - row_count) // 2
-            self.grid_layout.addWidget(card, row, start_col + (i % columns), Qt.AlignHCenter)
+        for i, widget in enumerate(widgets):
+            row = i // columns; row_count = min(columns, len(widgets) - row * columns); start_col = (columns - row_count) // 2
+            self.grid_layout.addWidget(widget, row, start_col + (i % columns), Qt.AlignHCenter)
