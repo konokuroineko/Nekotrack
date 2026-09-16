@@ -149,6 +149,7 @@ def search_anime(
     sort=None,
     min_score=None,
     genre=None,
+    tag=None,
 ):
     """Search AniList for anime, manga, or novel media with optional filters."""
     if media_type not in {None, "ANIME", "MANGA"}:
@@ -172,36 +173,31 @@ def search_anime(
         raise ValueError("Invalid season")
 
     if sort and sort not in {
-        "SEARCH_MATCH",
-        "POPULARITY_DESC",
-        "POPULARITY",
-        "SCORE_DESC",
-        "SCORE",
-        "START_DATE_DESC",
-        "START_DATE",
-        "END_DATE_DESC",
-        "END_DATE",
+        "ID",
+        "ID_DESC",
         "TITLE_ROMAJI",
         "TITLE_ROMAJI_DESC",
+        "START_DATE",
+        "START_DATE_DESC",
+        "END_DATE",
+        "END_DATE_DESC",
+        "SCORE",
+        "SCORE_DESC",
+        "POPULARITY",
+        "POPULARITY_DESC",
+        "UPDATED_AT",
         "UPDATED_AT_DESC",
-        "ID_DESC",
+        "SEARCH_MATCH",
     }:
         raise ValueError("Invalid sort")
 
     if min_score is not None and not 0 <= int(min_score) <= 100:
         raise ValueError("min_score must be between 0 and 100")
 
-    # AniList treats format_in as the multi-format filter. Do not send
-    # format and format_in together: some combinations are rejected with
-    # "illegal operator and value combinations".
-    effective_formats = None
-    if format_filter:
-        effective_formats = [format_filter]
-    elif media_format:
+    effective_formats = [format_filter] if format_filter else None
+    if media_format and not format_filter:
         effective_formats = [media_format]
 
-    # Relevance sorting requires an actual text search. Browsing with
-    # filters uses popularity when no explicit sort was requested.
     clean_search = search.strip() if search else None
     effective_sort = sort
     if not clean_search and effective_sort == "SEARCH_MATCH":
@@ -220,7 +216,8 @@ def search_anime(
         $year: String,
         $sort: [MediaSort],
         $minScore: Int,
-        $genres: [String]
+        $genres: [String],
+        $tags: [String]
     ) {
         Page(page: $page, perPage: $perPage) {
             pageInfo {
@@ -238,7 +235,8 @@ def search_anime(
                 startDate_like: $year,
                 sort: $sort,
                 averageScore_greater: $minScore,
-                genre_in: $genres
+                genre_in: $genres,
+                tag_in: $tags
             ) {
                 %s
             }
@@ -259,6 +257,7 @@ def search_anime(
         "sort": [effective_sort] if effective_sort else None,
         "minScore": int(min_score) if min_score is not None else None,
         "genres": [genre.strip()] if genre and genre.strip() else None,
+        "tags": [tag.strip()] if tag and tag.strip() else None,
     }
 
     data = anilist_request(query, variables)
