@@ -1,72 +1,27 @@
-from pathlib import Path
-
-from PySide6.QtCore import Qt, Signal, QUrl
-from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QFont, QFontMetrics
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QFont, QFontMetrics, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout, QSizePolicy
+from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QSizePolicy, QVBoxLayout
 
-from database import save_cover_path
-from ui.preferences import get
-from ui.theme import COLORS
-
-
-IMAGE_DIRECTORY = Path("data") / "images" / "works"
-
-
-class CoverFrame(QFrame):
-    """Poster with artwork clipped to the rounded frame and an accent outline."""
-    def __init__(self, width=None, parent=None):
-        super().__init__(parent)
-        self._pixmap = QPixmap()
-        self._width = width or get("card_size")
-        self.setFixedSize(self._width, round(self._width * 284 / 210))
-        self.setAttribute(Qt.WA_TranslucentBackground)
-
-    def set_pixmap(self, pixmap):
-        self._pixmap = pixmap
-        self.update()
-
-    def paintEvent(self, event):
-        del event
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        rect = self.rect().adjusted(2, 2, -2, -2)
-        radius = get("corner_radius")
-        path = QPainterPath()
-        path.addRoundedRect(rect, radius, radius)
-        if not self._pixmap.isNull():
-            scaled = self._pixmap.scaled(rect.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            x = max(0, (scaled.width() - rect.width()) // 2)
-            y = max(0, (scaled.height() - rect.height()) // 2)
-            cropped = scaled.copy(x, y, rect.width(), rect.height())
-            painter.save()
-            painter.setClipPath(path)
-            painter.drawPixmap(rect.topLeft(), cropped)
-            painter.restore()
-        painter.setPen(QPen(QColor(COLORS["accent"]), 3.0))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawPath(path)
-        painter.end()
+from ui.theme import COLORS, get
+from ui.widgets.cover_frame import CoverFrame
 
 
 class WorkCard(QFrame):
-    clicked = Signal(object)
-    progress_changed = Signal(int)
-    add_requested = Signal(object)
+    _network_manager = QNetworkAccessManager()
     _cover_cache = {}
     _cover_failures = set()
 
-    def __init__(self, work, progress_editable=False, mode="library", add_callback=None, parent=None):
-        super().__init__(parent)
+    def __init__(self, work, progress_editable=False, mode="library", add_callback=None):
+        super().__init__()
         self.work = work
+        self.progress_editable = progress_editable
         self.mode = mode
         self.add_callback = add_callback
-        self._network_manager = QNetworkAccessManager(self)
         self._cover_reply = None
+
+        card_width = get("card_size")
         self.setObjectName("posterCard")
-        self.setCursor(Qt.PointingHandCursor)
-        card_width = get("card_size") + 8
         self.setFixedWidth(card_width)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         hover_css = f"background: {COLORS['surface_hover']}; border-color: {COLORS['accent']};" if get("hover_highlight") else ""
@@ -83,7 +38,7 @@ class WorkCard(QFrame):
         """)
         root = QVBoxLayout(self)
         root.setContentsMargins(2, 2, 2, 2)
-        root.setSpacing(8)
+        root.setSpacing(4)
         self.cover = CoverFrame(get("card_size"))
         root.addWidget(self.cover, 0, Qt.AlignHCenter)
         self._load_cover()
@@ -93,23 +48,36 @@ class WorkCard(QFrame):
         title_font.setPointSize(get("font_size"))
         title_font.setWeight(QFont.Weight.Bold)
         title_metrics = QFontMetrics(title_font)
-        title_height = title_metrics.lineSpacing() * 2
-        title = QLabel(self._fit_title_to_two_lines(full_title, card_width - 12, title_font))
+        fitted_title = self._fit_title_to_two_lines(full_title, card_width - 12, title_font)
+        title_line_count = max(1, fitted_title.count("\n") + 1)
+        title = QLabel(fitted_title)
         title.setObjectName("title")
         title.setWordWrap(False)
         title.setFont(title_font)
-        title.setFixedHeight(title_height)
+        title.setFixedHeight(title_metrics.lineSpacing() * title_line_count)
         title.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         title.setToolTip(full_title)
         root.addWidget(title)
 
         series_count = self._value("_series_count")
         summary = self._value("_bundle_summary")
-        if series_count and int(series_count) > 1:
+        try:
+            has_bundle = int(series_count or 0) > 1
+        except (TypeError, ValueError):
+            has_bundle = False
+
+        if has_bundle:
+            series_info_font = QFont(self.font())
+            series_info_font.setPointSize(10)
+            series_info_font.setWeight(QFont.Weight.Bold)
             series_info = QLabel(str(summary or f"{int(series_count)} entries"))
             series_info.setObjectName("seriesInfo")
-            series_info.setToolTip("")
+            series_info.setFont(series_info_font)
+            series_info.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            series_info.setFixedHeight(QFontMetrics(series_info_font).lineSpacing())
+            series_info.setToolTip(str(summary) if summary else "")
             root.addWidget(series_info)
+
         meta_parts = []
         fmt = self._value("format")
         year = self._value("start_year") or (self._value("startDate") or {}).get("year")
@@ -229,51 +197,27 @@ class WorkCard(QFrame):
 
     def _cover_finished(self, cover_url):
         reply = self._cover_reply
-        self._cover_reply = None
-        if reply is not None and reply.error() == reply.NetworkError.NoError:
-            pixmap = QPixmap()
-            if pixmap.loadFromData(reply.readAll()):
-                self._cover_cache[cover_url] = pixmap
-                self.cover.set_pixmap(pixmap)
-                work_id = self._value("id")
-                if work_id:
-                    try:
-                        IMAGE_DIRECTORY.mkdir(parents=True, exist_ok=True)
-                        path = IMAGE_DIRECTORY / f"{work_id}.jpg"
-                        if pixmap.save(str(path), "JPG", 85):
-                            save_cover_path(work_id, str(path))
-                    except Exception:
-                        pass
-            else:
-                self._cover_failures.add(cover_url)
-        else:
+        if reply is None:
+            return
+        if reply.error():
             self._cover_failures.add(cover_url)
-        if reply is not None:
             reply.deleteLater()
-
-    def _add_clicked(self):
-        self.add_requested.emit(self.work)
-        if self.add_callback:
-            self.add_callback(self.work, self.sender())
+            self._cover_reply = None
+            return
+        data = reply.readAll()
+        pixmap = QPixmap()
+        if pixmap.loadFromData(data):
+            self._cover_cache[cover_url] = pixmap
+            self.cover.set_pixmap(pixmap)
+        reply.deleteLater()
+        self._cover_reply = None
 
     def _title(self):
         title = self._value("title")
         if isinstance(title, dict):
-            title = title.get("english") or title.get("romaji") or title.get("native")
-        if title:
-            return str(title)
-        fallback = self._fallback_member()
-        if fallback is not None:
-            fallback_title = self._member_value(fallback, "title")
-            if isinstance(fallback_title, dict):
-                fallback_title = fallback_title.get("english") or fallback_title.get("romaji") or fallback_title.get("native")
-            if fallback_title:
-                return str(fallback_title)
-        work_id = self._value("id")
-        return f"Untitled · {work_id}" if work_id else "Untitled"
+            return title.get("english") or title.get("romaji") or title.get("native") or "Untitled"
+        return str(title or "Untitled")
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.clicked.emit(self.work)
-            return
-        super().mousePressEvent(event)
+    def _add_clicked(self):
+        if self.add_callback:
+            self.add_callback(self.work)
