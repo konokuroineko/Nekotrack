@@ -93,22 +93,33 @@ class WorkCard(QFrame):
         title_font.setPointSize(get("font_size"))
         title_font.setWeight(QFont.Weight.Bold)
         title_metrics = QFontMetrics(title_font)
-        title_height = title_metrics.lineSpacing() * 2
-        title = QLabel(self._fit_title_to_two_lines(full_title, card_width - 12, title_font))
+        fitted_title = self._fit_title_to_two_lines(full_title, card_width - 12, title_font)
+        title_line_count = max(1, fitted_title.count("\n") + 1)
+        title = QLabel(fitted_title)
         title.setObjectName("title")
         title.setWordWrap(False)
         title.setFont(title_font)
-        title.setFixedHeight(title_height)
+        title.setFixedHeight(title_metrics.lineSpacing() * title_line_count)
         title.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         title.setToolTip(full_title)
         root.addWidget(title)
 
         series_count = self._value("_series_count")
         summary = self._value("_bundle_summary")
-        if series_count and int(series_count) > 1:
+        try:
+            has_bundle = int(series_count or 0) > 1
+        except (TypeError, ValueError):
+            has_bundle = False
+        if has_bundle:
+            series_font = QFont(self.font())
+            series_font.setPointSize(10)
+            series_font.setWeight(QFont.Weight.Bold)
             series_info = QLabel(str(summary or f"{int(series_count)} entries"))
             series_info.setObjectName("seriesInfo")
-            series_info.setToolTip("")
+            series_info.setFont(series_font)
+            series_info.setFixedHeight(QFontMetrics(series_font).lineSpacing())
+            series_info.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            series_info.setToolTip(str(summary or ""))
             root.addWidget(series_info)
         meta_parts = []
         fmt = self._value("format")
