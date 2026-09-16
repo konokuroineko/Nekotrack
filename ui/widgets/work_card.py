@@ -133,45 +133,46 @@ class WorkCard(QFrame):
 
     @staticmethod
     def _fit_title_to_two_lines(text, width, font):
-        """Fit a title to exactly two visual lines; ellipsize only when a third line is needed."""
+        """Fit a title to at most two complete lines and elide overflow on line two."""
         text = " ".join(str(text).split())
         if not text:
             return ""
 
         metrics = QFontMetrics(font)
         words = text.split()
-        first = ""
-        second = ""
-        remainder_start = 0
 
+        first = ""
+        first_end = 0
         for index, word in enumerate(words):
             candidate = word if not first else f"{first} {word}"
             if metrics.horizontalAdvance(candidate) <= width:
                 first = candidate
-                remainder_start = index + 1
+                first_end = index + 1
             else:
                 break
 
-        if remainder_start >= len(words):
+        if first_end >= len(words):
             return first
 
-        for index in range(remainder_start, len(words)):
-            word = words[index]
-            candidate = word if not second else f"{second} {word}"
+        second = ""
+        second_end = first_end
+        for index in range(first_end, len(words)):
+            candidate = words[index] if not second else f"{second} {words[index]}"
             if metrics.horizontalAdvance(candidate) <= width:
                 second = candidate
-                continue
-            remainder_start = index
-            break
-        else:
-            remainder_start = len(words)
+                second_end = index + 1
+            else:
+                break
 
-        if remainder_start < len(words):
-            # The second line must represent everything that did not fit, but remain one line.
-            remaining = " ".join(words[remainder_start - len(words[remainder_start:]) if False else remainder_start:])
-            second = metrics.elidedText(second + (" " if second else "") + remaining, Qt.TextElideMode.ElideRight, width)
+        if second_end < len(words):
+            overflow = " ".join(words[second_end:])
+            second = metrics.elidedText(
+                f"{second} {overflow}" if second else overflow,
+                Qt.TextElideMode.ElideRight,
+                width,
+            )
 
-        return f"{first}\n{second}" if second else f"{first}\n{metrics.elidedText(' '.join(words[remainder_start:]), Qt.TextElideMode.ElideRight, width)}"
+        return f"{first}\n{second}" if second else f"{first}\n{metrics.elidedText(' '.join(words[first_end:]), Qt.TextElideMode.ElideRight, width)}"
 
     def _value(self, key):
         if hasattr(self.work, "get"):
