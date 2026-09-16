@@ -96,18 +96,20 @@ class SearchPage(QWidget):
         self.year_filter = QLineEdit(); self.year_filter.setPlaceholderText("e.g. 2024"); self.year_filter.setFixedHeight(38)
         self.min_score_filter = QComboBox(); self.min_score_filter.addItems(["Any score", "50+", "60+", "70+", "80+", "90+"]); self.min_score_filter.setFixedHeight(38)
         self.sort_filter = self._make_combo(["Relevance", "Popularity", "Score", "Newest", "Oldest", "Title A–Z", "Title Z–A"])
-        self.genre_filter = QLineEdit(); self.genre_filter.setPlaceholderText("e.g. Isekai"); self.genre_filter.setFixedHeight(38)
+        self.genre_filter = QLineEdit(); self.genre_filter.setPlaceholderText("e.g. Fantasy, Action"); self.genre_filter.setFixedHeight(38)
+        self.tag_filter = QLineEdit(); self.tag_filter.setPlaceholderText("e.g. Isekai, Reincarnation"); self.tag_filter.setFixedHeight(38)
 
         fields = [
             ("Type", self.media_filter, 0, 0), ("Format", self.format_filter, 0, 1), ("Status", self.status_filter, 0, 2), ("Season", self.season_filter, 0, 3),
             ("Year", self.year_filter, 1, 0), ("Minimum score", self.min_score_filter, 1, 1), ("Sort", self.sort_filter, 1, 2), ("Genre", self.genre_filter, 1, 3),
+            ("Tag", self.tag_filter, 2, 0),
         ]
         for label_text, widget, row, col in fields:
             label = QLabel(label_text); label.setStyleSheet(f"font-size: 10px; font-weight: 700; color: {COLORS['muted']}; padding-left: 2px;")
             filters_layout.addWidget(label, row * 2, col); filters_layout.addWidget(widget, row * 2 + 1, col)
 
         self.clear_filters_button = QPushButton("Clear filters"); self.clear_filters_button.setFixedHeight(38)
-        filters_layout.addWidget(self.clear_filters_button, 4, 0, 1, 4, Qt.AlignLeft)
+        filters_layout.addWidget(self.clear_filters_button, 6, 0, 1, 4, Qt.AlignLeft)
         panel.addWidget(self.filters_panel); root.addWidget(search_panel)
 
         result_head = QHBoxLayout()
@@ -165,21 +167,48 @@ class SearchPage(QWidget):
         sort_map = {"Relevance": "SEARCH_MATCH", "Popularity": "POPULARITY_DESC", "Score": "SCORE_DESC", "Newest": "START_DATE_DESC", "Oldest": "START_DATE", "Title A–Z": "TITLE_ROMAJI", "Title Z–A": "TITLE_ROMAJI_DESC"}
         year = self.year_filter.text().strip(); year = year if year.isdigit() and len(year) == 4 else None
         min_score = self.min_score_filter.currentText(); min_score = int(min_score[:-1]) if min_score.endswith("+") else None
-        return {"format_filter": format_map.get(self.format_filter.currentText()), "status": status_map.get(self.status_filter.currentText()), "season": season_map.get(self.season_filter.currentText()), "year": year, "sort": sort_map.get(self.sort_filter.currentText()), "min_score": min_score, "genre": self.genre_filter.text().strip() or None}
+        return {
+            "format_filter": format_map.get(self.format_filter.currentText()),
+            "status": status_map.get(self.status_filter.currentText()),
+            "season": season_map.get(self.season_filter.currentText()),
+            "year": year,
+            "sort": sort_map.get(self.sort_filter.currentText()),
+            "min_score": min_score,
+            "genre": self.genre_filter.text().strip() or None,
+            "tag": self.tag_filter.text().strip() or None,
+        }
 
     def clear_filters(self):
-        self.media_filter.setCurrentIndex(0); self._refresh_format_filter(); self.status_filter.setCurrentIndex(0); self.season_filter.setCurrentIndex(0); self.year_filter.clear(); self.min_score_filter.setCurrentIndex(0); self.sort_filter.setCurrentIndex(0); self.genre_filter.clear()
+        self.media_filter.setCurrentIndex(0)
+        self._refresh_format_filter()
+        self.status_filter.setCurrentIndex(0)
+        self.season_filter.setCurrentIndex(0)
+        self.year_filter.clear()
+        self.min_score_filter.setCurrentIndex(0)
+        self.sort_filter.setCurrentIndex(0)
+        self.genre_filter.clear()
+        self.tag_filter.clear()
         if self.has_searched and not self.is_loading: self.search_clicked()
 
     def search_clicked(self):
         text = self.search.text().strip()
         if self.is_loading: return
-        self.current_search = text; self.current_media_type, self.current_media_format = self.selected_media_filter(); self.current_page = 1; self.has_next_page = False; self.raw_results = []; self.has_searched = True
-        self.clear_results(); self.results_title.setText("Browsing AniList" if not text else f"Searching for “{text}”"); self.search_button.setEnabled(False); self.is_loading = True; self.start_search(text, 1)
+        self.current_search = text
+        self.current_media_type, self.current_media_format = self.selected_media_filter()
+        self.current_page = 1
+        self.has_next_page = False
+        self.raw_results = []
+        self.has_searched = True
+        self.clear_results()
+        self.results_title.setText("Browsing AniList" if not text else f"Searching for “{text}”")
+        self.search_button.setEnabled(False)
+        self.is_loading = True
+        self.start_search(text, 1)
 
     def load_more_results(self):
         if self.has_searched and self.has_next_page and not self.is_loading:
-            self.is_loading = True; self.start_search(self.current_search, self.current_page + 1)
+            self.is_loading = True
+            self.start_search(self.current_search, self.current_page + 1)
 
     def start_search(self, text, page):
         thread = QThread(); worker = SearchWorker(text, page, self.current_media_type, self.current_media_format, self.selected_filters()); worker.moveToThread(thread); thread.started.connect(worker.run)
