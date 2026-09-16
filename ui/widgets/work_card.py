@@ -94,18 +94,23 @@ class WorkCard(QFrame):
         title_font.setWeight(QFont.Weight.Bold)
         title_metrics = QFontMetrics(title_font)
         fitted_title = self._fit_title_to_two_lines(full_title, card_width - 12, title_font)
+        title_line_count = max(1, fitted_title.count("\n") + 1)
         title = QLabel(fitted_title)
         title.setObjectName("title")
         title.setWordWrap(False)
         title.setFont(title_font)
-        title_line_count = max(1, fitted_title.count("\n") + 1)
-        title.setFixedHeight(title_metrics.lineSpacing() * title_line_count)
+        # Use the font's actual glyph box instead of lineSpacing(), so a one-line
+        # title does not leave leading underneath it before the bundle indicator.
+        title_height = (
+            title_metrics.height()
+            if title_line_count == 1
+            else title_metrics.lineSpacing() * (title_line_count - 1) + title_metrics.height()
+        )
+        title.setFixedHeight(title_height)
         title.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        title.setMargin(0)
         title.setToolTip(full_title)
 
-        # Keep the title and bundle indicator in one zero-spacing block.
-        # This removes the artificial gap between them while preserving the
-        # normal 8px spacing before/after the whole text block.
         title_block = QVBoxLayout()
         title_block.setContentsMargins(0, 0, 0, 0)
         title_block.setSpacing(0)
@@ -125,8 +130,9 @@ class WorkCard(QFrame):
             series_info = QLabel(str(summary or f"{int(series_count)} entries"))
             series_info.setObjectName("seriesInfo")
             series_info.setFont(series_font)
-            series_info.setFixedHeight(QFontMetrics(series_font).lineSpacing())
-            series_info.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            series_info.setFixedHeight(QFontMetrics(series_font).height())
+            series_info.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            series_info.setMargin(0)
             series_info.setToolTip(str(summary or ""))
             title_block.addWidget(series_info)
 
@@ -147,6 +153,7 @@ class WorkCard(QFrame):
         if meta_parts:
             meta = QLabel("  ·  ".join(meta_parts))
             meta.setObjectName("meta")
+            meta.setMargin(0)
             root.addWidget(meta)
 
         add_button = None
@@ -157,14 +164,12 @@ class WorkCard(QFrame):
             add_button.clicked.connect(self._add_clicked)
             root.addWidget(add_button)
 
-        # Keep every card the same height as the maximum two-line-title layout.
-        # Any unused height is placed after the content, never between title/series/meta.
         root.addStretch(1)
         self.adjustSize()
         target_height = (
             self.cover.height()
             + 2 * title_metrics.lineSpacing()
-            + (QFontMetrics(series_font).lineSpacing() if has_bundle else 0)
+            + (QFontMetrics(series_font).height() if has_bundle else 0)
             + (meta.sizeHint().height() if meta is not None else 0)
             + (add_button.sizeHint().height() if add_button is not None else 0)
             + root.contentsMargins().top()
