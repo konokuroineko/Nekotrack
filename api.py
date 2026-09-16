@@ -150,7 +150,7 @@ def search_anime(
     min_score=None,
     genre=None,
 ):
-    """Search or browse AniList media with optional filters."""
+    """Search AniList for anime, manga, or novel media with optional filters."""
     if media_type not in {None, "ANIME", "MANGA"}:
         raise ValueError("media_type must be None, ANIME, or MANGA")
 
@@ -202,10 +202,6 @@ def search_anime(
         if media_format not in {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC"}:
             raise ValueError("Invalid anime media_format")
 
-    if media_type is None and media_format is not None:
-        if media_format not in {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC", "MANGA", "NOVEL", "ONE_SHOT"}:
-            raise ValueError("Invalid media_format")
-
     if format_filter and format_filter not in {"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC", "MANGA", "NOVEL", "ONE_SHOT"}:
         raise ValueError("Invalid format_filter")
 
@@ -235,8 +231,13 @@ def search_anime(
     if min_score is not None and not 0 <= int(min_score) <= 100:
         raise ValueError("min_score must be between 0 and 100")
 
+    clean_search = search.strip() if search else None
+    effective_sort = sort
+    if not clean_search and effective_sort == "SEARCH_MATCH":
+        effective_sort = "POPULARITY_DESC"
+
     variables = {
-        "search": search.strip() or None if isinstance(search, str) else search,
+        "search": clean_search,
         "page": page,
         "perPage": per_page,
         "type": media_type,
@@ -246,7 +247,7 @@ def search_anime(
         "season": season,
         "seasonYear": int(year) if season and year else None,
         "year": str(year) if year and not season else None,
-        "sort": [sort] if sort else None,
+        "sort": [effective_sort] if effective_sort else None,
         "minScore": int(min_score) if min_score is not None else None,
         "genre": genre.strip() if genre else None,
     }
