@@ -393,24 +393,28 @@ class SearchPage(QWidget):
         self.pending_batch_active = False
         self.has_searched = True
 
+        self._clear_results()
         self._append_skeletons(20)
-        self.results_title.setText("Browsing AniList" if not text else f"Searching for “{text}”")
-        self.search_button.setEnabled(False)
-        self.is_loading = True
-        self.start_search(text, 1)
+        self.results_title.setText("Browsing AniList" if not text else f"Searching for \"{text}\"")
+        self._start_search(1)
 
     def load_more_results(self):
-        if not self.has_searched or self.is_loading or not self.has_next_page:
+        if not self.has_searched or self.is_loading or self.pending_batch_active or not self.has_next_page:
             return
-        if self.pending_batch_active:
-            return
-        self._append_skeletons(20)
         self.is_loading = True
-        self.start_search(self.current_search, self.current_page + 1)
+        self._append_skeletons(20)
+        self._start_search(self.current_page + 1)
 
-    def start_search(self, text, page):
+    def _start_search(self, page):
+        self.is_loading = True
+        worker = SearchWorker(
+            self.current_search,
+            page,
+            self.current_media_type,
+            self.current_media_format,
+            self.current_filters,
+        )
         thread = QThread(self)
-        worker = SearchWorker(text, page, self.current_media_type, self.current_media_format, dict(self.current_filters))
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self.search_finished)
@@ -501,7 +505,7 @@ class SearchPage(QWidget):
             widget = self.grid_layout.itemAt(index).widget()
             if isinstance(widget, SkeletonCard):
                 skeleton = widget
-                row, column, _, alignment = self.grid_layout.getItemPosition(index)
+                row, column, _, _ = self.grid_layout.getItemPosition(index)
                 break
 
         card = WorkCard(item, mode="search", add_callback=self.add_to_library)
@@ -510,9 +514,9 @@ class SearchPage(QWidget):
         if skeleton is not None:
             self.grid_layout.removeWidget(skeleton)
             skeleton.deleteLater()
-            self.grid_layout.addWidget(card, row, column, alignment)
+            self.grid_layout.addWidget(card, row, column, 1, 1, Qt.AlignHCenter)
         else:
-            self.grid_layout.addWidget(card)
+            self.grid_layout.addWidget(card, 0, 0, 1, 1, Qt.AlignHCenter)
 
         self._reflow_results()
 
@@ -523,59 +527,23 @@ class SearchPage(QWidget):
 
     def _trim_skeletons_to_pending(self):
         skeletons = [
-            self.grid_layout.itemAt(i).widget()
-            for i in range(self.grid_layout.count())
-            if isinstance(self.grid_layout.itemAt(i).widget(), SkeletonCard)
+            self.grid_layout.itemAt(index).widget()
+            for index in range(self.grid_layout.count())
+            if isinstance(self.grid_layout.itemAt(index).widget(), SkeletonCard)
         ]
-        needed = len(self.pending_items)
-        for widget in skeletons[needed:]:
-            self.grid_layout.removeWidget(widget)
-            widget.deleteLater()
+        extra = max(0, len(skeletons) - len(self.pending_items))
+        for skeleton in skeletons[:extra]:
+            self.grid_layout.removeWidget(skeleton)
+            skeleton.deleteLater()
         self._reflow_results()
 
-    def _update_results_title(self):
-        entries = len(self.raw_results)
-        series_count = len(self.displayed_items)
-        if self.pending_batch_active:
-            self.results_title.setText(f"{entries} entries · {series_count} series · loading…")
-        else:
-            self.results_title.setText(f"{entries} entries · {series_count} series")
-
-    def _reflow_results(self):
-        widgets = []
-        for i in range(self.grid_layout.count()):
-            widget = self.grid_layout.itemAt(i).widget()
-            if isinstance(widget, (WorkCard, SkeletonCard)):
-                widgets.append(widget)
-
-        for widget in widgets:
-            self.grid_layout.removeWidget(widget)
-
-        columns = max(1, self.results_scroll.viewport().width() // 230)
-        columns = min(columns, max(1, len(widgets)))
-        for col in range(columns):
-            self.grid_layout.setColumnStretch(col, 1)
-
-        for i, widget in enumerate(widgets):
-            row = i // columns
-            row_count = min(columns, len(widgets) - row * columns)
-            start_col = (columns - row_count) // 2
-            self.grid_layout.addWidget(widget, row, start_col + (i % columns), Qt.AlignHCenter)
-
     def _start_enrichment(self):
-        if not self.raw_results:
+        if not self.raw_results or self.enrichment_thread is not None:
             return
-        if self.enrichment_thread is not None and self.enrichment_thread.isRunning():
-            self.enrichment_pending = True
-            return
-
-        generation = self.enrichment_generation
+        self.enrichment_pending = True
         stop_event = Event()
-        self.enrichment_stop = stop_event
-        self.enrichment_pending = False
-
         thread = QThread(self)
-        worker = SeriesEnrichmentWorker(list(self.raw_results), stop_event, generation)
+        worker = SeriesEnrichmentWorker(self.raw_results, stop_event, self.enrichment_generation)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self.enrichment_finished)
@@ -583,105 +551,68 @@ class SearchPage(QWidget):
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(lambda t=thread, g=generation: self._enrichment_thread_finished(t, g))
+        thread.finished.connect(self._enrichment_thread_finished)
+        self.enrichment_stop = stop_event
         self.enrichment_thread = thread
         self.enrichment_worker = worker
         thread.start()
 
-    def _request_enrichment_stop(self):
-        if self.enrichment_stop is not None:
-            self.enrichment_stop.set()
+    def _enrichment_thread_finished(self):
+        thread = self.enrichment_thread
+        self.enrichment_thread = None
+        self.enrichment_worker = None
+        self.enrichment_stop = None
         self.enrichment_pending = False
+        if thread is not None:
+            thread.deleteLater()
 
     def _stop_enrichment(self):
         if self.enrichment_stop is not None:
             self.enrichment_stop.set()
-        thread = self.enrichment_thread
         self.enrichment_pending = False
-        if thread is not None and thread.isRunning():
-            return
-        self.enrichment_thread = None
-        self.enrichment_worker = None
-        self.enrichment_stop = None
-
-    def _enrichment_thread_finished(self, thread, generation):
-        if self.enrichment_thread is thread:
-            self.enrichment_thread = None
-            self.enrichment_worker = None
-            self.enrichment_stop = None
-
-        thread.deleteLater()
-
-        if self.has_searched and self.enrichment_pending:
-            self.enrichment_pending = False
-            QTimer.singleShot(200, self._start_enrichment)
 
     def enrichment_finished(self, generation, grouped):
-        if generation != self.enrichment_generation or not self.has_searched:
+        if generation != self.enrichment_generation:
             return
-        if not self.raw_results:
-            return
-
         skeleton_count = sum(
             1
-            for i in range(self.grid_layout.count())
-            if isinstance(self.grid_layout.itemAt(i).widget(), SkeletonCard)
+            for index in range(self.grid_layout.count())
+            if isinstance(self.grid_layout.itemAt(index).widget(), SkeletonCard)
         )
-        self.displayed_items = grouped
         self._render_grouped_preserving_skeletons(grouped, skeleton_count)
-        self._update_results_title()
 
     def enrichment_error(self, generation, message):
-        if generation != self.enrichment_generation or not self.has_searched:
+        if generation != self.enrichment_generation:
             return
-        if "(429)" in message:
-            self.results_title.setText(f"{len(self.raw_results)} entries · series enrichment paused")
-        else:
-            self.results_title.setText(f"{len(self.raw_results)} entries · relation enrichment unavailable")
+        self.enrichment_pending = False
+        self._update_results_title()
 
     def _render_grouped_preserving_skeletons(self, grouped, skeleton_count):
-        self._stop_pending_render()
-        self.clear_results()
+        self._clear_results()
         self.displayed_items = list(grouped)
         for item in grouped:
             card = WorkCard(item, mode="search", add_callback=self.add_to_library)
             card.clicked.connect(self.anime_selected)
             self.grid_layout.addWidget(card)
-        for _ in range(skeleton_count):
-            self.grid_layout.addWidget(SkeletonCard())
+        self._append_skeletons(skeleton_count)
         self._reflow_results()
+        self._update_results_title()
 
-    def search_error(self, message):
-        self.search_button.setEnabled(True)
-        self.is_loading = False
-        rate_limited = "(429)" in message
-
-        if self.raw_results and rate_limited:
-            self.has_next_page = False
-            self.pending_items = []
-            self.pending_batch_active = False
-            self._stop_pending_render()
-            self._remove_all_skeletons()
-            grouped = group_media_results(self.raw_results)
-            self.displayed_items = list(grouped)
-            self._render_grouped_preserving_skeletons(grouped, 0)
-            self.results_title.setText(f"{len(self.raw_results)} entries · {len(grouped)} series · AniList rate limit reached")
-            return
-
-        self.clear_results()
-        if "(403)" in message and "temporarily disabled" in message.lower():
-            text = "AniList is temporarily unavailable.\nYour offline library still works."
-        elif rate_limited:
-            text = "AniList is rate-limiting requests.\nPlease try again shortly."
-        elif "(5" in message[:20]:
-            text = "AniList is having server problems.\nPlease try again later."
+    def _update_results_title(self):
+        count = len(self.displayed_items)
+        if self.is_loading:
+            self.results_title.setText("Loading…")
+        elif self.enrichment_pending:
+            self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · refining")
         else:
-            text = f"Search failed.\n{message}"
-        self.results_title.setText("Search unavailable")
-        self.show_message(text)
-        retry = QPushButton("Try again")
-        retry.clicked.connect(self.search_clicked)
-        self.grid_layout.addWidget(retry, 1, 0)
+            self.results_title.setText(f"{count} result{'s' if count != 1 else ''}")
+
+    def _clear_results(self):
+        while self.grid_layout.count():
+            item = self.grid_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
 
     def _stop_pending_render(self):
         if self.pending_timer is not None:
@@ -689,61 +620,67 @@ class SearchPage(QWidget):
             self.pending_timer.deleteLater()
             self.pending_timer = None
 
-    def _remove_all_skeletons(self):
-        for i in range(self.grid_layout.count() - 1, -1, -1):
-            widget = self.grid_layout.itemAt(i).widget()
-            if isinstance(widget, SkeletonCard):
-                self.grid_layout.takeAt(i)
-                widget.deleteLater()
-        self._reflow_results()
+    def _reflow_results(self):
+        widgets = []
+        for index in range(self.grid_layout.count()):
+            widget = self.grid_layout.itemAt(index).widget()
+            if isinstance(widget, (WorkCard, SkeletonCard)):
+                widgets.append(widget)
 
-    def show_message(self, text):
-        panel = QFrame()
-        panel.setStyleSheet(f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 18px;")
-        box = QVBoxLayout(panel)
-        box.setContentsMargins(35, 60, 35, 60)
-        label = QLabel(text)
-        label.setAlignment(Qt.AlignCenter)
-        label.setWordWrap(True)
-        label.setStyleSheet(f"color: {COLORS['secondary']}; font-size: 14px; border: none;")
-        box.addWidget(label)
-        self.grid_layout.addWidget(panel, 0, 0, 1, 4)
+        if not widgets:
+            return
 
-    def clear_results(self):
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        for index in range(self.grid_layout.count() - 1, -1, -1):
+            self.grid_layout.takeAt(index)
+
+        width = max(1, self.results_scroll.viewport().width())
+        columns = max(1, width // 230)
+        columns = min(columns, len(widgets))
+
+        for col in range(columns):
+            self.grid_layout.setColumnStretch(col, 1)
+
+        for i, widget in enumerate(widgets):
+            row = i // columns
+            row_count = min(columns, len(widgets) - row * columns)
+            start_col = (columns - row_count) // 2
+            self.grid_layout.addWidget(widget, row, start_col + (i % columns), 1, 1, Qt.AlignHCenter)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._reflow_results()
 
-    def _render_full_grouped_placeholder(self, grouped):
-        self._render_grouped_preserving_skeletons(grouped, 0)
-
-    def shutdown_workers(self):
-        self.has_searched = False
-        self.enrichment_generation += 1
+    def _start_search_error(self, message):
+        self.is_loading = False
+        self.search_button.setEnabled(True)
         self._stop_pending_render()
+        self.pending_items = []
+        self.pending_batch_active = False
+        self._update_results_title()
+        if "429" in message or "too many requests" in message.lower():
+            self._update_results_title()
+            return
+        self._clear_results()
+        label = QLabel(f"Search failed: {message}")
+        label.setWordWrap(True)
+        label.setStyleSheet(f"color: {COLORS['muted']}; padding: 30px;")
+        self.grid_layout.addWidget(label, 0, 0, 1, 1, Qt.AlignHCenter)
 
-        if self.enrichment_stop is not None:
-            self.enrichment_stop.set()
-        enrichment_thread = self.enrichment_thread
-        if enrichment_thread is not None and enrichment_thread.isRunning():
-            enrichment_thread.quit()
-            enrichment_thread.wait()
-        self.enrichment_thread = None
-        self.enrichment_worker = None
-        self.enrichment_stop = None
-
-        for thread in list(self.search_threads):
-            if thread.isRunning():
-                thread.quit()
-                thread.wait()
-        self.search_threads.clear()
-        self.search_workers.clear()
+    def search_error(self, message):
+        self._start_search_error(message)
 
     def closeEvent(self, event):
         self.shutdown_workers()
         super().closeEvent(event)
+
+    def shutdown_workers(self):
+        self._stop_pending_render()
+        self._stop_enrichment()
+        for thread in list(self.search_threads):
+            thread.quit()
+            thread.wait(1500)
+        if self.enrichment_thread is not None:
+            self.enrichment_thread.quit()
+            self.enrichment_thread.wait(3000)
+        self.search_threads.clear()
+        self.search_workers.clear()
