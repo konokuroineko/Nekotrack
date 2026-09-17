@@ -1,4 +1,12 @@
 from collections import defaultdict
+import re
+
+
+def _count_marker(title, series_module):
+    """Use explicit season markers, but do not treat a bare trailing number as one."""
+    title = title or ""
+    marker_title = re.sub(r"(?:^|[\s:])([2-9])\s*$", "", title)
+    return series_module._season_marker(marker_title)
 
 
 def logical_season_count(members, series_module):
@@ -31,7 +39,7 @@ def logical_season_count(members, series_module):
     # labeled season therefore remain one logical season.
     by_marker = defaultdict(list)
     for member in tv_members:
-        marker = series_module._season_marker(series_module._title_text(member))
+        marker = _count_marker(series_module._title_text(member), series_module)
         if marker:
             by_marker[marker].append(int(member["id"]))
 
@@ -49,7 +57,7 @@ def logical_season_count(members, series_module):
         if not series_module._is_continuation_title(title):
             continue
 
-        current_marker = series_module._season_marker(title)
+        current_marker = _count_marker(title, series_module)
         for edge in series_module._search_relation_edges(member):
             if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
                 continue
@@ -63,7 +71,7 @@ def logical_season_count(members, series_module):
                 continue
 
             target_title = series_module._title_text(by_id[target_id])
-            target_marker = series_module._season_marker(target_title)
+            target_marker = _count_marker(target_title, series_module)
 
             if current_marker == target_marker:
                 union(member_id, target_id)
