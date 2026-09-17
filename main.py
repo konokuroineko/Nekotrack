@@ -38,11 +38,6 @@ def prepare_user_data():
 
 prepare_user_data()
 
-import series
-from season_count import patch_series
-
-patch_series(series)
-
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from ui.main_window import MainWindow
