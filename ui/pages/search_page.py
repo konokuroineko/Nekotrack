@@ -127,8 +127,8 @@ class SeriesEnrichmentWorker(QObject):
             grouped = group_media_results(
                 self.results,
                 enrich=True,
-                max_requests=20,
-                delay=1.5,
+                max_requests=0,
+                delay=0.35,
                 stop_event=self.stop_event,
             )
             self.finished.emit(
