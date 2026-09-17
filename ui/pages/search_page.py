@@ -117,9 +117,10 @@ class SeriesEnrichmentWorker(QObject):
 
     def __init__(self, results, stop_event, generation):
         super().__init__()
-        self.results = results
+        self.results = list(results)
         self.stop_event = stop_event
         self.generation = generation
+        self.snapshot_count = len(self.results)
 
     def run(self):
         try:
@@ -130,7 +131,13 @@ class SeriesEnrichmentWorker(QObject):
                 delay=1.5,
                 stop_event=self.stop_event,
             )
-            self.finished.emit(self.generation, grouped)
+            self.finished.emit(
+                self.generation,
+                {
+                    "snapshot_count": self.snapshot_count,
+                    "grouped": grouped,
+                },
+            )
         except Exception as error:
             self.error.emit(self.generation, str(error))
 
@@ -157,6 +164,7 @@ class SearchPage(QWidget):
         self.enrichment_stop = None
         self.enrichment_generation = 0
         self.enrichment_pending = False
+        self.enrichment_restart_pending = False
 
         self.raw_results = []
         self.displayed_items = []
@@ -381,6 +389,7 @@ class SearchPage(QWidget):
         self._stop_pending_render()
         self._stop_enrichment()
         self.enrichment_generation += 1
+        self.enrichment_restart_pending = False
 
         self.current_search = text
         self.current_media_type, self.current_media_format = self.selected_media_filter()
@@ -547,12 +556,18 @@ class SearchPage(QWidget):
         self._reflow_results()
 
     def _start_enrichment(self):
-        if not self.raw_results or self.enrichment_thread is not None:
+        if not self.raw_results:
             return
+
+        if self.enrichment_thread is not None:
+            self.enrichment_restart_pending = True
+            return
+
         self.enrichment_pending = True
+        self.enrichment_restart_pending = False
         stop_event = Event()
         thread = QThread(self)
-        worker = SeriesEnrichmentWorker(self.raw_results, stop_event, self.enrichment_generation)
+        worker = SeriesEnrichmentWorker(list(self.raw_results), stop_event, self.enrichment_generation)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self.enrichment_finished)
@@ -571,18 +586,42 @@ class SearchPage(QWidget):
         self.enrichment_thread = None
         self.enrichment_worker = None
         self.enrichment_stop = None
-        self.enrichment_pending = False
         if thread is not None:
             thread.deleteLater()
+
+        if not self.has_searched:
+            self.enrichment_pending = False
+            self.enrichment_restart_pending = False
+            return
+
+        if self.enrichment_restart_pending:
+            self.enrichment_restart_pending = False
+            self.enrichment_pending = True
+            QTimer.singleShot(0, self._start_enrichment)
+        else:
+            self.enrichment_pending = False
+            self._update_results_title()
 
     def _stop_enrichment(self):
         if self.enrichment_stop is not None:
             self.enrichment_stop.set()
         self.enrichment_pending = False
+        self.enrichment_restart_pending = False
 
-    def enrichment_finished(self, generation, grouped):
+    def enrichment_finished(self, generation, payload):
         if generation != self.enrichment_generation:
             return
+
+        snapshot_count = payload.get("snapshot_count", -1) if isinstance(payload, dict) else -1
+        grouped = payload.get("grouped", []) if isinstance(payload, dict) else payload
+
+        # Pagination may have appended another page while this enrichment pass
+        # was running. Never rebuild the UI from a stale snapshot; wait for the
+        # replacement enrichment pass to process the newer result set instead.
+        if snapshot_count != len(self.raw_results):
+            self.enrichment_restart_pending = True
+            return
+
         skeleton_count = sum(
             1
             for index in range(self.grid_layout.count())
@@ -592,6 +631,8 @@ class SearchPage(QWidget):
 
     def enrichment_error(self, generation, message):
         if generation != self.enrichment_generation:
+            return
+        if self.enrichment_restart_pending:
             return
         self.enrichment_pending = False
         self._update_results_title()
