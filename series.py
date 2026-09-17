@@ -5,7 +5,7 @@ import time
 from api import get_media_details, get_media_relations
 from database import get_all_library, get_connection, save_anime
 
-SERIES_RELATIONS = {"PREQUEL", "SEQUEL", "PARENT", "SIDE_STORY", "SUMMARY", "FULL_STORY", "SPIN_OFF"}
+SERIES_RELATIONS = {"PREQUEL", "SEQUEL", "SIDE_STORY", "SUMMARY"}
 _relation_sync_checked_ids = set()
 _relation_cache = {}
 _relation_cache_failures = set()
@@ -42,6 +42,31 @@ def _media_family(item):
 
 def _same_media_family(left, right):
     return _media_family(left) == _media_family(right)
+
+
+def _is_bundleable(item):
+    """Return whether this media type/format belongs in a series bundle."""
+    family = _media_family(item)
+    fmt = item.get("format") if hasattr(item, "get") else item["format"]
+    fmt = str(fmt or "").upper()
+    if family == "ANIME":
+        return fmt in {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA"}
+    if family == "MANGA":
+        return fmt == "MANGA"
+    if family in {"NOVEL", "ONE_SHOT"}:
+        return True
+    return False
+
+
+def _bundle_edge_allowed(item, edge):
+    """Allow only relations that can legitimately join two bundleable entries."""
+    if edge.get("relationType") not in SERIES_RELATIONS:
+        return False
+    node = edge.get("node") or {}
+    target_id = node.get("id")
+    if not target_id:
+        return False
+    return _same_media_family(item, node) and _is_bundleable(item) and _is_bundleable(node)
 
 
 def _series_group_key(item):
@@ -178,14 +203,11 @@ def _discover_related(items, max_nodes=80, max_requests=0, delay=1.0, stop_event
                     continue
 
         for edge in _search_relation_edges(item):
-            if edge.get("relationType") not in SERIES_RELATIONS:
+            if not _bundle_edge_allowed(item, edge):
                 continue
             node = edge.get("node") or {}
-            target_id = node.get("id")
-            if not target_id:
-                continue
-            target_id = int(target_id)
-            if target_id in known_ids or _media_family(node) != _media_family(item):
+            target_id = int(node["id"])
+            if target_id in known_ids:
                 continue
             related = _related_placeholder(node)
             known_ids.add(target_id)
@@ -214,18 +236,20 @@ def _group_discovered(results, discovered):
     for item in discovered:
         item_id = int(item["id"])
         for edge in _search_relation_edges(item):
-            if edge.get("relationType") not in SERIES_RELATIONS:
+            if not _bundle_edge_allowed(item, edge):
                 continue
             target = edge.get("node") or {}
             target_id = target.get("id")
             if not target_id:
                 continue
             target_id = int(target_id)
-            if target_id in ids and _same_media_family(item, target):
+            if target_id in ids:
                 union(item_id, target_id)
 
     by_key = {}
     for item in discovered:
+        if not _is_bundleable(item):
+            continue
         key = _series_group_key(item)
         item_id = int(item["id"])
         if key[1]:
@@ -286,10 +310,11 @@ def has_pending_relation_enrichment(results):
             else:
                 edges = _search_relation_edges(item)
         for edge in edges:
-            if edge.get("relationType") in SERIES_RELATIONS:
-                node = edge.get("node") or {}
-                if node.get("id") and int(node["id"]) not in seen and node.get("id") not in _relation_cache:
-                    queue.append(_related_placeholder(node))
+            if not _bundle_edge_allowed(item, edge):
+                continue
+            node = edge.get("node") or {}
+            if node.get("id") and int(node["id"]) not in seen and int(node["id"]) not in _relation_cache:
+                queue.append(_related_placeholder(node))
     return False
 
 
@@ -346,16 +371,18 @@ def get_library_series():
         if left != right:
             parent[right] = left
 
+    row_by_id = {int(row["id"]): row for row in rows}
     for relation in _relation_data_for(ids):
         source_id, target_id = int(relation["source_id"]), int(relation["target_id"])
-        if source_id in ids and target_id in ids:
-            source = next((row for row in rows if int(row["id"]) == source_id), None)
-            target = next((row for row in rows if int(row["id"]) == target_id), None)
-            if source is not None and target is not None and _same_media_family(source, target):
-                union(source_id, target_id)
+        source = row_by_id.get(source_id)
+        target = row_by_id.get(target_id)
+        if source is not None and target is not None and _same_media_family(source, target) and _is_bundleable(source) and _is_bundleable(target):
+            union(source_id, target_id)
 
     by_key = {}
     for row in rows:
+        if not _is_bundleable(row):
+            continue
         key = _series_group_key(row)
         if key[1]:
             work_id = int(row["id"])
