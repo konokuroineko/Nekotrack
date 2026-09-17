@@ -90,14 +90,11 @@ def _season_group_key(item):
         values = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
         return f"season-{values[roman.group(1)]}"
 
-    # Common title form used by series such as "Mushoku Tensei II: ...".
     roman_prefix = re.search(r"(?:^|\s)(ii|iii|iv|v|vi)\s*[:\-–—]\s*", title)
     if roman_prefix:
         values = {"ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
         return f"season-{values[roman_prefix.group(1)]}"
 
-    # Also handle titles that end with a standalone Roman numeral, such as
-    # "Series II", without treating words like "II-sei" as season markers.
     roman_suffix = re.search(r"(?:^|\s)(ii|iii|iv|v|vi)\s*$", title)
     if roman_suffix:
         values = {"ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
@@ -107,9 +104,6 @@ def _season_group_key(item):
 
 
 def _bundle_summary(members):
-    # A single work is not a bundle. WorkCard also uses _series_count to
-    # suppress the bundle indicator, but keeping the summary empty here
-    # prevents other consumers from treating a lone entry as a bundle.
     if len(members) <= 1:
         return ""
 
@@ -200,8 +194,6 @@ def _cache_relation_details_batch(media_ids):
     try:
         fetched = get_media_relations_batch(missing)
     except Exception:
-        # A transient failure should not permanently poison every ID in the
-        # batch. The current enrichment pass can retry the unresolved nodes.
         return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
 
     for media_id in missing:
@@ -215,13 +207,18 @@ def _cache_relation_details_batch(media_ids):
 
 
 def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_event=None):
-    """Finite breadth-first traversal of the bundleable relation graph."""
+    """Finite breadth-first traversal of the bundleable relation graph.
+
+    max_requests meanings:
+      -1: never perform network relation fetches (fast UI grouping)
+       0: unlimited fetches (background enrichment)
+      >0: cap fetches at that number
+    """
     discovered = list(items)
     known_ids = {int(item["id"]) for item in discovered}
     frontier = list(discovered)
     processed_ids = set()
     requests_used = 0
-    stalled_rounds = 0
 
     while frontier and len(discovered) < max_nodes:
         if stop_event is not None and stop_event.is_set():
@@ -238,8 +235,9 @@ def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_ev
                 continue
             unresolved.append(item)
 
+        can_fetch = max_requests == 0 or (max_requests > 0 and requests_used < max_requests)
         loaded_this_round = 0
-        if unresolved and (max_requests <= 0 or requests_used < max_requests):
+        if unresolved and can_fetch:
             for start in range(0, len(unresolved), RELATION_BATCH_SIZE):
                 if stop_event is not None and stop_event.is_set():
                     break
@@ -293,14 +291,13 @@ def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_ev
                 break
 
         if not next_frontier:
-            if unresolved_remaining and loaded_this_round == 0 and max_requests <= 0:
-                stalled_rounds += 1
-                if stalled_rounds < 3:
-                    time.sleep(max(1.0, delay))
-                    continue
             break
 
-        stalled_rounds = 0
+        # In capped mode an unresolved node stays unresolved instead of being
+        # treated as completed; a later enrichment pass can retry it.
+        if unresolved_remaining and loaded_this_round == 0 and max_requests != 0:
+            break
+
         frontier = next_frontier
 
     return discovered, requests_used
@@ -374,7 +371,7 @@ def group_media_results(results, enrich=False, max_requests=0, delay=0.25, stop_
         return []
     discovered, _ = _discover_related(
         results,
-        max_requests=max_requests if enrich else 0,
+        max_requests=max_requests if enrich else -1,
         delay=delay,
         stop_event=stop_event,
     )
