@@ -14,6 +14,7 @@ import series
 class Log:
     def __init__(self, path):
         self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.handle = self.path.open("w", encoding="utf-8")
 
     def write(self, text=""):
@@ -43,9 +44,11 @@ def describe(item):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Diagnose NekoTrack bundling when searching with the TV format filter."
+        description=(
+            "Diagnose NekoTrack bundling for the exact catalog-browse path "
+            "used by an empty search box + Anime type + TV format filter."
+        )
     )
-    parser.add_argument("search", help="The exact anime name/search text")
     parser.add_argument("--pages", type=int, default=3)
     parser.add_argument("--per-page", type=int, default=20)
     parser.add_argument("--delay", type=float, default=0.35)
@@ -61,16 +64,19 @@ def main():
         log.write("=" * 100)
         log.write("NEKOTRACK TV-FILTER BUNDLE DIAGNOSTIC")
         log.write(f"timestamp={time.strftime('%Y-%m-%d %H:%M:%S')}")
-        log.write(f"search={args.search!r}")
-        log.write(f"filters: media_type=ANIME format_filter=TV pages={args.pages} per_page={args.per_page}")
+        log.write("search='' (EMPTY SEARCH BOX)")
+        log.write(
+            f"filters: media_type=ANIME format_filter=TV sort=SEARCH_MATCH "
+            f"pages={args.pages} per_page={args.per_page}"
+        )
         log.write(f"SERIES_RELATIONS={sorted(series.SERIES_RELATIONS)}")
         log.write("")
 
         results = []
         for page in range(1, max(1, args.pages) + 1):
-            log.write(f"SEARCH page={page}")
+            log.write(f"SEARCH page={page} EMPTY_QUERY")
             payload = api.search_anime(
-                args.search,
+                "",
                 page=page,
                 per_page=args.per_page,
                 media_type="ANIME",
@@ -103,6 +109,9 @@ def main():
         original_cache = series._cache_relation_details_batch
         original_allowed = series._relation_edge_allowed
         original_apply = series._apply_relation_details
+        original_discover = series._discover_related
+        original_group = series._group_discovered
+        original_logical = series._bundle_logical_season_count
 
         def cache_wrapper(media_ids):
             requested = [int(x) for x in media_ids]
@@ -139,9 +148,45 @@ def main():
             )
             return result
 
+        def discover_wrapper(items, **kwargs):
+            log.write("=" * 100)
+            log.write("DISCOVERY START")
+            log.write(f"seed_count={len(items)} seed_ids={[int(item['id']) for item in items]}")
+            result, requests_used = original_discover(items, **kwargs)
+            log.write(f"DISCOVERY END discovered={len(result)} requests_used={requests_used}")
+            for item in result:
+                log.write(f"  DISCOVERED {describe(item)} related_only={item.get('_related_only', False)} loaded={item.get('_relations_loaded', False)}")
+            return result, requests_used
+
+        def group_wrapper(results_arg, discovered):
+            log.write("=" * 100)
+            log.write(f"GROUPING START original={len(results_arg)} discovered={len(discovered)}")
+            grouped = original_group(results_arg, discovered)
+            log.write(f"GROUPING END groups={len(grouped)}")
+            for index, item in enumerate(grouped, 1):
+                members = item.get("_series_members") or []
+                log.write(
+                    f"  GROUP {index}: representative={int(item['id'])} {title(item)!r} "
+                    f"count={item.get('_series_count')} summary={item.get('_bundle_summary')!r}"
+                )
+                for member in members:
+                    log.write(f"    MEMBER {describe(member)}")
+            return grouped
+
+        def logical_wrapper(members):
+            value = original_logical(members)
+            tv = [m for m in members if str(m.get("format") or "").upper() in {"TV", "TV_SHORT"}]
+            log.write(
+                f"SEASON_COUNT result={value} tv={[(int(m['id']), title(m)) for m in tv]}"
+            )
+            return value
+
         series._cache_relation_details_batch = cache_wrapper
         series._apply_relation_details = apply_wrapper
         series._relation_edge_allowed = allowed_wrapper
+        series._discover_related = discover_wrapper
+        series._group_discovered = group_wrapper
+        series._bundle_logical_season_count = logical_wrapper
 
         grouped = series.group_media_results(
             results,
@@ -162,8 +207,10 @@ def main():
                 log.write(f"  MEMBER {describe(member)}")
 
         result = {
-            "search": args.search,
+            "search": "",
             "filter": "TV",
+            "media_type": "ANIME",
+            "sort": "SEARCH_MATCH",
             "seed_count": len(results),
             "seed_ids": [int(x["id"]) for x in results],
             "groups": [
@@ -201,6 +248,9 @@ def main():
             series._cache_relation_details_batch = original_cache
             series._apply_relation_details = original_apply
             series._relation_edge_allowed = original_allowed
+            series._discover_related = original_discover
+            series._group_discovered = original_group
+            series._bundle_logical_season_count = original_logical
         except NameError:
             pass
         log.close()
