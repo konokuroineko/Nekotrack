@@ -103,6 +103,18 @@ def _season_marker(title):
     if ordinal:
         return f"season-{int(ordinal.group(1))}"
 
+    word_ordinal = re.search(
+        r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+season\b",
+        title,
+    )
+    if word_ordinal:
+        values = {
+            "first": 1, "second": 2, "third": 3, "fourth": 4,
+            "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8,
+            "ninth": 9, "tenth": 10,
+        }
+        return f"season-{values[word_ordinal.group(1)]}"
+
     numbered = re.search(r"\bseason\s*(\d+)\b", title)
     if numbered:
         return f"season-{int(numbered.group(1))}"
@@ -122,6 +134,12 @@ def _season_marker(title):
         values = {"ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
         return f"season-{values[roman_suffix.group(1)]}"
 
+    # Some databases number follow-up seasons with a bare trailing number,
+    # e.g. "Tokyo Ghoul:re 2" rather than "Season 2".
+    bare_number = re.search(r"(?:^|[\s:])([2-9])\s*$", title)
+    if bare_number:
+        return f"season-{int(bare_number.group(1))}"
+
     return None
 
 
@@ -133,10 +151,27 @@ def _is_continuation_title(title):
     )
 
 
+def _is_arc_title(title):
+    """Return True for titles that represent named story arcs rather than numbered seasons."""
+    return bool(re.search(r"\barc\b", (title or "").lower()))
+
+
+def _member_start_year(member):
+    start_date = member.get("startDate") if hasattr(member, "get") else None
+    if isinstance(start_date, dict) and start_date.get("year") is not None:
+        return start_date.get("year")
+    return member.get("start_year") if hasattr(member, "get") else None
+
+
 def _bundle_logical_season_count(members):
     """
-    Count logical TV seasons without assuming every unnumbered title belongs to
-    season 1. Relation-linked continuation parts/cours are merged into one season.
+    Count logical TV seasons rather than raw TV entries.
+
+    AniList can represent one real season as several directly-related TV arc
+    entries. For example, Demon Slayer Season 2 is split into the Mugen Train
+    Arc and Entertainment District Arc. Numbered season/part markers remain
+    authoritative; unnumbered arc entries can share a season when they are
+    directly linked and aired in the same year.
     """
     tv_members = [
         member
@@ -160,6 +195,10 @@ def _bundle_logical_season_count(members):
         if left_root != right_root:
             parent[right_root] = left_root
 
+    by_id = {int(member["id"]): member for member in tv_members}
+
+    # Explicit season identities are the strongest signal. All parts/cours of
+    # that same explicit season are counted as one logical season.
     by_explicit_marker = defaultdict(list)
     for member in tv_members:
         marker = _season_marker(_title_text(member))
@@ -171,7 +210,8 @@ def _bundle_logical_season_count(members):
         for media_id in ids_for_marker[1:]:
             union(first, media_id)
 
-    by_id = {int(member["id"]): member for member in tv_members}
+    # Explicit part/cour/final continuations inherit the logical season of
+    # their directly-linked TV neighbor, even when only one side has a marker.
     for member in tv_members:
         member_id = int(member["id"])
         title = _title_text(member)
@@ -190,11 +230,45 @@ def _bundle_logical_season_count(members):
                 continue
 
             target = by_id[target_id]
-            if _season_marker(title) and _season_marker(title) == _season_marker(_title_text(target)):
+            current_marker = _season_marker(title)
+            target_marker = _season_marker(_title_text(target))
+
+            if current_marker and current_marker == target_marker:
                 union(member_id, target_id)
                 continue
 
-            if _is_continuation_title(_title_text(target)) or not _season_marker(title):
+            if _is_continuation_title(_title_text(target)) or not current_marker:
+                union(member_id, target_id)
+
+    # Unnumbered named arcs are often multiple entries making up one season.
+    # Merge only when they are directly linked in the season chain AND share a
+    # start year. This avoids collapsing genuinely separate numbered seasons
+    # that happen to air during the same calendar year.
+    arc_ids = {
+        int(member["id"])
+        for member in tv_members
+        if _is_arc_title(_title_text(member))
+        and _season_marker(_title_text(member)) is None
+        and not _is_continuation_title(_title_text(member))
+    }
+
+    for member_id in arc_ids:
+        member = by_id[member_id]
+        member_year = _member_start_year(member)
+        for edge in _search_relation_edges(member):
+            if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
+                continue
+            node = edge.get("node") or {}
+            target_id = node.get("id")
+            if target_id is None:
+                continue
+            target_id = int(target_id)
+            if target_id not in arc_ids:
+                continue
+
+            target = by_id[target_id]
+            target_year = _member_start_year(target)
+            if member_year is not None and member_year == target_year:
                 union(member_id, target_id)
 
     return len({find(media_id) for media_id in ids})
