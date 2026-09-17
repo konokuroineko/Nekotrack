@@ -1,19 +1,7 @@
 from threading import Event
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, QTimer
-from PySide6.QtWidgets import (
-    QComboBox,
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QPushButton,
-    QScrollArea,
-    QSizePolicy,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from api import search_anime
 from series import group_media_results
@@ -28,7 +16,7 @@ class InfiniteScrollArea(QScrollArea):
     def __init__(self):
         super().__init__()
         self.verticalScrollBar().valueChanged.connect(self._check)
-        self._last_trigger = None
+        self._last_trigger = -1
 
     def _check(self):
         bar = self.verticalScrollBar()
@@ -39,18 +27,19 @@ class InfiniteScrollArea(QScrollArea):
             self.scroll_to_bottom.emit()
 
     def reset_trigger(self):
-        self._last_trigger = None
+        self._last_trigger = -1
 
 
 class SkeletonCard(QFrame):
-    """Fixed-size placeholder that occupies the same grid slot as a work card."""
+    """Fixed-size result placeholder used until a work card is ready."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         card_size = get("card_size")
         card_width = card_size + 8
         cover_height = round(card_size * 284 / 210)
-        self.setFixedSize(card_width, cover_height + 112)
+        card_height = cover_height + 112
+        self.setFixedSize(card_width, card_height)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.setObjectName("skeleton")
         self.setStyleSheet(f"""
@@ -65,6 +54,7 @@ class SkeletonCard(QFrame):
                 border-radius: {get('corner_radius')}px;
             }}
         """)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(8)
@@ -74,18 +64,23 @@ class SkeletonCard(QFrame):
         cover.setFixedSize(card_size, cover_height)
         root.addWidget(cover, 0, Qt.AlignHCenter)
 
-        title1 = QFrame()
-        title1.setObjectName("skeletonFill")
-        title1.setFixedSize(max(80, card_width - 26), 9)
-        title2 = QFrame()
-        title2.setObjectName("skeletonFill")
-        title2.setFixedSize(max(55, card_width - 70), 9)
+        title_line_1 = QFrame()
+        title_line_1.setObjectName("skeletonFill")
+        title_line_1.setFixedHeight(9)
+        title_line_1.setFixedWidth(max(80, card_width - 26))
+
+        title_line_2 = QFrame()
+        title_line_2.setObjectName("skeletonFill")
+        title_line_2.setFixedHeight(9)
+        title_line_2.setFixedWidth(max(55, card_width - 70))
+
         meta = QFrame()
         meta.setObjectName("skeletonFill")
-        meta.setFixedSize(max(70, card_width - 90), 8)
+        meta.setFixedHeight(8)
+        meta.setFixedWidth(max(70, card_width - 90))
 
-        root.addWidget(title1)
-        root.addWidget(title2)
+        root.addWidget(title_line_1)
+        root.addWidget(title_line_2)
         root.addWidget(meta)
         root.addStretch(1)
 
@@ -146,7 +141,6 @@ class SearchPage(QWidget):
     def __init__(self, add_to_library):
         super().__init__()
         self.add_to_library = add_to_library
-
         self.current_search = ""
         self.current_media_type = None
         self.current_media_format = None
@@ -155,7 +149,6 @@ class SearchPage(QWidget):
         self.has_next_page = False
         self.is_loading = False
         self.has_searched = False
-
         self.search_threads = []
         self.search_workers = []
 
@@ -308,7 +301,10 @@ class SearchPage(QWidget):
         if self.current_media_type == "ANIME":
             items = ["All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music"]
         elif self.current_media_type == "MANGA":
-            items = ["All", "Novel"] if self.current_media_format == "NOVEL" else ["All", "Manga", "One Shot"]
+            if self.current_media_format == "NOVEL":
+                items = ["All", "Novel"]
+            else:
+                items = ["All", "Manga", "One Shot"]
         else:
             items = ["All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music", "Manga", "Novel", "One Shot"]
         self.format_filter.addItems(items)
@@ -383,7 +379,7 @@ class SearchPage(QWidget):
             return
 
         self._stop_pending_render()
-        self._request_enrichment_stop()
+        self._stop_enrichment()
         self.enrichment_generation += 1
 
         self.current_search = text
@@ -394,11 +390,9 @@ class SearchPage(QWidget):
         self.raw_results = []
         self.displayed_items = []
         self.pending_items = []
-        self.pending_batch_generation = self.enrichment_generation
         self.pending_batch_active = False
         self.has_searched = True
 
-        self.results_scroll.reset_trigger()
         self._append_skeletons(20)
         self.results_title.setText("Browsing AniList" if not text else f"Searching for “{text}”")
         self.search_button.setEnabled(False)
@@ -406,10 +400,10 @@ class SearchPage(QWidget):
         self.start_search(text, 1)
 
     def load_more_results(self):
-        if not self.has_searched or self.is_loading or self.pending_batch_active or not self.has_next_page:
+        if not self.has_searched or self.is_loading or not self.has_next_page:
             return
-
-        self.results_scroll.reset_trigger()
+        if self.pending_batch_active:
+            return
         self._append_skeletons(20)
         self.is_loading = True
         self.start_search(self.current_search, self.current_page + 1)
@@ -501,20 +495,25 @@ class SearchPage(QWidget):
             QTimer.singleShot(0, self.results_scroll._check)
 
     def _replace_first_skeleton(self, item):
+        skeleton = None
+        row = column = 0
         for index in range(self.grid_layout.count()):
             widget = self.grid_layout.itemAt(index).widget()
             if isinstance(widget, SkeletonCard):
-                self.grid_layout.removeWidget(widget)
-                widget.deleteLater()
-                card = WorkCard(item, mode="search", add_callback=self.add_to_library)
-                card.clicked.connect(self.anime_selected)
-                self.grid_layout.insertWidget(index, card)
-                self._reflow_results()
-                return
+                skeleton = widget
+                row, column, _, alignment = self.grid_layout.getItemPosition(index)
+                break
 
         card = WorkCard(item, mode="search", add_callback=self.add_to_library)
         card.clicked.connect(self.anime_selected)
-        self.grid_layout.addWidget(card)
+
+        if skeleton is not None:
+            self.grid_layout.removeWidget(skeleton)
+            skeleton.deleteLater()
+            self.grid_layout.addWidget(card, row, column, alignment)
+        else:
+            self.grid_layout.addWidget(card)
+
         self._reflow_results()
 
     def _append_skeletons(self, count):
@@ -584,7 +583,7 @@ class SearchPage(QWidget):
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(lambda t=thread: self._enrichment_thread_finished(t, generation))
+        thread.finished.connect(lambda t=thread, g=generation: self._enrichment_thread_finished(t, g))
         self.enrichment_thread = thread
         self.enrichment_worker = worker
         thread.start()
@@ -594,6 +593,17 @@ class SearchPage(QWidget):
             self.enrichment_stop.set()
         self.enrichment_pending = False
 
+    def _stop_enrichment(self):
+        if self.enrichment_stop is not None:
+            self.enrichment_stop.set()
+        thread = self.enrichment_thread
+        self.enrichment_pending = False
+        if thread is not None and thread.isRunning():
+            return
+        self.enrichment_thread = None
+        self.enrichment_worker = None
+        self.enrichment_stop = None
+
     def _enrichment_thread_finished(self, thread, generation):
         if self.enrichment_thread is thread:
             self.enrichment_thread = None
@@ -602,10 +612,7 @@ class SearchPage(QWidget):
 
         thread.deleteLater()
 
-        if self.has_searched and self.enrichment_pending and generation != self.enrichment_generation:
-            self.enrichment_pending = False
-            QTimer.singleShot(200, self._start_enrichment)
-        elif self.has_searched and self.enrichment_pending:
+        if self.has_searched and self.enrichment_pending:
             self.enrichment_pending = False
             QTimer.singleShot(200, self._start_enrichment)
 
@@ -615,7 +622,6 @@ class SearchPage(QWidget):
         if not self.raw_results:
             return
 
-        # Preserve the user's scroll position and any trailing skeleton slots.
         skeleton_count = sum(
             1
             for i in range(self.grid_layout.count())
@@ -713,12 +719,16 @@ class SearchPage(QWidget):
         super().resizeEvent(event)
         self._reflow_results()
 
+    def _render_full_grouped_placeholder(self, grouped):
+        self._render_grouped_preserving_skeletons(grouped, 0)
+
     def shutdown_workers(self):
         self.has_searched = False
         self.enrichment_generation += 1
         self._stop_pending_render()
-        self._request_enrichment_stop()
 
+        if self.enrichment_stop is not None:
+            self.enrichment_stop.set()
         enrichment_thread = self.enrichment_thread
         if enrichment_thread is not None and enrichment_thread.isRunning():
             enrichment_thread.quit()
