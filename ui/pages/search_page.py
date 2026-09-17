@@ -126,7 +126,7 @@ class SeriesEnrichmentWorker(QObject):
             grouped = group_media_results(
                 self.results,
                 enrich=True,
-                max_requests=6,
+                max_requests=20,
                 delay=1.5,
                 stop_event=self.stop_event,
             )
@@ -463,6 +463,7 @@ class SearchPage(QWidget):
         if not self.pending_items:
             self.pending_batch_active = False
             self._update_results_title()
+            self._start_enrichment()
             QTimer.singleShot(0, self.results_scroll.reset_trigger)
             QTimer.singleShot(0, self.results_scroll._check)
             return
@@ -480,6 +481,7 @@ class SearchPage(QWidget):
             self._stop_pending_render()
             self.pending_batch_active = False
             self._update_results_title()
+            self._start_enrichment()
             self.results_scroll.reset_trigger()
             QTimer.singleShot(0, self.results_scroll._check)
             return
@@ -492,6 +494,7 @@ class SearchPage(QWidget):
         if not self.pending_items:
             self._stop_pending_render()
             self.pending_batch_active = False
+            self._start_enrichment()
             self.results_scroll.reset_trigger()
             QTimer.singleShot(0, self.results_scroll._check)
 
@@ -544,10 +547,24 @@ class SearchPage(QWidget):
         self._reflow_results()
 
     def _start_enrichment(self):
-        # Search results must remain stable while the user scrolls.
-        # Deeper relation enrichment used to rebuild the entire grid and collapse
-        # multiple visible search results into a smaller set after pagination.
-        return
+        if not self.raw_results or self.enrichment_thread is not None:
+            return
+        self.enrichment_pending = True
+        stop_event = Event()
+        thread = QThread(self)
+        worker = SeriesEnrichmentWorker(self.raw_results, stop_event, self.enrichment_generation)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self.enrichment_finished)
+        worker.error.connect(self.enrichment_error)
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._enrichment_thread_finished)
+        self.enrichment_stop = stop_event
+        self.enrichment_thread = thread
+        self.enrichment_worker = worker
+        thread.start()
 
     def _enrichment_thread_finished(self):
         thread = self.enrichment_thread
@@ -566,9 +583,12 @@ class SearchPage(QWidget):
     def enrichment_finished(self, generation, grouped):
         if generation != self.enrichment_generation:
             return
-        # Retained for compatibility with any outstanding worker signals.
-        self.enrichment_pending = False
-        self._update_results_title()
+        skeleton_count = sum(
+            1
+            for index in range(self.grid_layout.count())
+            if isinstance(self.grid_layout.itemAt(index).widget(), SkeletonCard)
+        )
+        self._render_grouped_preserving_skeletons(grouped, skeleton_count)
 
     def enrichment_error(self, generation, message):
         if generation != self.enrichment_generation:
@@ -577,9 +597,15 @@ class SearchPage(QWidget):
         self._update_results_title()
 
     def _render_grouped_preserving_skeletons(self, grouped, skeleton_count):
-        # Kept for compatibility; normal search flow no longer calls this because
-        # regrouping live search results makes pagination appear to lose items.
-        return
+        self._clear_results()
+        self.displayed_items = list(grouped)
+        for item in grouped:
+            card = WorkCard(item, mode="search", add_callback=self.add_to_library)
+            card.clicked.connect(self.anime_selected)
+            self.grid_layout.addWidget(card)
+        self._append_skeletons(skeleton_count)
+        self._reflow_results()
+        self._update_results_title()
 
     def _update_results_title(self):
         count = len(self.displayed_items)
