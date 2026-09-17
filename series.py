@@ -211,13 +211,15 @@ def _bundle_logical_season_count(members):
             union(first, media_id)
 
     # Explicit part/cour/final continuations inherit the logical season of
-    # their directly-linked TV neighbor, even when only one side has a marker.
+    # their directly-linked TV neighbor, but never cross two different explicit
+    # season identities.
     for member in tv_members:
         member_id = int(member["id"])
         title = _title_text(member)
         if not _is_continuation_title(title):
             continue
 
+        current_marker = _season_marker(title)
         for edge in _search_relation_edges(member):
             if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
                 continue
@@ -230,14 +232,25 @@ def _bundle_logical_season_count(members):
                 continue
 
             target = by_id[target_id]
-            current_marker = _season_marker(title)
-            target_marker = _season_marker(_title_text(target))
+            target_title = _title_text(target)
+            target_marker = _season_marker(target_title)
 
-            if current_marker and current_marker == target_marker:
-                union(member_id, target_id)
+            if current_marker is not None and target_marker is not None:
+                if current_marker == target_marker:
+                    union(member_id, target_id)
                 continue
 
-            if _is_continuation_title(_title_text(target)) or not current_marker:
+            if current_marker is not None and target_marker is None:
+                if _is_continuation_title(target_title):
+                    union(member_id, target_id)
+                continue
+
+            if current_marker is None and target_marker is not None:
+                if _is_continuation_title(title):
+                    union(member_id, target_id)
+                continue
+
+            if _is_continuation_title(target_title):
                 union(member_id, target_id)
 
     # Unnumbered named arcs are often multiple entries making up one season.
