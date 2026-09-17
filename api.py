@@ -4,7 +4,7 @@ import time
 
 ANILIST_URL = "https://graphql.anilist.co"
 
-MAX_RETRIES = 3
+MAX_RETRIES = 5
 RETRY_DELAY = 1
 
 
@@ -19,7 +19,40 @@ def anilist_request(query, variables=None):
                 json={"query": query, "variables": variables or {}},
                 timeout=30,
             )
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
+
+            if response.status_code == 429:
+                if attempt < MAX_RETRIES - 1:
+                    retry_after = response.headers.get("Retry-After")
+                    try:
+                        wait_time = max(1.0, float(retry_after)) if retry_after is not None else RETRY_DELAY * (2 ** attempt)
+                    except (TypeError, ValueError):
+                        wait_time = RETRY_DELAY * (2 ** attempt)
+                    print(
+                        f"AniList rate limited the request (attempt {attempt + 1}/{MAX_RETRIES}). "
+                        f"Retrying in {wait_time:g}s..."
+                    )
+                    time.sleep(wait_time)
+                    continue
+
+                errors = data.get("errors") or []
+                message = errors[0].get("message") if errors else response.reason
+                raise Exception(f"AniList request failed (429): {message}")
+
+            if response.status_code >= 500:
+                last_error = Exception(f"AniList server error ({response.status_code}): {response.reason}")
+                if attempt < MAX_RETRIES - 1:
+                    wait_time = RETRY_DELAY * (2 ** attempt)
+                    print(
+                        f"AniList server error (attempt {attempt + 1}/{MAX_RETRIES}). "
+                        f"Retrying in {wait_time:g}s..."
+                    )
+                    time.sleep(wait_time)
+                    continue
+                raise last_error
 
             if response.status_code >= 400:
                 errors = data.get("errors") or []
