@@ -7,13 +7,13 @@ from database import get_all_library, get_connection, save_anime
 
 SERIES_RELATIONS = {
     "PREQUEL", "SEQUEL", "PARENT", "SIDE_STORY", "SUMMARY",
-    "FULL_STORY", "SPIN_OFF", "ALTERNATIVE",
+    "FULL_STORY", "SPIN_OFF", "ALTERNATIVE", "COMPILATION", "CONTAINS",
 }
 ANIME_BUNDLE_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL"}
-RELATION_BATCH_SIZE = 25
+RELATION_BATCH_SIZE = 10
+MAX_NODE_FETCH_RETRIES = 3
 _relation_sync_checked_ids = set()
 _relation_cache = {}
-_relation_cache_failures = set()
 
 
 def _title_text(item):
@@ -189,15 +189,14 @@ def _apply_relation_details(item, details):
 
 def _cache_relation_details_batch(media_ids):
     ids = sorted({int(media_id) for media_id in media_ids if media_id is not None})
-    missing = [media_id for media_id in ids if media_id not in _relation_cache and media_id not in _relation_cache_failures]
+    missing = [media_id for media_id in ids if media_id not in _relation_cache]
     if not missing:
         return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
 
     try:
         fetched = get_media_relations_batch(missing)
-    except Exception as error:
-        message = str(error)
-        if any(code in message for code in ("429", "500", "502", "503", "504")) or len(missing) == 1:
+    except Exception:
+        if len(missing) == 1:
             return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
         midpoint = max(1, len(missing) // 2)
         left = _cache_relation_details_batch(missing[:midpoint])
@@ -207,26 +206,19 @@ def _cache_relation_details_batch(media_ids):
 
     for media_id in missing:
         details = fetched.get(media_id)
-        if details is None:
-            _relation_cache_failures.add(media_id)
-        else:
+        if details is not None:
             _relation_cache[media_id] = details
 
     return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
 
 
-def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_event=None):
-    """Finite breadth-first traversal of the full same-family relation graph.
-
-    max_requests meanings:
-      -1: never perform network relation fetches (fast UI grouping)
-       0: unlimited fetches (background enrichment)
-      >0: cap fetches at that number
-    """
+def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_event=None):
+    """Finite breadth-first traversal of the full same-family relation graph."""
     discovered = list(items)
     known_ids = {int(item["id"]) for item in discovered}
     frontier = list(discovered)
     processed_ids = set()
+    fetch_failures = defaultdict(int)
     requests_used = 0
 
     while frontier and len(discovered) < max_nodes:
@@ -240,8 +232,6 @@ def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_ev
                 continue
             if item.get("_relations_loaded") or _search_relation_edges(item) or item_id in _relation_cache:
                 continue
-            if item_id in _relation_cache_failures:
-                continue
             unresolved.append(item)
 
         can_fetch = max_requests == 0 or (max_requests > 0 and requests_used < max_requests)
@@ -253,6 +243,7 @@ def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_ev
                     break
 
                 batch = unresolved[start:start + RELATION_BATCH_SIZE]
+                before = set(_relation_cache)
                 fetched = _cache_relation_details_batch([item["id"] for item in batch])
                 requests_used += 1
 
@@ -260,12 +251,14 @@ def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_ev
                     details = fetched.get(int(item["id"]))
                     if details is not None:
                         _apply_relation_details(item, details)
+                    else:
+                        fetch_failures[int(item["id"])] += 1
 
                 if delay > 0 and start + RELATION_BATCH_SIZE < len(unresolved):
                     time.sleep(delay)
 
         next_frontier = []
-        unresolved_remaining = 0
+        unresolved_remaining = []
         for item in frontier:
             item_id = int(item["id"])
             if item_id in processed_ids:
@@ -277,7 +270,8 @@ def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_ev
                     _apply_relation_details(item, cached)
 
             if not item.get("_relations_loaded") and not _search_relation_edges(item):
-                unresolved_remaining += 1
+                if fetch_failures[item_id] < MAX_NODE_FETCH_RETRIES:
+                    unresolved_remaining.append(item)
                 continue
 
             processed_ids.add(item_id)
@@ -297,10 +291,15 @@ def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_ev
             if len(discovered) >= max_nodes:
                 break
 
+        if len(discovered) >= max_nodes:
+            break
+
+        if unresolved_remaining and can_fetch:
+            next_frontier.extend(unresolved_remaining)
+
         if not next_frontier:
             break
-        if unresolved_remaining and not can_fetch:
-            break
+
         frontier = next_frontier
 
     return discovered, requests_used
@@ -322,9 +321,6 @@ def _group_discovered(results, discovered):
         if left != right:
             parent[right] = left
 
-    # Build components from the full structural relation graph. A special,
-    # music entry, or other non-bundleable bridge can therefore connect two
-    # actual seasons without itself being included in the displayed bundle.
     for item in discovered:
         item_id = int(item["id"])
         for edge in _search_relation_edges(item):
@@ -334,9 +330,6 @@ def _group_discovered(results, discovered):
             if target_id in ids:
                 union(item_id, target_id)
 
-    # Title identity is a fallback for AniList records whose relation graph is
-    # incomplete, but it is still restricted to the same media family and
-    # bundleable formats so unrelated adaptations do not get merged.
     by_key = {}
     for item in discovered:
         if not _is_bundleable(item):
@@ -377,19 +370,11 @@ def _group_discovered(results, discovered):
             grouped.append((min(first_position.get(int(item["id"]), 10**9) for item in bundle_members), representative))
             represented_original_ids.update(int(item["id"]) for item in visible_bundle_members)
 
-    # Preserve original results that are not bundleable (for example MUSIC)
-    # instead of silently losing them because they shared a structural
-    # relation component with an anime bundle.
     for item in results:
         item_id = int(item["id"])
         if item_id in represented_original_ids:
             continue
-        if _is_bundleable(item):
-            # A bundleable original that did not get represented above is
-            # already handled by a singleton group below.
-            grouped.append((first_position[item_id], {**item, "_series_count": 1, "_series_members": [item], "_bundle_summary": ""}))
-        else:
-            grouped.append((first_position[item_id], {**item, "_series_count": 1, "_series_members": [item], "_bundle_summary": ""}))
+        grouped.append((first_position[item_id], {**item, "_series_count": 1, "_series_members": [item], "_bundle_summary": ""}))
 
     grouped.sort(key=lambda pair: pair[0])
     return [item for _, item in grouped]
