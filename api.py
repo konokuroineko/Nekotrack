@@ -352,35 +352,49 @@ def get_media_relations_batch(media_ids):
     if not ids:
         return {}
 
+    # `id_in` is a Media filter exposed on the Page.media field. The top-level
+    # Media query returns one Media object, not a list, so using
+    # `Media(id_in: ...)` here made the batch enrichment iterate over the
+    # object's dictionary keys and crash. Keep this request batched through
+    # Page.media so the result is always a list of media records.
     query = """
-    query ($ids: [Int]) {
-        Media(id_in: $ids) {
-            id
-            type
-            format
-            title { romaji english native }
-            coverImage { large }
-            episodes
-            startDate { year month day }
-            relations {
-                edges {
-                    relationType
-                    node {
-                        id
-                        type
-                        format
-                        title { romaji english native }
-                        coverImage { large }
-                        episodes
-                        startDate { year month day }
+    query ($ids: [Int], $perPage: Int) {
+        Page(page: 1, perPage: $perPage) {
+            media(id_in: $ids) {
+                id
+                type
+                format
+                title { romaji english native }
+                coverImage { large }
+                episodes
+                startDate { year month day }
+                relations {
+                    edges {
+                        relationType
+                        node {
+                            id
+                            type
+                            format
+                            title { romaji english native }
+                            coverImage { large }
+                            episodes
+                            startDate { year month day }
+                        }
                     }
                 }
             }
         }
     }
     """
-    data = anilist_request(query, {"ids": ids})
-    return {int(item["id"]): item for item in data.get("Media") or []}
+    data = anilist_request(query, {"ids": ids, "perPage": len(ids)})
+    media = (data.get("Page") or {}).get("media") or []
+    if isinstance(media, dict):
+        media = [media]
+    return {
+        int(item["id"]): item
+        for item in media
+        if isinstance(item, dict) and item.get("id") is not None
+    }
 
 
 def get_media_details(media_id):
