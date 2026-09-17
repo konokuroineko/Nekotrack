@@ -91,17 +91,28 @@ def _season_group_key(item):
         return f"season-{values[roman.group(1)]}"
 
     # Common title form used by series such as "Mushoku Tensei II: ...".
-    # Treat a leading Roman numeral II-VI before a title separator as the
-    # season number, while leaving Season 1's unnumbered title as season-1.
     roman_prefix = re.search(r"(?:^|\s)(ii|iii|iv|v|vi)\s*[:\-–—]\s*", title)
     if roman_prefix:
         values = {"ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
         return f"season-{values[roman_prefix.group(1)]}"
 
+    # Also handle titles that end with a standalone Roman numeral, such as
+    # "Series II", without treating words like "II-sei" as season markers.
+    roman_suffix = re.search(r"(?:^|\s)(ii|iii|iv|v|vi)\s*$", title)
+    if roman_suffix:
+        values = {"ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
+        return f"season-{values[roman_suffix.group(1)]}"
+
     return "season-1"
 
 
 def _bundle_summary(members):
+    # A single work is not a bundle. WorkCard also uses _series_count to
+    # suppress the bundle indicator, but keeping the summary empty here
+    # prevents other consumers from treating a lone entry as a bundle.
+    if len(members) <= 1:
+        return ""
+
     counts = defaultdict(int)
     logical_seasons = set()
     for member in members:
@@ -147,6 +158,11 @@ def _bundle_edge_allowed(item, edge):
     return _is_bundleable(item) and _is_bundleable(edge.get("node") or {})
 
 
+def _traversal_edge_allowed(item, edge):
+    """Only traverse through entries that can actually participate in a bundle."""
+    return _bundle_edge_allowed(item, edge)
+
+
 def _related_placeholder(node):
     return {
         "id": int(node["id"]),
@@ -185,7 +201,7 @@ def _cache_relation_details_batch(media_ids):
         fetched = get_media_relations_batch(missing)
     except Exception:
         # A transient failure should not permanently poison every ID in the
-        # batch. The next enrichment pass can retry them.
+        # batch. The current enrichment pass can retry the unresolved nodes.
         return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
 
     for media_id in missing:
@@ -198,21 +214,19 @@ def _cache_relation_details_batch(media_ids):
     return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
 
 
-def _discover_related(items, max_nodes=300, max_requests=0, delay=0.25, stop_event=None):
-    """Finite breadth-first traversal of the series relation graph."""
+def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_event=None):
+    """Finite breadth-first traversal of the bundleable relation graph."""
     discovered = list(items)
     known_ids = {int(item["id"]) for item in discovered}
     frontier = list(discovered)
     processed_ids = set()
     requests_used = 0
+    stalled_rounds = 0
 
     while frontier and len(discovered) < max_nodes:
         if stop_event is not None and stop_event.is_set():
             break
 
-        # Fetch relations for every unresolved node in the current frontier,
-        # not just the first ten. This prevents later series entries from
-        # being silently processed without their relation graph.
         unresolved = []
         for item in frontier:
             item_id = int(item["id"])
@@ -224,6 +238,7 @@ def _discover_related(items, max_nodes=300, max_requests=0, delay=0.25, stop_eve
                 continue
             unresolved.append(item)
 
+        loaded_this_round = 0
         if unresolved and (max_requests <= 0 or requests_used < max_requests):
             for start in range(0, len(unresolved), RELATION_BATCH_SIZE):
                 if stop_event is not None and stop_event.is_set():
@@ -239,31 +254,30 @@ def _discover_related(items, max_nodes=300, max_requests=0, delay=0.25, stop_eve
                     details = fetched.get(int(item["id"]))
                     if details is not None:
                         _apply_relation_details(item, details)
+                        loaded_this_round += 1
 
                 if delay > 0 and start + RELATION_BATCH_SIZE < len(unresolved):
                     time.sleep(delay)
 
         next_frontier = []
+        unresolved_remaining = 0
         for item in frontier:
             item_id = int(item["id"])
             if item_id in processed_ids:
                 continue
 
-            # A node can already have been cached by a different frontier
-            # batch, so apply that cache before deciding whether it is usable.
             if not item.get("_relations_loaded") and not _search_relation_edges(item):
                 cached = _relation_cache.get(item_id)
                 if cached is not None:
                     _apply_relation_details(item, cached)
 
-            # Do not mark an unresolved node as processed. If the request
-            # budget was exhausted, it must remain eligible for a later pass.
             if not item.get("_relations_loaded") and not _search_relation_edges(item):
+                unresolved_remaining += 1
                 continue
 
             processed_ids.add(item_id)
             for edge in _search_relation_edges(item):
-                if not _relation_edge_allowed(item, edge):
+                if not _traversal_edge_allowed(item, edge):
                     continue
                 node = edge.get("node") or {}
                 target_id = int(node["id"])
@@ -279,7 +293,14 @@ def _discover_related(items, max_nodes=300, max_requests=0, delay=0.25, stop_eve
                 break
 
         if not next_frontier:
+            if unresolved_remaining and loaded_this_round == 0 and max_requests <= 0:
+                stalled_rounds += 1
+                if stalled_rounds < 3:
+                    time.sleep(max(1.0, delay))
+                    continue
             break
+
+        stalled_rounds = 0
         frontier = next_frontier
 
     return discovered, requests_used
