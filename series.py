@@ -10,6 +10,10 @@ SERIES_RELATIONS = {
     "PREQUEL", "SEQUEL", "PARENT", "SIDE_STORY", "SUMMARY",
     "FULL_STORY", "SPIN_OFF", "ALTERNATIVE", "COMPILATION", "CONTAINS",
 }
+# These relations describe the actual season/continuation chain. Traversal is
+# intentionally restricted to them so a TV-catalog search cannot spend its
+# global discovery budget walking huge spin-off/alternative graphs first.
+SEASON_CHAIN_RELATIONS = {"PREQUEL", "SEQUEL", "PARENT"}
 ANIME_BUNDLE_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL"}
 RELATION_BATCH_SIZE = 10
 MAX_NODE_FETCH_RETRIES = 3
@@ -190,8 +194,6 @@ def _bundle_logical_season_count(members):
                 union(member_id, target_id)
                 continue
 
-            # A generic "Part 2"/"Cour 2" or "Final Season" continuation is
-            # one logical season with its directly linked TV predecessor.
             if _is_continuation_title(_title_text(target)) or not _season_marker(title):
                 union(member_id, target_id)
 
@@ -258,8 +260,11 @@ def _bundle_edge_allowed(item, edge):
 
 
 def _traversal_edge_allowed(item, edge):
-    """Traversal may cross non-bundleable bridge entries within one media family."""
-    return _relation_edge_allowed(item, edge)
+    """Walk only the season/continuation chain during recursive discovery."""
+    if edge.get("relationType") not in SEASON_CHAIN_RELATIONS:
+        return False
+    node = edge.get("node") or {}
+    return bool(node.get("id")) and _same_media_family(item, node)
 
 
 def _related_placeholder(node):
@@ -324,9 +329,6 @@ def _cache_relation_details_batch(media_ids):
         if details is not None:
             _relation_cache[int(media_id)] = details
 
-    # AniList can occasionally return a partial id_in result without an HTTP
-    # failure. Retry only the missing IDs so a partial batch cannot silently
-    # prune a relation chain.
     missing_after_fetch = [
         media_id for media_id in missing if media_id not in _relation_cache
     ]
@@ -343,17 +345,13 @@ def _cache_relation_details_batch(media_ids):
 
 
 def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_event=None):
-    """Finite breadth-first traversal of the full same-family relation graph."""
+    """Finite breadth-first traversal of the season/continuation relation graph."""
     discovered = list(items)
     known_ids = {int(item["id"]) for item in discovered}
     frontier = list(discovered)
     processed_ids = set()
     fetch_failures = defaultdict(int)
     requests_used = 0
-
-    # Search results contain only a lightweight/partial relation payload.
-    # During enrichment, hydrate those original nodes too instead of treating
-    # that payload as the complete relation graph.
     hydrate_existing_nodes = max_requests != -1
 
     while frontier and len(discovered) < max_nodes:
@@ -366,8 +364,7 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
             if item_id in processed_ids:
                 continue
 
-            has_cached_full_record = item.get("_relations_loaded")
-            if has_cached_full_record:
+            if item.get("_relations_loaded"):
                 continue
 
             if not hydrate_existing_nodes and (
