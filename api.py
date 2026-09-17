@@ -1,3 +1,4 @@
+import datetime
 import requests
 import time
 
@@ -403,7 +404,7 @@ def get_media_details(media_id):
     query ($id: Int) {
         Media(id: $id) {
             %s
-            airingSchedule(perPage: 50) {
+            airingSchedule(perPage: 50, notYetAired: false) {
                 nodes {
                     airingAt
                     episode
@@ -414,3 +415,34 @@ def get_media_details(media_id):
     """ % _media_fields(include_details=True)
     data = anilist_request(query, {"id": media_id})
     return data["Media"]
+
+
+def media_episodes(details):
+    """Normalize a detail payload into the episode records `save_episodes` expects.
+
+    AniList exposes two episode-ish sources: ``airingSchedule`` (numbered nodes
+    with air times) and ``streamingEpisodes`` (titled clips without episode
+    numbers or dates). Only the schedule carries enough information for the
+    library's watched-state tracking, so episodes without a number are skipped.
+    """
+    episodes = []
+    for node in (details.get("airingSchedule") or {}).get("nodes") or []:
+        number = node.get("episode")
+        if number is None:
+            continue
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            continue
+        air_date = None
+        airing_at = node.get("airingAt")
+        if airing_at:
+            try:
+                air_date = datetime.datetime.fromtimestamp(airing_at).date().isoformat()
+            except (OverflowError, OSError, TypeError, ValueError):
+                air_date = None
+        episodes.append(
+            {"episodeNumber": number, "title": None, "description": None, "airdate": air_date}
+        )
+    episodes.sort(key=lambda episode: episode["episodeNumber"])
+    return episodes

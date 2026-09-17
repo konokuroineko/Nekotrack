@@ -2,7 +2,7 @@ from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, Signal, QEvent, QT
 from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLayout
 
 from api import get_media_details
-from database import get_all_library, get_connection, save_anime
+from database import get_connection, save_anime
 from series import get_library_series
 from ui.preferences import get
 from ui.theme import COLORS

@@ -4,7 +4,21 @@ import tempfile
 from pathlib import Path
 
 import requests
-from PySide6.QtCore import QThread, Signal
+
+try:
+    from PySide6.QtCore import QThread, Signal
+except ImportError:  # keep version logic importable without PySide6 (tests/tooling)
+    QThread = object
+
+    class Signal:
+        """No-op stand-in for class-body signal declarations.
+
+        The threaded updater classes are only instantiated by the desktop app,
+        which always ships PySide6 (see requirements.txt).
+        """
+
+        def __init__(self, *args, **kwargs):
+            pass
 
 
 REPO_API_URL = "https://api.github.com/repos/konokuroineko/Nekotrack/releases"

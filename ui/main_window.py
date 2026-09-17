@@ -202,12 +202,12 @@ class MainWindow(QMainWindow):
 
     def show_search_work(self, work):
         try:
-            from api import get_media_details
+            from api import get_media_details, media_episodes
             details = get_media_details(work["id"])
             save_anime(details)
             save_characters(work["id"], (details.get("characters") or {}).get("edges"))
             save_staff(work["id"], (details.get("staff") or {}).get("edges"))
-            save_episodes(work["id"], details.get("streamingEpisodes"))
+            save_episodes(work["id"], media_episodes(details))
             self.show_work_details(get_work(work["id"]) or work)
         except Exception:
             self.show_work_details(work)
@@ -225,11 +225,11 @@ class MainWindow(QMainWindow):
 
     def add_to_library(self, anime, button):
         try:
-            from api import get_media_details
+            from api import get_media_details, media_episodes
             details = get_media_details(anime["id"])
             save_anime(details)
             save_characters(anime["id"], (details.get("characters") or {}).get("edges"))
-            save_episodes(anime["id"], details.get("streamingEpisodes"))
+            save_episodes(anime["id"], media_episodes(details))
             save_staff(anime["id"], (details.get("staff") or {}).get("edges"))
             add_to_library(anime["id"], "Planning")
             self.library_page.refresh()

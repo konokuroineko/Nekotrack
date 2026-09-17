@@ -1,7 +1,7 @@
 from collections import OrderedDict
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal
-from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
 
 from api import get_media_details
 from database import get_all_relation_cards, get_library_relation_sync_ids, get_connection, save_anime

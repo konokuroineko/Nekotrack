@@ -183,8 +183,11 @@ __marimo__/
 
 # Local database
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 
 # Downloaded/cached cover images
+data/
 data/images/

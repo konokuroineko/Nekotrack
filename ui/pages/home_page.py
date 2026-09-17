@@ -1,7 +1,6 @@
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from database import get_all_library
-from ui.theme import COLORS, SPACING
+from ui.theme import COLORS
 
 
 class HomePage(QWidget):

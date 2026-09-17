@@ -48,9 +48,29 @@ Track what you watch and read, explore characters and staff, manage your library
 
 ## Data and privacy
 
-NekoTrack stores its local SQLite database as `anime_tracker.db`. Cover images are cached under `data/images/`. These generated/local files are intentionally ignored by Git.
+NekoTrack stores its local SQLite database as `anime_tracker.db` inside the per-user application data directory (`%APPDATA%\NekoTrack` on Windows). Cover images are cached under `data/images/` there. These generated/local files are intentionally ignored by Git.
 
 NekoTrack does not currently require an AniList API token for its public GraphQL requests.
+
+## Development
+
+Requires Python 3.9+.
+
+```bash
+# Create a virtual environment and install dependencies
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+# Run the app
+python main.py
+
+# Run the offline test suite (no network, no UI required)
+pytest
+```
+
+The core logic (`api`, `database`, `season_count`, `series`, `updater`) is fully testable without PySide6; only the `ui/` package and `main.py` need a desktop session.
 
 ## AniList
 
