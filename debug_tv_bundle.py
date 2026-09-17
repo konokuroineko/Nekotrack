@@ -45,13 +45,14 @@ def describe(item):
 def main():
     parser = argparse.ArgumentParser(
         description=(
-            "Diagnose NekoTrack bundling for the exact catalog-browse path "
-            "used by an empty search box + Anime type + TV format filter."
+            "Diagnose NekoTrack bundling for an empty search box + Anime type + "
+            "TV format filter."
         )
     )
-    parser.add_argument("--pages", type=int, default=3)
-    parser.add_argument("--per-page", type=int, default=20)
-    parser.add_argument("--delay", type=float, default=0.35)
+    parser.add_argument("--pages", type=int, default=1, help="Catalog pages to inspect (default: 1)")
+    parser.add_argument("--per-page", type=int, default=20, help="Results per page (default: 20)")
+    parser.add_argument("--max-nodes", type=int, default=100, help="Maximum relation nodes to traverse (default: 100)")
+    parser.add_argument("--delay", type=float, default=0.35, help="Delay between relation batches (default: 0.35)")
     parser.add_argument("--output", default="bundle_tv_debug.log")
     args = parser.parse_args()
 
@@ -67,7 +68,7 @@ def main():
         log.write("search='' (EMPTY SEARCH BOX)")
         log.write(
             f"filters: media_type=ANIME format_filter=TV sort=SEARCH_MATCH "
-            f"pages={args.pages} per_page={args.per_page}"
+            f"pages={args.pages} per_page={args.per_page} max_nodes={args.max_nodes}"
         )
         log.write(f"SERIES_RELATIONS={sorted(series.SERIES_RELATIONS)}")
         log.write("")
@@ -104,14 +105,11 @@ def main():
         log.write("")
         log.write(f"SEED_TOTAL {len(results)} ids={[int(x['id']) for x in results]}")
         log.write("")
-        log.write("RUNNING SERIES GROUPING WITH FULL ENRICHMENT")
+        log.write("RUNNING SERIES DISCOVERY")
 
         original_cache = series._cache_relation_details_batch
         original_allowed = series._relation_edge_allowed
         original_apply = series._apply_relation_details
-        original_discover = series._discover_related
-        original_group = series._group_discovered
-        original_logical = series._bundle_logical_season_count
 
         def cache_wrapper(media_ids):
             requested = [int(x) for x in media_ids]
@@ -139,61 +137,28 @@ def main():
         def allowed_wrapper(item, edge):
             node = edge.get("node") or {}
             result = original_allowed(item, edge)
-            left_family = series._media_family(item)
-            right_family = series._media_family(node)
             log.write(
                 f"EDGE_DECISION allowed={result} relation={edge.get('relationType')} "
-                f"source={item.get('id')} {title(item)!r} family={left_family} format={item.get('format')} "
-                f"target={node.get('id')} {title(node)!r} family={right_family} format={node.get('format')}"
+                f"source={item.get('id')} {title(item)!r} family={series._media_family(item)} format={item.get('format')} "
+                f"target={node.get('id')} {title(node)!r} family={series._media_family(node)} format={node.get('format')}"
             )
             return result
-
-        def discover_wrapper(items, **kwargs):
-            log.write("=" * 100)
-            log.write("DISCOVERY START")
-            log.write(f"seed_count={len(items)} seed_ids={[int(item['id']) for item in items]}")
-            result, requests_used = original_discover(items, **kwargs)
-            log.write(f"DISCOVERY END discovered={len(result)} requests_used={requests_used}")
-            for item in result:
-                log.write(f"  DISCOVERED {describe(item)} related_only={item.get('_related_only', False)} loaded={item.get('_relations_loaded', False)}")
-            return result, requests_used
-
-        def group_wrapper(results_arg, discovered):
-            log.write("=" * 100)
-            log.write(f"GROUPING START original={len(results_arg)} discovered={len(discovered)}")
-            grouped = original_group(results_arg, discovered)
-            log.write(f"GROUPING END groups={len(grouped)}")
-            for index, item in enumerate(grouped, 1):
-                members = item.get("_series_members") or []
-                log.write(
-                    f"  GROUP {index}: representative={int(item['id'])} {title(item)!r} "
-                    f"count={item.get('_series_count')} summary={item.get('_bundle_summary')!r}"
-                )
-                for member in members:
-                    log.write(f"    MEMBER {describe(member)}")
-            return grouped
-
-        def logical_wrapper(members):
-            value = original_logical(members)
-            tv = [m for m in members if str(m.get("format") or "").upper() in {"TV", "TV_SHORT"}]
-            log.write(
-                f"SEASON_COUNT result={value} tv={[(int(m['id']), title(m)) for m in tv]}"
-            )
-            return value
 
         series._cache_relation_details_batch = cache_wrapper
         series._apply_relation_details = apply_wrapper
         series._relation_edge_allowed = allowed_wrapper
-        series._discover_related = discover_wrapper
-        series._group_discovered = group_wrapper
-        series._bundle_logical_season_count = logical_wrapper
 
-        grouped = series.group_media_results(
+        discovered, requests_used = series._discover_related(
             results,
-            enrich=True,
+            max_nodes=max(1, args.max_nodes),
             max_requests=0,
             delay=args.delay,
         )
+        log.write(f"DISCOVERY_END discovered={len(discovered)} requests_used={requests_used}")
+        for item in discovered:
+            log.write(f"  DISCOVERED {describe(item)} related_only={item.get('_related_only', False)} loaded={item.get('_relations_loaded', False)}")
+
+        grouped = series._group_discovered(results, discovered)
 
         log.write("")
         log.write("FINAL_GROUPS")
@@ -213,6 +178,8 @@ def main():
             "sort": "SEARCH_MATCH",
             "seed_count": len(results),
             "seed_ids": [int(x["id"]) for x in results],
+            "discovered_count": len(discovered),
+            "relation_requests": requests_used,
             "groups": [
                 {
                     "representative": int(x["id"]),
@@ -248,9 +215,6 @@ def main():
             series._cache_relation_details_batch = original_cache
             series._apply_relation_details = original_apply
             series._relation_edge_allowed = original_allowed
-            series._discover_related = original_discover
-            series._group_discovered = original_group
-            series._bundle_logical_season_count = original_logical
         except NameError:
             pass
         log.close()
