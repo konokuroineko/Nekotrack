@@ -5,6 +5,7 @@ import time
 from api import get_media_details, get_media_relations_batch
 from database import get_all_library, get_connection, save_anime
 
+
 SERIES_RELATIONS = {
     "PREQUEL", "SEQUEL", "PARENT", "SIDE_STORY", "SUMMARY",
     "FULL_STORY", "SPIN_OFF", "ALTERNATIVE", "COMPILATION", "CONTAINS",
@@ -12,6 +13,7 @@ SERIES_RELATIONS = {
 ANIME_BUNDLE_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL"}
 RELATION_BATCH_SIZE = 10
 MAX_NODE_FETCH_RETRIES = 3
+
 _relation_sync_checked_ids = set()
 _relation_cache = {}
 
@@ -60,10 +62,22 @@ def _is_bundleable(item):
 
 def _series_key(title):
     value = (title or "").lower().strip()
-    value = re.sub(r"\s*[:\-–—]?\s*(?:the\s+)?final\s+season(?:\s+part\s+\d+)?(?:\s+\([^)]*\))?\s*$", "", value)
-    value = re.sub(r"\s*[:\-–—]?\s*(?:\d+(?:st|nd|rd|th)|season\s*\d+|series\s*\d+|season\s*[ivx]+|series\s*[ivx]+)(?:\s+part\s+\d+)?\s*$", "", value)
+    value = re.sub(
+        r"\s*[:\-–—]?\s*(?:the\s+)?final\s+season(?:\s+part\s+\d+)?(?:\s+\([^)]*\))?\s*$",
+        "",
+        value,
+    )
+    value = re.sub(
+        r"\s*[:\-–—]?\s*(?:\d+(?:st|nd|rd|th)|season\s*\d+|series\s*\d+|season\s*[ivx]+|series\s*[ivx]+)(?:\s+part\s+\d+)?\s*$",
+        "",
+        value,
+    )
     value = re.sub(r"(?:^|\s)(?:ii|iii|iv|v|vi)\s*[:\-–—]\s*", " ", value)
-    value = re.sub(r"\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\s*(?:season)?\s*$", "", value)
+    value = re.sub(
+        r"\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\s*(?:season)?\s*$",
+        "",
+        value,
+    )
     value = re.sub(r"\s*[:\-–—]?\s*(?:part|cour)\s*\d+\s*$", "", value)
     value = re.sub(r"\s+\d+$", "", value)
     value = re.sub(r"\s+", " ", value).strip()
@@ -74,8 +88,10 @@ def _series_group_key(item):
     return _media_family(item), _series_key(_title_text(item))
 
 
-def _season_group_key(item):
-    title = _title_text(item).lower()
+def _season_marker(title):
+    """Return an explicit season identity, or None when the title does not say one."""
+    title = (title or "").lower()
+
     if re.search(r"\bfinal\s+season\b", title):
         return "final"
 
@@ -102,7 +118,84 @@ def _season_group_key(item):
         values = {"ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
         return f"season-{values[roman_suffix.group(1)]}"
 
-    return "season-1"
+    return None
+
+
+def _is_continuation_title(title):
+    title = (title or "").lower()
+    return bool(
+        re.search(r"\b(?:part|cour)\s*(?:\d+|i|ii|iii|iv|v|vi)\b", title)
+        or re.search(r"\bfinal\s+season\b", title)
+    )
+
+
+def _bundle_logical_season_count(members):
+    """
+    Count logical TV seasons without assuming every unnumbered title belongs to
+    season 1. Relation-linked continuation parts/cours are merged into one season.
+    """
+    tv_members = [
+        member
+        for member in members
+        if str(member.get("format") or "").upper() in {"TV", "TV_SHORT"}
+    ]
+    if not tv_members:
+        return 0
+
+    ids = {int(member["id"]) for member in tv_members}
+    parent = {media_id: media_id for media_id in ids}
+
+    def find(media_id):
+        while parent[media_id] != media_id:
+            parent[media_id] = parent[parent[media_id]]
+            media_id = parent[media_id]
+        return media_id
+
+    def union(left, right):
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    by_explicit_marker = defaultdict(list)
+    for member in tv_members:
+        marker = _season_marker(_title_text(member))
+        if marker:
+            by_explicit_marker[marker].append(int(member["id"]))
+
+    for ids_for_marker in by_explicit_marker.values():
+        first = ids_for_marker[0]
+        for media_id in ids_for_marker[1:]:
+            union(first, media_id)
+
+    by_id = {int(member["id"]): member for member in tv_members}
+    for member in tv_members:
+        member_id = int(member["id"])
+        title = _title_text(member)
+        if not _is_continuation_title(title):
+            continue
+
+        for edge in _search_relation_edges(member):
+            if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
+                continue
+            node = edge.get("node") or {}
+            target_id = node.get("id")
+            if target_id is None:
+                continue
+            target_id = int(target_id)
+            if target_id not in ids:
+                continue
+
+            target = by_id[target_id]
+            if _season_marker(title) and _season_marker(title) == _season_marker(_title_text(target)):
+                union(member_id, target_id)
+                continue
+
+            # A generic "Part 2"/"Cour 2" or "Final Season" continuation is
+            # one logical season with its directly linked TV predecessor.
+            if _is_continuation_title(_title_text(target)) or not _season_marker(title):
+                union(member_id, target_id)
+
+    return len({find(media_id) for media_id in ids})
 
 
 def _bundle_summary(members):
@@ -110,12 +203,16 @@ def _bundle_summary(members):
         return ""
 
     counts = defaultdict(int)
-    logical_seasons = set()
+    logical_seasons = _bundle_logical_season_count(members)
     for member in members:
-        fmt = str(member.get("format") or "").upper() if hasattr(member, "get") else str(member["format"] or "").upper()
+        fmt = (
+            str(member.get("format") or "").upper()
+            if hasattr(member, "get")
+            else str(member["format"] or "").upper()
+        )
         if fmt in {"TV", "TV_SHORT"}:
-            logical_seasons.add(_season_group_key(member))
-        elif fmt == "OVA":
+            continue
+        if fmt == "OVA":
             counts["OVAs"] += 1
         elif fmt == "ONA":
             counts["ONAs"] += 1
@@ -129,11 +226,17 @@ def _bundle_summary(members):
             counts[fmt.lower()] += 1
         else:
             counts["entries"] += 1
+
     if logical_seasons:
-        counts["seasons"] = len(logical_seasons)
+        counts["seasons"] = logical_seasons
+
     order = ["seasons", "OVAs", "ONAs", "movies", "specials", "music"]
     parts = [f"{counts[key]} {key}" for key in order if counts[key]]
-    parts.extend(f"{count} {key}" for key, count in counts.items() if key not in order)
+    parts.extend(
+        f"{count} {key}"
+        for key, count in counts.items()
+        if key not in order
+    )
     return " · ".join(parts)
 
 
@@ -191,25 +294,52 @@ def _cache_relation_details_batch(media_ids):
     ids = sorted({int(media_id) for media_id in media_ids if media_id is not None})
     missing = [media_id for media_id in ids if media_id not in _relation_cache]
     if not missing:
-        return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
+        return {
+            media_id: _relation_cache[media_id]
+            for media_id in ids
+            if media_id in _relation_cache
+        }
 
     try:
         fetched = get_media_relations_batch(missing)
     except Exception:
         if len(missing) == 1:
-            return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
+            return {
+                media_id: _relation_cache[media_id]
+                for media_id in ids
+                if media_id in _relation_cache
+            }
+
         midpoint = max(1, len(missing) // 2)
         left = _cache_relation_details_batch(missing[:midpoint])
         right = _cache_relation_details_batch(missing[midpoint:])
         left.update(right)
-        return {media_id: left[media_id] for media_id in ids if media_id in left}
+        return {
+            media_id: left[media_id]
+            for media_id in ids
+            if media_id in left
+        }
 
-    for media_id in missing:
-        details = fetched.get(media_id)
+    for media_id, details in fetched.items():
         if details is not None:
+            _relation_cache[int(media_id)] = details
+
+    # AniList can occasionally return a partial id_in result without an HTTP
+    # failure. Retry only the missing IDs so a partial batch cannot silently
+    # prune a relation chain.
+    missing_after_fetch = [
+        media_id for media_id in missing if media_id not in _relation_cache
+    ]
+    if missing_after_fetch and len(missing_after_fetch) < len(missing):
+        recovered = _cache_relation_details_batch(missing_after_fetch)
+        for media_id, details in recovered.items():
             _relation_cache[media_id] = details
 
-    return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
+    return {
+        media_id: _relation_cache[media_id]
+        for media_id in ids
+        if media_id in _relation_cache
+    }
 
 
 def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_event=None):
@@ -221,6 +351,11 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
     fetch_failures = defaultdict(int)
     requests_used = 0
 
+    # Search results contain only a lightweight/partial relation payload.
+    # During enrichment, hydrate those original nodes too instead of treating
+    # that payload as the complete relation graph.
+    hydrate_existing_nodes = max_requests != -1
+
     while frontier and len(discovered) < max_nodes:
         if stop_event is not None and stop_event.is_set():
             break
@@ -230,11 +365,23 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
             item_id = int(item["id"])
             if item_id in processed_ids:
                 continue
-            if item.get("_relations_loaded") or _search_relation_edges(item) or item_id in _relation_cache:
+
+            has_cached_full_record = item.get("_relations_loaded")
+            if has_cached_full_record:
                 continue
+
+            if not hydrate_existing_nodes and (
+                _search_relation_edges(item) or item_id in _relation_cache
+            ):
+                continue
+
             unresolved.append(item)
 
-        can_fetch = max_requests == 0 or (max_requests > 0 and requests_used < max_requests)
+        can_fetch = (
+            max_requests == 0
+            or (max_requests > 0 and requests_used < max_requests)
+        )
+
         if unresolved and can_fetch:
             for start in range(0, len(unresolved), RELATION_BATCH_SIZE):
                 if stop_event is not None and stop_event.is_set():
@@ -243,8 +390,9 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
                     break
 
                 batch = unresolved[start:start + RELATION_BATCH_SIZE]
-                before = set(_relation_cache)
-                fetched = _cache_relation_details_batch([item["id"] for item in batch])
+                fetched = _cache_relation_details_batch(
+                    [item["id"] for item in batch]
+                )
                 requests_used += 1
 
                 for item in batch:
@@ -259,35 +407,41 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
 
         next_frontier = []
         unresolved_remaining = []
+
         for item in frontier:
             item_id = int(item["id"])
             if item_id in processed_ids:
                 continue
 
-            if not item.get("_relations_loaded") and not _search_relation_edges(item):
+            if not item.get("_relations_loaded"):
                 cached = _relation_cache.get(item_id)
                 if cached is not None:
                     _apply_relation_details(item, cached)
 
             if not item.get("_relations_loaded") and not _search_relation_edges(item):
-                if fetch_failures[item_id] < MAX_NODE_FETCH_RETRIES:
+                if fetch_failures[item_id] < MAX_NODE_FETCH_RETRIES and can_fetch:
                     unresolved_remaining.append(item)
                 continue
 
             processed_ids.add(item_id)
+
             for edge in _search_relation_edges(item):
                 if not _traversal_edge_allowed(item, edge):
                     continue
+
                 node = edge.get("node") or {}
                 target_id = int(node["id"])
                 if target_id in known_ids:
                     continue
+
                 related = _related_placeholder(node)
                 known_ids.add(target_id)
                 discovered.append(related)
                 next_frontier.append(related)
+
                 if len(discovered) >= max_nodes:
                     break
+
             if len(discovered) >= max_nodes:
                 break
 
@@ -359,22 +513,47 @@ def _group_discovered(results, discovered):
             )
         )
 
-        bundle_members = [item for item in group_members if _is_bundleable(item)]
-        visible_bundle_members = [item for item in bundle_members if int(item["id"]) in original_ids]
+        bundle_members = [
+            item for item in group_members if _is_bundleable(item)
+        ]
+        visible_bundle_members = [
+            item for item in bundle_members
+            if int(item["id"]) in original_ids
+        ]
 
         if visible_bundle_members and bundle_members:
             representative = dict(visible_bundle_members[0])
             representative["_series_count"] = len(bundle_members)
             representative["_series_members"] = bundle_members
             representative["_bundle_summary"] = _bundle_summary(bundle_members)
-            grouped.append((min(first_position.get(int(item["id"]), 10**9) for item in bundle_members), representative))
-            represented_original_ids.update(int(item["id"]) for item in visible_bundle_members)
+            grouped.append(
+                (
+                    min(
+                        first_position.get(int(item["id"]), 10**9)
+                        for item in bundle_members
+                    ),
+                    representative,
+                )
+            )
+            represented_original_ids.update(
+                int(item["id"]) for item in visible_bundle_members
+            )
 
     for item in results:
         item_id = int(item["id"])
         if item_id in represented_original_ids:
             continue
-        grouped.append((first_position[item_id], {**item, "_series_count": 1, "_series_members": [item], "_bundle_summary": ""}))
+        grouped.append(
+            (
+                first_position[item_id],
+                {
+                    **item,
+                    "_series_count": 1,
+                    "_series_members": [item],
+                    "_bundle_summary": "",
+                },
+            )
+        )
 
     grouped.sort(key=lambda pair: pair[0])
     return [item for _, item in grouped]
@@ -383,6 +562,7 @@ def _group_discovered(results, discovered):
 def group_media_results(results, enrich=False, max_requests=0, delay=0.25, stop_event=None):
     if not results:
         return []
+
     discovered, _ = _discover_related(
         results,
         max_requests=max_requests if enrich else -1,
@@ -395,12 +575,14 @@ def group_media_results(results, enrich=False, max_requests=0, delay=0.25, stop_
 def has_pending_relation_enrichment(results):
     seen = set()
     queue = list(results)
+
     while queue:
         item = queue.pop(0)
         item_id = int(item["id"])
         if item_id in seen:
             continue
         seen.add(item_id)
+
         if item.get("_relations_loaded"):
             edges = _search_relation_edges(item)
         else:
@@ -411,26 +593,39 @@ def has_pending_relation_enrichment(results):
                 return True
             else:
                 edges = _search_relation_edges(item)
+
         for edge in edges:
             if not _relation_edge_allowed(item, edge):
                 continue
+
             node = edge.get("node") or {}
             target_id = node.get("id")
-            if target_id and int(target_id) not in seen and int(target_id) not in _relation_cache:
+            if (
+                target_id
+                and int(target_id) not in seen
+                and int(target_id) not in _relation_cache
+            ):
                 queue.append(_related_placeholder(node))
+
     return False
 
 
 def _relation_data_for(ids):
     if not ids:
         return []
+
     placeholders = ",".join("?" for _ in ids)
     relation_types = ",".join(repr(value) for value in SERIES_RELATIONS)
     connection = get_connection()
+
     rows = connection.execute(
-        f"SELECT source_id, target_id, relation_type FROM work_relations WHERE relation_type IN ({relation_types}) AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
+        f"SELECT source_id, target_id, relation_type "
+        f"FROM work_relations "
+        f"WHERE relation_type IN ({relation_types}) "
+        f"AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
         [*ids, *ids],
     ).fetchall()
+
     connection.close()
     return rows
 
@@ -439,11 +634,17 @@ def sync_library_relations():
     rows = list(get_all_library())
     if len(rows) < 2:
         return False
+
     ids = {int(row["id"]) for row in rows}
     existing_rows = _relation_data_for(ids)
-    existing = {int(row["source_id"]) for row in existing_rows} | {int(row["target_id"]) for row in existing_rows}
+    existing = (
+        {int(row["source_id"]) for row in existing_rows}
+        | {int(row["target_id"]) for row in existing_rows}
+    )
+
     missing = ids - existing - _relation_sync_checked_ids
     changed = False
+
     for work_id in missing:
         try:
             details = get_media_details(work_id)
@@ -453,6 +654,7 @@ def sync_library_relations():
                 changed = True
         except Exception:
             continue
+
     return changed
 
 
@@ -460,6 +662,7 @@ def get_library_series():
     rows = list(get_all_library())
     if not rows:
         return []
+
     ids = {int(row["id"]) for row in rows}
     parent = {work_id: work_id for work_id in ids}
 
@@ -475,17 +678,27 @@ def get_library_series():
             parent[right] = left
 
     row_by_id = {int(row["id"]): row for row in rows}
+
     for relation in _relation_data_for(ids):
-        source_id, target_id = int(relation["source_id"]), int(relation["target_id"])
+        source_id = int(relation["source_id"])
+        target_id = int(relation["target_id"])
         source = row_by_id.get(source_id)
         target = row_by_id.get(target_id)
-        if source is not None and target is not None and _same_media_family(source, target) and _is_bundleable(source) and _is_bundleable(target):
+
+        if (
+            source is not None
+            and target is not None
+            and _same_media_family(source, target)
+            and _is_bundleable(source)
+            and _is_bundleable(target)
+        ):
             union(source_id, target_id)
 
     by_key = {}
     for row in rows:
         if not _is_bundleable(row):
             continue
+
         key = _series_group_key(row)
         if key[1]:
             work_id = int(row["id"])
@@ -500,14 +713,32 @@ def get_library_series():
 
     result = []
     for members in groups.values():
-        members.sort(key=lambda row: (row["start_year"] is None, row["start_year"] or 9999, row["id"]))
+        members.sort(
+            key=lambda row: (
+                row["start_year"] is None,
+                row["start_year"] or 9999,
+                row["id"],
+            )
+        )
+
         group = dict(members[0])
         statuses = {row["status"] for row in members}
-        group["status"] = "Watching" if "Watching" in statuses else "Completed" if statuses and statuses == {"Completed"} else "Planning"
+        group["status"] = (
+            "Watching"
+            if "Watching" in statuses
+            else "Completed"
+            if statuses and statuses == {"Completed"}
+            else "Planning"
+        )
         group["_series_count"] = len(members)
         group["_series_members"] = members
-        group["_series_episode_total"] = sum(int(row["episodes"] or 0) for row in members)
-        group["_series_progress"] = sum(int(row["progress_episodes"] or 0) for row in members)
+        group["_series_episode_total"] = sum(
+            int(row["episodes"] or 0) for row in members
+        )
+        group["_series_progress"] = sum(
+            int(row["progress_episodes"] or 0) for row in members
+        )
         group["_bundle_summary"] = _bundle_summary(members)
         result.append(group)
+
     return result
