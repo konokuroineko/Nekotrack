@@ -60,11 +60,13 @@ def _is_bundleable(item):
 
 def _series_key(title):
     value = (title or "").lower().strip()
-    value = re.sub(r"\s*[:\-–—]?\s*(the\s+)?final\s+season(?:\s+part\s+\d+)?\s*$", "", value)
-    value = re.sub(r"\s*[:\-–—]?\s*(?:season|series)\s*(?:\d+|[ivx]+)(?:\s+part\s+\d+)?\s*$", "", value)
-    value = re.sub(r"\s*[:\-–—]?\s*(?:part|cour)\s*\d+\s*$", "", value)
+    value = re.sub(r"\s*[:\-–—]?\s*(?:the\s+)?final\s+season(?:\s+part\s+\d+)?(?:\s+\([^)]*\))?\s*$", "", value)
+    value = re.sub(r"\s*[:\-–—]?\s*(?:\d+(?:st|nd|rd|th)|season\s*\d+|series\s*\d+|season\s*[ivx]+|series\s*[ivx]+)(?:\s+part\s+\d+)?\s*$", "", value)
+    value = re.sub(r"(?:^|\s)(?:ii|iii|iv|v|vi)\s*[:\-–—]\s*", " ", value)
     value = re.sub(r"\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\s*(?:season)?\s*$", "", value)
+    value = re.sub(r"\s*[:\-–—]?\s*(?:part|cour)\s*\d+\s*$", "", value)
     value = re.sub(r"\s+\d+$", "", value)
+    value = re.sub(r"\s+", " ", value).strip()
     return re.sub(r"[^a-z0-9]+", " ", value).strip()
 
 
@@ -153,8 +155,8 @@ def _bundle_edge_allowed(item, edge):
 
 
 def _traversal_edge_allowed(item, edge):
-    """Only traverse through entries that can actually participate in a bundle."""
-    return _bundle_edge_allowed(item, edge)
+    """Traversal may cross non-bundleable bridge entries within one media family."""
+    return _relation_edge_allowed(item, edge)
 
 
 def _related_placeholder(node):
@@ -193,8 +195,15 @@ def _cache_relation_details_batch(media_ids):
 
     try:
         fetched = get_media_relations_batch(missing)
-    except Exception:
-        return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
+    except Exception as error:
+        message = str(error)
+        if any(code in message for code in ("429", "500", "502", "503", "504")) or len(missing) == 1:
+            return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
+        midpoint = max(1, len(missing) // 2)
+        left = _cache_relation_details_batch(missing[:midpoint])
+        right = _cache_relation_details_batch(missing[midpoint:])
+        left.update(right)
+        return {media_id: left[media_id] for media_id in ids if media_id in left}
 
     for media_id in missing:
         details = fetched.get(media_id)
@@ -207,7 +216,7 @@ def _cache_relation_details_batch(media_ids):
 
 
 def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_event=None):
-    """Finite breadth-first traversal of the bundleable relation graph.
+    """Finite breadth-first traversal of the full same-family relation graph.
 
     max_requests meanings:
       -1: never perform network relation fetches (fast UI grouping)
@@ -236,7 +245,6 @@ def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_ev
             unresolved.append(item)
 
         can_fetch = max_requests == 0 or (max_requests > 0 and requests_used < max_requests)
-        loaded_this_round = 0
         if unresolved and can_fetch:
             for start in range(0, len(unresolved), RELATION_BATCH_SIZE):
                 if stop_event is not None and stop_event.is_set():
@@ -252,7 +260,6 @@ def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_ev
                     details = fetched.get(int(item["id"]))
                     if details is not None:
                         _apply_relation_details(item, details)
-                        loaded_this_round += 1
 
                 if delay > 0 and start + RELATION_BATCH_SIZE < len(unresolved):
                     time.sleep(delay)
@@ -292,12 +299,8 @@ def _discover_related(items, max_nodes=1000, max_requests=0, delay=0.25, stop_ev
 
         if not next_frontier:
             break
-
-        # In capped mode an unresolved node stays unresolved instead of being
-        # treated as completed; a later enrichment pass can retry it.
-        if unresolved_remaining and loaded_this_round == 0 and max_requests != 0:
+        if unresolved_remaining and not can_fetch:
             break
-
         frontier = next_frontier
 
     return discovered, requests_used
@@ -319,15 +322,21 @@ def _group_discovered(results, discovered):
         if left != right:
             parent[right] = left
 
+    # Build components from the full structural relation graph. A special,
+    # music entry, or other non-bundleable bridge can therefore connect two
+    # actual seasons without itself being included in the displayed bundle.
     for item in discovered:
         item_id = int(item["id"])
         for edge in _search_relation_edges(item):
-            if not _bundle_edge_allowed(item, edge):
+            if not _relation_edge_allowed(item, edge):
                 continue
             target_id = int((edge.get("node") or {})["id"])
             if target_id in ids:
                 union(item_id, target_id)
 
+    # Title identity is a fallback for AniList records whose relation graph is
+    # incomplete, but it is still restricted to the same media family and
+    # bundleable formats so unrelated adaptations do not get merged.
     by_key = {}
     for item in discovered:
         if not _is_bundleable(item):
@@ -346,6 +355,8 @@ def _group_discovered(results, discovered):
 
     first_position = {int(item["id"]): i for i, item in enumerate(results)}
     grouped = []
+    represented_original_ids = set()
+
     for group_members in groups.values():
         group_members.sort(
             key=lambda item: (
@@ -354,14 +365,32 @@ def _group_discovered(results, discovered):
                 int(item["id"]),
             )
         )
-        visible = [item for item in group_members if int(item["id"]) in original_ids]
-        if not visible:
+
+        bundle_members = [item for item in group_members if _is_bundleable(item)]
+        visible_bundle_members = [item for item in bundle_members if int(item["id"]) in original_ids]
+
+        if visible_bundle_members and bundle_members:
+            representative = dict(visible_bundle_members[0])
+            representative["_series_count"] = len(bundle_members)
+            representative["_series_members"] = bundle_members
+            representative["_bundle_summary"] = _bundle_summary(bundle_members)
+            grouped.append((min(first_position.get(int(item["id"]), 10**9) for item in bundle_members), representative))
+            represented_original_ids.update(int(item["id"]) for item in visible_bundle_members)
+
+    # Preserve original results that are not bundleable (for example MUSIC)
+    # instead of silently losing them because they shared a structural
+    # relation component with an anime bundle.
+    for item in results:
+        item_id = int(item["id"])
+        if item_id in represented_original_ids:
             continue
-        representative = dict(visible[0])
-        representative["_series_count"] = len(group_members)
-        representative["_series_members"] = group_members
-        representative["_bundle_summary"] = _bundle_summary(group_members)
-        grouped.append((min(first_position.get(int(item["id"]), 10**9) for item in group_members), representative))
+        if _is_bundleable(item):
+            # A bundleable original that did not get represented above is
+            # already handled by a singleton group below.
+            grouped.append((first_position[item_id], {**item, "_series_count": 1, "_series_members": [item], "_bundle_summary": ""}))
+        else:
+            grouped.append((first_position[item_id], {**item, "_series_count": 1, "_series_members": [item], "_bundle_summary": ""}))
+
     grouped.sort(key=lambda pair: pair[0])
     return [item for _, item in grouped]
 
