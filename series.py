@@ -229,6 +229,37 @@ def _bundle_edge_allowed(item, edge):
     return _is_bundleable(item) and _is_bundleable(edge.get("node") or {})
 
 
+def _relation_group_compatible(item, edge, target):
+    """Avoid pulling unrelated cross-format works into a series bundle.
+
+    AniList can use PREQUEL/SEQUEL/SIDE_STORY for franchise-level connections
+    that are not actually part of the same display bundle. Same-format
+    continuations remain trusted; cross-format entries must also share the
+    meaningful title identity (for example "Attack on Titan" -> "... No
+    Regrets"), which blocks unrelated entries such as ONE PIECE -> MONSTERS.
+    """
+    if not _relation_edge_allowed(item, edge):
+        return False
+
+    source_format = str(item.get("format") or "").upper()
+    target_format = str(target.get("format") or "").upper()
+    if source_format == target_format:
+        return True
+
+    source_key = _series_key(_title_text(item))
+    target_key = _series_key(_title_text(target))
+    if not source_key or not target_key:
+        return False
+    if source_key == target_key:
+        return True
+
+    source_tokens = set(source_key.split())
+    target_tokens = set(target_key.split())
+    return bool(source_tokens and target_tokens and (
+        source_tokens <= target_tokens or target_tokens <= source_tokens
+    ))
+
+
 def _traversal_edge_allowed(item, edge):
     """Walk only the season/continuation chain during recursive discovery."""
     if edge.get("relationType") not in SEASON_CHAIN_RELATIONS:
@@ -445,11 +476,16 @@ def _group_discovered(results, discovered):
     for item in discovered:
         item_id = int(item["id"])
         for edge in _search_relation_edges(item):
-            if not _relation_edge_allowed(item, edge):
+            target = edge.get("node") or {}
+            target_id = target.get("id")
+            if target_id is None:
                 continue
-            target_id = int((edge.get("node") or {})["id"])
-            if target_id in ids:
-                union(item_id, target_id)
+            target_id = int(target_id)
+            if target_id not in ids:
+                continue
+            if not _relation_group_compatible(item, edge, target):
+                continue
+            union(item_id, target_id)
 
     by_key = {}
     for item in discovered:
