@@ -2,10 +2,24 @@ from collections import defaultdict
 import re
 import time
 
-from api import get_media_details, get_media_relations
+from api import get_media_details, get_media_relations, get_media_relations_batch
 from database import get_all_library, get_connection, save_anime
 
-SERIES_RELATIONS = {"PREQUEL", "SEQUEL", "SIDE_STORY", "SUMMARY"}
+# These are the AniList relationship types that describe a connected series/franchise
+# entry. Deliberately exclude relationships such as CHARACTER, ADAPTATION, OTHER,
+# SOURCE, and SAME_UNIVERSE because they do not mean the entries belong in one bundle.
+SERIES_RELATIONS = {
+    "PREQUEL",
+    "SEQUEL",
+    "PARENT",
+    "SIDE_STORY",
+    "SUMMARY",
+    "FULL_STORY",
+    "SPIN_OFF",
+    "ALTERNATIVE",
+}
+
+ANIME_BUNDLE_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL"}
 _relation_sync_checked_ids = set()
 _relation_cache = {}
 _relation_cache_failures = set()
@@ -45,12 +59,12 @@ def _same_media_family(left, right):
 
 
 def _is_bundleable(item):
-    """Return whether this media type/format belongs in a series bundle."""
+    """Return whether this entry should be visible as a member of a bundle."""
     family = _media_family(item)
     fmt = item.get("format") if hasattr(item, "get") else item["format"]
     fmt = str(fmt or "").upper()
     if family == "ANIME":
-        return fmt in {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA"}
+        return fmt in ANIME_BUNDLE_FORMATS
     if family == "MANGA":
         return fmt == "MANGA"
     if family in {"NOVEL", "ONE_SHOT"}:
@@ -58,15 +72,22 @@ def _is_bundleable(item):
     return False
 
 
-def _bundle_edge_allowed(item, edge):
-    """Allow only relations that can legitimately join two bundleable entries."""
+def _relation_edge_allowed(item, edge):
+    """Allow a relation to participate in series discovery/traversal."""
     if edge.get("relationType") not in SERIES_RELATIONS:
         return False
     node = edge.get("node") or {}
-    target_id = node.get("id")
-    if not target_id:
+    if not node.get("id"):
         return False
-    return _same_media_family(item, node) and _is_bundleable(item) and _is_bundleable(node)
+    return _same_media_family(item, node)
+
+
+def _bundle_edge_allowed(item, edge):
+    """Allow a relation to directly join two visible bundle members."""
+    if not _relation_edge_allowed(item, edge):
+        return False
+    node = edge.get("node") or {}
+    return _is_bundleable(item) and _is_bundleable(node)
 
 
 def _series_group_key(item):
@@ -138,6 +159,7 @@ def _related_placeholder(node):
         "title": node.get("title") or {},
         "coverImage": node.get("coverImage") or {},
         "episodes": node.get("episodes"),
+        "startDate": node.get("startDate") or {},
         "_related_only": True,
         "_relations_loaded": False,
     }
@@ -152,6 +174,7 @@ def _apply_relation_details(item, details):
     item["title"] = details.get("title") or item.get("title") or {}
     item["coverImage"] = details.get("coverImage") or item.get("coverImage") or {}
     item["episodes"] = details.get("episodes") if details.get("episodes") is not None else item.get("episodes")
+    item["startDate"] = details.get("startDate") or item.get("startDate") or {}
     item["_relations_loaded"] = True
 
 
@@ -170,8 +193,29 @@ def _cache_relation_details(media_id):
     return _relation_cache[media_id]
 
 
-def _discover_related(items, max_nodes=80, max_requests=0, delay=1.0, stop_event=None):
-    """Expand direct search relations immediately and fetch deeper relations slowly in background."""
+def _cache_relation_details_batch(media_ids):
+    """Fetch and cache lightweight relation details for a batch of IDs."""
+    ids = [int(media_id) for media_id in media_ids if media_id is not None]
+    missing = [media_id for media_id in ids if media_id not in _relation_cache and media_id not in _relation_cache_failures]
+    if not missing:
+        return {media_id: _relation_cache.get(media_id) for media_id in ids if media_id in _relation_cache}
+    try:
+        fetched = get_media_relations_batch(missing)
+    except Exception:
+        for media_id in missing:
+            _relation_cache_failures.add(media_id)
+        return {media_id: _relation_cache.get(media_id) for media_id in ids if media_id in _relation_cache}
+    for media_id in missing:
+        details = fetched.get(media_id)
+        if details is None:
+            _relation_cache_failures.add(media_id)
+        else:
+            _relation_cache[media_id] = details
+    return {media_id: _relation_cache.get(media_id) for media_id in ids if media_id in _relation_cache}
+
+
+def _discover_related(items, max_nodes=250, max_requests=0, delay=0.25, stop_event=None):
+    """Expand the connected series graph without one-request-per-related-entry."""
     discovered = list(items)
     known_ids = {int(item["id"]) for item in discovered}
     queue = list(discovered)
@@ -180,39 +224,69 @@ def _discover_related(items, max_nodes=80, max_requests=0, delay=1.0, stop_event
     while queue and len(discovered) < max_nodes:
         if stop_event is not None and stop_event.is_set():
             break
-        item = queue.pop(0)
-        item_id = int(item["id"])
 
-        relations_loaded = bool(item.get("_relations_loaded")) if hasattr(item, "get") else False
-        if not relations_loaded and not _search_relation_edges(item):
-            cached = _relation_cache.get(item_id)
-            if cached is not None:
-                _apply_relation_details(item, cached)
-                relations_loaded = True
-            elif requests_used < max_requests:
-                if requests_used and delay > 0:
-                    time.sleep(delay)
-                if stop_event is not None and stop_event.is_set():
+        batch = []
+        next_queue = []
+        for item in queue:
+            relations_loaded = bool(item.get("_relations_loaded"))
+            if relations_loaded or _search_relation_edges(item) or int(item["id"]) in _relation_cache:
+                next_queue.append(item)
+            elif int(item["id"]) not in _relation_cache_failures:
+                batch.append(item)
+                if len(batch) >= 10:
                     break
-                details = _cache_relation_details(item_id)
-                requests_used += 1
-                if details:
-                    _apply_relation_details(item, details)
-                    relations_loaded = True
-                else:
-                    continue
+            else:
+                next_queue.append(item)
 
-        for edge in _search_relation_edges(item):
-            if not _bundle_edge_allowed(item, edge):
-                continue
-            node = edge.get("node") or {}
-            target_id = int(node["id"])
-            if target_id in known_ids:
-                continue
-            related = _related_placeholder(node)
-            known_ids.add(target_id)
-            discovered.append(related)
-            queue.append(related)
+        if batch:
+            ids = [int(item["id"]) for item in batch]
+            cached = _cache_relation_details_batch(ids) if requests_used < max_requests else {}
+            if cached:
+                requests_used += 1
+                if requests_used > 1 and delay > 0:
+                    time.sleep(delay)
+                for item in batch:
+                    details = cached.get(int(item["id"]))
+                    if details is not None:
+                        _apply_relation_details(item, details)
+                    next_queue.append(item)
+            else:
+                next_queue.extend(batch)
+
+        if not next_queue and not batch:
+            break
+
+        # Process all currently loaded nodes once, then continue with newly
+        # discovered placeholders in the next BFS round.
+        queue = next_queue
+        current = list(queue)
+        queue = []
+        for item in current:
+            if stop_event is not None and stop_event.is_set():
+                break
+            for edge in _search_relation_edges(item):
+                if not _relation_edge_allowed(item, edge):
+                    continue
+                node = edge.get("node") or {}
+                target_id = int(node["id"])
+                if target_id in known_ids:
+                    continue
+                related = _related_placeholder(node)
+                known_ids.add(target_id)
+                discovered.append(related)
+                if len(discovered) >= max_nodes:
+                    break
+                queue.append(related)
+            if len(discovered) >= max_nodes:
+                break
+
+        # If relation-bearing original results remain, keep them available for
+        # the next pass. This also prevents an enrichment run from stalling on
+        # an entry that had no inline relations before batching.
+        if len(discovered) < max_nodes:
+            for item in current:
+                if item not in queue and item.get("_relations_loaded") and item not in discovered:
+                    queue.append(item)
 
     return discovered, requests_used
 
@@ -240,11 +314,8 @@ def _group_discovered(results, discovered):
                 continue
             target = edge.get("node") or {}
             target_id = target.get("id")
-            if not target_id:
-                continue
-            target_id = int(target_id)
-            if target_id in ids:
-                union(item_id, target_id)
+            if target_id and int(target_id) in ids:
+                union(item_id, int(target_id))
 
     by_key = {}
     for item in discovered:
@@ -265,9 +336,19 @@ def _group_discovered(results, discovered):
     first_position = {int(item["id"]): i for i, item in enumerate(results)}
     grouped = []
     for group_members in groups.values():
-        group_members.sort(key=lambda item: ((item.get("startDate") or {}).get("year") is None, (item.get("startDate") or {}).get("year") or 9999, int(item["id"])))
+        group_members.sort(
+            key=lambda item: (
+                (item.get("startDate") or {}).get("year") is None,
+                (item.get("startDate") or {}).get("year") or 9999,
+                int(item["id"]),
+            )
+        )
+        # Never expose a discovered related entry as a brand-new search result;
+        # it only exists to enrich the bundle of an original result.
         visible = [item for item in group_members if int(item["id"]) in original_ids]
-        representative = dict(visible[0] if visible else group_members[0])
+        if not visible:
+            continue
+        representative = dict(visible[0])
         representative["_series_count"] = len(group_members)
         representative["_series_members"] = group_members
         representative["_bundle_summary"] = _bundle_summary(group_members)
@@ -276,8 +357,8 @@ def _group_discovered(results, discovered):
     return [item for _, item in grouped]
 
 
-def group_media_results(results, enrich=False, max_requests=0, delay=1.0, stop_event=None):
-    """Group results instantly, optionally expanding deeper relation chains in the background."""
+def group_media_results(results, enrich=False, max_requests=0, delay=0.25, stop_event=None):
+    """Group results immediately, optionally traversing the wider relation graph."""
     if not results:
         return []
     discovered, _ = _discover_related(
@@ -310,10 +391,11 @@ def has_pending_relation_enrichment(results):
             else:
                 edges = _search_relation_edges(item)
         for edge in edges:
-            if not _bundle_edge_allowed(item, edge):
+            if not _relation_edge_allowed(item, edge):
                 continue
             node = edge.get("node") or {}
-            if node.get("id") and int(node["id"]) not in seen and int(node["id"]) not in _relation_cache:
+            target_id = node.get("id")
+            if target_id and int(target_id) not in seen and int(target_id) not in _relation_cache:
                 queue.append(_related_placeholder(node))
     return False
 
