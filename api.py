@@ -313,6 +313,43 @@ def get_media_relations(media_id):
     return data["Media"]
 
 
+def get_media_relations_batch(media_ids):
+    """Fetch lightweight relation data for multiple media IDs in one request."""
+    ids = sorted({int(media_id) for media_id in media_ids if media_id is not None})
+    if not ids:
+        return {}
+
+    query = """
+    query ($ids: [Int]) {
+        Media(id_in: $ids) {
+            id
+            type
+            format
+            title { romaji english native }
+            coverImage { large }
+            episodes
+            startDate { year month day }
+            relations {
+                edges {
+                    relationType
+                    node {
+                        id
+                        type
+                        format
+                        title { romaji english native }
+                        coverImage { large }
+                        episodes
+                        startDate { year month day }
+                    }
+                }
+            }
+        }
+    }
+    """
+    data = anilist_request(query, {"ids": ids})
+    return {int(item["id"]): item for item in data.get("Media") or []}
+
+
 def get_media_details(media_id):
     """Fetch the complete media record needed by detail/import workflows."""
     query = """
