@@ -9,6 +9,9 @@ sys.path.insert(0, str(ROOT))
 
 import api
 import series
+from season_count import patch_series
+
+patch_series(series)
 
 
 class Log:
