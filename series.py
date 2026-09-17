@@ -1,5 +1,6 @@
 from collections import defaultdict
 import re
+import time
 
 from api import get_media_details, get_media_relations_batch
 from database import get_all_library, get_connection, save_anime
@@ -9,6 +10,7 @@ SERIES_RELATIONS = {
     "FULL_STORY", "SPIN_OFF", "ALTERNATIVE",
 }
 ANIME_BUNDLE_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL"}
+RELATION_BATCH_SIZE = 25
 _relation_sync_checked_ids = set()
 _relation_cache = {}
 _relation_cache_failures = set()
@@ -74,16 +76,28 @@ def _season_group_key(item):
     title = _title_text(item).lower()
     if re.search(r"\bfinal\s+season\b", title):
         return "final"
+
     ordinal = re.search(r"\b(\d+)(?:st|nd|rd|th)\s+season\b", title)
     if ordinal:
         return f"season-{int(ordinal.group(1))}"
+
     numbered = re.search(r"\bseason\s*(\d+)\b", title)
     if numbered:
         return f"season-{int(numbered.group(1))}"
+
     roman = re.search(r"\b(?:season|series)\s+(i|ii|iii|iv|v|vi)\b", title)
     if roman:
         values = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
         return f"season-{values[roman.group(1)]}"
+
+    # Common title form used by series such as "Mushoku Tensei II: ...".
+    # Treat a leading Roman numeral II-VI before a title separator as the
+    # season number, while leaving Season 1's unnumbered title as season-1.
+    roman_prefix = re.search(r"(?:^|\s)(ii|iii|iv|v|vi)\s*[:\-–—]\s*", title)
+    if roman_prefix:
+        values = {"ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
+        return f"season-{values[roman_prefix.group(1)]}"
+
     return "season-1"
 
 
@@ -166,36 +180,41 @@ def _cache_relation_details_batch(media_ids):
     missing = [media_id for media_id in ids if media_id not in _relation_cache and media_id not in _relation_cache_failures]
     if not missing:
         return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
+
     try:
         fetched = get_media_relations_batch(missing)
     except Exception:
-        for media_id in missing:
-            _relation_cache_failures.add(media_id)
+        # A transient failure should not permanently poison every ID in the
+        # batch. The next enrichment pass can retry them.
         return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
+
     for media_id in missing:
         details = fetched.get(media_id)
         if details is None:
             _relation_cache_failures.add(media_id)
         else:
             _relation_cache[media_id] = details
+
     return {media_id: _relation_cache[media_id] for media_id in ids if media_id in _relation_cache}
 
 
-def _discover_related(items, max_nodes=300, max_requests=0, stop_event=None):
+def _discover_related(items, max_nodes=300, max_requests=0, delay=0.25, stop_event=None):
     """Finite breadth-first traversal of the series relation graph."""
     discovered = list(items)
     known_ids = {int(item["id"]) for item in discovered}
-    queue = list(discovered)
+    frontier = list(discovered)
     processed_ids = set()
     requests_used = 0
 
-    while queue and len(discovered) < max_nodes:
+    while frontier and len(discovered) < max_nodes:
         if stop_event is not None and stop_event.is_set():
             break
 
-        # Load a batch of not-yet-loaded nodes. One request can cover many IDs.
-        batch = []
-        for item in queue:
+        # Fetch relations for every unresolved node in the current frontier,
+        # not just the first ten. This prevents later series entries from
+        # being silently processed without their relation graph.
+        unresolved = []
+        for item in frontier:
             item_id = int(item["id"])
             if item_id in processed_ids:
                 continue
@@ -203,32 +222,46 @@ def _discover_related(items, max_nodes=300, max_requests=0, stop_event=None):
                 continue
             if item_id in _relation_cache_failures:
                 continue
-            batch.append(item)
-            if len(batch) >= 10:
-                break
+            unresolved.append(item)
 
-        if batch and requests_used < max_requests:
-            fetched = _cache_relation_details_batch([item["id"] for item in batch])
-            requests_used += 1
-            for item in batch:
-                details = fetched.get(int(item["id"]))
-                if details is not None:
-                    _apply_relation_details(item, details)
+        if unresolved and (max_requests <= 0 or requests_used < max_requests):
+            for start in range(0, len(unresolved), RELATION_BATCH_SIZE):
+                if stop_event is not None and stop_event.is_set():
+                    break
+                if max_requests > 0 and requests_used >= max_requests:
+                    break
 
-        next_queue = []
-        current = queue
-        queue = []
-        for item in current:
+                batch = unresolved[start:start + RELATION_BATCH_SIZE]
+                fetched = _cache_relation_details_batch([item["id"] for item in batch])
+                requests_used += 1
+
+                for item in batch:
+                    details = fetched.get(int(item["id"]))
+                    if details is not None:
+                        _apply_relation_details(item, details)
+
+                if delay > 0 and start + RELATION_BATCH_SIZE < len(unresolved):
+                    time.sleep(delay)
+
+        next_frontier = []
+        for item in frontier:
             item_id = int(item["id"])
             if item_id in processed_ids:
                 continue
-            processed_ids.add(item_id)
 
+            # A node can already have been cached by a different frontier
+            # batch, so apply that cache before deciding whether it is usable.
             if not item.get("_relations_loaded") and not _search_relation_edges(item):
                 cached = _relation_cache.get(item_id)
                 if cached is not None:
                     _apply_relation_details(item, cached)
 
+            # Do not mark an unresolved node as processed. If the request
+            # budget was exhausted, it must remain eligible for a later pass.
+            if not item.get("_relations_loaded") and not _search_relation_edges(item):
+                continue
+
+            processed_ids.add(item_id)
             for edge in _search_relation_edges(item):
                 if not _relation_edge_allowed(item, edge):
                     continue
@@ -239,15 +272,15 @@ def _discover_related(items, max_nodes=300, max_requests=0, stop_event=None):
                 related = _related_placeholder(node)
                 known_ids.add(target_id)
                 discovered.append(related)
-                next_queue.append(related)
+                next_frontier.append(related)
                 if len(discovered) >= max_nodes:
                     break
             if len(discovered) >= max_nodes:
                 break
 
-        queue = next_queue
-        if not queue and requests_used >= max_requests:
+        if not next_frontier:
             break
+        frontier = next_frontier
 
     return discovered, requests_used
 
@@ -321,6 +354,7 @@ def group_media_results(results, enrich=False, max_requests=0, delay=0.25, stop_
     discovered, _ = _discover_related(
         results,
         max_requests=max_requests if enrich else 0,
+        delay=delay,
         stop_event=stop_event,
     )
     return _group_discovered(results, discovered)
