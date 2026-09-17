@@ -408,7 +408,13 @@ class SearchPage(QWidget):
         self._start_search(1)
 
     def load_more_results(self):
-        if not self.has_searched or self.is_loading or self.pending_batch_active or not self.has_next_page:
+        if (
+            not self.has_searched
+            or self.is_loading
+            or self.enrichment_pending
+            or self.pending_batch_active
+            or not self.has_next_page
+        ):
             return
         self.is_loading = True
         self._append_skeletons(20)
@@ -454,18 +460,15 @@ class SearchPage(QWidget):
             self.raw_results = []
         self.raw_results.extend(new_results)
 
-        grouped = group_media_results(self.raw_results)
-        if self.current_page == 1:
-            items_to_render = grouped
-        else:
-            existing_ids = {int(item["id"]) for item in self.displayed_items}
-            items_to_render = [item for item in grouped if int(item["id"]) not in existing_ids]
-
-        self.pending_items = list(items_to_render)
-        self.pending_batch_active = bool(self.pending_items)
-
-        self._trim_skeletons_to_pending()
-        self._start_pending_render()
+        # Do not render a provisional grouping here.  Relation discovery is
+        # what determines the real series/season bundle, so rendering this
+        # search payload first can briefly show incorrect counts such as
+        # "2 seasons" for Demon Slayer before enrichment catches up.
+        self.pending_items = []
+        self.pending_batch_active = False
+        self.displayed_items = []
+        self._update_results_title()
+        self._start_enrichment()
 
     def _start_pending_render(self):
         self._stop_pending_render()
@@ -565,6 +568,7 @@ class SearchPage(QWidget):
 
         self.enrichment_pending = True
         self.enrichment_restart_pending = False
+        self._update_results_title()
         stop_event = Event()
         thread = QThread(self)
         worker = SeriesEnrichmentWorker(list(self.raw_results), stop_event, self.enrichment_generation)
@@ -622,12 +626,10 @@ class SearchPage(QWidget):
             self.enrichment_restart_pending = True
             return
 
-        skeleton_count = sum(
-            1
-            for index in range(self.grid_layout.count())
-            if isinstance(self.grid_layout.itemAt(index).widget(), SkeletonCard)
-        )
-        self._render_grouped_preserving_skeletons(grouped, skeleton_count)
+        # The UI is held at skeleton state while enrichment runs, so once
+        # the snapshot is complete we can replace the provisional grid in one
+        # step and show only fully-resolved grouped results.
+        self._render_grouped_preserving_skeletons(grouped, 0)
 
     def enrichment_error(self, generation, message):
         if generation != self.enrichment_generation:
