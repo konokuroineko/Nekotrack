@@ -3,9 +3,18 @@ import re
 
 
 def _count_marker(title, series_module):
-    """Use explicit season markers, but do not treat a bare trailing number as one."""
+    """Use explicit season markers, but never interpret a bare suffix number as one."""
     title = title or ""
-    marker_title = re.sub(r"(?:^|[\s:])([2-9])\s*$", "", title)
+    has_explicit_marker = bool(
+        re.search(r"\bfinal\s+season\b", title, re.IGNORECASE)
+        or re.search(r"\b(?:\d+(?:st|nd|rd|th)|season\s*\d+|series\s*\d+)\b", title, re.IGNORECASE)
+        or re.search(r"\b(?:season|series)\s+(?:i|ii|iii|iv|v|vi)\b", title, re.IGNORECASE)
+        or re.search(r"(?:^|\s)(?:ii|iii|iv|v|vi)\s*[:\-–—]\s*", title, re.IGNORECASE)
+        or re.search(r"(?:^|\s)(?:ii|iii|iv|v|vi)\s*$", title, re.IGNORECASE)
+    )
+    marker_title = title
+    if not has_explicit_marker:
+        marker_title = re.sub(r"(?:^|[\s:])([2-9])\s*$", "", title)
     return series_module._season_marker(marker_title)
 
 
