@@ -501,12 +501,21 @@ class SearchPage(QWidget):
     def _replace_first_skeleton(self, item):
         skeleton = None
         row = column = 0
+        skeleton_candidates = []
+
         for index in range(self.grid_layout.count()):
             widget = self.grid_layout.itemAt(index).widget()
             if isinstance(widget, SkeletonCard):
-                skeleton = widget
-                row, column, _, _ = self.grid_layout.getItemPosition(index)
-                break
+                current_row, current_column, _, _ = self.grid_layout.getItemPosition(index)
+                skeleton_candidates.append((current_row, current_column, widget))
+
+        if skeleton_candidates:
+            _, _, skeleton = min(
+                skeleton_candidates,
+                key=lambda value: (value[0], value[1]),
+            )
+            index = self.grid_layout.indexOf(skeleton)
+            row, column, _, _ = self.grid_layout.getItemPosition(index)
 
         card = WorkCard(item, mode="search", add_callback=self.add_to_library)
         card.clicked.connect(self.anime_selected)
@@ -625,26 +634,36 @@ class SearchPage(QWidget):
         for index in range(self.grid_layout.count()):
             widget = self.grid_layout.itemAt(index).widget()
             if isinstance(widget, (WorkCard, SkeletonCard)):
-                widgets.append(widget)
+                row, column, _, _ = self.grid_layout.getItemPosition(index)
+                widgets.append((row, column, widget))
 
         if not widgets:
             return
+
+        widgets.sort(key=lambda value: (value[0], value[1]))
+        ordered_widgets = [widget for _, _, widget in widgets]
 
         for index in range(self.grid_layout.count() - 1, -1, -1):
             self.grid_layout.takeAt(index)
 
         width = max(1, self.results_scroll.viewport().width())
         columns = max(1, width // 230)
-        columns = min(columns, len(widgets))
+        columns = min(columns, len(ordered_widgets))
 
         for col in range(columns):
             self.grid_layout.setColumnStretch(col, 1)
 
-        for i, widget in enumerate(widgets):
+        for i, widget in enumerate(ordered_widgets):
             row = i // columns
-            row_count = min(columns, len(widgets) - row * columns)
-            start_col = (columns - row_count) // 2
-            self.grid_layout.addWidget(widget, row, start_col + (i % columns), 1, 1, Qt.AlignHCenter)
+            column = i % columns
+            self.grid_layout.addWidget(
+                widget,
+                row,
+                column,
+                1,
+                1,
+                Qt.AlignHCenter,
+            )
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
