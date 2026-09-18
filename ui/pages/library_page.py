@@ -74,7 +74,7 @@ class LibraryPage(QWidget):
     def __init__(self):
         super().__init__()
         self.all_anime = []; self.anime_list = []; self.current_filter = "All"; self.current_sort = "Recently Added"; self._cards = []; self._empty_label = None
-        self._sync_thread = None; self._sync_worker = None; self._sync_done_ids = set()
+        self._sync_thread = None; self._sync_worker = None; self._sync_done_ids = set(); self._sync_failed_ids = set()
         self._resize_timer = QTimer(self); self._resize_timer.setSingleShot(True); self._resize_timer.setInterval(140); self._resize_timer.timeout.connect(self._finish_resize)
         self._resize_layout_was_enabled = True; self._last_target_positions = None; self._animations = []; self._build_shell(); self.refresh()
 
