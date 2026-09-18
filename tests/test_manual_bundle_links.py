@@ -6,6 +6,26 @@ import database
 
 
 class ManualBundleDatabaseTests(unittest.TestCase):
+    def test_delete_work_data_removes_local_work_and_library_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                work = {
+                    "id": 1,
+                    "title": {"romaji": "Work One", "english": None, "native": None},
+                    "type": "ANIME",
+                    "format": "TV",
+                }
+                database.save_anime(work)
+                database.add_to_library(1)
+                self.assertTrue(database.delete_work_data(1))
+                self.assertIsNone(database.get_work(1))
+                self.assertFalse(database.get_manual_bundle_links())
+            finally:
+                os.chdir(old_cwd)
+
     def test_remove_from_library_keeps_work_data(self):
         with tempfile.TemporaryDirectory() as directory:
             old_cwd = os.getcwd()
