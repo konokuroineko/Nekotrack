@@ -50,6 +50,9 @@ class WorkDetailPage(QWidget):
 
     def set_work(self, work):
         self.work = work
+        if self._delete_overlay is not None:
+            self._delete_overlay.deleteLater()
+            self._delete_overlay = None
         content = QWidget()
         root = QVBoxLayout(content)
         root.setContentsMargins(42, 34, 42, 50)
@@ -280,7 +283,7 @@ class WorkDetailPage(QWidget):
         cancel = QPushButton("Cancel")
         cancel.setObjectName("deleteCancel")
         cancel.setCursor(Qt.PointingHandCursor)
-        cancel.clicked.connect(overlay.deleteLater)
+        cancel.clicked.connect(lambda: self._close_delete_overlay(overlay))
         buttons.addWidget(cancel)
 
         if is_bundle:
@@ -319,6 +322,11 @@ class WorkDetailPage(QWidget):
         overlay.raise_()
         overlay.show()
         self._delete_overlay = overlay
+
+    def _close_delete_overlay(self, overlay):
+        if overlay is self._delete_overlay:
+            self._delete_overlay = None
+        overlay.deleteLater()
 
     def _delete_from_detail(self, work_ids, overlay):
         deleted = False
