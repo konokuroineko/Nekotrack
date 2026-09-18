@@ -359,14 +359,14 @@ def _relation_group_compatible(item, edge, target):
     if source_format == target_format:
         return True
 
-    # AniList's SIDE_STORY and SUMMARY relations are explicit franchise
-    # membership signals. Keep them across anime formats (TV/OVA/movie/
-    # special/ONA) instead of requiring title-token overlap. This is needed
-    # for entries whose proper subtitle does not repeat the main title,
-    # while PREQUEL/SEQUEL still use title compatibility to avoid unrelated
-    # franchise-level links such as ONE PIECE -> MONSTERS.
+    # AniList's SIDE_STORY, SUMMARY, and PARENT relations are explicit
+    # franchise-membership signals. Keep them across anime formats
+    # (TV/OVA/movie/special/ONA) instead of requiring title-token overlap.
+    # This is needed for entries whose proper subtitle does not repeat the
+    # main title. PREQUEL/SEQUEL still use title compatibility to avoid
+    # unrelated franchise-level links such as ONE PIECE -> MONSTERS.
     relation_type = edge.get("relationType")
-    if relation_type in {"SIDE_STORY", "SUMMARY"}:
+    if relation_type in {"SIDE_STORY", "SUMMARY", "PARENT"}:
         return True
 
     source_key = _series_key(_title_text(item))
