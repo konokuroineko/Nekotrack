@@ -5,7 +5,7 @@ from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, Signal, QEvent, QT
 from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLayout
 
 from api import get_media_details
-from database import clear_bundle_override, delete_work_data, get_all_library, get_bundle_override, get_connection, save_anime, save_bundle_override
+from database import clear_bundle_override, delete_work_data, get_bundle_override, get_connection, save_anime, save_bundle_override
 from series import get_library_series
 from ui.preferences import get
 from ui.theme import COLORS
