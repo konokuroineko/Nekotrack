@@ -133,7 +133,11 @@ class MainWindow(QMainWindow):
         self.navigation.show("home")
 
     def _page_changed(self, page_name):
-        if page_name == "relationships":
+        if page_name == "collections":
+            # Rebuild the library when returning to it so relation-sync failures
+            # can be retried through the normal page refresh path.
+            self.library_page.refresh()
+        elif page_name == "relationships":
             self.relationship_page.refresh()
 
     def apply_settings(self, changed_key=""):
