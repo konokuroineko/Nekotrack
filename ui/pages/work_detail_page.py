@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 )
 
 from database import (
-    add_manual_bundle_link, get_characters, get_episodes,
+    add_manual_bundle_link, delete_work_data, get_characters, get_episodes,
     get_manual_bundle_partners, get_relations, get_staff, get_work,
     remove_manual_bundle_link, save_cover_path, set_episode_progress, set_episode_watched,
 )
@@ -31,7 +31,6 @@ class WorkDetailPage(QWidget):
     bundle_changed = Signal()
     auto_bundle_requested = Signal(object)
     bundle_edit_requested = Signal(object)
-    remove_requested = Signal(object)
 
     _cover_cache = {}
     _cover_failures = set()
@@ -41,6 +40,7 @@ class WorkDetailPage(QWidget):
         self.work = None
         self._cover_manager = QNetworkAccessManager(self)
         self._cover_reply = None
+        self._delete_overlay = None
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -86,6 +86,15 @@ class WorkDetailPage(QWidget):
             QPushButton#bundleRemove:hover {{ background:{COLORS['surface_hover']}; border-color:{COLORS['border_hover']}; color:{COLORS['primary']}; }}
             QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:0; font-size:30px; font-weight:900; padding:0; }}
             QToolButton#detailMenu:hover {{ background:transparent; color:{COLORS['accent_hover']}; }}
+            QFrame#deleteOverlay {{ background:{COLORS['surface']}; border:1px solid {COLORS['border_hover']}; border-radius:18px; }}
+            QLabel#deleteTitle {{ color:{COLORS['primary']}; font-size:19px; font-weight:850; }}
+            QLabel#deleteMessage {{ color:{COLORS['secondary']}; font-size:12px; }}
+            QPushButton#deleteCancel {{ background:{COLORS['surface_alt']}; color:{COLORS['secondary']}; border:1px solid {COLORS['border']}; border-radius:9px; padding:9px 16px; font-weight:750; }}
+            QPushButton#deleteCancel:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['primary']}; }}
+            QPushButton#deleteConfirm {{ background:#c94343; color:white; border:0; border-radius:9px; padding:9px 18px; font-weight:850; }}
+            QPushButton#deleteConfirm:hover {{ background:#e05252; }}
+            QPushButton#deleteBundle {{ background:#c94343; color:white; border:0; border-radius:9px; padding:9px 14px; font-weight:850; }}
+            QPushButton#deleteBundle:hover {{ background:#e05252; }}
             QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {COLORS['border_hover']}; background: {COLORS['background_alt']}; }}
             QCheckBox::indicator:checked {{ background: {COLORS['accent']}; border-color: {COLORS['accent']}; }}
         """)
@@ -221,7 +230,7 @@ class WorkDetailPage(QWidget):
 
         menu.addSeparator()
         delete_action = menu.addAction("Delete")
-
+        
         button = self.sender()
         selected = menu.exec(
             button.mapToGlobal(button.rect().bottomLeft())
@@ -234,7 +243,95 @@ class WorkDetailPage(QWidget):
         elif edit_action is not None and selected == edit_action:
             self.bundle_edit_requested.emit(group)
         elif selected == delete_action:
-            self.remove_requested.emit(group)
+            self._show_delete_confirmation(group)
+
+    def _show_delete_confirmation(self, group):
+        if self._delete_overlay is not None:
+            self._delete_overlay.deleteLater()
+            self._delete_overlay = None
+
+        members = list(group.get("_series_members") or [])
+        current_id = int(self._value("id"))
+        is_bundle = len(members) > 1
+
+        overlay = QFrame(self)
+        overlay.setObjectName("deleteOverlay")
+        overlay.setFixedWidth(460)
+        layout = QVBoxLayout(overlay)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(10)
+
+        title = QLabel("Delete from NekoTrack?")
+        title.setObjectName("deleteTitle")
+        layout.addWidget(title)
+
+        message = QLabel(
+            "This will permanently remove the selected local data and cached cover."
+            if not is_bundle
+            else "This entry is part of a bundle. Choose what you want to remove."
+        )
+        message.setObjectName("deleteMessage")
+        message.setWordWrap(True)
+        layout.addWidget(message)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+
+        cancel = QPushButton("Cancel")
+        cancel.setObjectName("deleteCancel")
+        cancel.setCursor(Qt.PointingHandCursor)
+        cancel.clicked.connect(overlay.deleteLater)
+        buttons.addWidget(cancel)
+
+        if is_bundle:
+            entry_button = QPushButton("Delete this entry")
+            entry_button.setObjectName("deleteConfirm")
+            entry_button.setCursor(Qt.PointingHandCursor)
+            entry_button.clicked.connect(
+                lambda: self._delete_from_detail([current_id], overlay)
+            )
+            buttons.addWidget(entry_button)
+
+            bundle_button = QPushButton("Delete entire bundle")
+            bundle_button.setObjectName("deleteBundle")
+            bundle_button.setCursor(Qt.PointingHandCursor)
+            bundle_button.clicked.connect(
+                lambda: self._delete_from_detail(
+                    [int(member["id"]) for member in members],
+                    overlay,
+                )
+            )
+            buttons.addWidget(bundle_button)
+        else:
+            confirm = QPushButton("Delete")
+            confirm.setObjectName("deleteConfirm")
+            confirm.setCursor(Qt.PointingHandCursor)
+            confirm.clicked.connect(
+                lambda: self._delete_from_detail([current_id], overlay)
+            )
+            buttons.addWidget(confirm)
+
+        layout.addLayout(buttons)
+        overlay.adjustSize()
+        x = max(18, (self.width() - overlay.width()) // 2)
+        y = max(18, (self.height() - overlay.height()) // 2)
+        overlay.move(x, y)
+        overlay.raise_()
+        overlay.show()
+        self._delete_overlay = overlay
+
+    def _delete_from_detail(self, work_ids, overlay):
+        deleted = False
+        for work_id in work_ids:
+            deleted = delete_work_data(int(work_id)) or deleted
+
+        overlay.deleteLater()
+        self._delete_overlay = None
+
+        if deleted:
+            self.bundle_changed.emit()
+            self.work = None
+            self.back_requested.emit()
 
     def _add_to_bundle(self):
         work_id = self._value("id")
