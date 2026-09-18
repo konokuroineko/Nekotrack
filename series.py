@@ -13,7 +13,7 @@ SERIES_RELATIONS = {
 # These relations describe the actual season/continuation chain. Traversal is
 # intentionally restricted to them so a TV-catalog search cannot spend its
 # global discovery budget walking huge spin-off/alternative graphs first.
-SEASON_CHAIN_RELATIONS = {"PREQUEL", "SEQUEL", "PARENT"}
+SEASON_CHAIN_RELATIONS = {"PREQUEL", "SEQUEL", "PARENT", "SUMMARY"}
 ANIME_BUNDLE_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL"}
 RELATION_BATCH_SIZE = 10
 MAX_NODE_FETCH_RETRIES = 3
@@ -143,7 +143,7 @@ def _season_marker(title):
 
     roman_suffix = re.search(r"(?:^|\s)(ii|iii|iv|v|vi)\s*$", title)
     if roman_suffix:
-        values = {"ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
+        values = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
         return f"season-{values[roman_suffix.group(1)]}"
 
     if not re.search(r"\b(?:part|cour)\s*[0-9]+\s*$", title):
