@@ -56,6 +56,7 @@ class RelationshipPage(QWidget):
         self._sync_thread = None
         self._sync_worker = None
         self._sync_started = False
+        self._sync_done_ids = set()
         self._sync_failed_ids = set()
 
         root = QVBoxLayout(self)
@@ -148,7 +149,10 @@ class RelationshipPage(QWidget):
         if not self._sync_started:
             work_ids = get_library_relation_sync_ids()
             work_ids.extend(self._missing_relation_targets())
-            work_ids = [work_id for work_id in sorted(set(work_ids)) if work_id not in self._sync_failed_ids]
+            work_ids = [
+                work_id for work_id in sorted(set(work_ids))
+                if work_id not in self._sync_done_ids and work_id not in self._sync_failed_ids
+            ]
             if work_ids:
                 self._start_relation_sync(work_ids)
 
@@ -217,6 +221,7 @@ class RelationshipPage(QWidget):
     def _relation_sync_finished(self, succeeded_ids):
         succeeded_ids = {int(work_id) for work_id in (succeeded_ids or set())}
         attempted_ids = set(self._sync_worker.work_ids) if self._sync_worker is not None else set()
+        self._sync_done_ids.update(succeeded_ids)
         self._sync_failed_ids.update(attempted_ids - succeeded_ids)
         self._sync_started = False
         self._sync_thread = None
