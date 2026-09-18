@@ -1,5 +1,6 @@
 import requests
 import time
+from urllib.parse import urlparse
 
 
 ANILIST_URL = "https://graphql.anilist.co"
@@ -169,6 +170,51 @@ def _media_fields(include_details=False, include_relations=True):
             }
         }
     """
+
+
+def parse_anilist_url(value):
+    """Return the AniList media ID when value is a supported AniList media URL."""
+    if not isinstance(value, str):
+        return None
+
+    text = value.strip()
+    if not text:
+        return None
+
+    try:
+        parsed = urlparse(text)
+    except ValueError:
+        return None
+
+    hostname = (parsed.hostname or "").lower()
+    if hostname not in {"anilist.co", "www.anilist.co"}:
+        return None
+
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2 or parts[0].lower() not in {"anime", "manga"}:
+        return None
+
+    try:
+        return int(parts[1])
+    except ValueError:
+        return None
+
+
+def get_media_by_anilist_url(url, include_relations=False):
+    """Fetch the exact AniList media entry referenced by an AniList URL."""
+    media_id = parse_anilist_url(url)
+    if media_id is None:
+        raise ValueError("Invalid AniList media URL")
+
+    query = """
+    query ($id: Int) {
+        Media(id: $id) {
+            %s
+        }
+    }
+    """ % _media_fields(include_details=False, include_relations=include_relations)
+    data = anilist_request(query, {"id": media_id})
+    return data.get("Media")
 
 
 def search_anime(
