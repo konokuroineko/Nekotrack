@@ -612,6 +612,75 @@ def remove_from_library(work_id):
     return cursor.rowcount > 0
 
 
+def delete_work_data(work_id):
+    """Permanently delete one work and its work-specific cached/local data."""
+    from pathlib import Path
+
+    work_id = int(work_id)
+    connection = get_connection()
+    row = connection.execute(
+        "SELECT cover_path FROM works WHERE id = ?",
+        (work_id,),
+    ).fetchone()
+    if row is None:
+        connection.close()
+        return False
+
+    override_paths = [
+        item["custom_cover_path"]
+        for item in connection.execute(
+            """
+            SELECT custom_cover_path
+            FROM bundle_overrides
+            WHERE bundle_anchor_id = ? OR cover_work_id = ?
+            """,
+            (work_id, work_id),
+        ).fetchall()
+        if item["custom_cover_path"]
+    ]
+
+    for table in (
+        "episodes",
+        "work_characters",
+        "work_staff",
+        "work_studios",
+        "work_songs",
+        "alternate_titles",
+    ):
+        connection.execute(f"DELETE FROM {table} WHERE work_id = ?", (work_id,))
+
+    connection.execute(
+        "DELETE FROM manual_bundle_links WHERE work_a = ? OR work_b = ?",
+        (work_id, work_id),
+    )
+    connection.execute(
+        "DELETE FROM bundle_overrides WHERE bundle_anchor_id = ? OR cover_work_id = ?",
+        (work_id, work_id),
+    )
+    connection.execute(
+        "DELETE FROM work_relations WHERE source_id = ? OR target_id = ?",
+        (work_id, work_id),
+    )
+    connection.execute("DELETE FROM user_library WHERE work_id = ?", (work_id,))
+    connection.execute("DELETE FROM works WHERE id = ?", (work_id,))
+    connection.commit()
+    connection.close()
+
+    paths = []
+    if row["cover_path"]:
+        paths.append(Path(str(row["cover_path"])))
+    paths.extend(Path(str(path)) for path in override_paths)
+
+    for path in paths:
+        try:
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            pass
+
+    return True
+
+
 def get_library_by_status(status):
     connection = get_connection()
     results = connection.execute("""
