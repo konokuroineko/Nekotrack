@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton,
     QInputDialog, QMessageBox, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 )
 
@@ -29,6 +29,9 @@ class WorkDetailPage(QWidget):
     character_selected = Signal(object)
     relation_selected = Signal(object)
     bundle_changed = Signal()
+    auto_bundle_requested = Signal(object)
+    bundle_edit_requested = Signal(object)
+    remove_requested = Signal(object)
 
     _cover_cache = {}
     _cover_failures = set()
@@ -81,6 +84,8 @@ class WorkDetailPage(QWidget):
             QPushButton#bundleAction:hover {{ background:{COLORS['accent_hover']}; }}
             QPushButton#bundleRemove {{ background:{COLORS['surface_alt']}; color:{COLORS['secondary']}; border:1px solid {COLORS['border']}; border-radius:10px; padding:8px 12px; font-weight:700; }}
             QPushButton#bundleRemove:hover {{ background:{COLORS['surface_hover']}; border-color:{COLORS['border_hover']}; color:{COLORS['primary']}; }}
+            QToolButton#detailMenu {{ background:rgba(0,0,0,145); color:white; border:1px solid rgba(255,255,255,50); border-radius:9px; font-size:22px; font-weight:900; padding:0; }}
+            QToolButton#detailMenu:hover {{ background:rgba(0,0,0,190); }}
             QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {COLORS['border_hover']}; background: {COLORS['background_alt']}; }}
             QCheckBox::indicator:checked {{ background: {COLORS['accent']}; border-color: {COLORS['accent']}; }}
         """)
@@ -103,7 +108,18 @@ class WorkDetailPage(QWidget):
         info = QVBoxLayout(); info.setSpacing(10)
         title = QLabel(self._title()); title.setWordWrap(True)
         title.setStyleSheet(f"font-size:34px;font-weight:850;color:{COLORS['primary']};letter-spacing:-1px;")
-        info.addWidget(title)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(12)
+        title_row.addWidget(title, 1)
+        if self._library_group() is not None:
+            menu_button = QToolButton()
+            menu_button.setObjectName("detailMenu")
+            menu_button.setText("⋮")
+            menu_button.setFixedSize(34, 34)
+            menu_button.setCursor(Qt.PointingHandCursor)
+            menu_button.clicked.connect(self._show_detail_menu)
+            title_row.addWidget(menu_button, 0, Qt.AlignTop)
+        info.addLayout(title_row)
         alt = self._value("native") or self._value("title_native") or ""
         if alt:
             native = QLabel(str(alt)); native.setStyleSheet(muted_label_stylesheet()); info.addWidget(native)
@@ -174,6 +190,51 @@ class WorkDetailPage(QWidget):
             else: self._cover_failures.add(cover_url)
         else: self._cover_failures.add(cover_url)
         if reply is not None: reply.deleteLater()
+
+    def _library_group(self):
+        work_id = self._value("id")
+        if work_id is None:
+            return None
+        current_id = int(work_id)
+        for group in get_library_series():
+            members = group.get("_series_members") or []
+            if any(int(member["id"]) == current_id for member in members):
+                return group
+        return None
+
+    def _show_detail_menu(self):
+        group = self._library_group()
+        if group is None:
+            return
+
+        menu = QMenu(self)
+        auto_action = menu.addAction("Auto Bundle")
+
+        try:
+            has_bundle = len(group.get("_series_members") or []) > 1
+        except (TypeError, ValueError):
+            has_bundle = False
+
+        edit_action = None
+        if has_bundle:
+            edit_action = menu.addAction("Edit Bundle Appearance…")
+
+        menu.addSeparator()
+        delete_action = menu.addAction("Delete")
+
+        button = self.sender()
+        selected = menu.exec(
+            button.mapToGlobal(button.rect().bottomLeft())
+            if isinstance(button, QToolButton)
+            else self.mapToGlobal(self.rect().center())
+        )
+
+        if selected == auto_action:
+            self.auto_bundle_requested.emit(group)
+        elif edit_action is not None and selected == edit_action:
+            self.bundle_edit_requested.emit(group)
+        elif selected == delete_action:
+            self.remove_requested.emit(group)
 
     def _add_to_bundle(self):
         work_id = self._value("id")
