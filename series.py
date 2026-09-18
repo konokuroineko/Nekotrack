@@ -13,7 +13,7 @@ SERIES_RELATIONS = {
 # These relations describe the actual season/continuation chain. Traversal is
 # intentionally restricted to them so a TV-catalog search cannot spend its
 # global discovery budget walking huge spin-off/alternative graphs first.
-SEASON_CHAIN_RELATIONS = {"PREQUEL", "SEQUEL", "PARENT", "SUMMARY"}
+SEASON_CHAIN_RELATIONS = {"PREQUEL", "SEQUEL", "PARENT", "SUMMARY", "SIDE_STORY"}
 ANIME_BUNDLE_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL"}
 RELATION_BATCH_SIZE = 10
 MAX_NODE_FETCH_RETRIES = 3
