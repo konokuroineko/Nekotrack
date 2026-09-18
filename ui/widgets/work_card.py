@@ -83,6 +83,9 @@ class WorkCard(QFrame):
             QLabel#seriesInfo {{ color: {COLORS['accent_hover']}; font-size: 10px; font-weight: 800; }}
             QPushButton#add {{ background: {COLORS['accent']}; color: #111318; border: none; border-radius: 8px; padding: 7px; font-weight: 800; }}
             QPushButton#add:hover {{ background: {COLORS['accent_hover']}; }}
+            QPushButton#libraryAction {{ background: {COLORS['surface_alt']}; color: {COLORS['secondary']}; border: 1px solid {COLORS['border']}; border-radius: 7px; padding: 6px 4px; font-size: 10px; font-weight: 750; }}
+            QPushButton#libraryAction:hover {{ background: {COLORS['surface_hover']}; color: {COLORS['primary']}; border-color: {COLORS['border_hover']}; }}
+            QPushButton#libraryRemove:hover {{ color: #d85b5b; border-color: #8a3f3f; }}
         """)
         root = QVBoxLayout(self)
         root.setContentsMargins(2, 2, 2, 2)
@@ -160,12 +163,30 @@ class WorkCard(QFrame):
         root.addLayout(content)
 
         add_button = None
+        library_auto_button = None
+        library_remove_button = None
         if mode == "search":
             add_button = QPushButton("+  Add to Library")
             add_button.setObjectName("add")
             add_button.setCursor(Qt.PointingHandCursor)
             add_button.clicked.connect(self._add_clicked)
             root.addWidget(add_button)
+        elif mode == "library":
+            action_row = QHBoxLayout()
+            action_row.setContentsMargins(0, 0, 0, 0)
+            action_row.setSpacing(5)
+            library_auto_button = QPushButton("Auto Bundle")
+            library_auto_button.setObjectName("libraryAction")
+            library_auto_button.setCursor(Qt.PointingHandCursor)
+            library_auto_button.clicked.connect(lambda: self.auto_bundle_requested.emit(self.work))
+            library_remove_button = QPushButton("Remove")
+            library_remove_button.setObjectName("libraryAction")
+            library_remove_button.setProperty("libraryRemove", True)
+            library_remove_button.setCursor(Qt.PointingHandCursor)
+            library_remove_button.clicked.connect(lambda: self.remove_requested.emit(self.work))
+            action_row.addWidget(library_auto_button)
+            action_row.addWidget(library_remove_button)
+            root.addLayout(action_row)
 
         root.addStretch(1)
         self.adjustSize()
@@ -175,9 +196,10 @@ class WorkCard(QFrame):
             + series_height
             + (meta.sizeHint().height() if meta is not None else 0)
             + (add_button.sizeHint().height() if add_button is not None else 0)
+            + (library_auto_button.sizeHint().height() if library_auto_button is not None else 0)
             + root.contentsMargins().top()
             + root.contentsMargins().bottom()
-            + root.spacing() * (1 + (1 if add_button is not None else 0))
+            + root.spacing() * (1 + (1 if add_button is not None else 0) + (1 if library_auto_button is not None else 0))
         )
         self.setFixedHeight(target_height)
 
