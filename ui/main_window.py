@@ -113,7 +113,6 @@ class MainWindow(QMainWindow):
         self.work_detail_page.back_requested.connect(lambda: self.navigation.show("collections"))
         self.work_detail_page.auto_bundle_requested.connect(self.library_page._auto_bundle_item)
         self.work_detail_page.bundle_edit_requested.connect(self.library_page._edit_bundle)
-        self.work_detail_page.remove_requested.connect(self.library_page._delete_item)
         self.work_detail_page.relation_selected.connect(self.show_relation)
         self.work_detail_page.bundle_changed.connect(self.library_page.refresh)
         self.relationship_page.work_selected.connect(self.show_relation)
