@@ -3,7 +3,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QFont, QFontMetrics
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PySide6.QtWidgets import QFrame, QLabel, QMenu, QPushButton, QToolButton, QVBoxLayout, QSizePolicy
+from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout, QSizePolicy
 
 from database import save_cover_path
 from ui.preferences import get
@@ -52,9 +52,6 @@ class CoverFrame(QFrame):
 
 class WorkCard(QFrame):
     clicked = Signal(object)
-    bundle_edit_requested = Signal(object)
-    remove_requested = Signal(object)
-    auto_bundle_requested = Signal(object)
     progress_changed = Signal(int)
     add_requested = Signal(object)
     _cover_cache = {}
@@ -72,31 +69,6 @@ class WorkCard(QFrame):
         card_width = get("card_size") + 8
         self.setFixedWidth(card_width)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.menu_button = None
-        if self.mode == "library":
-            self.menu_button = QToolButton(self)
-            self.menu_button.setText("⋮")
-            self.menu_button.setCursor(Qt.PointingHandCursor)
-            self.menu_button.setFixedSize(28, 28)
-            self.menu_button.setStyleSheet(
-                f"""
-                QToolButton {{
-                    background: rgba(0, 0, 0, 145);
-                    color: white;
-                    border: 1px solid rgba(255, 255, 255, 50);
-                    border-radius: 8px;
-                    font-size: 20px;
-                    font-weight: 900;
-                    padding: 0;
-                }}
-                QToolButton:hover {{
-                    background: rgba(0, 0, 0, 190);
-                }}
-                """
-            )
-            self.menu_button.clicked.connect(self._show_library_menu)
-            self.menu_button.move(card_width - self.menu_button.width() - 8, 8)
-            self.menu_button.raise_()
         hover_css = f"background: {COLORS['surface_hover']}; border-color: {COLORS['accent']};" if get("hover_highlight") else ""
         self.setStyleSheet(f"""
             QFrame#posterCard {{ background: transparent; border: 2px solid transparent; border-radius: {get('corner_radius') + 2}px; }}
@@ -194,10 +166,6 @@ class WorkCard(QFrame):
 
         root.addStretch(1)
 
-        # The cover and other card widgets are created after the menu button,
-        # so make the three-dot button the topmost child once the card is built.
-        if self.menu_button is not None:
-            self.menu_button.raise_()
 
         self.adjustSize()
         target_height = (
@@ -367,43 +335,6 @@ class WorkCard(QFrame):
         work_id = self._value("id")
         return f"Untitled · {work_id}" if work_id else "Untitled"
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self.menu_button is not None:
-            self.menu_button.move(self.width() - self.menu_button.width() - 8, 8)
-            self.menu_button.raise_()
-
-    def _show_library_menu(self):
-        if self.mode != "library":
-            return
-
-        menu = QMenu(self)
-        auto_action = menu.addAction("Auto Bundle")
-
-        try:
-            has_bundle = int(self._value("_series_count") or 0) > 1
-        except (TypeError, ValueError):
-            has_bundle = False
-
-        edit_action = None
-        if has_bundle:
-            edit_action = menu.addAction("Edit Bundle Appearance…")
-
-        menu.addSeparator()
-        delete_action = menu.addAction("Delete")
-
-        selected = menu.exec(
-            self.menu_button.mapToGlobal(
-                self.menu_button.rect().bottomLeft()
-            )
-        )
-
-        if selected == auto_action:
-            self.auto_bundle_requested.emit(self.work)
-        elif edit_action is not None and selected == edit_action:
-            self.bundle_edit_requested.emit(self.work)
-        elif selected == delete_action:
-            self.remove_requested.emit(self.work)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
