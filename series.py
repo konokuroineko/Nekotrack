@@ -3,7 +3,7 @@ import re
 import time
 
 from api import get_media_details, get_media_relations_batch
-from database import get_all_library, get_connection, get_manual_bundle_links, get_work, save_anime
+from database import get_all_library, get_bundle_override, get_connection, get_manual_bundle_links, get_work, save_anime
 
 
 SERIES_RELATIONS = {
@@ -712,10 +712,21 @@ def _group_discovered(results, discovered):
         ]
 
         if visible_bundle_members and bundle_members:
+            # Keep the originally matched work as the search result identity,
+            # but use the earliest bundle member for the default presentation.
             representative = dict(visible_bundle_members[0])
+            default_member = bundle_members[0]
+            representative["title"] = _get(default_member, "title") or representative.get("title")
+            if _get(default_member, "cover_path"):
+                representative["cover_path"] = _get(default_member, "cover_path")
+            if _get(default_member, "cover_url"):
+                representative["cover_url"] = _get(default_member, "cover_url")
+            if _get(default_member, "coverImage"):
+                representative["coverImage"] = _get(default_member, "coverImage")
             representative["_series_count"] = len(bundle_members)
             representative["_series_members"] = bundle_members
             representative["_bundle_summary"] = _bundle_summary(bundle_members)
+            representative["_bundle_default_member_id"] = int(_get(default_member, "id"))
             grouped.append(
                 (
                     min(
@@ -941,6 +952,31 @@ def get_library_series():
             int(row["progress_episodes"] or 0) for row in members
         )
         group["_bundle_summary"] = _bundle_summary(members)
+
+        if len(members) > 1:
+            member_ids = [int(row["id"]) for row in members]
+            override = get_bundle_override(member_ids)
+            if override:
+                custom_title = override["custom_title"]
+                if custom_title:
+                    group["title"] = custom_title
+
+                custom_cover_path = override["custom_cover_path"]
+                cover_work_id = override["cover_work_id"]
+                if custom_cover_path:
+                    group["cover_path"] = custom_cover_path
+                    group["cover_url"] = None
+                elif cover_work_id is not None:
+                    cover_member = next(
+                        (row for row in members if int(row["id"]) == int(cover_work_id)),
+                        None,
+                    )
+                    if cover_member is not None:
+                        group["cover_path"] = cover_member["cover_path"]
+                        group["cover_url"] = cover_member["cover_url"]
+                        group["_bundle_cover_work_id"] = int(cover_work_id)
+
+        group["_bundle_default_member_id"] = int(members[0]["id"])
         result.append(group)
 
     return result
