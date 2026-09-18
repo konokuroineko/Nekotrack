@@ -22,22 +22,31 @@ _relation_sync_checked_ids = set()
 _relation_cache = {}
 
 
+def _get(item, key, default=None):
+    """Read a field from either an AniList dict or a sqlite3.Row."""
+    if hasattr(item, "get"):
+        return item.get(key, default)
+    try:
+        return item[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 def _title_text(item):
-    title = item.get("title") or {} if hasattr(item, "get") else item["title"] or {}
+    title = _get(item, "title") or {}
     if isinstance(title, dict):
         return title.get("english") or title.get("romaji") or title.get("native") or ""
     return str(title)
 
 
 def _media_type(item):
-    value = item.get("type") if hasattr(item, "get") else item["type"]
+    value = _get(item, "type")
     return str(value or "UNKNOWN").upper()
 
 
 def _media_family(item):
     media_type = _media_type(item)
-    fmt = item.get("format") if hasattr(item, "get") else item["format"]
-    fmt = str(fmt or "").upper()
+    fmt = str(_get(item, "format") or "").upper()
     if media_type == "MANGA":
         if fmt == "NOVEL":
             return "NOVEL"
@@ -53,8 +62,7 @@ def _same_media_family(left, right):
 
 def _is_bundleable(item):
     family = _media_family(item)
-    fmt = item.get("format") if hasattr(item, "get") else item["format"]
-    fmt = str(fmt or "").upper()
+    fmt = str(_get(item, "format") or "").upper()
     if family == "ANIME":
         return fmt in ANIME_BUNDLE_FORMATS
     if family == "MANGA":
@@ -92,16 +100,190 @@ def _series_group_key(item):
     return _media_family(item), _series_key(_title_text(item))
 
 
-def _member_start_year(member):
-    start_date = member.get("startDate") if hasattr(member, "get") else None
-    if isinstance(start_date, dict) and start_date.get("year") is not None:
-        return start_date.get("year")
-    return member.get("start_year") if hasattr(member, "get") else None
+# Season counting belongs to the series bundling system. Keeping it here
+# avoids a second module for logic that is only used to summarize bundles.
+
+
+def _season_marker(title):
+    """Return only an explicit season identity, never a bare Part/Cour number."""
+    title = (title or "").lower()
+
+    if re.search(r"\bfinal\s+season\b", title):
+        return "final"
+
+    ordinal = re.search(r"\b(\d+)(?:st|nd|rd|th)\s+season\b", title)
+    if ordinal:
+        return f"season-{int(ordinal.group(1))}"
+
+    word_ordinal = re.search(
+        r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+season\b",
+        title,
+    )
+    if word_ordinal:
+        values = {
+            "first": 1, "second": 2, "third": 3, "fourth": 4,
+            "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8,
+            "ninth": 9, "tenth": 10,
+        }
+        return f"season-{values[word_ordinal.group(1)]}"
+
+    numbered = re.search(r"\bseason\s*(\d+)\b", title)
+    if numbered:
+        return f"season-{int(numbered.group(1))}"
+
+    roman = re.search(r"\b(?:season|series)\s+(i|ii|iii|iv|v|vi)\b", title)
+    if roman:
+        values = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
+        return f"season-{values[roman.group(1)]}"
+
+    roman_prefix = re.search(r"(?:^|\s)(ii|iii|iv|v|vi)\s*[:\-–—]\s*", title)
+    if roman_prefix:
+        values = {"ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
+        return f"season-{values[roman_prefix.group(1)]}"
+
+    roman_suffix = re.search(r"(?:^|\s)(ii|iii|iv|v|vi)\s*$", title)
+    if roman_suffix:
+        values = {"ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
+        return f"season-{values[roman_suffix.group(1)]}"
+
+    if not re.search(r"\b(?:part|cour)\s*[0-9]+\s*$", title):
+        bare_number = re.search(r"(?:^|[\s:])([2-9])\s*$", title)
+        if bare_number:
+            return f"season-{int(bare_number.group(1))}"
+
+    return None
+
+
+def _is_continuation(title):
+    title = (title or "").lower()
+    return bool(
+        re.search(r"\b(?:part|cour)\s*(?:\d+|i|ii|iii|iv|v|vi)\b", title)
+        or re.search(r"\bfinal\s+season\b", title)
+    )
+
+
+def _is_arc(title):
+    return bool(re.search(r"\barc\b", (title or "").lower()))
+
+
+def _air_period(member):
+    start = _get(member, "startDate") or {}
+    year = start.get("year")
+    month = start.get("month")
+    if year is None:
+        year = _get(member, "start_year")
+    if month is None and year is None:
+        return None
+    if month is None:
+        return (year, None)
+
+    airing_season = (int(month) - 1) // 3
+    return (year, airing_season)
+
+
+def logical_season_count(members):
+    tv_members = [
+        member
+        for member in members
+        if str(_get(member, "format") or "").upper() in {"TV", "TV_SHORT"}
+    ]
+    if not tv_members:
+        return 0
+
+    ids = {int(_get(member, "id")) for member in tv_members}
+    parent = {media_id: media_id for media_id in ids}
+    by_id = {int(_get(member, "id")): member for member in tv_members}
+
+    def find(media_id):
+        while parent[media_id] != media_id:
+            parent[media_id] = parent[parent[media_id]]
+            media_id = parent[media_id]
+        return media_id
+
+    def union(left, right):
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    # 1. Explicit season labels are authoritative.
+    by_marker = defaultdict(list)
+    for member in tv_members:
+        marker = _season_marker(_title_text(member))
+        if marker:
+            by_marker[marker].append(int(_get(member, "id")))
+
+    for ids_for_marker in by_marker.values():
+        first = ids_for_marker[0]
+        for media_id in ids_for_marker[1:]:
+            union(first, media_id)
+
+    # 2. Explicit Part/Cour/Final continuations inherit their direct TV
+    #    neighbor, but never cross two different explicit season markers.
+    for member in tv_members:
+        title = _title_text(member)
+        if not _is_continuation(title):
+            continue
+
+        member_id = int(_get(member, "id"))
+        current_marker = _season_marker(title)
+
+        for edge in (_get(member, "relations") or {}).get("edges", []):
+            if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
+                continue
+
+            node = edge.get("node") or {}
+            target_id = node.get("id")
+            if target_id is None:
+                continue
+
+            target_id = int(target_id)
+            if target_id not in by_id:
+                continue
+
+            target_title = _title_text(by_id[target_id])
+            target_marker = _season_marker(target_title)
+
+            if current_marker is not None and target_marker is not None:
+                if current_marker == target_marker:
+                    union(member_id, target_id)
+            elif current_marker is None and target_marker is None:
+                union(member_id, target_id)
+
+    # 3. Unnumbered named arcs can form a single season. Merge only directly
+    #    linked arc entries that began in the same airing season.
+    arc_ids = {
+        int(_get(member, "id"))
+        for member in tv_members
+        if _is_arc(_title_text(member))
+        and _season_marker(_title_text(member)) is None
+        and not _is_continuation(_title_text(member))
+    }
+
+    for member_id in arc_ids:
+        member = by_id[member_id]
+        member_period = _air_period(member)
+
+        for edge in (_get(member, "relations") or {}).get("edges", []):
+            if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
+                continue
+
+            node = edge.get("node") or {}
+            target_id = node.get("id")
+            if target_id is None:
+                continue
+
+            target_id = int(target_id)
+            if target_id not in arc_ids:
+                continue
+
+            target_period = _air_period(by_id[target_id])
+            if member_period == target_period:
+                union(member_id, target_id)
+
+    return len({find(media_id) for media_id in ids})
 
 
 def _bundle_logical_season_count(members):
-    """Count logical TV seasons using the shared season-count implementation."""
-    from season_count import logical_season_count
     return logical_season_count(members)
 
 
@@ -112,11 +294,7 @@ def _bundle_summary(members):
     counts = defaultdict(int)
     logical_seasons = _bundle_logical_season_count(members)
     for member in members:
-        fmt = (
-            str(member.get("format") or "").upper()
-            if hasattr(member, "get")
-            else str(member["format"] or "").upper()
-        )
+        fmt = str(_get(member, "format") or "").upper()
         if fmt in {"TV", "TV_SHORT"}:
             continue
         if fmt == "OVA":
@@ -176,8 +354,8 @@ def _relation_group_compatible(item, edge, target):
     if not _relation_edge_allowed(item, edge):
         return False
 
-    source_format = str(item.get("format") or "").upper()
-    target_format = str(target.get("format") or "").upper()
+    source_format = str(_get(item, "format") or "").upper()
+    target_format = str(_get(target, "format") or "").upper()
     if source_format == target_format:
         return True
 
@@ -443,7 +621,7 @@ def _group_discovered(results, discovered):
     tv_members = [
         item
         for item in discovered
-        if str(item.get("format") or "").upper() in {"TV", "TV_SHORT"}
+        if str(_get(item, "format") or "").upper() in {"TV", "TV_SHORT"}
     ]
     tv_keys = [
         (item, _series_key(_title_text(item)))
@@ -455,9 +633,9 @@ def _group_discovered(results, discovered):
         item_tokens = key.split()
         if len(item_tokens) < 2:
             continue
-        item_id = int(item["id"])
+        item_id = int(_get(item, "id"))
         for other, other_key in tv_keys:
-            if item_id == int(other["id"]) or not other_key:
+            if item_id == int(_get(other, "id")) or not other_key:
                 continue
             other_tokens = other_key.split()
             if len(other_tokens) < 2:
@@ -468,7 +646,7 @@ def _group_discovered(results, discovered):
                 else (other_tokens, item_tokens)
             )
             if longer[:len(shorter)] == shorter:
-                union(item_id, int(other["id"]))
+                union(item_id, int(_get(other, "id")))
 
     groups = defaultdict(list)
     for item in discovered:
@@ -481,9 +659,9 @@ def _group_discovered(results, discovered):
     for group_members in groups.values():
         group_members.sort(
             key=lambda item: (
-                (item.get("startDate") or {}).get("year") is None,
-                (item.get("startDate") or {}).get("year") or 9999,
-                int(item["id"]),
+                _get(item, "startDate") is None,
+                (_get(item, "startDate") or {}).get("year") or 9999,
+                int(_get(item, "id")),
             )
         )
 
@@ -492,7 +670,7 @@ def _group_discovered(results, discovered):
         ]
         visible_bundle_members = [
             item for item in bundle_members
-            if int(item["id"]) in original_ids
+            if int(_get(item, "id")) in original_ids
         ]
 
         if visible_bundle_members and bundle_members:
@@ -503,18 +681,18 @@ def _group_discovered(results, discovered):
             grouped.append(
                 (
                     min(
-                        first_position.get(int(item["id"]), 10**9)
+                        first_position.get(int(_get(item, "id")), 10**9)
                         for item in bundle_members
                     ),
                     representative,
                 )
             )
             represented_original_ids.update(
-                int(item["id"]) for item in visible_bundle_members
+                int(_get(item, "id")) for item in visible_bundle_members
             )
 
     for item in results:
-        item_id = int(item["id"])
+        item_id = int(_get(item, "id"))
         if item_id in represented_original_ids:
             continue
         grouped.append(
