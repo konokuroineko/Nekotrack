@@ -10,21 +10,23 @@ from ui.widgets.work_card import WorkCard
 
 
 class RelationSyncWorker(QObject):
-    finished = Signal()
+    finished = Signal(object)
 
     def __init__(self, work_ids):
         super().__init__()
         self.work_ids = work_ids
 
     def run(self):
+        succeeded_ids = set()
         for work_id in self.work_ids:
             try:
                 details = get_media_details(work_id)
                 if details:
                     save_anime(details)
+                    succeeded_ids.add(int(work_id))
             except Exception:
                 continue
-        self.finished.emit()
+        self.finished.emit(succeeded_ids)
 
 
 class FlowLayout(QLayout):
@@ -107,7 +109,9 @@ class LibraryPage(QWidget):
                         if id(card) in target_positions: card.move(target_positions[id(card)])
         return super().eventFilter(watched, event)
 
-    def refresh(self):
+    def refresh(self, retry_failed=True):
+        if retry_failed:
+            self._sync_failed_ids.clear()
         self._cancel_resize_animation(); self.all_anime = get_library_series(); self._apply_filter(); self._apply_sort(); self._populate(); self._start_relation_sync()
 
     def _start_relation_sync(self):
@@ -116,15 +120,23 @@ class LibraryPage(QWidget):
         ids = [int(row["id"]) for row in connection.execute("SELECT DISTINCT works.id FROM works JOIN user_library ON user_library.work_id=works.id").fetchall()]
         connected = {int(row["id"]) for row in connection.execute("SELECT DISTINCT source_id AS id FROM work_relations UNION SELECT DISTINCT target_id AS id FROM work_relations").fetchall()}
         connection.close()
-        missing = [work_id for work_id in ids if work_id not in connected and work_id not in self._sync_done_ids]
+        missing = [
+            work_id for work_id in ids
+            if work_id not in connected
+            and work_id not in self._sync_done_ids
+            and work_id not in self._sync_failed_ids
+        ]
         if not missing: return
         self._sync_thread = QThread(self); self._sync_worker = RelationSyncWorker(missing); self._sync_worker.moveToThread(self._sync_thread)
         self._sync_thread.started.connect(self._sync_worker.run); self._sync_worker.finished.connect(self._relation_sync_finished); self._sync_worker.finished.connect(self._sync_thread.quit); self._sync_thread.finished.connect(self._sync_worker.deleteLater); self._sync_thread.finished.connect(self._sync_thread.deleteLater); self._sync_thread.start()
 
-    def _relation_sync_finished(self):
-        if self._sync_worker is not None: self._sync_done_ids.update(self._sync_worker.work_ids)
+    def _relation_sync_finished(self, succeeded_ids):
+        succeeded_ids = {int(work_id) for work_id in (succeeded_ids or set())}
+        attempted_ids = set(self._sync_worker.work_ids) if self._sync_worker is not None else set()
+        self._sync_done_ids.update(succeeded_ids)
+        self._sync_failed_ids.update(attempted_ids - succeeded_ids)
         self._sync_thread = None; self._sync_worker = None
-        self.refresh()
+        self.refresh(retry_failed=False)
 
     def _set_filter(self,value):
         self.current_filter=value
