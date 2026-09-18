@@ -3,7 +3,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QFont, QFontMetrics
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QSizePolicy
+from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout, QSizePolicy
 
 from database import save_cover_path
 from ui.preferences import get
@@ -52,9 +52,6 @@ class CoverFrame(QFrame):
 
 class WorkCard(QFrame):
     clicked = Signal(object)
-    bundle_edit_requested = Signal(object)
-    remove_requested = Signal(object)
-    auto_bundle_requested = Signal(object)
     progress_changed = Signal(int)
     add_requested = Signal(object)
     _cover_cache = {}
@@ -163,30 +160,12 @@ class WorkCard(QFrame):
         root.addLayout(content)
 
         add_button = None
-        library_auto_button = None
-        library_remove_button = None
         if mode == "search":
             add_button = QPushButton("+  Add to Library")
             add_button.setObjectName("add")
             add_button.setCursor(Qt.PointingHandCursor)
             add_button.clicked.connect(self._add_clicked)
             root.addWidget(add_button)
-        elif mode == "library":
-            action_row = QHBoxLayout()
-            action_row.setContentsMargins(0, 0, 0, 0)
-            action_row.setSpacing(5)
-            library_auto_button = QPushButton("Auto Bundle")
-            library_auto_button.setObjectName("libraryAction")
-            library_auto_button.setCursor(Qt.PointingHandCursor)
-            library_auto_button.clicked.connect(lambda: self.auto_bundle_requested.emit(self.work))
-            library_remove_button = QPushButton("Remove")
-            library_remove_button.setObjectName("libraryAction")
-            library_remove_button.setProperty("libraryRemove", True)
-            library_remove_button.setCursor(Qt.PointingHandCursor)
-            library_remove_button.clicked.connect(lambda: self.remove_requested.emit(self.work))
-            action_row.addWidget(library_auto_button)
-            action_row.addWidget(library_remove_button)
-            root.addLayout(action_row)
 
         root.addStretch(1)
         self.adjustSize()
@@ -196,10 +175,9 @@ class WorkCard(QFrame):
             + series_height
             + (meta.sizeHint().height() if meta is not None else 0)
             + (add_button.sizeHint().height() if add_button is not None else 0)
-            + (library_auto_button.sizeHint().height() if library_auto_button is not None else 0)
             + root.contentsMargins().top()
             + root.contentsMargins().bottom()
-            + root.spacing() * (1 + (1 if add_button is not None else 0) + (1 if library_auto_button is not None else 0))
+            + root.spacing() * (1 + (1 if add_button is not None else 0))
         )
         self.setFixedHeight(target_height)
 
@@ -363,34 +341,3 @@ class WorkCard(QFrame):
             self.clicked.emit(self.work)
             return
         super().mousePressEvent(event)
-
-    def contextMenuEvent(self, event):
-        if self.mode == "library":
-            menu = QMenu(self)
-
-            auto_action = menu.addAction("Auto bundle")
-            try:
-                has_bundle = int(self._value("_series_count") or 0) > 1
-            except (TypeError, ValueError):
-                has_bundle = False
-
-            edit_action = None
-            if has_bundle:
-                edit_action = menu.addAction("Edit bundle appearance…")
-
-            remove_action = menu.addAction("Remove from Library")
-            selected = menu.exec(event.globalPos())
-
-            if selected == auto_action:
-                self.auto_bundle_requested.emit(self.work)
-                event.accept()
-                return
-            if edit_action is not None and selected == edit_action:
-                self.bundle_edit_requested.emit(self.work)
-                event.accept()
-                return
-            if selected == remove_action:
-                self.remove_requested.emit(self.work)
-                event.accept()
-                return
-        super().contextMenuEvent(event)
