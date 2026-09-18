@@ -95,6 +95,7 @@ class WorkCard(QFrame):
                 """
             )
             self.menu_button.clicked.connect(self._show_library_menu)
+            self.menu_button.move(card_width - self.menu_button.width() - 8, 8)
             self.menu_button.raise_()
         hover_css = f"background: {COLORS['surface_hover']}; border-color: {COLORS['accent']};" if get("hover_highlight") else ""
         self.setStyleSheet(f"""
@@ -107,9 +108,6 @@ class WorkCard(QFrame):
             QLabel#seriesInfo {{ color: {COLORS['accent_hover']}; font-size: 10px; font-weight: 800; }}
             QPushButton#add {{ background: {COLORS['accent']}; color: #111318; border: none; border-radius: 8px; padding: 7px; font-weight: 800; }}
             QPushButton#add:hover {{ background: {COLORS['accent_hover']}; }}
-            QPushButton#libraryAction {{ background: {COLORS['surface_alt']}; color: {COLORS['secondary']}; border: 1px solid {COLORS['border']}; border-radius: 7px; padding: 6px 4px; font-size: 10px; font-weight: 750; }}
-            QPushButton#libraryAction:hover {{ background: {COLORS['surface_hover']}; color: {COLORS['primary']}; border-color: {COLORS['border_hover']}; }}
-            QPushButton#libraryRemove:hover {{ color: #d85b5b; border-color: #8a3f3f; }}
         """)
         root = QVBoxLayout(self)
         root.setContentsMargins(2, 2, 2, 2)
