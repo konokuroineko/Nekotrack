@@ -92,70 +92,6 @@ def _series_group_key(item):
     return _media_family(item), _series_key(_title_text(item))
 
 
-def _season_marker(title):
-    """Return an explicit season identity, or None when the title does not say one."""
-    title = (title or "").lower()
-
-    if re.search(r"\bfinal\s+season\b", title):
-        return "final"
-
-    ordinal = re.search(r"\b(\d+)(?:st|nd|rd|th)\s+season\b", title)
-    if ordinal:
-        return f"season-{int(ordinal.group(1))}"
-
-    word_ordinal = re.search(
-        r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+season\b",
-        title,
-    )
-    if word_ordinal:
-        values = {
-            "first": 1, "second": 2, "third": 3, "fourth": 4,
-            "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8,
-            "ninth": 9, "tenth": 10,
-        }
-        return f"season-{values[word_ordinal.group(1)]}"
-
-    numbered = re.search(r"\bseason\s*(\d+)\b", title)
-    if numbered:
-        return f"season-{int(numbered.group(1))}"
-
-    roman = re.search(r"\b(?:season|series)\s+(i|ii|iii|iv|v|vi)\b", title)
-    if roman:
-        values = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
-        return f"season-{values[roman.group(1)]}"
-
-    roman_prefix = re.search(r"(?:^|\s)(ii|iii|iv|v|vi)\s*[:\-–—]\s*", title)
-    if roman_prefix:
-        values = {"ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
-        return f"season-{values[roman_prefix.group(1)]}"
-
-    roman_suffix = re.search(r"(?:^|\s)(ii|iii|iv|v|vi)\s*$", title)
-    if roman_suffix:
-        values = {"ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
-        return f"season-{values[roman_suffix.group(1)]}"
-
-    # Some databases number follow-up seasons with a bare trailing number,
-    # e.g. "Tokyo Ghoul:re 2" rather than "Season 2".
-    bare_number = re.search(r"(?:^|[\s:])([2-9])\s*$", title)
-    if bare_number:
-        return f"season-{int(bare_number.group(1))}"
-
-    return None
-
-
-def _is_continuation_title(title):
-    title = (title or "").lower()
-    return bool(
-        re.search(r"\b(?:part|cour)\s*(?:\d+|i|ii|iii|iv|v|vi)\b", title)
-        or re.search(r"\bfinal\s+season\b", title)
-    )
-
-
-def _is_arc_title(title):
-    """Return True for titles that represent named story arcs rather than numbered seasons."""
-    return bool(re.search(r"\barc\b", (title or "").lower()))
-
-
 def _member_start_year(member):
     start_date = member.get("startDate") if hasattr(member, "get") else None
     if isinstance(start_date, dict) and start_date.get("year") is not None:
@@ -163,11 +99,10 @@ def _member_start_year(member):
     return member.get("start_year") if hasattr(member, "get") else None
 
 
-
 def _bundle_logical_season_count(members):
     """Count logical TV seasons using the shared season-count implementation."""
     from season_count import logical_season_count
-    return logical_season_count(members, globals())
+    return logical_season_count(members)
 
 
 def _bundle_summary(members):
@@ -250,6 +185,7 @@ def _relation_group_compatible(item, edge, target):
     target_key = _series_key(_title_text(target))
     if not source_key or not target_key:
         return False
+
     if source_key == target_key:
         return True
 
@@ -505,7 +441,8 @@ def _group_discovered(results, discovered):
     # them through the normal season chain, but keep a title-family fallback so
     # discovered TV entries are not stranded in groups with no original seed.
     tv_members = [
-        item for item in discovered
+        item
+        for item in discovered
         if str(item.get("format") or "").upper() in {"TV", "TV_SHORT"}
     ]
     tv_keys = [
