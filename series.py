@@ -499,6 +499,40 @@ def _group_discovered(results, discovered):
             else:
                 by_key[key] = item_id
 
+    # TV continuations often carry a named production subtitle instead of a
+    # numeric Season marker (for example "Sword Art Online: Alicization" and
+    # "Sword Art Online: Alicization - War of Underworld"). AniList still links
+    # them through the normal season chain, but keep a title-family fallback so
+    # discovered TV entries are not stranded in groups with no original seed.
+    tv_members = [
+        item for item in discovered
+        if str(item.get("format") or "").upper() in {"TV", "TV_SHORT"}
+    ]
+    tv_keys = [
+        (item, _series_key(_title_text(item)))
+        for item in tv_members
+    ]
+    for item, key in tv_keys:
+        if not key:
+            continue
+        item_tokens = key.split()
+        if len(item_tokens) < 2:
+            continue
+        item_id = int(item["id"])
+        for other, other_key in tv_keys:
+            if item_id == int(other["id"]) or not other_key:
+                continue
+            other_tokens = other_key.split()
+            if len(other_tokens) < 2:
+                continue
+            shorter, longer = (
+                (item_tokens, other_tokens)
+                if len(item_tokens) <= len(other_tokens)
+                else (other_tokens, item_tokens)
+            )
+            if longer[:len(shorter)] == shorter:
+                union(item_id, int(other["id"]))
+
     groups = defaultdict(list)
     for item in discovered:
         groups[find(int(item["id"]))].append(item)
