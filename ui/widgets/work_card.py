@@ -3,7 +3,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QFont, QFontMetrics
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PySide6.QtWidgets import QFrame, QLabel, QMenu, QPushButton, QVBoxLayout, QSizePolicy
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QSizePolicy
 
 from database import save_cover_path
 from ui.preferences import get
