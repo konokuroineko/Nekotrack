@@ -379,9 +379,23 @@ def _relation_group_compatible(item, edge, target):
 
     source_tokens = set(source_key.split())
     target_tokens = set(target_key.split())
-    return bool(source_tokens and target_tokens and (
+    if source_tokens and target_tokens and (
         source_tokens <= target_tokens or target_tokens <= source_tokens
-    ))
+    ):
+        return True
+
+    # Some legitimate sequels change the subtitle completely when moving
+    # from a TV season to a movie trilogy (for example Demon Slayer's
+    # Hashira Training Arc -> Infinity Castle). Treat a shared ordered title
+    # prefix of at least two meaningful tokens as the same series identity.
+    source_words = source_key.split()
+    target_words = target_key.split()
+    common_prefix = 0
+    for left, right in zip(source_words, target_words):
+        if left != right:
+            break
+        common_prefix += 1
+    return common_prefix >= 2
 
 
 def _traversal_edge_allowed(item, edge):
