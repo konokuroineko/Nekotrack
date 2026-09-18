@@ -89,13 +89,14 @@ class SearchWorker(QObject):
     finished = Signal(object)
     error = Signal(str)
 
-    def __init__(self, search_text, page, media_type, media_format, filters):
+    def __init__(self, search_text, page, media_type, media_format, filters, include_relations=True):
         super().__init__()
         self.search_text = search_text
         self.page = page
         self.media_type = media_type
         self.media_format = media_format
         self.filters = filters
+        self.include_relations = include_relations
 
     def run(self):
         try:
@@ -104,6 +105,7 @@ class SearchWorker(QObject):
                 self.page,
                 media_type=self.media_type,
                 media_format=self.media_format,
+                include_relations=self.include_relations,
                 **self.filters,
             )
             self.finished.emit(data)
@@ -441,6 +443,7 @@ class SearchPage(QWidget):
             self.current_media_type,
             self.current_media_format,
             self.current_filters,
+            include_relations=not self.fast_search.isChecked(),
         )
         thread = QThread(self)
         worker.moveToThread(thread)
