@@ -109,6 +109,9 @@ class ManageLibraryPage(QWidget):
         refresh.setCursor(Qt.PointingHandCursor)
         refresh.clicked.connect(self.refresh)
         controls_row.addWidget(refresh)
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet(f"color:{COLORS['muted']};font-size:11px;")
+        controls_row.addWidget(self.status_label)
         controls_row.addStretch()
 
         root.addWidget(controls)
@@ -301,6 +304,7 @@ class ManageLibraryPage(QWidget):
         self._worker.error.connect(self._thread.quit)
         self._thread.finished.connect(self._worker.deleteLater)
         self._thread.finished.connect(self._thread.deleteLater)
+        self.status_label.setText(f"Refreshing {len(work_ids)} library entr{'y' if len(work_ids) == 1 else 'ies'}…")
         self._thread.start()
 
     def _auto_bundle_group(self, group):
@@ -311,14 +315,19 @@ class ManageLibraryPage(QWidget):
         self._start_auto_bundle(self._library_ids())
 
     def _auto_bundle_finished(self, succeeded_ids):
+        succeeded_count = len(succeeded_ids or set())
         self._thread = None
         self._worker = None
         self.refresh()
+        self.status_label.setText(
+            f"Refreshed {succeeded_count} entr{'y' if succeeded_count == 1 else 'ies'}; automatic bundles rebuilt."
+        )
         self.changed.emit()
 
     def _auto_bundle_error(self, message):
         self._thread = None
         self._worker = None
+        self.status_label.setText("Auto Bundle failed.")
         QMessageBox.warning(self, "Auto Bundle", f"Could not refresh relations: {message}")
 
     def _delete_group(self, group):
@@ -351,6 +360,7 @@ class ManageLibraryPage(QWidget):
             else:
                 index = options.index(selected) - 1
                 member_ids = [int(members[index]["id"])]
+                selected = self._member_title(members[index])
                 mode = "entry"
 
         if mode == "bundle":
