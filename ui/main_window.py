@@ -11,6 +11,7 @@ from ui.theme import COLORS, application_stylesheet, refresh_theme
 from ui.pages.character_page import CharacterPage
 from ui.pages.home_page import HomePage
 from ui.pages.library_page import LibraryPage
+from ui.pages.manage_library_page import ManageLibraryPage
 from ui.pages.person_page import PersonPage
 from ui.pages.relationship_page import RelationshipPage
 from ui.pages.search_page import SearchPage
@@ -84,6 +85,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.navigation = NavigationController(self.stack)
         self.library_page = LibraryPage()
+        self.manage_library_page = ManageLibraryPage()
         self.search_page = SearchPage(self.add_to_library)
         self.work_detail_page = WorkDetailPage()
         self.settings_page = SettingsPage()
@@ -91,6 +93,7 @@ class MainWindow(QMainWindow):
         pages = {
             "home": HomePage(),
             "collections": self.library_page,
+            "manage": self.manage_library_page,
             "search": self.search_page,
             "work_detail": self.work_detail_page,
             "person": PersonPage(),
@@ -101,7 +104,7 @@ class MainWindow(QMainWindow):
         for name, page in pages.items():
             self.navigation.add_page(name, page)
 
-        self._section(side, "LIBRARY", [("⌂", "Home", "home"), ("▦", "Library", "collections"), ("⌕", "Search", "search")])
+        self._section(side, "LIBRARY", [("⌂", "Home", "home"), ("▦", "Library", "collections"), ("⚙", "Manage", "manage"), ("⌕", "Search", "search")])
         self._section(side, "EXPLORE", [("♙", "People", "person"), ("♧", "Characters", "character"), ("◇", "Relations", "relationships")])
         side.addStretch()
         self._add_nav(side, "⚙", "Settings", "settings")
@@ -113,6 +116,8 @@ class MainWindow(QMainWindow):
         self.work_detail_page.back_requested.connect(lambda: self.navigation.show("collections"))
         self.work_detail_page.relation_selected.connect(self.show_relation)
         self.work_detail_page.bundle_changed.connect(self.library_page.refresh)
+        self.work_detail_page.bundle_changed.connect(self.manage_library_page.refresh)
+        self.manage_library_page.changed.connect(self.library_page.refresh)
         self.relationship_page.work_selected.connect(self.show_relation)
         self.settings_page.settings_changed.connect(self.apply_settings)
 
@@ -137,6 +142,8 @@ class MainWindow(QMainWindow):
             # Rebuild the library when returning to it so relation-sync failures
             # can be retried through the normal page refresh path.
             self.library_page.refresh()
+        elif page_name == "manage":
+            self.manage_library_page.refresh()
         elif page_name == "relationships":
             self.relationship_page.refresh()
 
