@@ -9,10 +9,11 @@ from PySide6.QtWidgets import (
 )
 
 from database import (
-    add_manual_bundle_link, get_characters, get_episodes, get_library_series,
+    add_manual_bundle_link, get_characters, get_episodes,
     get_manual_bundle_partners, get_relations, get_staff, get_work,
     remove_manual_bundle_link, save_cover_path, set_episode_progress, set_episode_watched,
 )
+from series import get_library_series
 from ui.theme import COLORS, muted_label_stylesheet
 from ui.widgets.character_card import CharacterCard
 from ui.widgets.person_card import PersonCard
@@ -190,7 +191,7 @@ class WorkDetailPage(QWidget):
             member_ids = {
                 int(member["id"])
                 for member in members
-                if member.get("id") is not None
+                if member["id"] is not None
             }
             if current_id in member_ids:
                 current_group_ids = member_ids
@@ -202,7 +203,7 @@ class WorkDetailPage(QWidget):
             member_ids = {
                 int(member["id"])
                 for member in members
-                if member.get("id") is not None
+                if member["id"] is not None
             }
             representative_id = group.get("id") if hasattr(group, "get") else None
             if representative_id is None:
