@@ -457,14 +457,19 @@ def get_bundle_override(work_ids):
 
     placeholders = ",".join("?" for _ in ids)
     connection = get_connection()
+    order_cases = " ".join(
+        f"WHEN ? THEN {index}"
+        for index, _ in enumerate(ids)
+    )
     row = connection.execute(
         f"""
         SELECT bundle_anchor_id, custom_title, cover_work_id, custom_cover_path
         FROM bundle_overrides
         WHERE bundle_anchor_id IN ({placeholders})
+        ORDER BY CASE bundle_anchor_id {order_cases} ELSE {len(ids)} END
         LIMIT 1
         """,
-        ids,
+        [*ids, *ids],
     ).fetchone()
     connection.close()
     return row
