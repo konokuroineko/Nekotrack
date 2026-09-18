@@ -123,7 +123,6 @@ celerybeat.pid
 mnesia/
 rabbitmq/
 rabbitmq-data/
-
 # ActiveMQ
 activemq-data/
 
@@ -183,8 +182,10 @@ __marimo__/
 
 # Local database
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 
 # Downloaded/cached cover images
-data/images/
+data/
