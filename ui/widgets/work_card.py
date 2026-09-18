@@ -90,7 +90,7 @@ class WorkCard(QFrame):
 
         full_title = self._title()
         title_font = QFont(self.font())
-        title_font.setPointSize(get("font_size"))
+        title_font.setPointSize(max(8, int(get("font_size") or 13)))
         title_font.setWeight(QFont.Weight.Bold)
         title_metrics = QFontMetrics(title_font)
         fitted_title = self._fit_title_to_two_lines(full_title, card_width - 12, title_font)
