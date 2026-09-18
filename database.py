@@ -600,6 +600,18 @@ def add_to_library(work_id, status="Planning"):
     connection.close()
 
 
+def remove_from_library(work_id):
+    """Remove a work from the user's Library while keeping its cached work data."""
+    connection = get_connection()
+    cursor = connection.execute(
+        "DELETE FROM user_library WHERE work_id = ?",
+        (int(work_id),),
+    )
+    connection.commit()
+    connection.close()
+    return cursor.rowcount > 0
+
+
 def get_library_by_status(status):
     connection = get_connection()
     results = connection.execute("""
