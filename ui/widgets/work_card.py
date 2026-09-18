@@ -53,6 +53,8 @@ class CoverFrame(QFrame):
 class WorkCard(QFrame):
     clicked = Signal(object)
     bundle_edit_requested = Signal(object)
+    remove_requested = Signal(object)
+    auto_bundle_requested = Signal(object)
     progress_changed = Signal(int)
     add_requested = Signal(object)
     _cover_cache = {}
@@ -342,15 +344,31 @@ class WorkCard(QFrame):
 
     def contextMenuEvent(self, event):
         if self.mode == "library":
+            menu = QMenu(self)
+
+            auto_action = menu.addAction("Auto bundle")
             try:
                 has_bundle = int(self._value("_series_count") or 0) > 1
             except (TypeError, ValueError):
                 has_bundle = False
+
+            edit_action = None
             if has_bundle:
-                menu = QMenu(self)
-                action = menu.addAction("Edit bundle appearance…")
-                if action == menu.exec(event.globalPos()):
-                    self.bundle_edit_requested.emit(self.work)
-                    event.accept()
-                    return
+                edit_action = menu.addAction("Edit bundle appearance…")
+
+            remove_action = menu.addAction("Remove from Library")
+            selected = menu.exec(event.globalPos())
+
+            if selected == auto_action:
+                self.auto_bundle_requested.emit(self.work)
+                event.accept()
+                return
+            if edit_action is not None and selected == edit_action:
+                self.bundle_edit_requested.emit(self.work)
+                event.accept()
+                return
+            if selected == remove_action:
+                self.remove_requested.emit(self.work)
+                event.accept()
+                return
         super().contextMenuEvent(event)
