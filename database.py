@@ -36,6 +36,16 @@ def initialize_database():
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bundle_overrides (
+            bundle_anchor_id INTEGER PRIMARY KEY,
+            custom_title TEXT,
+            cover_work_id INTEGER,
+            custom_cover_path TEXT,
+            FOREIGN KEY (bundle_anchor_id) REFERENCES works(id),
+            FOREIGN KEY (cover_work_id) REFERENCES works(id)
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_library (
             work_id INTEGER PRIMARY KEY, status TEXT NOT NULL DEFAULT 'Planning',
             progress_episodes INTEGER DEFAULT 0, progress_chapters INTEGER DEFAULT 0,
@@ -437,6 +447,80 @@ def get_manual_bundle_partners(work_id):
     return rows
 
 
+
+
+def get_bundle_override(work_ids):
+    """Return the saved presentation override for a bundle touching these works."""
+    ids = sorted({int(work_id) for work_id in work_ids if work_id is not None})
+    if not ids:
+        return None
+
+    placeholders = ",".join("?" for _ in ids)
+    connection = get_connection()
+    row = connection.execute(
+        f"""
+        SELECT bundle_anchor_id, custom_title, cover_work_id, custom_cover_path
+        FROM bundle_overrides
+        WHERE bundle_anchor_id IN ({placeholders})
+        LIMIT 1
+        """,
+        ids,
+    ).fetchone()
+    connection.close()
+    return row
+
+
+def save_bundle_override(work_ids, anchor_id, custom_title=None, cover_work_id=None, custom_cover_path=None):
+    """Save a bundle presentation override against its current earliest member."""
+    ids = sorted({int(work_id) for work_id in work_ids if work_id is not None})
+    anchor_id = int(anchor_id)
+    if not ids or anchor_id not in ids:
+        return False
+
+    if cover_work_id is not None:
+        cover_work_id = int(cover_work_id)
+        if cover_work_id not in ids:
+            return False
+
+    custom_title = str(custom_title).strip() if custom_title is not None else None
+    custom_title = custom_title or None
+    custom_cover_path = str(custom_cover_path).strip() if custom_cover_path else None
+
+    connection = get_connection()
+    placeholders = ",".join("?" for _ in ids)
+    connection.execute(
+        f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
+        ids,
+    )
+    connection.execute(
+        """
+        INSERT INTO bundle_overrides (
+            bundle_anchor_id, custom_title, cover_work_id, custom_cover_path
+        )
+        VALUES (?, ?, ?, ?)
+        """,
+        (anchor_id, custom_title, cover_work_id, custom_cover_path),
+    )
+    connection.commit()
+    connection.close()
+    return True
+
+
+def clear_bundle_override(work_ids):
+    """Remove a bundle presentation override."""
+    ids = sorted({int(work_id) for work_id in work_ids if work_id is not None})
+    if not ids:
+        return False
+
+    placeholders = ",".join("?" for _ in ids)
+    connection = get_connection()
+    cursor = connection.execute(
+        f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
+        ids,
+    )
+    connection.commit()
+    connection.close()
+    return cursor.rowcount > 0
 
 
 def get_all_relation_cards(relation_type=None, source_id=None):
