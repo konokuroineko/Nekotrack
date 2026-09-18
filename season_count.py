@@ -5,8 +5,18 @@ from collections import defaultdict
 LOGIC_VERSION = 2
 
 
+def _get(item, key, default=None):
+    """Read a member attribute from dicts and sqlite3.Row-like objects alike."""
+    if hasattr(item, "get"):
+        return item.get(key, default)
+    try:
+        return item[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 def _title_text(item):
-    title = item.get("title") or {}
+    title = _get(item, "title") or {}
     if isinstance(title, dict):
         return title.get("english") or title.get("romaji") or title.get("native") or ""
     return str(title)
@@ -78,11 +88,11 @@ def _is_arc(title):
 
 
 def _air_period(member):
-    start = member.get("startDate") or {}
+    start = _get(member, "startDate") or {}
     year = start.get("year")
     month = start.get("month")
     if year is None:
-        year = member.get("start_year")
+        year = _get(member, "start_year")
     if month is None and year is None:
         return None
     if month is None:
@@ -95,18 +105,18 @@ def _air_period(member):
     return (year, airing_season)
 
 
-def logical_season_count(members, series_module):
+def logical_season_count(members, series_module=None):
     tv_members = [
         member
         for member in members
-        if str(member.get("format") or "").upper() in {"TV", "TV_SHORT"}
+        if str(_get(member, "format") or "").upper() in {"TV", "TV_SHORT"}
     ]
     if not tv_members:
         return 0
 
-    ids = {int(member["id"]) for member in tv_members}
+    ids = {int(_get(member, "id")) for member in tv_members}
     parent = {media_id: media_id for media_id in ids}
-    by_id = {int(member["id"]): member for member in tv_members}
+    by_id = {int(_get(member, "id")): member for member in tv_members}
 
     def find(media_id):
         while parent[media_id] != media_id:
@@ -124,7 +134,7 @@ def logical_season_count(members, series_module):
     for member in tv_members:
         marker = _season_marker(_title_text(member))
         if marker:
-            by_marker[marker].append(int(member["id"]))
+            by_marker[marker].append(int(_get(member, "id")))
 
     for ids_for_marker in by_marker.values():
         first = ids_for_marker[0]
@@ -138,10 +148,10 @@ def logical_season_count(members, series_module):
         if not _is_continuation(title):
             continue
 
-        member_id = int(member["id"])
+        member_id = int(_get(member, "id"))
         current_marker = _season_marker(title)
 
-        for edge in (member.get("relations") or {}).get("edges", []):
+        for edge in (_get(member, "relations") or {}).get("edges", []):
             if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
                 continue
 
@@ -166,7 +176,7 @@ def logical_season_count(members, series_module):
     # 3. Unnumbered named arcs can form a single season. Merge only directly
     #    linked arc entries that began in the same airing season.
     arc_ids = {
-        int(member["id"])
+        int(_get(member, "id"))
         for member in tv_members
         if _is_arc(_title_text(member))
         and _season_marker(_title_text(member)) is None
@@ -177,7 +187,7 @@ def logical_season_count(members, series_module):
         member = by_id[member_id]
         member_period = _air_period(member)
 
-        for edge in (member.get("relations") or {}).get("edges", []):
+        for edge in (_get(member, "relations") or {}).get("edges", []):
             if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
                 continue
 
