@@ -375,7 +375,7 @@ def _relation_group_compatible(item, edge, target):
 
 
 def _traversal_edge_allowed(item, edge):
-    """Walk only the season/continuation chain during recursive discovery."""
+    """Walk the season/continuation chain and discover recap/summary entries during recursive discovery."""
     if edge.get("relationType") not in SEASON_CHAIN_RELATIONS:
         return False
     node = edge.get("node") or {}
