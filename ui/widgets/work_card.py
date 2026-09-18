@@ -3,7 +3,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QFont, QFontMetrics
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout, QSizePolicy
+from PySide6.QtWidgets import QFrame, QLabel, QMenu, QPushButton, QVBoxLayout, QSizePolicy
 
 from database import save_cover_path
 from ui.preferences import get
@@ -52,6 +52,7 @@ class CoverFrame(QFrame):
 
 class WorkCard(QFrame):
     clicked = Signal(object)
+    bundle_edit_requested = Signal(object)
     progress_changed = Signal(int)
     add_requested = Signal(object)
     _cover_cache = {}
@@ -248,6 +249,12 @@ class WorkCard(QFrame):
 
     def _load_cover(self):
         cover_path = self._value("cover_path")
+        bundle_cover_work_id = self._value("_bundle_cover_work_id")
+        if bundle_cover_work_id is not None:
+            for member in self._value("_series_members") or []:
+                if int(self._member_value(member, "id")) == int(bundle_cover_work_id):
+                    cover_path = self._member_value(member, "cover_path")
+                    break
         fallback = self._fallback_member()
         if not cover_path and fallback:
             cover_path = self._member_value(fallback, "cover_path")
@@ -257,6 +264,14 @@ class WorkCard(QFrame):
                 self.cover.set_pixmap(pixmap)
                 return
         cover_url = self._value("cover_url") or (self._value("coverImage") or {}).get("large")
+        if bundle_cover_work_id is not None:
+            for member in self._value("_series_members") or []:
+                if int(self._member_value(member, "id")) == int(bundle_cover_work_id):
+                    cover_url = self._member_value(member, "cover_url")
+                    if not cover_url:
+                        image = self._member_value(member, "coverImage")
+                        cover_url = image.get("large") if isinstance(image, dict) else None
+                    break
         if not cover_url and fallback:
             cover_url = self._member_value(fallback, "cover_url")
             if not cover_url:
@@ -324,3 +339,18 @@ class WorkCard(QFrame):
             self.clicked.emit(self.work)
             return
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        if self.mode == "library":
+            try:
+                has_bundle = int(self._value("_series_count") or 0) > 1
+            except (TypeError, ValueError):
+                has_bundle = False
+            if has_bundle:
+                menu = QMenu(self)
+                action = menu.addAction("Edit bundle appearance…")
+                if action == menu.exec(event.globalPos()):
+                    self.bundle_edit_requested.emit(self.work)
+                    event.accept()
+                    return
+        super().contextMenuEvent(event)
