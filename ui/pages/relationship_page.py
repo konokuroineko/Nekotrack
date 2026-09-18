@@ -28,21 +28,23 @@ RELATION_LABELS = {
 
 
 class RelationSyncWorker(QObject):
-    finished = Signal()
+    finished = Signal(object)
 
     def __init__(self, work_ids):
         super().__init__()
         self.work_ids = sorted(set(int(work_id) for work_id in work_ids))
 
     def run(self):
+        succeeded_ids = set()
         for work_id in self.work_ids:
             try:
                 details = get_media_details(work_id)
                 if details:
                     save_anime(details)
+                    succeeded_ids.add(int(work_id))
             except Exception:
                 continue
-        self.finished.emit()
+        self.finished.emit(succeeded_ids)
 
 
 class RelationshipPage(QWidget):
@@ -54,6 +56,7 @@ class RelationshipPage(QWidget):
         self._sync_thread = None
         self._sync_worker = None
         self._sync_started = False
+        self._sync_failed_ids = set()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(SPACING["xxl"], SPACING["xxl"], SPACING["xxl"], SPACING["xxl"])
@@ -123,7 +126,9 @@ class RelationshipPage(QWidget):
         connection.close()
         return [int(row["target_id"]) for row in rows]
 
-    def refresh(self):
+    def refresh(self, retry_failed=True):
+        if retry_failed:
+            self._sync_failed_ids.clear()
         rows = get_all_relation_cards()
         self._all_relations = list(rows)
         current = self.filter_box.currentData() if self.filter_box.count() else "All"
@@ -143,7 +148,7 @@ class RelationshipPage(QWidget):
         if not self._sync_started:
             work_ids = get_library_relation_sync_ids()
             work_ids.extend(self._missing_relation_targets())
-            work_ids = sorted(set(work_ids))
+            work_ids = [work_id for work_id in sorted(set(work_ids)) if work_id not in self._sync_failed_ids]
             if work_ids:
                 self._start_relation_sync(work_ids)
 
@@ -209,10 +214,14 @@ class RelationshipPage(QWidget):
         self._sync_thread.finished.connect(self._sync_thread.deleteLater)
         self._sync_thread.start()
 
-    def _relation_sync_finished(self):
+    def _relation_sync_finished(self, succeeded_ids):
+        succeeded_ids = {int(work_id) for work_id in (succeeded_ids or set())}
+        attempted_ids = set(self._sync_worker.work_ids) if self._sync_worker is not None else set()
+        self._sync_failed_ids.update(attempted_ids - succeeded_ids)
+        self._sync_started = False
         self._sync_thread = None
         self._sync_worker = None
-        self.refresh()
+        self.refresh(retry_failed=False)
 
     def showEvent(self, event):
         super().showEvent(event)
