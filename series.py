@@ -875,13 +875,17 @@ def get_library_series():
         source = row_by_id.get(source_id)
         target = row_by_id.get(target_id)
 
-        if (
-            source is not None
-            and target is not None
-            and _same_media_family(source, target)
-            and _is_bundleable(source)
-            and _is_bundleable(target)
-        ):
+        if source is None or target is None:
+            continue
+
+        # Use the same conservative relation policy as Search. In particular,
+        # don't let stored franchise-level relations bypass the cross-format
+        # compatibility rules used during search enrichment.
+        edge = {
+            "relationType": relation["relation_type"],
+            "node": target,
+        }
+        if _relation_group_compatible(source, edge, target):
             union(source_id, target_id)
 
     # Manual bundle links are explicit user overrides and may join works
