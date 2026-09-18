@@ -1,8 +1,11 @@
+import shutil
+from pathlib import Path
+
 from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, Signal, QEvent, QTimer, QPropertyAnimation, QEasingCurve, QThread
-from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLayout
+from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLayout
 
 from api import get_media_details
-from database import get_all_library, get_connection, save_anime
+from database import clear_bundle_override, delete_work_data, get_all_library, get_bundle_override, get_connection, save_anime, save_bundle_override
 from series import get_library_series
 from ui.preferences import get
 from ui.theme import COLORS
@@ -138,6 +141,282 @@ class LibraryPage(QWidget):
         self._sync_thread = None; self._sync_worker = None
         self.refresh(retry_failed=False)
 
+    def _auto_bundle_item(self, group):
+        members = list(group.get("_series_members") or [])
+        if not members:
+            work_id = group.get("id")
+            members = [group] if work_id is not None else []
+        if not members:
+            return
+        if self._sync_thread is not None and self._sync_thread.isRunning():
+            return
+
+        work_ids = [int(member["id"]) for member in members]
+        self._sync_thread = QThread(self)
+        self._sync_worker = RelationSyncWorker(work_ids)
+        self._sync_worker.moveToThread(self._sync_thread)
+        self._sync_thread.started.connect(self._sync_worker.run)
+        self._sync_worker.finished.connect(self._relation_sync_finished)
+        self._sync_worker.finished.connect(self._sync_thread.quit)
+        self._sync_thread.finished.connect(self._sync_worker.deleteLater)
+        self._sync_thread.finished.connect(self._sync_thread.deleteLater)
+        self._sync_thread.start()
+
+    def _delete_item(self, group):
+        members = list(group.get("_series_members") or [])
+        if not members:
+            return
+
+        if len(members) == 1:
+            selected_ids = [int(members[0]["id"])]
+            selected_title = self._member_title(members[0])
+        else:
+            options = ["Delete entire bundle"] + [
+                f"Delete: {self._member_title(member)}"
+                for member in members
+            ]
+            choice, ok = QInputDialog.getItem(
+                self,
+                "Delete",
+                "Choose what to delete:",
+                options,
+                0,
+                False,
+            )
+            if not ok:
+                return
+            if choice == options[0]:
+                selected_ids = [int(member["id"]) for member in members]
+                selected_title = None
+            else:
+                index = options.index(choice) - 1
+                selected_ids = [int(members[index]["id"])]
+                selected_title = self._member_title(members[index])
+
+        if selected_title is None:
+            message = (
+                f"Delete this bundle and all {len(selected_ids)} entries?\n\n"
+                "This permanently removes their local NekoTrack data and cached covers."
+            )
+        else:
+            message = (
+                f"Delete “{selected_title}” from NekoTrack?\n\n"
+                "This permanently removes its local NekoTrack data and cached cover."
+            )
+
+        answer = QMessageBox.question(
+            self,
+            "Confirm delete",
+            message,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        deleted = False
+        for work_id in selected_ids:
+            deleted = delete_work_data(work_id) or deleted
+        if deleted:
+            self.refresh()
+
+    def _edit_bundle(self, group):
+        members = list(group.get("_series_members") or [])
+        if len(members) < 2:
+            return
+
+        member_ids = [int(member["id"]) for member in members]
+        default_member = members[0]
+        override = get_bundle_override(member_ids)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Edit bundle appearance")
+        dialog.setMinimumWidth(540)
+
+        root = QVBoxLayout(dialog)
+        root.setContentsMargins(22, 20, 22, 20)
+        root.setSpacing(16)
+
+        heading = QLabel("Bundle appearance")
+        heading.setStyleSheet(
+            f"font-size:20px;font-weight:850;color:{COLORS['primary']};"
+        )
+        root.addWidget(heading)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignTop)
+        form.setVerticalSpacing(12)
+
+        custom_title = QCheckBox("Use custom title")
+        custom_title.setChecked(bool(override and override["custom_title"]))
+        title_edit = QLineEdit(
+            str(
+                override["custom_title"]
+                if override and override["custom_title"]
+                else group.get("title") or ""
+            )
+        )
+        title_edit.setPlaceholderText(self._member_title(default_member))
+        title_edit.setEnabled(custom_title.isChecked())
+        custom_title.toggled.connect(title_edit.setEnabled)
+
+        title_box = QVBoxLayout()
+        title_box.addWidget(custom_title)
+        title_box.addWidget(title_edit)
+        form.addRow("Title", title_box)
+
+        cover_combo = QComboBox()
+        cover_combo.addItem(
+            f"Automatic — {self._member_title(default_member)}",
+            ("default", None),
+        )
+
+        selected_cover_id = (
+            int(override["cover_work_id"])
+            if override and override["cover_work_id"] is not None
+            else None
+        )
+        selected_custom_path = (
+            str(override["custom_cover_path"])
+            if override and override["custom_cover_path"]
+            else None
+        )
+        selected_index = 0
+
+        for member in members:
+            member_id = int(member["id"])
+            label = self._member_title(member)
+            meta = " · ".join(
+                str(value)
+                for value in (
+                    member["format"] or "",
+                    member["start_year"] or "",
+                )
+                if value
+            )
+            if meta:
+                label = f"{label}  —  {meta}"
+            cover_combo.addItem(label, ("member", member_id))
+            if selected_cover_id == member_id:
+                selected_index = cover_combo.count() - 1
+
+        custom_index = cover_combo.count()
+        cover_combo.addItem("Custom image…", ("custom", selected_custom_path))
+        if selected_custom_path:
+            selected_index = custom_index
+
+        path_label = QLabel(selected_custom_path or "No custom image selected.")
+        path_label.setWordWrap(True)
+        path_label.setStyleSheet(
+            f"color:{COLORS['muted']};font-size:11px;"
+        )
+
+        def choose_custom():
+            path, _ = QFileDialog.getOpenFileName(
+                dialog,
+                "Choose bundle cover",
+                "",
+                "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
+            )
+            if not path:
+                return
+            path_label.setText(path)
+            cover_combo.setItemData(custom_index, ("custom", path))
+            cover_combo.setCurrentIndex(custom_index)
+
+        def cover_changed(index):
+            data = cover_combo.itemData(index) or ("default", None)
+            path_label.setVisible(data[0] == "custom")
+            if data[0] != "custom":
+                path_label.setText("No custom image selected.")
+
+        cover_combo.currentIndexChanged.connect(cover_changed)
+        cover_combo.setCurrentIndex(selected_index)
+        cover_changed(selected_index)
+
+        cover_box = QVBoxLayout()
+        cover_box.addWidget(cover_combo)
+        choose_button = QPushButton("Choose custom image…")
+        choose_button.clicked.connect(choose_custom)
+        cover_box.addWidget(choose_button)
+        cover_box.addWidget(path_label)
+        form.addRow("Cover", cover_box)
+
+        note = QLabel(
+            f"Automatic uses the earliest item: {self._member_title(default_member)}."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(
+            f"color:{COLORS['muted']};font-size:11px;"
+        )
+        form.addRow("", note)
+        root.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
+        )
+        reset = buttons.addButton(
+            "Reset appearance",
+            QDialogButtonBox.ResetRole,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+
+        def reset_appearance():
+            clear_bundle_override(member_ids)
+            dialog.reject()
+            self.refresh()
+
+        reset.clicked.connect(reset_appearance)
+        root.addWidget(buttons)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        title = title_edit.text().strip() if custom_title.isChecked() else None
+        cover_mode, cover_value = cover_combo.currentData() or ("default", None)
+        cover_work_id = None
+        custom_cover_path = None
+
+        if cover_mode == "member":
+            cover_work_id = int(cover_value)
+        elif cover_mode == "custom":
+            source_path = str(cover_value or "").strip()
+            source = Path(source_path) if source_path else None
+            if source is not None and source.is_file():
+                bundle_dir = Path("data") / "images" / "bundles"
+                bundle_dir.mkdir(parents=True, exist_ok=True)
+                destination = bundle_dir / (
+                    f"bundle_{int(default_member['id'])}{source.suffix.lower() or '.png'}"
+                )
+                try:
+                    if source.resolve() != destination.resolve():
+                        shutil.copy2(source, destination)
+                    custom_cover_path = str(destination)
+                except Exception:
+                    custom_cover_path = str(source)
+
+        if save_bundle_override(
+            member_ids,
+            int(default_member["id"]),
+            custom_title=title,
+            cover_work_id=cover_work_id,
+            custom_cover_path=custom_cover_path,
+        ):
+            self.refresh()
+
+    @staticmethod
+    def _member_title(member):
+        title = member["title"]
+        if isinstance(title, dict):
+            return str(
+                title.get("english")
+                or title.get("romaji")
+                or title.get("native")
+                or "Untitled"
+            )
+        return str(title or "Untitled")
+
     def _set_filter(self,value):
         self.current_filter=value
         for name,button in self.filter_buttons.items(): button.setChecked(name==value); button.setStyleSheet(self._filter_style(name==value))
@@ -163,7 +442,7 @@ class LibraryPage(QWidget):
         if not self.anime_list:
             empty=QLabel("Nothing here yet\n\nAdd titles from Search to build your collection."); empty.setAlignment(Qt.AlignCenter); empty.setStyleSheet(f"color:{COLORS['muted']};font-size:15px;padding:100px;"); self.flow_layout.addWidget(empty); self._empty_label=empty; return
         for anime in self.anime_list:
-            card=WorkCard(anime,mode="library"); card.setSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed); card.clicked.connect(self.work_selected); self._cards.append(card); self.flow_layout.addWidget(card)
+            card=WorkCard(anime,mode="library"); card.setSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed); card.clicked.connect(self.work_selected); card.auto_bundle_requested.connect(self._auto_bundle_item); card.bundle_edit_requested.connect(self._edit_bundle); card.remove_requested.connect(self._delete_item); self._cards.append(card); self.flow_layout.addWidget(card)
         self.flow_layout.invalidate(); self.flow_layout.activate(); self._last_target_positions={id(card):QPoint(card.pos()) for card in self._cards}
     def _animate_to_positions(self,start_positions,target_positions):
         self._stop_animations(); animations=[]; duration=get("animation_speed")
