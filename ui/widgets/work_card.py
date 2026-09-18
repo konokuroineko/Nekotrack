@@ -297,7 +297,7 @@ class WorkCard(QFrame):
             if pixmap.loadFromData(reply.readAll()):
                 self._cover_cache[cover_url] = pixmap
                 self.cover.set_pixmap(pixmap)
-                work_id = self._value("id")
+                work_id = self._value("_bundle_cover_work_id") or self._value("_bundle_default_member_id") or self._value("id")
                 if work_id:
                     try:
                         IMAGE_DIRECTORY.mkdir(parents=True, exist_ok=True)
