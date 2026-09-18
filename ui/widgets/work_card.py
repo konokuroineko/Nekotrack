@@ -193,6 +193,12 @@ class WorkCard(QFrame):
             root.addWidget(add_button)
 
         root.addStretch(1)
+
+        # The cover and other card widgets are created after the menu button,
+        # so make the three-dot button the topmost child once the card is built.
+        if self.menu_button is not None:
+            self.menu_button.raise_()
+
         self.adjustSize()
         target_height = (
             self.cover.height()
