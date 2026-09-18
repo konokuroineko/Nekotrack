@@ -3,7 +3,7 @@ import re
 import time
 
 from api import get_media_details, get_media_relations_batch
-from database import get_all_library, get_connection, save_anime
+from database import get_all_library, get_connection, get_manual_bundle_links, get_work, save_anime
 
 
 SERIES_RELATIONS = {
@@ -611,6 +611,18 @@ def _group_discovered(results, discovered):
         if left != right:
             parent[right] = left
 
+    # Explicit manual links are an override: when the user links two works,
+    # they belong to the same display bundle regardless of AniList relation type
+    # or whether one entry has a missing/unrecognized format.
+    manual_links = get_manual_bundle_links(ids)
+    manual_ids = set()
+    for link in manual_links:
+        left_id = int(link["work_a"])
+        right_id = int(link["work_b"])
+        if left_id in ids and right_id in ids:
+            union(left_id, right_id)
+            manual_ids.update((left_id, right_id))
+
     for item in discovered:
         item_id = int(item["id"])
         for edge in _search_relation_edges(item):
@@ -690,7 +702,9 @@ def _group_discovered(results, discovered):
         )
 
         bundle_members = [
-            item for item in group_members if _is_bundleable(item)
+            item
+            for item in group_members
+            if _is_bundleable(item) or int(_get(item, "id")) in manual_ids
         ]
         visible_bundle_members = [
             item for item in bundle_members
@@ -868,6 +882,14 @@ def get_library_series():
             and _is_bundleable(source)
             and _is_bundleable(target)
         ):
+            union(source_id, target_id)
+
+    # Manual bundle links are explicit user overrides and may join works
+    # even when AniList relations or formats would not allow automatic bundling.
+    for link in get_manual_bundle_links(ids):
+        source_id = int(link["work_a"])
+        target_id = int(link["work_b"])
+        if source_id in ids and target_id in ids:
             union(source_id, target_id)
 
     by_key = {}
