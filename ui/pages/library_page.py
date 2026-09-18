@@ -442,7 +442,7 @@ class LibraryPage(QWidget):
         if not self.anime_list:
             empty=QLabel("Nothing here yet\n\nAdd titles from Search to build your collection."); empty.setAlignment(Qt.AlignCenter); empty.setStyleSheet(f"color:{COLORS['muted']};font-size:15px;padding:100px;"); self.flow_layout.addWidget(empty); self._empty_label=empty; return
         for anime in self.anime_list:
-            card=WorkCard(anime,mode="library"); card.setSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed); card.clicked.connect(self.work_selected); card.auto_bundle_requested.connect(self._auto_bundle_item); card.bundle_edit_requested.connect(self._edit_bundle); card.remove_requested.connect(self._delete_item); self._cards.append(card); self.flow_layout.addWidget(card)
+            card=WorkCard(anime,mode="library"); card.setSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed); card.clicked.connect(self.work_selected); self._cards.append(card); self.flow_layout.addWidget(card)
         self.flow_layout.invalidate(); self.flow_layout.activate(); self._last_target_positions={id(card):QPoint(card.pos()) for card in self._cards}
     def _animate_to_positions(self,start_positions,target_positions):
         self._stop_animations(); animations=[]; duration=get("animation_speed")
