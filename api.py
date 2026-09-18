@@ -85,7 +85,7 @@ def anilist_request(query, variables=None):
     )
 
 
-def _media_fields(include_details=False):
+def _media_fields(include_details=False, include_relations=True):
     """Return GraphQL fields shared by search and detail queries."""
     base = """
         id
@@ -98,6 +98,8 @@ def _media_fields(include_details=False):
         format
     """
     if not include_details:
+        if not include_relations:
+            return base
         return base + """
         relations {
             edges {
@@ -183,6 +185,7 @@ def search_anime(
     min_score=None,
     genre=None,
     tag=None,
+    include_relations=True,
 ):
     """Search or browse AniList media with optional filters."""
     if media_type not in {None, "ANIME", "MANGA"}:
@@ -305,7 +308,7 @@ def search_anime(
             media(
                 {argument_block}
             ) {{
-                {_media_fields(include_details=False)}
+                {_media_fields(include_details=False, include_relations=include_relations)}
             }}
         }}
     }}
