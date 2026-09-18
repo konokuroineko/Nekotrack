@@ -26,6 +26,15 @@ def initialize_database():
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS manual_bundle_links (
+            work_a INTEGER NOT NULL, work_b INTEGER NOT NULL,
+            PRIMARY KEY (work_a, work_b),
+            FOREIGN KEY (work_a) REFERENCES works(id),
+            FOREIGN KEY (work_b) REFERENCES works(id),
+            CHECK (work_a < work_b)
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_library (
             work_id INTEGER PRIMARY KEY, status TEXT NOT NULL DEFAULT 'Planning',
             progress_episodes INTEGER DEFAULT 0, progress_chapters INTEGER DEFAULT 0,
@@ -336,6 +345,89 @@ def get_relations(work_id):
     """, (work_id,)).fetchall()
     connection.close()
     return results
+
+def add_manual_bundle_link(work_a, work_b):
+    """Persist an explicit user-selected bundle link between two works."""
+    work_a, work_b = sorted((int(work_a), int(work_b)))
+    if work_a == work_b:
+        return False
+
+    connection = get_connection()
+    connection.execute(
+        "INSERT OR IGNORE INTO manual_bundle_links (work_a, work_b) VALUES (?, ?)",
+        (work_a, work_b),
+    )
+    changed = connection.total_changes > 0
+    connection.commit()
+    connection.close()
+    return changed
+
+
+def remove_manual_bundle_link(work_a, work_b):
+    work_a, work_b = sorted((int(work_a), int(work_b)))
+    connection = get_connection()
+    cursor = connection.execute(
+        "DELETE FROM manual_bundle_links WHERE work_a = ? AND work_b = ?",
+        (work_a, work_b),
+    )
+    changed = cursor.rowcount > 0
+    connection.commit()
+    connection.close()
+    return changed
+
+
+def get_manual_bundle_links(work_ids=None):
+    """Return explicit bundle links, optionally limited to works touching these IDs."""
+    connection = get_connection()
+
+    if work_ids is None:
+        rows = connection.execute(
+            "SELECT work_a, work_b FROM manual_bundle_links ORDER BY work_a, work_b"
+        ).fetchall()
+    else:
+        ids = sorted({int(work_id) for work_id in work_ids if work_id is not None})
+        if not ids:
+            connection.close()
+            return []
+
+        placeholders = ",".join("?" for _ in ids)
+        rows = connection.execute(
+            f"""
+            SELECT work_a, work_b
+            FROM manual_bundle_links
+            WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
+            ORDER BY work_a, work_b
+            """,
+            [*ids, *ids],
+        ).fetchall()
+
+    connection.close()
+    return rows
+
+
+def get_manual_bundle_partners(work_id):
+    """Return the works explicitly manually linked to one work."""
+    work_id = int(work_id)
+    connection = get_connection()
+    rows = connection.execute(
+        """
+        SELECT
+            CASE WHEN links.work_a = ? THEN links.work_b ELSE links.work_a END AS partner_id,
+            works.title AS partner_title,
+            works.format AS partner_format,
+            works.type AS partner_type
+        FROM manual_bundle_links AS links
+        JOIN works ON works.id =
+            CASE WHEN links.work_a = ? THEN links.work_b ELSE links.work_a END
+        WHERE links.work_a = ? OR links.work_b = ?
+        ORDER BY works.title
+        """,
+        (work_id, work_id, work_id, work_id),
+    ).fetchall()
+    connection.close()
+    return rows
+
+
 
 
 def get_all_relation_cards(relation_type=None, source_id=None):
