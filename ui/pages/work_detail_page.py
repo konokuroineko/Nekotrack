@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton,
+    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton, QWidgetAction,
     QInputDialog, QMessageBox, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 )
 
@@ -87,8 +87,8 @@ class WorkDetailPage(QWidget):
             QPushButton#bundleAction:hover {{ background:{COLORS['accent_hover']}; }}
             QPushButton#bundleRemove {{ background:{COLORS['surface_alt']}; color:{COLORS['secondary']}; border:1px solid {COLORS['border']}; border-radius:10px; padding:8px 12px; font-weight:700; }}
             QPushButton#bundleRemove:hover {{ background:{COLORS['surface_hover']}; border-color:{COLORS['border_hover']}; color:{COLORS['primary']}; }}
-            QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:0; font-size:30px; font-weight:900; padding:0; }}
-            QToolButton#detailMenu:hover {{ background:transparent; color:{COLORS['accent_hover']}; }}
+            QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:2px solid transparent; border-radius:{get('corner_radius') + 2}px; font-size:30px; font-weight:900; padding:0; }}
+            QToolButton#detailMenu:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
             QFrame#deleteOverlay {{ background:{COLORS['surface']}; border:1px solid {COLORS['border_hover']}; border-radius:18px; }}
             QLabel#deleteTitle {{ color:{COLORS['primary']}; font-size:19px; font-weight:850; }}
             QLabel#deleteMessage {{ color:{COLORS['secondary']}; font-size:12px; }}
@@ -232,8 +232,21 @@ class WorkDetailPage(QWidget):
             edit_action = menu.addAction("Edit Bundle Appearance…")
 
         menu.addSeparator()
-        delete_action = menu.addAction("Delete")
-        
+
+        delete_action = QWidgetAction(menu)
+        delete_button = QPushButton("Delete")
+        delete_button.setCursor(Qt.PointingHandCursor)
+        delete_button.setStyleSheet(
+            "QPushButton { background:#c94343; color:white; border:0; "
+            "border-radius:7px; padding:7px 12px; font-weight:850; } "
+            "QPushButton:hover { background:#e05252; }"
+        )
+        delete_button.clicked.connect(
+            lambda: (menu.hide(), self._show_delete_confirmation(group))
+        )
+        delete_action.setDefaultWidget(delete_button)
+        menu.addAction(delete_action)
+
         button = self.sender()
         selected = menu.exec(
             button.mapToGlobal(button.rect().bottomLeft())
@@ -245,8 +258,6 @@ class WorkDetailPage(QWidget):
             self.auto_bundle_requested.emit(group)
         elif edit_action is not None and selected == edit_action:
             self.bundle_edit_requested.emit(group)
-        elif selected == delete_action:
-            self._show_delete_confirmation(group)
 
     def _show_delete_confirmation(self, group):
         if self._delete_overlay is not None:
