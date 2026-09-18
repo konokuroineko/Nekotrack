@@ -198,9 +198,7 @@ class LibraryPage(QWidget):
         answer = QMessageBox.question(
             self,
             "Remove from Library",
-            f"Remove “{title}” from your Library?
-
-"
+            f"Remove “{title}” from your Library?\n\n"
             "Its cached AniList data will be kept.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
