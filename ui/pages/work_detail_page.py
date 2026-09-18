@@ -184,6 +184,7 @@ class WorkDetailPage(QWidget):
         groups = get_library_series()
         options = []
         current_group_ids = set()
+        used_labels = set()
 
         for group in groups:
             members = group.get("_series_members") if hasattr(group, "get") else None
@@ -213,9 +214,15 @@ class WorkDetailPage(QWidget):
                 continue
 
             summary = group.get("_bundle_summary") if hasattr(group, "get") else ""
-            label = str(group.get("title") or "Untitled")
+            base_label = str(group.get("title") or "Untitled")
             if summary:
-                label = f"{label}  —  {summary}"
+                base_label = f"{base_label}  —  {summary}"
+            label = base_label
+            suffix = 2
+            while label in used_labels:
+                label = f"{base_label} ({suffix})"
+                suffix += 1
+            used_labels.add(label)
             options.append((label, representative_id))
 
         if not options:
@@ -265,12 +272,21 @@ class WorkDetailPage(QWidget):
             )
             return
 
-        options = {
-            f"{row['partner_title'] or 'Untitled'}"
-            + (f"  —  {row['partner_format']}" if row["partner_format"] else ""): int(row["partner_id"])
-            for row in partners
-        }
-        labels = list(options)
+        options = []
+        used_labels = set()
+        for row in partners:
+            base_label = str(row["partner_title"] or "Untitled")
+            if row["partner_format"]:
+                base_label += f"  —  {row['partner_format']}"
+            label = base_label
+            suffix = 2
+            while label in used_labels:
+                label = f"{base_label} ({suffix})"
+                suffix += 1
+            used_labels.add(label)
+            options.append((label, int(row["partner_id"])))
+
+        labels = [label for label, _ in options]
         selected, ok = QInputDialog.getItem(
             self,
             "Remove manual link",
@@ -282,7 +298,7 @@ class WorkDetailPage(QWidget):
         if not ok:
             return
 
-        target_id = options[selected]
+        target_id = next(target_id for label, target_id in options if label == selected)
         if remove_manual_bundle_link(int(work_id), target_id):
             self.bundle_changed.emit()
             refreshed = get_work(int(work_id))
