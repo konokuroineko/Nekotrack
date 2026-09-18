@@ -6,6 +6,7 @@ DATABASE_NAME = "anime_tracker.db"
 def get_connection():
     connection = sqlite3.connect(DATABASE_NAME)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
     return connection
 
 
@@ -353,6 +354,14 @@ def add_manual_bundle_link(work_a, work_b):
         return False
 
     connection = get_connection()
+    existing_count = connection.execute(
+        "SELECT COUNT(*) FROM works WHERE id IN (?, ?)",
+        (work_a, work_b),
+    ).fetchone()[0]
+    if existing_count != 2:
+        connection.close()
+        return False
+
     connection.execute(
         "INSERT OR IGNORE INTO manual_bundle_links (work_a, work_b) VALUES (?, ?)",
         (work_a, work_b),
