@@ -221,44 +221,77 @@ class WorkDetailPage(QWidget):
             return
 
         menu = QMenu(self)
-        auto_action = menu.addAction("Auto Bundle")
+        menu.setStyleSheet(
+            f"""
+            QMenu {{
+                background: {COLORS['surface']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 12px;
+                padding: 6px;
+            }}
+            QPushButton#detailMenuItem {{
+                background: transparent;
+                color: {COLORS['secondary']};
+                border: 1px solid transparent;
+                border-radius: 9px;
+                padding: 8px 12px;
+                text-align: left;
+                font-weight: 700;
+            }}
+            QPushButton#detailMenuItem:hover {{
+                background: {COLORS['surface_hover']};
+                border-color: {COLORS['accent']};
+                color: {COLORS['primary']};
+            }}
+            QPushButton#detailDeleteItem {{
+                background: transparent;
+                color: #ef7474;
+                border: 1px solid transparent;
+                border-radius: 9px;
+                padding: 8px 12px;
+                text-align: left;
+                font-weight: 800;
+            }}
+            QPushButton#detailDeleteItem:hover {{
+                background: {COLORS['surface_hover']};
+                border-color: {COLORS['accent']};
+                color: #ff8585;
+            }}
+            """
+        )
+
+        def add_item(text, object_name, callback):
+            action = QWidgetAction(menu)
+            button = QPushButton(text)
+            button.setObjectName(object_name)
+            button.setCursor(Qt.PointingHandCursor)
+            button.clicked.connect(lambda: (menu.hide(), callback()))
+            action.setDefaultWidget(button)
+            menu.addAction(action)
+
+        add_item("Auto Bundle", "detailMenuItem", lambda: self.auto_bundle_requested.emit(group))
 
         try:
             has_bundle = len(group.get("_series_members") or []) > 1
         except (TypeError, ValueError):
             has_bundle = False
 
-        edit_action = None
         if has_bundle:
-            edit_action = menu.addAction("Edit Bundle Appearance…")
+            add_item(
+                "Edit Bundle Appearance…",
+                "detailMenuItem",
+                lambda: self.bundle_edit_requested.emit(group),
+            )
 
         menu.addSeparator()
-
-        delete_action = QWidgetAction(menu)
-        delete_button = QPushButton("Delete")
-        delete_button.setCursor(Qt.PointingHandCursor)
-        delete_button.setStyleSheet(
-            "QPushButton { background:#c94343; color:white; border:0; "
-            "border-radius:7px; padding:7px 12px; font-weight:850; } "
-            "QPushButton:hover { background:#e05252; }"
-        )
-        delete_button.clicked.connect(
-            lambda: (menu.hide(), self._show_delete_confirmation(group))
-        )
-        delete_action.setDefaultWidget(delete_button)
-        menu.addAction(delete_action)
+        add_item("Delete", "detailDeleteItem", lambda: self._show_delete_confirmation(group))
 
         button = self.sender()
-        selected = menu.exec(
+        menu.exec(
             button.mapToGlobal(button.rect().bottomLeft())
             if isinstance(button, QToolButton)
             else self.mapToGlobal(self.rect().center())
         )
-
-        if selected == auto_action:
-            self.auto_bundle_requested.emit(group)
-        elif edit_action is not None and selected == edit_action:
-            self.bundle_edit_requested.emit(group)
 
     def _show_delete_confirmation(self, group):
         if self._delete_overlay is not None:
