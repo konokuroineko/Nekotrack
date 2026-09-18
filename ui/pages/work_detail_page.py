@@ -14,6 +14,7 @@ from database import (
     remove_manual_bundle_link, save_cover_path, set_episode_progress, set_episode_watched,
 )
 from series import get_library_series
+from ui.preferences import get
 from ui.theme import COLORS, muted_label_stylesheet
 from ui.widgets.character_card import CharacterCard
 from ui.widgets.person_card import PersonCard
