@@ -84,8 +84,8 @@ class WorkDetailPage(QWidget):
             QPushButton#bundleAction:hover {{ background:{COLORS['accent_hover']}; }}
             QPushButton#bundleRemove {{ background:{COLORS['surface_alt']}; color:{COLORS['secondary']}; border:1px solid {COLORS['border']}; border-radius:10px; padding:8px 12px; font-weight:700; }}
             QPushButton#bundleRemove:hover {{ background:{COLORS['surface_hover']}; border-color:{COLORS['border_hover']}; color:{COLORS['primary']}; }}
-            QToolButton#detailMenu {{ background:rgba(0,0,0,145); color:white; border:1px solid rgba(255,255,255,50); border-radius:9px; font-size:22px; font-weight:900; padding:0; }}
-            QToolButton#detailMenu:hover {{ background:rgba(0,0,0,190); }}
+            QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:0; font-size:30px; font-weight:900; padding:0; }}
+            QToolButton#detailMenu:hover {{ background:transparent; color:{COLORS['accent_hover']}; }}
             QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {COLORS['border_hover']}; background: {COLORS['background_alt']}; }}
             QCheckBox::indicator:checked {{ background: {COLORS['accent']}; border-color: {COLORS['accent']}; }}
         """)
@@ -115,7 +115,7 @@ class WorkDetailPage(QWidget):
             menu_button = QToolButton()
             menu_button.setObjectName("detailMenu")
             menu_button.setText("⋮")
-            menu_button.setFixedSize(34, 34)
+            menu_button.setFixedSize(42, 42)
             menu_button.setCursor(Qt.PointingHandCursor)
             menu_button.clicked.connect(self._show_detail_menu)
             title_row.addWidget(menu_button, 0, Qt.AlignTop)
