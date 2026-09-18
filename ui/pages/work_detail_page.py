@@ -5,12 +5,13 @@ from PySide6.QtGui import QPixmap, QPainter, QPainterPath
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
+    QInputDialog, QMessageBox, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 )
 
 from database import (
-    get_characters, get_episodes, get_relations, get_staff, get_work,
-    save_cover_path, set_episode_progress, set_episode_watched,
+    add_manual_bundle_link, get_characters, get_episodes, get_library_series,
+    get_manual_bundle_partners, get_relations, get_staff, get_work,
+    remove_manual_bundle_link, save_cover_path, set_episode_progress, set_episode_watched,
 )
 from ui.theme import COLORS, muted_label_stylesheet
 from ui.widgets.character_card import CharacterCard
@@ -26,6 +27,7 @@ class WorkDetailPage(QWidget):
     person_selected = Signal(object)
     character_selected = Signal(object)
     relation_selected = Signal(object)
+    bundle_changed = Signal()
 
     _cover_cache = {}
     _cover_failures = set()
@@ -74,6 +76,10 @@ class WorkDetailPage(QWidget):
             QSpinBox#episodeCounter::up-button, QSpinBox#episodeCounter::down-button {{ width: 0; height: 0; border: 0; }}
             QPushButton#counterButton {{ background: {COLORS['surface_alt']}; color: {COLORS['primary']}; border: 1px solid {COLORS['border']}; border-radius: 10px; font-size: 18px; font-weight: 850; min-width: 38px; min-height: 38px; }}
             QPushButton#counterButton:hover {{ background: {COLORS['surface_hover']}; border-color: {COLORS['accent']}; }}
+            QPushButton#bundleAction {{ background:{COLORS['accent']}; color:#111318; border:0; border-radius:10px; padding:8px 12px; font-weight:800; }}
+            QPushButton#bundleAction:hover {{ background:{COLORS['accent_hover']}; }}
+            QPushButton#bundleRemove {{ background:{COLORS['surface_alt']}; color:{COLORS['secondary']}; border:1px solid {COLORS['border']}; border-radius:10px; padding:8px 12px; font-weight:700; }}
+            QPushButton#bundleRemove:hover {{ background:{COLORS['surface_hover']}; border-color:{COLORS['border_hover']}; color:{COLORS['primary']}; }}
             QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {COLORS['border_hover']}; background: {COLORS['background_alt']}; }}
             QCheckBox::indicator:checked {{ background: {COLORS['accent']}; border-color: {COLORS['accent']}; }}
         """)
@@ -105,6 +111,22 @@ class WorkDetailPage(QWidget):
             metadata = QLabel(meta); metadata.setStyleSheet(f"color:{COLORS['secondary']};font-size:13px;"); info.addWidget(metadata)
         score = self._value("score") or self._value("averageScore")
         score_label = QLabel(f"★  {score}%" if score else "—  No score"); score_label.setStyleSheet(f"color:{COLORS['accent']};font-size:18px;font-weight:800;"); info.addWidget(score_label)
+
+        bundle_row = QHBoxLayout()
+        bundle_row.setSpacing(8)
+        add_bundle = QPushButton("＋  Add to bundle")
+        add_bundle.setObjectName("bundleAction")
+        add_bundle.setCursor(Qt.PointingHandCursor)
+        add_bundle.clicked.connect(self._add_to_bundle)
+        remove_bundle = QPushButton("Remove manual link")
+        remove_bundle.setObjectName("bundleRemove")
+        remove_bundle.setCursor(Qt.PointingHandCursor)
+        remove_bundle.clicked.connect(self._remove_manual_bundle_link)
+        bundle_row.addWidget(add_bundle)
+        bundle_row.addWidget(remove_bundle)
+        bundle_row.addStretch()
+        info.addLayout(bundle_row)
+
         info.addSpacing(10)
         progress_title = QLabel("Episode progress"); progress_title.setStyleSheet(f"color:{COLORS['secondary']};font-size:12px;font-weight:800;"); info.addWidget(progress_title)
         progress_row = QHBoxLayout(); progress_row.setSpacing(8)
@@ -151,6 +173,121 @@ class WorkDetailPage(QWidget):
             else: self._cover_failures.add(cover_url)
         else: self._cover_failures.add(cover_url)
         if reply is not None: reply.deleteLater()
+
+    def _add_to_bundle(self):
+        work_id = self._value("id")
+        if work_id is None:
+            return
+
+        current_id = int(work_id)
+        groups = get_library_series()
+        options = []
+        current_group_ids = set()
+
+        for group in groups:
+            members = group.get("_series_members") if hasattr(group, "get") else None
+            members = members or []
+            member_ids = {
+                int(member["id"])
+                for member in members
+                if member.get("id") is not None
+            }
+            if current_id in member_ids:
+                current_group_ids = member_ids
+                break
+
+        for group in groups:
+            members = group.get("_series_members") if hasattr(group, "get") else None
+            members = members or []
+            member_ids = {
+                int(member["id"])
+                for member in members
+                if member.get("id") is not None
+            }
+            representative_id = group.get("id") if hasattr(group, "get") else None
+            if representative_id is None:
+                continue
+            representative_id = int(representative_id)
+            if current_id in member_ids or member_ids & current_group_ids:
+                continue
+
+            summary = group.get("_bundle_summary") if hasattr(group, "get") else ""
+            label = str(group.get("title") or "Untitled")
+            if summary:
+                label = f"{label}  —  {summary}"
+            options.append((label, representative_id))
+
+        if not options:
+            QMessageBox.information(
+                self,
+                "Add to bundle",
+                "There are no other library bundles to add this work to yet.",
+            )
+            return
+
+        labels = [label for label, _ in options]
+        selected, ok = QInputDialog.getItem(
+            self,
+            "Add to bundle",
+            "Choose the bundle:",
+            labels,
+            0,
+            False,
+        )
+        if not ok:
+            return
+
+        target_id = dict(options)[selected]
+        if add_manual_bundle_link(current_id, target_id):
+            self.bundle_changed.emit()
+            refreshed = get_work(current_id)
+            if refreshed:
+                self.set_work(refreshed)
+            QMessageBox.information(
+                self,
+                "Bundle updated",
+                "The work was added to the selected bundle.",
+            )
+
+
+    def _remove_manual_bundle_link(self):
+        work_id = self._value("id")
+        if work_id is None:
+            return
+
+        partners = get_manual_bundle_partners(int(work_id))
+        if not partners:
+            QMessageBox.information(
+                self,
+                "Remove manual link",
+                "This work has no manual bundle links.",
+            )
+            return
+
+        options = {
+            f"{row['partner_title'] or 'Untitled'}"
+            + (f"  —  {row['partner_format']}" if row["partner_format"] else ""): int(row["partner_id"])
+            for row in partners
+        }
+        labels = list(options)
+        selected, ok = QInputDialog.getItem(
+            self,
+            "Remove manual link",
+            "Choose the manual link to remove:",
+            labels,
+            0,
+            False,
+        )
+        if not ok:
+            return
+
+        target_id = options[selected]
+        if remove_manual_bundle_link(int(work_id), target_id):
+            self.bundle_changed.emit()
+            refreshed = get_work(int(work_id))
+            if refreshed:
+                self.set_work(refreshed)
+
 
     def _progress_counter_changed(self, value):
         if self.work is None: return
