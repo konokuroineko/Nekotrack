@@ -1,8 +1,8 @@
 from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, Signal, QEvent, QTimer, QPropertyAnimation, QEasingCurve, QThread
-from PySide6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLayout, QCheckBox, QFormLayout
+from PySide6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLayout, QCheckBox, QFormLayout, QMessageBox, QInputDialog
 
 from api import get_media_details
-from database import clear_bundle_override, get_all_library, get_bundle_override, get_connection, save_anime, save_bundle_override
+from database import clear_bundle_override, get_all_library, get_bundle_override, get_connection, remove_from_library, save_anime, save_bundle_override
 from series import get_library_series
 from ui.preferences import get
 from ui.theme import COLORS
@@ -137,6 +137,76 @@ class LibraryPage(QWidget):
         self._sync_failed_ids.update(attempted_ids - succeeded_ids)
         self._sync_thread = None; self._sync_worker = None
         self.refresh(retry_failed=False)
+
+    def _auto_bundle_item(self, group):
+        members = list(group.get("_series_members") or [])
+        if not members:
+            return
+
+        if self._sync_thread is not None and self._sync_thread.isRunning():
+            return
+
+        member_ids = [int(member["id"]) for member in members]
+        self._sync_thread = QThread(self)
+        self._sync_worker = RelationSyncWorker(member_ids)
+        self._sync_worker.moveToThread(self._sync_thread)
+        self._sync_thread.started.connect(self._sync_worker.run)
+        self._sync_worker.finished.connect(self._relation_sync_finished)
+        self._sync_worker.finished.connect(self._sync_thread.quit)
+        self._sync_thread.finished.connect(self._sync_worker.deleteLater)
+        self._sync_thread.finished.connect(self._sync_thread.deleteLater)
+        self._sync_thread.start()
+
+    def _remove_library_item(self, group):
+        members = list(group.get("_series_members") or [])
+        if not members:
+            work_id = group.get("id")
+            if work_id is None:
+                return
+            members = [group]
+
+        selected_id = int(members[0]["id"])
+        if len(members) > 1:
+            options = []
+            for member in members:
+                title = self._bundle_member_title(member)
+                fmt = member["format"] or ""
+                year = member["start_year"] or ""
+                meta = " · ".join(str(value) for value in (fmt, year) if value)
+                options.append(
+                    (f"{title}  —  {meta}" if meta else title, int(member["id"]))
+                )
+            labels = [label for label, _ in options]
+            selected, ok = QInputDialog.getItem(
+                self,
+                "Remove from Library",
+                "This card represents a bundle. Choose the entry to remove:",
+                labels,
+                0,
+                False,
+            )
+            if not ok:
+                return
+            selected_id = dict(options)[selected]
+
+        member = next(
+            (item for item in members if int(item["id"]) == selected_id),
+            None,
+        )
+        title = self._bundle_member_title(member) if member else "this entry"
+
+        answer = QMessageBox.question(
+            self,
+            "Remove from Library",
+            f"Remove “{title}” from your Library?
+
+"
+            "Its cached AniList data will be kept.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer == QMessageBox.Yes and remove_from_library(selected_id):
+            self.refresh()
 
     def _edit_bundle(self, group):
         members = list(group.get("_series_members") or [])
@@ -305,7 +375,7 @@ class LibraryPage(QWidget):
         if not self.anime_list:
             empty=QLabel("Nothing here yet\n\nAdd titles from Search to build your collection."); empty.setAlignment(Qt.AlignCenter); empty.setStyleSheet(f"color:{COLORS['muted']};font-size:15px;padding:100px;"); self.flow_layout.addWidget(empty); self._empty_label=empty; return
         for anime in self.anime_list:
-            card=WorkCard(anime,mode="library"); card.setSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed); card.clicked.connect(self.work_selected); card.bundle_edit_requested.connect(self._edit_bundle); self._cards.append(card); self.flow_layout.addWidget(card)
+            card=WorkCard(anime,mode="library"); card.setSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed); card.clicked.connect(self.work_selected); card.bundle_edit_requested.connect(self._edit_bundle); card.remove_requested.connect(self._remove_library_item); card.auto_bundle_requested.connect(self._auto_bundle_item); self._cards.append(card); self.flow_layout.addWidget(card)
         self.flow_layout.invalidate(); self.flow_layout.activate(); self._last_target_positions={id(card):QPoint(card.pos()) for card in self._cards}
     def _animate_to_positions(self,start_positions,target_positions):
         self._stop_animations(); animations=[]; duration=get("animation_speed")
