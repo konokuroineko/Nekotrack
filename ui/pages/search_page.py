@@ -3,7 +3,7 @@ from threading import Event
 from PySide6.QtCore import QObject, QThread, Qt, Signal, QTimer
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
-from api import search_anime
+from api import get_media_by_anilist_url, parse_anilist_url, search_anime
 from series import group_media_results
 from ui.preferences import get
 from ui.theme import COLORS
@@ -100,6 +100,23 @@ class SearchWorker(QObject):
 
     def run(self):
         try:
+            if self.page == 1 and parse_anilist_url(self.search_text) is not None:
+                media = get_media_by_anilist_url(
+                    self.search_text,
+                    include_relations=self.include_relations,
+                )
+                self.finished.emit(
+                    {
+                        "pageInfo": {
+                            "currentPage": 1,
+                            "lastPage": 1,
+                            "hasNextPage": False,
+                        },
+                        "media": [media] if media else [],
+                    }
+                )
+                return
+
             data = search_anime(
                 self.search_text,
                 self.page,
@@ -200,7 +217,7 @@ class SearchPage(QWidget):
         bar = QHBoxLayout()
         bar.setSpacing(8)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Title, character, franchise... (optional)")
+        self.search.setPlaceholderText("Title, character, franchise, or AniList link...")
         self.search.setMinimumHeight(46)
         self.search.setClearButtonEnabled(True)
         self.search_button = QPushButton("Search")
