@@ -1,7 +1,7 @@
 from threading import Event
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, QTimer
-from PySide6.QtWidgets import QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from api import search_anime
 from series import group_media_results
@@ -241,6 +241,11 @@ class SearchPage(QWidget):
         self.tag_filter.setPlaceholderText("e.g. Isekai, Reincarnation")
         self.tag_filter.setFixedHeight(38)
 
+        self.fast_search = QCheckBox("Fast Search")
+        self.fast_search.setToolTip("Skip series and bundle enrichment. Results are shown directly from AniList.")
+        self.fast_search.setCursor(Qt.PointingHandCursor)
+        self.fast_search.stateChanged.connect(self.fast_search_changed)
+
         fields = [
             ("Type", self.media_filter, 0, 0),
             ("Format", self.format_filter, 0, 1),
@@ -258,9 +263,11 @@ class SearchPage(QWidget):
             filters_layout.addWidget(label, row * 2, col)
             filters_layout.addWidget(widget, row * 2 + 1, col)
 
+        filters_layout.addWidget(self.fast_search, 6, 0, 1, 2, Qt.AlignLeft)
+
         self.clear_filters_button = QPushButton("Clear filters")
         self.clear_filters_button.setFixedHeight(38)
-        filters_layout.addWidget(self.clear_filters_button, 6, 0, 1, 4, Qt.AlignLeft)
+        filters_layout.addWidget(self.clear_filters_button, 6, 2, 1, 2, Qt.AlignLeft)
         panel.addWidget(self.filters_panel)
         root.addWidget(search_panel)
 
@@ -368,6 +375,12 @@ class SearchPage(QWidget):
             "tag": self.tag_filter.text().strip() or None,
         }
 
+    def fast_search_changed(self, _state):
+        # Switching modes on an existing result set should immediately rebuild
+        # the results using the selected search mode.
+        if self.has_searched and not self.is_loading:
+            self.search_clicked()
+
     def clear_filters(self):
         self.media_filter.setCurrentIndex(0)
         self._refresh_format_filter()
@@ -464,6 +477,20 @@ class SearchPage(QWidget):
         # what determines the real series/season bundle, so rendering this
         # search payload first can briefly show incorrect counts such as
         # "2 seasons" for Demon Slayer before enrichment catches up.
+        if self.fast_search.isChecked():
+            # Fast Search deliberately bypasses the entire series/bundle
+            # enrichment pipeline and renders AniList's raw results directly.
+            if self.current_page == 1:
+                self._clear_results()
+                self.displayed_items = []
+            for item in new_results:
+                self.displayed_items.append(item)
+                self._replace_first_skeleton(item)
+            self._update_results_title()
+            self.results_scroll.reset_trigger()
+            QTimer.singleShot(0, self.results_scroll._check)
+            return
+
         self.pending_items = []
         self.pending_batch_active = False
         self.displayed_items = []
@@ -559,6 +586,8 @@ class SearchPage(QWidget):
         self._reflow_results()
 
     def _start_enrichment(self):
+        if self.fast_search.isChecked():
+            return
         if not self.raw_results:
             return
 
@@ -656,6 +685,8 @@ class SearchPage(QWidget):
             self.results_title.setText("Loading…")
         elif self.enrichment_pending:
             self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · refining")
+        elif self.fast_search.isChecked():
+            self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · fast")
         else:
             self.results_title.setText(f"{count} result{'s' if count != 1 else ''}")
 
