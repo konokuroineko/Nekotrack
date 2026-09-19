@@ -1,6 +1,6 @@
 import threading
 
-from api import get_media_details, get_media_episodes
+from api import get_episode_data, get_media_details, get_media_episodes
 from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
@@ -53,10 +53,6 @@ class LibraryImportWorker(QObject):
             save_characters(
                 self.work_id,
                 (details.get("characters") or {}).get("edges"),
-            )
-            save_episodes(
-                self.work_id,
-                details.get("streamingEpisodes"),
             )
             save_staff(
                 self.work_id,
@@ -274,7 +270,6 @@ class MainWindow(QMainWindow):
                     save_anime(details)
                     save_characters(work_id, (details.get("characters") or {}).get("edges"))
                     save_staff(work_id, (details.get("staff") or {}).get("edges"))
-                    save_episodes(work_id, details.get("streamingEpisodes"))
                     work = get_work(work_id) or work
             except Exception:
                 pass
@@ -356,7 +351,6 @@ class MainWindow(QMainWindow):
             save_anime(details)
             save_characters(work["id"], (details.get("characters") or {}).get("edges"))
             save_staff(work["id"], (details.get("staff") or {}).get("edges"))
-            save_episodes(work["id"], details.get("streamingEpisodes"))
             self.show_work_details(get_work(work["id"]) or work)
         except Exception:
             self.show_work_details(work)
