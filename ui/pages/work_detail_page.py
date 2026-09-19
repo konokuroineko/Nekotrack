@@ -14,7 +14,7 @@ from database import (
     add_manual_bundle_link, add_to_library, delete_work_data, get_bundle_characters,
     get_bundle_relations, get_bundle_staff, get_connection, get_episodes, get_work,
     save_anime, save_characters, save_cover_path, save_episodes, save_staff,
-    set_episode_progress, set_episode_watched,
+    save_work_mal_id, set_episode_progress, set_episode_watched,
 )
 from series import get_library_series
 from ui.preferences import get
@@ -38,10 +38,191 @@ class EpisodeSyncWorker(QObject):
 
     def run(self):
         try:
-            episodes = get_episode_data(self.work_id)
-            self.finished.emit(self.work_id, episodes)
+            payload = get_episode_data(self.work_id)
+            self.finished.emit(self.work_id, payload)
         except Exception as error:
             self.error.emit(self.work_id, str(error))
+
+
+class EpisodeArtwork(QLabel):
+    _cache = {}
+    _failures = set()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(180, 102)
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet(
+            f"background:{COLORS['background_alt']};border-radius:10px;"
+            f"color:{COLORS['muted']};font-size:11px;font-weight:800;"
+        )
+        self._manager = QNetworkAccessManager(self)
+        self._reply = None
+        self._fallback_pixmap = QPixmap()
+
+    def set_fallback_pixmap(self, pixmap):
+        self._fallback_pixmap = pixmap if pixmap is not None else QPixmap()
+
+    def load(self, url):
+        url = str(url or "").strip()
+        if not url:
+            self._show_fallback()
+            return
+
+        cached = self._cache.get(url)
+        if cached is not None and not cached.isNull():
+            self.setText("")
+            self.setPixmap(self._cropped(cached))
+            return
+
+        if url in self._failures:
+            self._show_fallback()
+            return
+
+        self._reply = self._manager.get(QNetworkRequest(QUrl(url)))
+        self._reply.finished.connect(lambda: self._finished(url))
+
+    def _finished(self, url):
+        reply = self._reply
+        self._reply = None
+
+        if reply is not None and reply.error() == reply.NetworkError.NoError:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(reply.readAll()):
+                self._cache[url] = pixmap
+                self.setText("")
+                self.setPixmap(self._cropped(pixmap))
+            else:
+                self._failures.add(url)
+                self._show_fallback()
+        else:
+            self._failures.add(url)
+            self._show_fallback()
+
+        if reply is not None:
+            reply.deleteLater()
+
+    def _show_fallback(self):
+        if not self._fallback_pixmap.isNull():
+            self.setText("")
+            self.setPixmap(self._cropped(self._fallback_pixmap))
+        else:
+            self.setPixmap(QPixmap())
+            self.setText("NO IMAGE")
+
+    def _cropped(self, pixmap):
+        size = self.size()
+        scaled = pixmap.scaled(
+            size,
+            Qt.KeepAspectRatioByExpanding,
+            Qt.SmoothTransformation,
+        )
+        x = max(0, (scaled.width() - size.width()) // 2)
+        y = max(0, (scaled.height() - size.height()) // 2)
+        cropped = scaled.copy(x, y, size.width(), size.height())
+
+        result = QPixmap(size)
+        result.fill(Qt.transparent)
+
+        painter = QPainter(result)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        rect = result.rect().adjusted(1, 1, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 10, 10)
+
+        painter.save()
+        painter.setClipPath(path)
+        painter.drawPixmap(rect.topLeft(), cropped)
+        painter.restore()
+        painter.end()
+        return result
+
+
+class EpisodeCard(QFrame):
+    watched_changed = Signal(int, bool)
+
+    def __init__(self, episode, fallback_pixmap=None, parent=None):
+        super().__init__(parent)
+        self.episode = episode
+        self.setObjectName("episodeCard")
+        self.setMinimumHeight(126)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 12, 14, 12)
+        layout.setSpacing(14)
+
+        artwork = EpisodeArtwork()
+        if fallback_pixmap is not None:
+            artwork.set_fallback_pixmap(fallback_pixmap)
+        artwork.load(episode["thumbnail_url"])
+        layout.addWidget(artwork, 0, Qt.AlignTop)
+
+        body = QVBoxLayout()
+        body.setSpacing(4)
+
+        top = QHBoxLayout()
+        number = QLabel(f"EPISODE {int(episode['episode_number']):02d}")
+        number.setStyleSheet(
+            f"color:{COLORS['accent']};font-size:11px;font-weight:900;"
+            "letter-spacing:0.6px;"
+        )
+        top.addWidget(number)
+
+        date = QLabel(self._format_date(episode["air_date"]))
+        date.setStyleSheet(f"color:{COLORS['muted']};font-size:11px;")
+        top.addStretch()
+        if date.text():
+            top.addWidget(date)
+        body.addLayout(top)
+
+        title = QLabel(episode["title"] or f"Episode {episode['episode_number']}")
+        title.setWordWrap(True)
+        title.setStyleSheet(
+            f"color:{COLORS['primary']};font-size:15px;font-weight:800;"
+        )
+        body.addWidget(title)
+
+        description_text = str(episode["description"] or "").strip()
+        description = QLabel(
+            description_text if description_text else "Synopsis unavailable."
+        )
+        description.setWordWrap(True)
+        description.setTextFormat(Qt.PlainText)
+        description.setMaximumHeight(42)
+        description.setStyleSheet(
+            f"color:{COLORS['secondary']};font-size:12px;"
+        )
+        body.addWidget(description, 1)
+
+        layout.addLayout(body, 1)
+
+        watched = QCheckBox()
+        watched.setChecked(bool(episode["watched"]))
+        watched.setCursor(Qt.PointingHandCursor)
+        watched.toggled.connect(
+            lambda checked, n=int(episode["episode_number"]):
+                self.watched_changed.emit(n, checked)
+        )
+        layout.addWidget(watched, 0, Qt.AlignTop)
+
+    @staticmethod
+    def _format_date(value):
+        text = str(value or "").strip()
+        if len(text) == 10 and text[4] == "-" and text[7] == "-":
+            year, month, day = text.split("-")
+            months = (
+                "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+            )
+            try:
+                return f"{months[int(month) - 1]} {int(day)}, {year}"
+            except (ValueError, IndexError):
+                pass
+        return text
+
 
 
 class StaffFlowLayout(QLayout):
@@ -291,6 +472,7 @@ class WorkDetailPage(QWidget):
         self._episode_sync_thread = None
         self._episode_sync_worker = None
         self._episode_sync_work_id = None
+        self._episode_sync_completed = set()
         self._cover_manager = QNetworkAccessManager(self)
         self._cover_reply = None
         self._delete_overlay = None
@@ -927,26 +1109,58 @@ class WorkDetailPage(QWidget):
 
         lay.addLayout(header)
 
+        selected_work = get_work(selected_id) if selected_id is not None else None
+        fallback_pixmap = QPixmap()
+
+        if selected_work is not None:
+            cover_path = selected_work["cover_path"]
+            cover_url = selected_work["cover_url"]
+            if cover_path:
+                fallback_pixmap.load(str(cover_path))
+            if fallback_pixmap.isNull() and cover_url:
+                cached = EpisodeArtwork._cache.get(str(cover_url))
+                if cached is not None and not cached.isNull():
+                    fallback_pixmap = cached
+
+        needs_metadata = any(
+            not str(ep["description"] or "").strip()
+            or not str(ep["thumbnail_url"] or "").strip()
+            or not str(ep["title"] or "").strip()
+            or str(ep["title"] or "").strip() == f"Episode {ep['episode_number']}"
+            for ep in episodes
+        )
+
+        if selected_id is not None and (
+            (
+                not episodes
+                and selected_work is not None
+                and int(selected_work["episodes"] or 0) > 0
+            )
+            or (
+                episodes
+                and needs_metadata
+                and selected_id not in self._episode_sync_completed
+            )
+        ):
+            self._start_episode_sync(selected_id)
+
         if not episodes:
-            work = get_work(selected_id) if selected_id is not None else None
-            expected_total = int(work["episodes"] or 0) if work is not None else 0
-
-            if expected_total > 0 and selected_id is not None:
-                x = QLabel("Loading episode data…")
-                x.setStyleSheet(muted_label_stylesheet())
-                lay.addWidget(x)
-                self._start_episode_sync(selected_id)
-            else:
-                x = QLabel(
-                    "No episode data is available for this season."
-                )
-                x.setStyleSheet(muted_label_stylesheet())
-                x.setWordWrap(True)
-                lay.addWidget(x)
-
+            message = (
+                "Loading episode data…"
+                if selected_work is not None
+                and int(selected_work["episodes"] or 0) > 0
+                else "No episode data is available for this season."
+            )
+            x = QLabel(message)
+            x.setStyleSheet(muted_label_stylesheet())
+            x.setWordWrap(True)
+            lay.addWidget(x)
             return frame
 
         for ep in episodes:
+            card = EpisodeCard(ep, fallback_pixmap=fallback_pixmap)
+            card.watched_changed.connect(self._episode_toggled)
+            lay.addWidget(card)
             row = QFrame()
             row.setObjectName("episode")
             r = QHBoxLayout(row)
@@ -1015,6 +1229,9 @@ class WorkDetailPage(QWidget):
     def _start_episode_sync(self, work_id):
         work_id = int(work_id)
 
+        if work_id in self._episode_sync_completed:
+            return
+
         if self._episode_sync_thread is not None and self._episode_sync_thread.isRunning():
             if self._episode_sync_work_id == work_id:
                 return
@@ -1036,9 +1253,16 @@ class WorkDetailPage(QWidget):
         thread.finished.connect(thread.deleteLater)
         thread.start()
 
-    def _episode_sync_finished(self, work_id, episodes):
+    def _episode_sync_finished(self, work_id, payload):
         work_id = int(work_id)
+        payload = payload or {}
+        episodes = payload.get("episodes") or []
+        mal_id = payload.get("mal_id")
+
+        if mal_id is not None:
+            save_work_mal_id(work_id, mal_id)
         save_episodes(work_id, episodes)
+        self._episode_sync_completed.add(work_id)
 
         if self._episode_sync_work_id == work_id:
             self._episode_sync_thread = None
@@ -1050,6 +1274,7 @@ class WorkDetailPage(QWidget):
 
     def _episode_sync_error(self, work_id, error):
         work_id = int(work_id)
+        self._episode_sync_completed.add(work_id)
 
         if self._episode_sync_work_id == work_id:
             self._episode_sync_thread = None
