@@ -1,10 +1,10 @@
 import threading
 
-from api import get_media_details
+from api import get_media_details, get_media_episodes
 from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
-from database import add_to_library, characters_are_loaded, get_work, initialize_database, save_anime, save_characters, save_cover_path, save_episodes, save_staff
+from database import add_to_library, characters_are_loaded, get_episodes, get_work, initialize_database, save_anime, save_characters, save_cover_path, save_episodes, save_staff
 from image_cache import download_cover
 from ui.navigation import NavigationController
 from ui.preferences import get
@@ -67,6 +67,24 @@ class LibraryImportWorker(QObject):
             self.error.emit(self.work_id, str(error))
 
 
+
+class EpisodeImportWorker(QObject):
+    finished = Signal(int, object)
+    error = Signal(int, str)
+
+    def __init__(self, work_id):
+        super().__init__()
+        self.work_id = int(work_id)
+
+    def run(self):
+        try:
+            episodes = get_media_episodes(self.work_id)
+            save_episodes(self.work_id, episodes)
+            self.finished.emit(self.work_id, episodes)
+        except Exception as error:
+            self.error.emit(self.work_id, str(error))
+
+
 class NavigationButton(QPushButton):
     def __init__(self, icon_text, label):
         super().__init__()
@@ -87,6 +105,8 @@ class MainWindow(QMainWindow):
         self.image_threads = []
         self.library_import_threads = []
         self.library_import_workers = []
+        self.episode_import_threads = []
+        self.episode_import_workers = []
         self.navigation_buttons = {}
         self._settings_rebuild_pending = False
         self.setup_ui()
@@ -261,6 +281,67 @@ class MainWindow(QMainWindow):
 
         self.work_detail_page.set_work(work)
         self.navigation.show("work_detail")
+        self._sync_missing_bundle_episodes(work)
+
+
+    def _sync_missing_bundle_episodes(self, work):
+        members = list(work.get("_series_members") or []) if hasattr(work, "get") else []
+        if not members:
+            members = [work]
+
+        for member in members:
+            try:
+                work_id = int(member["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+
+            if get_episodes(work_id):
+                continue
+
+            worker = EpisodeImportWorker(work_id)
+            thread = QThread(self)
+            worker.moveToThread(thread)
+
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._episode_import_finished)
+            worker.error.connect(self._episode_import_error)
+            worker.finished.connect(thread.quit)
+            worker.error.connect(thread.quit)
+            thread.finished.connect(worker.deleteLater)
+            thread.finished.connect(
+                lambda t=thread, w=worker:
+                    self._episode_import_thread_finished(t, w)
+            )
+
+            self.episode_import_threads.append(thread)
+            self.episode_import_workers.append(worker)
+            thread.start()
+
+    def _episode_import_finished(self, work_id, episodes):
+        current = self.work_detail_page.work
+        if current is None:
+            return
+
+        members = list(current.get("_series_members") or []) if hasattr(current, "get") else []
+        ids = {int(member["id"]) for member in members if member.get("id") is not None}
+        current_id = current.get("id") if hasattr(current, "get") else None
+
+        if current_id is not None:
+            ids.add(int(current_id))
+
+        if int(work_id) in ids:
+            self.work_detail_page._replace_episode_section()
+
+    def _episode_import_error(self, work_id, message):
+        return
+
+    def _episode_import_thread_finished(self, thread, worker):
+        if thread in self.episode_import_threads:
+            self.episode_import_threads.remove(thread)
+        if worker in self.episode_import_workers:
+            self.episode_import_workers.remove(worker)
+        thread.deleteLater()
+
 
     def show_search_work(self, work):
         try:
