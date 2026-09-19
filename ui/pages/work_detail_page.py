@@ -823,7 +823,7 @@ class WorkDetailPage(QWidget):
         )
         lay.addWidget(header)
 
-        if title == "Staff":
+        if title in {"Staff", "Relations"}:
             container = QWidget()
             flow = StaffFlowLayout(container, h_spacing=8, v_spacing=12)
 
@@ -860,7 +860,7 @@ class WorkDetailPage(QWidget):
         return frame
 
     def _relations(self):
-        return self._grid_section("Relations", get_relations(self._value("id")), RelationCard, self.relation_selected, 3)
+        return self._grid_section("Relations", get_relations(self._value("id")), RelationCard, self.relation_selected, 6)
 
     @staticmethod
     def _member_title(member):
