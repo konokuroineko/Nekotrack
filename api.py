@@ -494,12 +494,12 @@ def get_media_episodes(media_id):
 
 
 def get_episode_data(media_id, mal_id=None):
-    """Fetch episode metadata, preferring Kitsu's per-episode dataset."""
-    resolved_mal_id = mal_id
+    """Fetch complete episode metadata for one exact anime entry."""
     anilist_query = """
     query ($id: Int) {
         Media(id: $id) {
             idMal
+            title { romaji english native }
             airingSchedule(page: 1, perPage: 50) {
                 nodes {
                     airingAt
@@ -515,15 +515,15 @@ def get_episode_data(media_id, mal_id=None):
     }
     """
 
+    media = {}
+    resolved_mal_id = mal_id
+
     try:
-        data = anilist_request(
-            anilist_query,
-            {"id": int(media_id)},
-        )
+        data = anilist_request(anilist_query, {"id": int(media_id)})
         media = data.get("Media") or {}
         resolved_mal_id = resolved_mal_id or media.get("idMal")
     except Exception:
-        media = {}
+        pass
 
     def _kitsu_episodes():
         if not resolved_mal_id:
@@ -547,29 +547,28 @@ def get_episode_data(media_id, mal_id=None):
         mapping_response.raise_for_status()
         mapping_payload = mapping_response.json() or {}
 
-        included = mapping_payload.get("included") or []
         kitsu_id = None
-        for item in included:
+        for item in mapping_payload.get("included") or []:
             if item.get("type") == "anime" and item.get("id"):
                 kitsu_id = item["id"]
                 break
 
         if kitsu_id is None:
-            mapping_rows = mapping_payload.get("data") or []
-            if mapping_rows:
-                relationship = (
-                    mapping_rows[0].get("relationships", {}).get("item", {})
+            rows = mapping_payload.get("data") or []
+            if rows:
+                linked = (
+                    rows[0]
+                    .get("relationships", {})
+                    .get("item", {})
+                    .get("data")
                 )
-                kitsu_id = (
-                    relationship.get("data", {}).get("id")
-                    if relationship.get("data")
-                    else None
-                )
+                if linked:
+                    kitsu_id = linked.get("id")
 
         if kitsu_id is None:
             return []
 
-        episodes = []
+        result = []
         offset = 0
         limit = 20
 
@@ -590,14 +589,14 @@ def get_episode_data(media_id, mal_id=None):
                 break
 
             for row in rows:
-                attributes = row.get("attributes") or {}
-                number = attributes.get("number")
+                attrs = row.get("attributes") or {}
+                number = attrs.get("number")
                 if number is None:
-                    number = attributes.get("relativeNumber")
+                    number = attrs.get("relativeNumber")
                 if number is None:
                     continue
 
-                thumbnail = attributes.get("thumbnail")
+                thumbnail = attrs.get("thumbnail")
                 if isinstance(thumbnail, dict):
                     thumbnail = (
                         thumbnail.get("original")
@@ -606,20 +605,20 @@ def get_episode_data(media_id, mal_id=None):
                         or thumbnail.get("small")
                     )
 
-                episodes.append({
+                result.append({
                     "episodeNumber": int(number),
                     "title": (
-                        attributes.get("canonicalTitle")
-                        or attributes.get("title_en_us")
-                        or attributes.get("title_en_jp")
-                        or attributes.get("title_ja_jp")
+                        attrs.get("canonicalTitle")
+                        or attrs.get("title_en_us")
+                        or attrs.get("title_en_jp")
+                        or attrs.get("title_ja_jp")
                         or f"Episode {number}"
                     ),
                     "description": (
-                        attributes.get("description")
-                        or attributes.get("synopsis")
+                        attrs.get("description")
+                        or attrs.get("synopsis")
                     ),
-                    "airdate": attributes.get("airdate"),
+                    "airdate": attrs.get("airdate"),
                     "thumbnail": thumbnail,
                 })
 
@@ -628,7 +627,7 @@ def get_episode_data(media_id, mal_id=None):
             offset += limit
 
         unique = {}
-        for episode in episodes:
+        for episode in result:
             unique[int(episode["episodeNumber"])] = episode
         return [unique[number] for number in sorted(unique)]
 
@@ -647,7 +646,6 @@ def get_episode_data(media_id, mal_id=None):
                 )
                 response.raise_for_status()
                 payload = response.json() or {}
-
                 for row in payload.get("data") or []:
                     number = row.get("mal_id")
                     if number is not None:
@@ -660,32 +658,28 @@ def get_episode_data(media_id, mal_id=None):
         except requests.RequestException:
             return []
 
-        result = []
-        for number in sorted(rows):
-            row = rows[number]
-            result.append({
+        return [
+            {
                 "episodeNumber": number,
                 "title": row.get("title") or f"Episode {number}",
                 "description": row.get("synopsis"),
                 "airdate": str(row.get("aired") or "")[:10] or None,
                 "thumbnail": None,
-            })
-        return result
+            }
+            for number, row in sorted(rows.items())
+        ]
 
     try:
         episodes = _kitsu_episodes()
     except requests.RequestException:
         episodes = []
 
-    if episodes:
-        return {
-            "mal_id": resolved_mal_id,
-            "episodes": episodes,
-        }
+    if not episodes:
+        episodes = _jikan_fallback()
 
     return {
         "mal_id": resolved_mal_id,
-        "episodes": _jikan_fallback(),
+        "episodes": episodes,
     }
 
 
