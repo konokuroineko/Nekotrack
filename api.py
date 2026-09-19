@@ -494,12 +494,13 @@ def get_media_episodes(media_id):
 
 
 def get_episode_data(media_id, mal_id=None):
-    """Fetch episode dates, titles, thumbnails and synopses for one anime."""
+    """Fetch episode metadata, preferring Kitsu's per-episode dataset."""
+    resolved_mal_id = mal_id
     anilist_query = """
-    query ($id: Int, $page: Int) {
+    query ($id: Int) {
         Media(id: $id) {
             idMal
-            airingSchedule(page: $page, perPage: 50) {
+            airingSchedule(page: 1, perPage: 50) {
                 nodes {
                     airingAt
                     episode
@@ -510,47 +511,132 @@ def get_episode_data(media_id, mal_id=None):
                     hasNextPage
                 }
             }
-            streamingEpisodes {
-                title
-                thumbnail
-                url
-                site
-            }
         }
     }
     """
 
-    page = 1
-    schedule = []
-    stream_rows = []
-    media = {}
-
-    # AniList supplies the schedule and any legal streaming thumbnails.
-    while True:
+    try:
         data = anilist_request(
             anilist_query,
-            {"id": int(media_id), "page": page},
+            {"id": int(media_id)},
         )
         media = data.get("Media") or {}
-        connection = media.get("airingSchedule") or {}
-        schedule.extend(connection.get("nodes") or [])
+        resolved_mal_id = resolved_mal_id or media.get("idMal")
+    except Exception:
+        media = {}
 
-        if page == 1:
-            stream_rows = list(media.get("streamingEpisodes") or [])
+    def _kitsu_episodes():
+        if not resolved_mal_id:
+            return []
 
-        page_info = connection.get("pageInfo") or {}
-        if not page_info.get("hasNextPage"):
-            break
-        page += 1
+        headers = {
+            "Accept": "application/vnd.api+json",
+            "Content-Type": "application/vnd.api+json",
+        }
 
-    resolved_mal_id = mal_id or media.get("idMal")
+        mapping_response = requests.get(
+            "https://kitsu.io/api/edge/mappings",
+            params={
+                "filter[externalSite]": "myanimelist/anime",
+                "filter[externalId]": str(int(resolved_mal_id)),
+                "include": "item",
+            },
+            headers=headers,
+            timeout=20,
+        )
+        mapping_response.raise_for_status()
+        mapping_payload = mapping_response.json() or {}
 
-    jikan_by_number = {}
-    video_by_number = {}
+        included = mapping_payload.get("included") or []
+        kitsu_id = None
+        for item in included:
+            if item.get("type") == "anime" and item.get("id"):
+                kitsu_id = item["id"]
+                break
 
-    # Keep episode-list data and video thumbnails independent. A videos
-    # endpoint failure must never erase the episode/synopsis data.
-    if resolved_mal_id:
+        if kitsu_id is None:
+            mapping_rows = mapping_payload.get("data") or []
+            if mapping_rows:
+                relationship = (
+                    mapping_rows[0].get("relationships", {}).get("item", {})
+                )
+                kitsu_id = (
+                    relationship.get("data", {}).get("id")
+                    if relationship.get("data")
+                    else None
+                )
+
+        if kitsu_id is None:
+            return []
+
+        episodes = []
+        offset = 0
+        limit = 20
+
+        while True:
+            response = requests.get(
+                f"https://kitsu.io/api/edge/anime/{kitsu_id}/episodes",
+                params={
+                    "page[limit]": limit,
+                    "page[offset]": offset,
+                },
+                headers=headers,
+                timeout=20,
+            )
+            response.raise_for_status()
+            payload = response.json() or {}
+            rows = payload.get("data") or []
+            if not rows:
+                break
+
+            for row in rows:
+                attributes = row.get("attributes") or {}
+                number = attributes.get("number")
+                if number is None:
+                    number = attributes.get("relativeNumber")
+                if number is None:
+                    continue
+
+                thumbnail = attributes.get("thumbnail")
+                if isinstance(thumbnail, dict):
+                    thumbnail = (
+                        thumbnail.get("original")
+                        or thumbnail.get("large")
+                        or thumbnail.get("medium")
+                        or thumbnail.get("small")
+                    )
+
+                episodes.append({
+                    "episodeNumber": int(number),
+                    "title": (
+                        attributes.get("canonicalTitle")
+                        or attributes.get("title_en_us")
+                        or attributes.get("title_en_jp")
+                        or attributes.get("title_ja_jp")
+                        or f"Episode {number}"
+                    ),
+                    "description": (
+                        attributes.get("description")
+                        or attributes.get("synopsis")
+                    ),
+                    "airdate": attributes.get("airdate"),
+                    "thumbnail": thumbnail,
+                })
+
+            if len(rows) < limit:
+                break
+            offset += limit
+
+        unique = {}
+        for episode in episodes:
+            unique[int(episode["episodeNumber"])] = episode
+        return [unique[number] for number in sorted(unique)]
+
+    def _jikan_fallback():
+        if not resolved_mal_id:
+            return []
+
+        rows = {}
         try:
             page = 1
             while True:
@@ -565,136 +651,43 @@ def get_episode_data(media_id, mal_id=None):
                 for row in payload.get("data") or []:
                     number = row.get("mal_id")
                     if number is not None:
-                        jikan_by_number[int(number)] = row
+                        rows[int(number)] = row
 
                 pagination = payload.get("pagination") or {}
                 if not pagination.get("has_next_page"):
                     break
                 page += 1
         except requests.RequestException:
-            jikan_by_number = {}
+            return []
 
-        try:
-            page = 1
-            while True:
-                response = requests.get(
-                    f"https://api.jikan.moe/v4/anime/{int(resolved_mal_id)}/videos/episodes",
-                    params={"page": page},
-                    timeout=20,
-                )
-                response.raise_for_status()
-                payload = response.json() or {}
+        result = []
+        for number in sorted(rows):
+            row = rows[number]
+            result.append({
+                "episodeNumber": number,
+                "title": row.get("title") or f"Episode {number}",
+                "description": row.get("synopsis"),
+                "airdate": str(row.get("aired") or "")[:10] or None,
+                "thumbnail": None,
+            })
+        return result
 
-                for row in payload.get("data") or []:
-                    number = row.get("episode")
-                    if number is not None:
-                        try:
-                            video_by_number[int(str(number).strip())] = row
-                        except ValueError:
-                            continue
+    try:
+        episodes = _kitsu_episodes()
+    except requests.RequestException:
+        episodes = []
 
-                pagination = payload.get("pagination") or {}
-                if not pagination.get("has_next_page"):
-                    break
-                page += 1
-        except requests.RequestException:
-            video_by_number = {}
-
-    def _date_from_timestamp(value):
-        if value is None:
-            return None
-        try:
-            return __import__("datetime").datetime.fromtimestamp(
-                int(value)
-            ).strftime("%Y-%m-%d")
-        except (TypeError, ValueError, OverflowError, OSError):
-            return None
-
-    schedule_by_number = {
-        int(node["episode"]): node
-        for node in schedule
-        if node.get("episode") is not None
-    }
-
-    # AniList streamingEpisodes has no dedicated episode-number field.
-    # Parse one only when the title or URL explicitly identifies it.
-    stream_by_number = {}
-    for stream in stream_rows:
-        if not isinstance(stream, dict):
-            continue
-        haystack = " ".join(
-            str(stream.get(key) or "")
-            for key in ("title", "url")
-        )
-        match = re.search(
-            r"\b(?:episode|ep)\s*#?\s*(\d+)\b",
-            haystack,
-            re.IGNORECASE,
-        )
-        if match:
-            stream_by_number[int(match.group(1))] = stream
-
-    all_numbers = set(schedule_by_number)
-    all_numbers.update(jikan_by_number)
-
-    # Jikan's list endpoint does not include synopsis text. Fetch the full
-    # record for each episode so the card gets the actual episode synopsis.
-    if resolved_mal_id and jikan_by_number:
-        missing_synopsis = [
-            number
-            for number, row in jikan_by_number.items()
-            if not row.get("synopsis")
-        ]
-        for number in missing_synopsis:
-            try:
-                response = requests.get(
-                    f"https://api.jikan.moe/v4/anime/{int(resolved_mal_id)}/episodes/{number}",
-                    timeout=20,
-                )
-                response.raise_for_status()
-                detail = response.json().get("data") or {}
-                if detail:
-                    jikan_by_number[number].update(detail)
-            except requests.RequestException:
-                continue
-
-    result = []
-    for number in sorted(all_numbers):
-        jikan = jikan_by_number.get(number) or {}
-        airing = schedule_by_number.get(number) or {}
-        aired = jikan.get("aired") or {}
-        video = video_by_number.get(number) or {}
-        video_images = video.get("images") or {}
-        video_jpg = video_images.get("jpg") or {}
-        video_webp = video_images.get("webp") or {}
-        stream = stream_by_number.get(number) or {}
-
-        result.append({
-            "episodeNumber": number,
-            "title": (
-                jikan.get("title")
-                or stream.get("title")
-                or video.get("title")
-                or f"Episode {number}"
-            ),
-            "description": jikan.get("synopsis"),
-            "airdate": (
-                _date_from_timestamp(airing.get("airingAt"))
-                or str(aired.get("from") or "")[:10]
-                or None
-            ),
-            "thumbnail": (
-                video_jpg.get("image_url")
-                or video_webp.get("image_url")
-                or stream.get("thumbnail")
-                or None
-            ),
-        })
+    if episodes:
+        return {
+            "mal_id": resolved_mal_id,
+            "episodes": episodes,
+        }
 
     return {
         "mal_id": resolved_mal_id,
-        "episodes": result,
+        "episodes": _jikan_fallback(),
     }
+
 
 def get_media_details(media_id):
     """Fetch the complete media record needed by detail/import workflows."""
