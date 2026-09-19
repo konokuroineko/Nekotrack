@@ -388,10 +388,10 @@ def save_episodes(work_id, episode_data):
             )
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(work_id, episode_number) DO UPDATE SET
-                title = COALESCE(excluded.title, episodes.title),
-                description = COALESCE(excluded.description, episodes.description),
-                air_date = COALESCE(excluded.air_date, episodes.air_date),
-                thumbnail_url = COALESCE(excluded.thumbnail_url, episodes.thumbnail_url)
+                title = excluded.title,
+                description = excluded.description,
+                air_date = excluded.air_date,
+                thumbnail_url = excluded.thumbnail_url
         """, (
             work_id,
             number,
