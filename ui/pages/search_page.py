@@ -464,7 +464,7 @@ class SearchPage(QWidget):
             self.current_media_type,
             self.current_media_format,
             self.current_filters,
-            include_relations=self.selection_mode or not self.fast_search.isChecked(),
+            include_relations=not self.fast_search.isChecked(),
         )
         thread = QThread(self)
         worker.moveToThread(thread)
@@ -493,33 +493,6 @@ class SearchPage(QWidget):
         self.has_next_page = data["pageInfo"]["hasNextPage"]
 
         new_results = data["media"]
-
-        if self.selection_mode:
-            expanded = []
-            seen_ids = set()
-
-            for item in new_results:
-                try:
-                    item_id = int(item["id"])
-                except (KeyError, TypeError, ValueError):
-                    continue
-                if item_id not in seen_ids:
-                    seen_ids.add(item_id)
-                    expanded.append(item)
-
-                relations = (item.get("relations") or {}).get("edges") or []
-                for edge in relations:
-                    related = edge.get("node") or {}
-                    try:
-                        related_id = int(related["id"])
-                    except (KeyError, TypeError, ValueError):
-                        continue
-                    if related_id in seen_ids:
-                        continue
-                    seen_ids.add(related_id)
-                    expanded.append(related)
-
-            new_results = expanded
 
         if self.current_page == 1:
             self.raw_results = []
