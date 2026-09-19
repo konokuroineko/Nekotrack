@@ -89,8 +89,12 @@ class WorkCard(QFrame):
         self._load_cover()
 
         full_title = self._title()
-        title_font = QFont(self.font())
-        title_font.setPointSize(max(8, int(get("font_size") or 13)))
+        font_size = max(8, int(get("font_size") or 13))
+
+        # Do not copy the stylesheet-derived widget font here. Qt can represent
+        # that font with a point size of -1 (for pixel-sized fonts), which makes
+        # later setPointSize() calls emit repeated warnings.
+        title_font = QFont("Segoe UI", font_size)
         title_font.setWeight(QFont.Weight.Bold)
         title_metrics = QFontMetrics(title_font)
         fitted_title = self._fit_title_to_two_lines(full_title, card_width - 12, title_font)
@@ -116,8 +120,7 @@ class WorkCard(QFrame):
         # exact same vertical height. Bundle cards therefore stay the same
         # height as non-bundle cards without an extra empty row around the
         # indicator.
-        series_font = QFont(self.font())
-        series_font.setPointSize(10)
+        series_font = QFont("Segoe UI", 10)
         series_font.setWeight(QFont.Weight.Bold)
         series_height = QFontMetrics(series_font).height()
 
