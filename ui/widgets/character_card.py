@@ -81,8 +81,10 @@ class CharacterCard(QFrame):
         else:
             self._image_artwork = image
 
-        text_layout = QVBoxLayout()
-        text_layout.setSpacing(6)
+        text_layout = QGridLayout()
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setHorizontalSpacing(18)
+        text_layout.setVerticalSpacing(0)
 
         character_role = self._value("character_role")
         if character_role:
@@ -93,9 +95,7 @@ class CharacterCard(QFrame):
             role.setLineWidth(0)
             role.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-size: 13px; font-weight: 700;")
             role.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
-            text_layout.addWidget(role, 0, Qt.AlignHCenter | Qt.AlignTop)
-
-        text_layout.addStretch(1)
+            text_layout.addWidget(role, 0, 0, 1, 2, Qt.AlignHCenter | Qt.AlignTop)
 
         names_row = QHBoxLayout()
         names_row.setSpacing(18)
@@ -118,8 +118,12 @@ class CharacterCard(QFrame):
             voice.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             names_row.addWidget(voice, 1)
 
-        text_layout.addLayout(names_row)
-        text_layout.addStretch(1)
+        names_widget = QWidget()
+        names_widget.setLayout(names_row)
+        text_layout.addWidget(names_widget, 0, 0, 1, 2, Qt.AlignCenter)
+        text_layout.setColumnStretch(0, 1)
+        text_layout.setColumnStretch(1, 1)
+        text_layout.setRowStretch(0, 1)
         layout.addLayout(text_layout, 1)
 
         person_image = CharacterArtwork(88, 116, 14)
