@@ -521,8 +521,6 @@ class WorkDetailPage(QWidget):
             QPushButton#back:hover {{ color: {COLORS['primary']}; }}
             QFrame#hero {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: 22px; }}
             QFrame#section {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: 18px; }}
-            QFrame#episode {{ background: {COLORS['surface_alt']}; border: 1px solid {COLORS['frame']}; border-radius: 10px; }}
-            QFrame#episode:hover {{ border-color: {COLORS['border_hover']}; }}
             QFrame#episodeCard {{
                 background: {COLORS['surface_alt']};
                 border: 1px solid {COLORS['border']};
@@ -1170,37 +1168,6 @@ class WorkDetailPage(QWidget):
             card = EpisodeCard(ep, fallback_pixmap=fallback_pixmap)
             card.watched_changed.connect(self._episode_toggled)
             lay.addWidget(card)
-            row = QFrame()
-            row.setObjectName("episode")
-            r = QHBoxLayout(row)
-            r.setContentsMargins(12, 9, 14, 9)
-
-            cb = QCheckBox()
-            cb.setChecked(bool(ep["watched"]))
-            r.addWidget(cb)
-
-            num = QLabel(f"EP {ep['episode_number']:02d}")
-            num.setMinimumWidth(52)
-            num.setStyleSheet(
-                f"color:{COLORS['accent']};font-weight:850;"
-            )
-            r.addWidget(num)
-
-            ep_title = QLabel(ep["title"] or "Episode")
-            ep_title.setStyleSheet(
-                f"color:{COLORS['primary']};font-weight:650;"
-            )
-            r.addWidget(ep_title, 1)
-
-            date = QLabel(str(ep["air_date"] or ""))
-            date.setStyleSheet(muted_label_stylesheet())
-            r.addWidget(date)
-
-            cb.toggled.connect(
-                lambda checked, n=ep["episode_number"]:
-                    self._episode_toggled(n, checked)
-            )
-            lay.addWidget(row)
 
         return frame
 
