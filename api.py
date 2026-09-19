@@ -90,6 +90,7 @@ def _media_fields(include_details=False, include_relations=True):
     """Return GraphQL fields shared by search and detail queries."""
     base = """
         id
+        idMal
         type
         title { romaji english native }
         episodes
@@ -125,6 +126,12 @@ def _media_fields(include_details=False, include_relations=True):
         volumes
         source
         duration
+        streamingEpisodes {
+            title
+            thumbnail
+            url
+            site
+        }
         studios {
             edges {
                 isMain
@@ -485,12 +492,13 @@ def get_media_episodes(media_id):
     ]
 
 
-def get_episode_data(media_id):
-    """Fetch and normalize the complete airing schedule for one media entry."""
-    query = """
-    query ($id: Int, $page: Int) {
+def get_episode_data(media_id, mal_id=None):
+    """Fetch episode dates/art from AniList and synopsis metadata from Jikan."""
+    anilist_query = """
+    query ($id: Int) {
         Media(id: $id) {
-            airingSchedule(page: $page, perPage: 50) {
+            idMal
+            airingSchedule(page: 1, perPage: 50) {
                 nodes {
                     airingAt
                     episode
@@ -501,40 +509,137 @@ def get_episode_data(media_id):
                     hasNextPage
                 }
             }
+            streamingEpisodes {
+                title
+                thumbnail
+                url
+                site
+            }
         }
     }
     """
-    page = 1
-    schedule = []
 
+    data = anilist_request(anilist_query, {"id": int(media_id)})
+    media = data.get("Media") or {}
+    resolved_mal_id = mal_id or media.get("idMal")
+
+    schedule = []
+    connection = media.get("airingSchedule") or {}
+    page = 1
     while True:
-        data = anilist_request(
-            query,
-            {"id": int(media_id), "page": page},
-        )
-        connection = ((data.get("Media") or {}).get("airingSchedule") or {})
-        schedule.extend(connection.get("nodes") or [])
-        page_info = connection.get("pageInfo") or {}
+        if page == 1:
+            current = connection
+        else:
+            page_data = anilist_request(
+                anilist_query,
+                {"id": int(media_id)},
+            )
+            break
+        schedule.extend(current.get("nodes") or [])
+        page_info = current.get("pageInfo") or {}
         if not page_info.get("hasNextPage"):
             break
-        page += 1
 
-    return [
-        {
-            "episodeNumber": node.get("episode"),
-            "title": f"Episode {node.get('episode')}",
-            "description": None,
-            "airdate": (
-                __import__("datetime").datetime.fromtimestamp(
-                    int(node["airingAt"])
-                ).strftime("%Y-%m-%d")
-                if node.get("airingAt") is not None
-                else None
-            ),
+        # AniList's airing schedule is normally far shorter than 50 rows.
+        # Keep a second-page query only when the connection says more exists.
+        page += 1
+        schedule_query = """
+        query ($id: Int, $page: Int) {
+            Media(id: $id) {
+                airingSchedule(page: $page, perPage: 50) {
+                    nodes { airingAt episode }
+                    pageInfo { currentPage lastPage hasNextPage }
+                }
+            }
         }
+        """
+        page_data = anilist_request(
+            schedule_query,
+            {"id": int(media_id), "page": page},
+        )
+        connection = ((page_data.get("Media") or {}).get("airingSchedule") or {})
+
+    stream_rows = media.get("streamingEpisodes") or []
+    stream_by_number = {
+        index: row
+        for index, row in enumerate(stream_rows, start=1)
+        if isinstance(row, dict)
+    }
+
+    jikan_by_number = {}
+    if resolved_mal_id:
+        try:
+            page = 1
+            while True:
+                response = requests.get(
+                    f"https://api.jikan.moe/v4/anime/{int(resolved_mal_id)}/episodes",
+                    params={"page": page},
+                    timeout=20,
+                )
+                response.raise_for_status()
+                payload = response.json() or {}
+                for row in payload.get("data") or []:
+                    number = row.get("mal_id")
+                    if number is not None:
+                        jikan_by_number[int(number)] = row
+
+                pagination = payload.get("pagination") or {}
+                if not pagination.get("has_next_page"):
+                    break
+                page += 1
+        except requests.RequestException:
+            # AniList data still provides a useful episode list if Jikan is
+            # unavailable or does not have this title.
+            jikan_by_number = {}
+
+    def _date_from_timestamp(value):
+        if value is None:
+            return None
+        try:
+            return __import__("datetime").datetime.fromtimestamp(
+                int(value)
+            ).strftime("%Y-%m-%d")
+        except (TypeError, ValueError, OverflowError, OSError):
+            return None
+
+    result = []
+    all_numbers = {
+        int(node["episode"])
         for node in schedule
         if node.get("episode") is not None
-    ]
+    }
+    all_numbers.update(jikan_by_number.keys())
+    all_numbers.update(stream_by_number.keys())
+
+    schedule_by_number = {
+        int(node["episode"]): node
+        for node in schedule
+        if node.get("episode") is not None
+    }
+
+    for number in sorted(all_numbers):
+        stream = stream_by_number.get(number) or {}
+        jikan = jikan_by_number.get(number) or {}
+        airing = schedule_by_number.get(number) or {}
+        title = (
+            jikan.get("title")
+            or stream.get("title")
+            or f"Episode {number}"
+        )
+        aired = jikan.get("aired") or {}
+        result.append({
+            "episodeNumber": number,
+            "title": title,
+            "description": jikan.get("synopsis"),
+            "airdate": (
+                _date_from_timestamp(airing.get("airingAt"))
+                or str((aired.get("from") or ""))[:10]
+                or None
+            ),
+            "thumbnail": stream.get("thumbnail"),
+        })
+
+    return result
 
 def get_media_details(media_id):
     """Fetch the complete media record needed by detail/import workflows."""
