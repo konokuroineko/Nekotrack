@@ -94,11 +94,11 @@ class CharacterCard(QFrame):
 
         person_name = self._value("person_name")
         if person_name:
-            voice = QLabel(f"Voice: {person_name}")
+            voice = QLabel(str(person_name))
             voice.setWordWrap(True)
             voice.setFrameShape(QFrame.NoFrame)
             voice.setLineWidth(0)
-            voice.setStyleSheet(f"background: transparent; border: none; {muted_label_stylesheet()}")
+            voice.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 600;")
             voice.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             text_layout.addWidget(voice, 1)
 
