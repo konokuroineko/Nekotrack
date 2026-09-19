@@ -164,9 +164,10 @@ class SeriesEnrichmentWorker(QObject):
 class SearchPage(QWidget):
     anime_selected = Signal(object)
 
-    def __init__(self, add_to_library):
+    def __init__(self, add_to_library, selection_mode=False):
         super().__init__()
         self.add_to_library = add_to_library
+        self.selection_mode = selection_mode
         self.current_search = ""
         self.current_media_type = None
         self.current_media_format = None
@@ -576,7 +577,7 @@ class SearchPage(QWidget):
             index = self.grid_layout.indexOf(skeleton)
             row, column, _, _ = self.grid_layout.getItemPosition(index)
 
-        card = WorkCard(item, mode="search", add_callback=self.add_to_library)
+        card = WorkCard(item, mode="search", add_callback=self.add_to_library, show_add_button=not self.selection_mode)
         card.clicked.connect(self.anime_selected)
 
         if skeleton is not None:
@@ -692,7 +693,7 @@ class SearchPage(QWidget):
         self._clear_results()
         self.displayed_items = list(grouped)
         for item in grouped:
-            card = WorkCard(item, mode="search", add_callback=self.add_to_library)
+            card = WorkCard(item, mode="search", add_callback=self.add_to_library, show_add_button=not self.selection_mode)
             card.clicked.connect(self.anime_selected)
             self.grid_layout.addWidget(card)
         self._append_skeletons(skeleton_count)
