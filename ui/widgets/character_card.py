@@ -120,7 +120,7 @@ class CharacterCard(QFrame):
 
         names_widget = QWidget()
         names_widget.setLayout(names_row)
-        text_layout.addWidget(names_widget, 0, 0, 1, 2, Qt.AlignCenter)
+        text_layout.addWidget(names_widget, 0, 0, 1, 2)
         text_layout.setColumnStretch(0, 1)
         text_layout.setColumnStretch(1, 1)
         text_layout.setRowStretch(0, 1)
