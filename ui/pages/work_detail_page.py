@@ -523,6 +523,15 @@ class WorkDetailPage(QWidget):
             QFrame#section {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: 18px; }}
             QFrame#episode {{ background: {COLORS['surface_alt']}; border: 1px solid {COLORS['frame']}; border-radius: 10px; }}
             QFrame#episode:hover {{ border-color: {COLORS['border_hover']}; }}
+            QFrame#episodeCard {{
+                background: {COLORS['surface_alt']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 14px;
+            }}
+            QFrame#episodeCard:hover {{
+                background: {COLORS['surface_hover']};
+                border-color: {COLORS['border_hover']};
+            }}
             QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:2px solid transparent; border-radius:{get('corner_radius') + 2}px; font-size:30px; font-weight:900; padding:0; }}
             QToolButton#detailMenu:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
             QFrame#deleteOverlay {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}
