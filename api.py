@@ -397,62 +397,7 @@ def get_media_relations(media_id):
     }
     """
     data = anilist_request(query, {"id": media_id})
-    media = data["Media"]
-
-    # AniList paginates character connections. The main detail request gets
-    # the first 25 characters, then we fetch and append every remaining page.
-    characters_connection = (media.get("characters") or {}) if isinstance(media, dict) else {}
-    all_character_edges = list(characters_connection.get("edges") or [])
-    page_info = characters_connection.get("pageInfo") or {}
-    page = int(page_info.get("currentPage") or 1)
-
-    while page_info.get("hasNextPage"):
-        page += 1
-        characters_query = """
-        query ($id: Int, $page: Int) {
-            Media(id: $id) {
-                characters(page: $page, perPage: 25, sort: ROLE) {
-                    edges {
-                        node {
-                            id
-                            name { full }
-                            image { large }
-                        }
-                        role
-                        voiceActors {
-                            id
-                            name { full }
-                            language
-                            image { large }
-                        }
-                    }
-                    pageInfo {
-                        currentPage
-                        lastPage
-                        hasNextPage
-                    }
-                }
-            }
-        }
-        """
-        page_data = anilist_request(characters_query, {"id": media_id, "page": page})
-        connection = ((page_data.get("Media") or {}).get("characters") or {})
-        all_character_edges.extend(connection.get("edges") or [])
-        page_info = connection.get("pageInfo") or {}
-
-    if isinstance(media, dict):
-        media["characters"] = {
-            **characters_connection,
-            "edges": all_character_edges,
-            "pageInfo": {
-                **page_info,
-                "currentPage": page,
-                "hasNextPage": False,
-            },
-        }
-
-    return media
-
+    return data["Media"]
 
 def get_media_relations_batch(media_ids):
     """Fetch lightweight relation data for multiple media IDs in one request."""
@@ -521,4 +466,58 @@ def get_media_details(media_id):
     }
     """ % _media_fields(include_details=True)
     data = anilist_request(query, {"id": media_id})
-    return data["Media"]
+    media = data["Media"]
+
+    # AniList paginates character connections. Fetch every page so imports
+    # never stop at the first 25 characters.
+    characters_connection = (media.get("characters") or {}) if isinstance(media, dict) else {}
+    all_character_edges = list(characters_connection.get("edges") or [])
+    page_info = characters_connection.get("pageInfo") or {}
+    page = int(page_info.get("currentPage") or 1)
+
+    while page_info.get("hasNextPage"):
+        page += 1
+        characters_query = """
+        query ($id: Int, $page: Int) {
+            Media(id: $id) {
+                characters(page: $page, perPage: 25, sort: ROLE) {
+                    edges {
+                        node {
+                            id
+                            name { full }
+                            image { large }
+                        }
+                        role
+                        voiceActors {
+                            id
+                            name { full }
+                            language
+                            image { large }
+                        }
+                    }
+                    pageInfo {
+                        currentPage
+                        lastPage
+                        hasNextPage
+                    }
+                }
+            }
+        }
+        """
+        page_data = anilist_request(characters_query, {"id": media_id, "page": page})
+        connection = ((page_data.get("Media") or {}).get("characters") or {})
+        all_character_edges.extend(connection.get("edges") or [])
+        page_info = connection.get("pageInfo") or {}
+
+    if isinstance(media, dict):
+        media["characters"] = {
+            **characters_connection,
+            "edges": all_character_edges,
+            "pageInfo": {
+                **page_info,
+                "currentPage": page,
+                "hasNextPage": False,
+            },
+        }
+
+    return media
