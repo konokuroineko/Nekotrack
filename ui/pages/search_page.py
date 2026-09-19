@@ -842,83 +842,45 @@ class SearchPage(QWidget):
                 Qt.AlignHCenter,
             )
 
-    def _target_positions_for_width(self, width):
-        cards = self._result_cards()
-        if not cards:
-            return {}
-
-        margins = self.grid_layout.contentsMargins()
-        h_spacing = self.grid_layout.horizontalSpacing()
-        v_spacing = self.grid_layout.verticalSpacing()
-
-        available_width = max(1, width - margins.left() - margins.right())
-        columns = max(1, available_width // 230)
-        columns = min(columns, len(cards))
-
-        card_width = max(1, max(card.width() for card in cards))
-        rows = (len(cards) + columns - 1) // columns
-        row_heights = [0] * rows
-
-        for index, card in enumerate(cards):
-            row_heights[index // columns] = max(
-                row_heights[index // columns],
-                card.height(),
-            )
-
-        positions = {}
-        y = margins.top()
-
-        for row in range(rows):
-            row_cards = cards[row * columns:(row + 1) * columns]
-            cell_width = max(
-                card_width,
-                (available_width - h_spacing * (columns - 1)) / columns,
-            )
-
-            for column, card in enumerate(row_cards):
-                x = margins.left() + round(
-                    column * (cell_width + h_spacing)
-                    + (cell_width - card.width()) / 2
-                )
-                positions[id(card)] = QPoint(x, y)
-
-            y += row_heights[row] + v_spacing
-
-        return positions
-
     def eventFilter(self, watched, event):
         if (
             watched is self.results_scroll.viewport()
             and event.type() == QEvent.Type.Resize
             and self._result_cards()
         ):
-            target_positions = self._target_positions_for_width(event.size().width())
-
             current_positions = {
                 id(card): QPoint(card.pos())
                 for card in self._result_cards()
             }
 
-            if target_positions != self._last_target_positions:
-                self._last_target_positions = target_positions
+            # Let the real QGridLayout calculate the destination positions.
+            self._stop_animations()
+            self.grid_layout.setEnabled(True)
+            self._reflow_results()
+            self.grid_layout.activate()
+
+            target_positions = {
+                id(card): QPoint(card.pos())
+                for card in self._result_cards()
+            }
+
+            if target_positions != current_positions:
+                self.grid_layout.setEnabled(False)
 
                 if get("resize_animation") and get("animation_speed") > 0:
-                    self._stop_animations()
-                    self.grid_layout.setEnabled(False)
-                    self._resize_layout_was_enabled = True
                     self._animate_to_positions(
                         current_positions,
                         target_positions,
                     )
-                    self._resize_timer.start()
                 else:
-                    self._stop_animations()
-                    self.grid_layout.setEnabled(False)
                     for card in self._result_cards():
                         target = target_positions.get(id(card))
                         if target is not None:
                             card.move(target)
-                    self._resize_timer.start()
+
+                self._resize_timer.start()
+
+            self._last_target_positions = target_positions
 
         return super().eventFilter(watched, event)
 
