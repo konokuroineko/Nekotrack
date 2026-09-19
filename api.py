@@ -732,10 +732,17 @@ def get_media_details(media_id):
             schedule.extend(schedule_connection.get("nodes") or [])
             schedule_page_info = schedule_connection.get("pageInfo") or {}
 
+        streaming_rows = media.get("streamingEpisodes") or []
         media["streamingEpisodes"] = [
             {
                 "episodeNumber": node.get("episode"),
-                "title": f"Episode {node.get('episode')}",
+                "title": (
+                    streaming_rows[index - 1].get("title")
+                    if index <= len(streaming_rows)
+                    and isinstance(streaming_rows[index - 1], dict)
+                    and streaming_rows[index - 1].get("title")
+                    else f"Episode {node.get('episode')}"
+                ),
                 "description": None,
                 "airdate": (
                     __import__("datetime").datetime.fromtimestamp(
@@ -744,8 +751,26 @@ def get_media_details(media_id):
                     if node.get("airingAt") is not None
                     else None
                 ),
+                "thumbnail": (
+                    streaming_rows[index - 1].get("thumbnail")
+                    if index <= len(streaming_rows)
+                    and isinstance(streaming_rows[index - 1], dict)
+                    else None
+                ),
+                "url": (
+                    streaming_rows[index - 1].get("url")
+                    if index <= len(streaming_rows)
+                    and isinstance(streaming_rows[index - 1], dict)
+                    else None
+                ),
+                "site": (
+                    streaming_rows[index - 1].get("site")
+                    if index <= len(streaming_rows)
+                    and isinstance(streaming_rows[index - 1], dict)
+                    else None
+                ),
             }
-            for node in schedule
+            for index, node in enumerate(schedule, start=1)
             if node.get("episode") is not None
         ]
 
