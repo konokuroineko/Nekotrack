@@ -554,7 +554,7 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
                 if cached is not None:
                     _apply_relation_details(item, cached)
 
-            if not item.get("_relations_loaded") and not _search_relation_edges(item):
+            if not _get(item, "_relations_loaded") and not _search_relation_edges(item):
                 if fetch_failures[item_id] < MAX_NODE_FETCH_RETRIES and can_fetch:
                     unresolved_remaining.append(item)
                 continue
