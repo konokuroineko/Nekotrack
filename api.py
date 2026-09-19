@@ -545,6 +545,8 @@ def get_episode_data(media_id, mal_id=None):
     stream_rows = media.get("streamingEpisodes") or []
 
     jikan_by_number = {}
+    video_by_number = {}
+
     if resolved_mal_id:
         try:
             page = 1
@@ -566,8 +568,29 @@ def get_episode_data(media_id, mal_id=None):
                 if not pagination.get("has_next_page"):
                     break
                 page += 1
+
+            page = 1
+            while True:
+                response = requests.get(
+                    f"https://api.jikan.moe/v4/anime/{int(resolved_mal_id)}/videos/episodes",
+                    params={"page": page},
+                    timeout=20,
+                )
+                response.raise_for_status()
+                payload = response.json() or {}
+
+                for row in payload.get("data") or []:
+                    number = row.get("episode")
+                    if number is not None:
+                        video_by_number[int(number)] = row
+
+                pagination = payload.get("pagination") or {}
+                if not pagination.get("has_next_page"):
+                    break
+                page += 1
         except requests.RequestException:
             jikan_by_number = {}
+            video_by_number = {}
 
     def _date_from_timestamp(value):
         if value is None:
@@ -592,13 +615,14 @@ def get_episode_data(media_id, mal_id=None):
         jikan = jikan_by_number.get(number) or {}
         airing = schedule_by_number.get(number) or {}
         aired = jikan.get("aired") or {}
-        images = jikan.get("images") or {}
-        jpg = images.get("jpg") or {}
-        webp = images.get("webp") or {}
+        video = video_by_number.get(number) or {}
+        video_images = video.get("images") or {}
+        video_jpg = video_images.get("jpg") or {}
+        video_webp = video_images.get("webp") or {}
 
         result.append({
             "episodeNumber": number,
-            "title": jikan.get("title") or f"Episode {number}",
+            "title": jikan.get("title") or video.get("title") or f"Episode {number}",
             "description": jikan.get("synopsis"),
             "airdate": (
                 _date_from_timestamp(airing.get("airingAt"))
@@ -606,8 +630,8 @@ def get_episode_data(media_id, mal_id=None):
                 or None
             ),
             "thumbnail": (
-                jpg.get("image_url")
-                or webp.get("image_url")
+                video_jpg.get("image_url")
+                or video_webp.get("image_url")
                 or None
             ),
         })
