@@ -491,10 +491,15 @@ def get_media_details(media_id):
     query ($id: Int) {
         Media(id: $id) {
             %s
-            airingSchedule(perPage: 50) {
+            airingSchedule(page: 1, perPage: 50) {
                 nodes {
                     airingAt
                     episode
+                }
+                pageInfo {
+                    currentPage
+                    lastPage
+                    hasNextPage
                 }
             }
         }
@@ -559,7 +564,40 @@ def get_media_details(media_id):
         # the local database. The detail/import code expects episodeNumber,
         # title, and airdate, while the current AniList query provides
         # episode numbers and timestamps through airingSchedule.
-        schedule = (media.get("airingSchedule") or {}).get("nodes") or []
+        schedule_connection = media.get("airingSchedule") or {}
+        schedule = list(schedule_connection.get("nodes") or [])
+        schedule_page_info = schedule_connection.get("pageInfo") or {}
+        schedule_page = int(schedule_page_info.get("currentPage") or 1)
+
+        while schedule_page_info.get("hasNextPage"):
+            schedule_page += 1
+            schedule_query = """
+            query ($id: Int, $page: Int) {
+                Media(id: $id) {
+                    airingSchedule(page: $page, perPage: 50) {
+                        nodes {
+                            airingAt
+                            episode
+                        }
+                        pageInfo {
+                            currentPage
+                            lastPage
+                            hasNextPage
+                        }
+                    }
+                }
+            }
+            """
+            schedule_data = anilist_request(
+                schedule_query,
+                {"id": media_id, "page": schedule_page},
+            )
+            schedule_connection = (
+                (schedule_data.get("Media") or {}).get("airingSchedule") or {}
+            )
+            schedule.extend(schedule_connection.get("nodes") or [])
+            schedule_page_info = schedule_connection.get("pageInfo") or {}
+
         media["streamingEpisodes"] = [
             {
                 "episodeNumber": node.get("episode"),
