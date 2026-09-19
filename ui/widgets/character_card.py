@@ -95,8 +95,8 @@ class CharacterCard(QFrame):
             role.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
             text_layout.addWidget(role, 0, Qt.AlignHCenter | Qt.AlignTop)
 
-        text_layout.addStretch(0)
-        
+        text_layout.addStretch(1)
+
         names_row = QHBoxLayout()
         names_row.setSpacing(18)
 
