@@ -1,11 +1,11 @@
 from api import get_media_details
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QUrl, QSize
+from PySide6.QtCore import Qt, Signal, QUrl, QSize, QPoint, QRect
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
+    QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout,
     QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 )
@@ -26,6 +26,86 @@ from ui.widgets.relation_card import RelationCard
 
 
 IMAGE_DIRECTORY = Path("data") / "images" / "works"
+
+
+class StaffFlowLayout(QLayout):
+    """Tightly pack fixed-width staff cards into as many cards per row as fit."""
+    def __init__(self, parent=None, h_spacing=8, v_spacing=12):
+        super().__init__(parent)
+        self._items = []
+        self._h_spacing = h_spacing
+        self._v_spacing = v_spacing
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations()
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        margins = self.contentsMargins()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        return size + QSize(
+            margins.left() + margins.right(),
+            margins.top() + margins.bottom(),
+        )
+
+    def _do_layout(self, rect, test_only):
+        margins = self.contentsMargins()
+        effective = rect.adjusted(
+            margins.left(), margins.top(), -margins.right(), -margins.bottom()
+        )
+        x = effective.x()
+        y = effective.y()
+        line_height = 0
+
+        for item in self._items:
+            size = item.sizeHint()
+            if size.width() <= 0:
+                continue
+
+            next_x = x + size.width()
+            if x > effective.x() and next_x > effective.right() + 1:
+                x = effective.x()
+                y += line_height + self._v_spacing
+                next_x = x + size.width()
+                line_height = 0
+
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), size))
+
+            x = next_x + self._h_spacing
+            line_height = max(line_height, size.height())
+
+        return (
+            y + line_height - rect.y() + margins.bottom()
+            if self._items
+            else margins.top() + margins.bottom()
+        )
 
 
 
@@ -726,24 +806,17 @@ class WorkDetailPage(QWidget):
 
         if title == "Staff":
             container = QWidget()
-            rows = QVBoxLayout(container)
-            rows.setContentsMargins(0, 0, 0, 0)
-            rows.setSpacing(12)
+            flow = StaffFlowLayout(container, h_spacing=8, v_spacing=12)
 
             if not items:
                 empty = QLabel("Nothing stored locally yet.")
                 empty.setStyleSheet(muted_label_stylesheet())
-                rows.addWidget(empty)
+                flow.addWidget(empty)
             else:
-                for start_index in range(0, len(items), columns):
-                    row = QHBoxLayout()
-                    row.setContentsMargins(0, 0, 0, 0)
-                    row.setSpacing(8)
-                    for item in items[start_index:start_index + columns]:
-                        card = cls(item)
-                        card.clicked.connect(signal)
-                        row.addWidget(card, 0, Qt.AlignTop)
-                    rows.addLayout(row)
+                for item in items:
+                    card = cls(item)
+                    card.clicked.connect(signal)
+                    flow.addWidget(card)
 
             lay.addWidget(container)
             return frame
