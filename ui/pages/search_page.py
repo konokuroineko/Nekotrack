@@ -730,6 +730,14 @@ class SearchPage(QWidget):
                         work_id = int(member["id"])
                     except (KeyError, TypeError, ValueError):
                         continue
+
+                    if self.current_media_type and str(member.get("type") or "").upper() != self.current_media_type:
+                        continue
+
+                    selected_format = self.current_media_format or self.current_filters.get("format_filter")
+                    if selected_format and str(member.get("format") or "").upper() != selected_format:
+                        continue
+
                     if work_id in seen_ids:
                         continue
                     seen_ids.add(work_id)
