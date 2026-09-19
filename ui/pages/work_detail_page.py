@@ -583,7 +583,7 @@ class WorkDetailPage(QWidget):
         excluded_ids = {
             int(member["id"])
             for member in (group.get("_series_members") or [])
-            if member.get("id") is not None
+            if member["id"] is not None
         }
         dialog = BundleSearchDialog(excluded_ids=excluded_ids, parent=self)
         if dialog.exec() != QDialog.Accepted or dialog.selected_work is None:
