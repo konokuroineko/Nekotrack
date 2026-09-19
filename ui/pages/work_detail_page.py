@@ -60,9 +60,6 @@ class EpisodeArtwork(QLabel):
         self._reply = None
         self._fallback_pixmap = QPixmap()
 
-    def set_fallback_pixmap(self, pixmap):
-        self._fallback_pixmap = pixmap if pixmap is not None else QPixmap()
-
     def load(self, url):
         url = str(url or "").strip()
         if not url:
@@ -155,8 +152,6 @@ class EpisodeCard(QFrame):
         layout.setSpacing(14)
 
         artwork = EpisodeArtwork()
-        if fallback_pixmap is not None:
-            artwork.set_fallback_pixmap(fallback_pixmap)
         artwork.load(episode["thumbnail_url"])
         layout.addWidget(artwork, 0, Qt.AlignTop)
 
@@ -1117,38 +1112,10 @@ class WorkDetailPage(QWidget):
         lay.addLayout(header)
 
         selected_work = get_work(selected_id) if selected_id is not None else None
-        fallback_pixmap = QPixmap()
 
-        if selected_work is not None:
-            cover_path = selected_work["cover_path"]
-            cover_url = selected_work["cover_url"]
-            if cover_path:
-                fallback_pixmap.load(str(cover_path))
-            if fallback_pixmap.isNull() and cover_url:
-                cached = EpisodeArtwork._cache.get(str(cover_url))
-                if cached is not None and not cached.isNull():
-                    fallback_pixmap = cached
-
-        needs_metadata = any(
-            not str(ep["description"] or "").strip()
-            or not str(ep["thumbnail_url"] or "").strip()
-            or not str(ep["title"] or "").strip()
-            or str(ep["title"] or "").strip() == f"Episode {ep['episode_number']}"
-            for ep in episodes
-        )
-
-        if selected_id is not None and (
-            (
-                not episodes
-                and selected_work is not None
-                and int(selected_work["episodes"] or 0) > 0
-            )
-            or (
-                episodes
-                and needs_metadata
-                and selected_id not in self._episode_sync_completed
-            )
-        ):
+        # Refresh each season once per detail-page session. This also clears
+        # stale thumbnail URLs left by earlier episode imports.
+        if selected_id is not None and selected_id not in self._episode_sync_completed:
             self._start_episode_sync(selected_id)
 
         if not episodes:
@@ -1165,7 +1132,7 @@ class WorkDetailPage(QWidget):
             return frame
 
         for ep in episodes:
-            card = EpisodeCard(ep, fallback_pixmap=fallback_pixmap)
+            card = EpisodeCard(ep)
             card.watched_changed.connect(self._episode_toggled)
             lay.addWidget(card)
 
