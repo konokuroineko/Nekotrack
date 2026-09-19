@@ -1,6 +1,6 @@
 from threading import Event
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, QTimer
+from PySide6.QtCore import QEvent, QObject, QPoint, QThread, Qt, Signal, QTimer, QPropertyAnimation, QEasingCurve
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from api import get_media_by_anilist_url, parse_anilist_url, search_anime
@@ -192,6 +192,13 @@ class SearchPage(QWidget):
         self.pending_timer = None
         self.pending_batch_active = False
         self.pending_batch_generation = 0
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(140)
+        self._resize_timer.timeout.connect(self._finish_resize)
+        self._resize_layout_was_enabled = True
+        self._last_target_positions = None
+        self._animations = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(34, 30, 34, 28)
@@ -310,6 +317,7 @@ class SearchPage(QWidget):
         self.grid_layout.setContentsMargins(4, 4, 4, 20)
         self.grid_layout.setHorizontalSpacing(22)
         self.grid_layout.setVerticalSpacing(30)
+        self.grid_container.installEventFilter(self)
         self.results_scroll.setWidget(self.grid_container)
         self.results_scroll.scroll_to_bottom.connect(self.load_more_results)
         root.addWidget(self.results_scroll, 1)
@@ -784,6 +792,8 @@ class SearchPage(QWidget):
             self.results_title.setText(f"{count} result{'s' if count != 1 else ''}")
 
     def _clear_results(self):
+        self._stop_animations()
+        self._last_target_positions = None
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             widget = item.widget()
@@ -832,6 +842,66 @@ class SearchPage(QWidget):
                 Qt.AlignHCenter,
             )
 
+    def eventFilter(self, watched, event):
+        if watched is self.grid_container and event.type() == QEvent.Type.Resize and self.displayed_items:
+            self._resize_timer.start()
+            current_positions = {
+                id(card): QPoint(card.pos())
+                for card in self._result_cards()
+            }
+            self._reflow_results()
+            target_positions = {
+                id(card): QPoint(card.pos())
+                for card in self._result_cards()
+            }
+            if target_positions != self._last_target_positions:
+                self._last_target_positions = target_positions
+                if get("resize_animation") and get("animation_speed") > 0:
+                    self._animate_to_positions(current_positions, target_positions)
+                else:
+                    self._stop_animations()
+            return super().eventFilter(watched, event)
+        return super().eventFilter(watched, event)
+
+    def _result_cards(self):
+        return [
+            self.grid_layout.itemAt(index).widget()
+            for index in range(self.grid_layout.count())
+            if isinstance(self.grid_layout.itemAt(index).widget(), (WorkCard, SkeletonCard))
+        ]
+
+    def _animate_to_positions(self, start_positions, target_positions):
+        self._stop_animations()
+        animations = []
+        duration = get("animation_speed")
+        for card in self._result_cards():
+            old_pos = start_positions.get(id(card), QPoint(card.pos()))
+            new_pos = target_positions.get(id(card))
+            if new_pos is None or old_pos == new_pos:
+                continue
+            card.move(old_pos)
+            animation = QPropertyAnimation(card, b"pos", self)
+            animation.setDuration(duration)
+            animation.setStartValue(old_pos)
+            animation.setEndValue(new_pos)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            animations.append(animation)
+            animation.start()
+        self._animations = animations
+
+    def _finish_resize(self):
+        self._stop_animations()
+        self._last_target_positions = {
+            id(card): QPoint(card.pos())
+            for card in self._result_cards()
+        }
+
+    def _stop_animations(self):
+        for animation in self._animations:
+            animation.stop()
+            animation.deleteLater()
+        self._animations = []
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._reflow_results()
@@ -861,6 +931,8 @@ class SearchPage(QWidget):
 
     def shutdown_workers(self):
         self._stop_pending_render()
+        self._resize_timer.stop()
+        self._stop_animations()
         self._stop_enrichment()
         for thread in list(self.search_threads):
             thread.quit()
