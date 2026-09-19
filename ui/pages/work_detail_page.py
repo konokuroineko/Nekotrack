@@ -860,7 +860,7 @@ class WorkDetailPage(QWidget):
         return frame
 
     def _relations(self):
-        return self._grid_section("Relations", get_relations(self._value("id")), RelationCard, self.relation_selected, 2)
+        return self._grid_section("Relations", get_relations(self._value("id")), RelationCard, self.relation_selected, 3)
 
     @staticmethod
     def _member_title(member):
