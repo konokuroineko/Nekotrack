@@ -225,16 +225,52 @@ def save_person_image_path(person_id, image_path):
     connection.close()
 
 
+def _normalize_work_ids(work_id):
+    if isinstance(work_id, (list, tuple, set)):
+        values = work_id
+    else:
+        values = [work_id]
+
+    ids = []
+    for value in values:
+        try:
+            media_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if media_id not in ids:
+            ids.append(media_id)
+    return ids
+
+
 def get_characters(work_id):
-    """Return one row per character, with the preferred Japanese voice actor when available."""
+    """Return one row per character across one work or a bundle of works."""
+    ids = _normalize_work_ids(work_id)
+    if not ids:
+        return []
+
+    placeholders = ",".join("?" for _ in ids)
     connection = get_connection()
-    results = connection.execute("""
+    results = connection.execute(f"""
         SELECT
             characters.id,
             characters.name AS character_name,
             characters.image_path AS character_image_path,
             characters.image_url AS character_image_url,
-            work_characters.role AS character_role,
+            (
+                SELECT wc.role
+                FROM work_characters AS wc
+                WHERE wc.work_id IN ({placeholders})
+                  AND wc.character_id = characters.id
+                ORDER BY
+                    CASE UPPER(COALESCE(wc.role, 'UNKNOWN'))
+                        WHEN 'MAIN' THEN 0
+                        WHEN 'SUPPORTING' THEN 1
+                        WHEN 'BACKGROUND' THEN 2
+                        ELSE 3
+                    END,
+                    wc.role
+                LIMIT 1
+            ) AS character_role,
             (
                 SELECT people.id
                 FROM character_voice_actors
@@ -295,33 +331,50 @@ def get_characters(work_id):
                     people.name
                 LIMIT 1
             ) AS person_image_url
-        FROM work_characters
-        JOIN characters ON characters.id = work_characters.character_id
-        WHERE work_characters.work_id = ?
+        FROM characters
+        WHERE EXISTS (
+            SELECT 1
+            FROM work_characters AS wc
+            WHERE wc.work_id IN ({placeholders})
+              AND wc.character_id = characters.id
+        )
         ORDER BY
-            CASE UPPER(COALESCE(work_characters.role, 'UNKNOWN'))
-                WHEN 'MAIN' THEN 0
-                WHEN 'SUPPORTING' THEN 1
-                WHEN 'BACKGROUND' THEN 2
-                ELSE 3
-            END,
-            characters.name
-    """, (work_id,)).fetchall()
+            CASE UPPER(COALEdef get_staff(work_id):
+    """Return one row per staff person, combining all of their roles."""
+    ids = _normalize_work_ids(work_id)
+    if not ids:
+        return []
+
+    placeholders = ",".join("?" for _ in ids)
+    connection = get_connection()
+    results = connection.execute(f"""
+        SELECT
+            people.id AS person_id,
+            people.name,
+            people.image_path,
+            people.image_url,
+            (
+                SELECT group_concat(role, char(10))
+                FROM (
+                    SELECT DISTINCT role
+                    FROM work_staff AS ws
+                    WHERE ws.work_id IN ({placeholders})
+                      AND ws.person_id = people.id
+                    ORDER BY role
+                )
+            ) AS role
+        FROM people
+        WHERE EXISTS (
+            SELECT 1
+            FROM work_staff AS ws
+            WHERE ws.work_id IN ({placeholders})
+              AND ws.person_id = people.id
+        )
+        ORDER BY people.name
+    """, [*ids, *ids]).fetchall()
     connection.close()
     return results
-
-
-def save_staff(work_id, staff_edges):
-    connection = get_connection()
-    for edge in staff_edges or []:
-        person = edge.get("node") or {}
-        person_id = person.get("id")
-        person_name = (person.get("name") or {}).get("full")
-        role = edge.get("role")
-        if not person_id or not person_name or not role:
-            continue
-        connection.execute("INSERT OR REPLACE INTO people (id, name, image_url) VALUES (?, ?, ?)",
-                           (person_id, person_name, (person.get("image") or {}).get("large")))
+or {}).get("large")))
         connection.execute("INSERT OR IGNORE INTO work_staff (work_id, person_id, role) VALUES (?, ?, ?)",
                            (work_id, person_id, role))
     connection.commit()
@@ -464,16 +517,45 @@ def save_anime(anime):
                     title = excluded.title,
                     type = excluded.type,
                     format = COALESCE(excluded.format, works.format),
-                    cover_url = COALESCE(excluded.cover_url, works.cover_url)
-            """, (target_id, target_title, node.get("type") or "ANIME", node.get("format"),
-                  (node.get("coverImage") or {}).get("large")))
-        connection.execute("INSERT OR REPLACE INTO work_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)",
-                           (anime["id"], target_id, relation_type))
-    connection.commit()
+                    cover_url = COALESCE(excluded.cover_url, def get_relations(work_id):
+    """Return one row per related work, merging duplicate relations across bundle members."""
+    ids = _normalize_work_ids(work_id)
+    if not ids:
+        return []
+
+    placeholders = ",".join("?" for _ in ids)
+    connection = get_connection()
+    results = connection.execute(f"""
+        SELECT
+            MIN(work_relations.source_id) AS source_id,
+            work_relations.target_id,
+            MIN(work_relations.relation_type) AS relation_type,
+            (
+                SELECT group_concat(relation_type, char(10))
+                FROM (
+                    SELECT DISTINCT relation_type
+                    FROM work_relations AS wr
+                    WHERE wr.target_id = work_relations.target_id
+                      AND wr.source_id IN ({placeholders})
+                    ORDER BY relation_type
+                )
+            ) AS relation_types,
+            works.title,
+            works.format,
+            works.type,
+            works.cover_url,
+            works.cover_path
+        FROM work_relations
+        LEFT JOIN works ON works.id = work_relations.target_id
+        WHERE work_relations.source_id IN ({placeholders})
+        GROUP BY work_relations.target_id
+        ORDER BY works.title
+    """, [*ids, *ids]).fetchall()
     connection.close()
+    return results
 
 
-def save_cover_path(work_id, cover_path):
+k_id, cover_path):
     connection = get_connection()
     connection.execute("UPDATE works SET cover_path = ? WHERE id = ?", (cover_path, work_id))
     connection.commit()
