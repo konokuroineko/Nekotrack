@@ -1,7 +1,11 @@
-from PySide6.QtCore import Signal, Qt
+from pathlib import Path
+
+from PySide6.QtCore import Signal, Qt, QUrl
 from PySide6.QtGui import QPixmap
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
 
+from database import save_person_image_path
 from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
 
 
@@ -13,6 +17,8 @@ class PersonCard(QFrame):
         self.person = person
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet(card_stylesheet())
+        self._network_manager = QNetworkAccessManager(self)
+        self._image_reply = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -22,9 +28,13 @@ class PersonCard(QFrame):
         self.image.setAlignment(Qt.AlignCenter)
         image_path = self._value("image_path")
         if image_path:
-            self.image.setPixmap(QPixmap(image_path).scaled(
-                self.image.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
-            ))
+            pixmap = QPixmap(str(image_path))
+            if not pixmap.isNull():
+                self.image.setPixmap(pixmap.scaled(
+                    self.image.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                ))
+        else:
+            self._load_image_url(self._value("image_url"))
         layout.addWidget(self.image, alignment=Qt.AlignCenter)
 
         name = QLabel(self._value("name") or "Unknown person")
@@ -39,6 +49,38 @@ class PersonCard(QFrame):
             role_label.setStyleSheet(muted_label_stylesheet())
             role_label.setAlignment(Qt.AlignCenter)
             layout.addWidget(role_label)
+
+    def _load_image_url(self, url):
+        if not url:
+            return
+        self._image_reply = self._network_manager.get(
+            QNetworkRequest(QUrl(str(url)))
+        )
+        self._image_reply.finished.connect(self._image_finished)
+
+    def _image_finished(self):
+        reply = self._image_reply
+        self._image_reply = None
+        if reply is not None and reply.error() == reply.NetworkError.NoError:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(reply.readAll()):
+                self.image.setPixmap(pixmap.scaled(
+                    self.image.size(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                ))
+                person_id = self._value("person_id")
+                if person_id is not None:
+                    try:
+                        directory = Path("data") / "images" / "people"
+                        directory.mkdir(parents=True, exist_ok=True)
+                        path = directory / f"{int(person_id)}.jpg"
+                        if pixmap.save(str(path), "JPG", 90):
+                            save_person_image_path(person_id, path)
+                    except Exception:
+                        pass
+        if reply is not None:
+            reply.deleteLater()
 
     def _value(self, key):
         if hasattr(self.person, "get"):
