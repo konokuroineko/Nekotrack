@@ -81,11 +81,8 @@ class CharacterCard(QFrame):
         else:
             self._image_artwork = image
 
-        text_layout = QHBoxLayout()
-        text_layout.setSpacing(18)
-
-        character_info = QVBoxLayout()
-        character_info.setSpacing(5)
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(6)
 
         character_role = self._value("character_role")
         if character_role:
@@ -95,19 +92,21 @@ class CharacterCard(QFrame):
             role.setFrameShape(QFrame.NoFrame)
             role.setLineWidth(0)
             role.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-size: 13px; font-weight: 700;")
-            role.setAlignment(Qt.AlignCenter)
-            character_info.addWidget(role)
+            role.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+            text_layout.addWidget(role, 0, Qt.AlignHCenter | Qt.AlignTop)
+
+        text_layout.addStretch(1)
+
+        names_row = QHBoxLayout()
+        names_row.setSpacing(18)
 
         name = QLabel(self._value("character_name") or "Unknown character")
         name.setWordWrap(True)
         name.setFrameShape(QFrame.NoFrame)
         name.setLineWidth(0)
         name.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 600;")
-        name.setAlignment(Qt.AlignCenter)
-        character_info.addStretch(1)
-        character_info.addWidget(name)
-        character_info.addStretch(1)
-        text_layout.addLayout(character_info, 1)
+        name.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        names_row.addWidget(name, 1)
 
         person_name = self._value("person_name")
         if person_name:
@@ -117,8 +116,10 @@ class CharacterCard(QFrame):
             voice.setLineWidth(0)
             voice.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 600;")
             voice.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            text_layout.addWidget(voice, 1)
+            names_row.addWidget(voice, 1)
 
+        text_layout.addLayout(names_row)
+        text_layout.addStretch(1)
         layout.addLayout(text_layout, 1)
 
         person_image = CharacterArtwork(88, 116, 14)
