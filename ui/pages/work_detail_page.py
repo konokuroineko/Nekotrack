@@ -2,7 +2,7 @@ from api import get_media_details
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QUrl, QSize
-from PySide6.QtGui import QPixmap, QPainter, QPainterPath
+from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
@@ -702,7 +702,21 @@ class WorkDetailPage(QWidget):
         scaled = pixmap.scaled(size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
         x = max(0, (scaled.width() - size.width()) // 2); y = max(0, (scaled.height() - size.height()) // 2)
         cropped = scaled.copy(x, y, size.width(), size.height()); result = QPixmap(size); result.fill(Qt.transparent)
-        painter = QPainter(result); painter.setRenderHint(QPainter.Antialiasing); path = QPainterPath(); path.addRoundedRect(0, 0, size.width(), size.height(), radius, radius); painter.setClipPath(path); painter.drawPixmap(0, 0, cropped); painter.end(); return result
+        painter = QPainter(result)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        rect = result.rect().adjusted(2, 2, -2, -2)
+        path = QPainterPath()
+        path.addRoundedRect(rect, radius, radius)
+        painter.save()
+        painter.setClipPath(path)
+        painter.drawPixmap(rect.topLeft(), cropped.scaled(rect.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+        painter.restore()
+        painter.setPen(QPen(QColor(COLORS["accent"]), 3.0))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
+        painter.end()
+        return result
 
     def _description(self):
         frame = QFrame(); frame.setObjectName("section"); lay = QVBoxLayout(frame); lay.setContentsMargins(20, 18, 20, 20); lay.setSpacing(10)
