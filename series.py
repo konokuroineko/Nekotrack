@@ -333,7 +333,7 @@ def _relation_edge_allowed(item, edge):
     if edge.get("relationType") not in SERIES_RELATIONS:
         return False
     node = edge.get("node") or {}
-    return bool(node.get("id")) and _same_media_family(item, node)
+    return bool(_get(node, "id")) and _same_media_family(item, node)
 
 
 def _bundle_edge_allowed(item, edge):
@@ -403,7 +403,7 @@ def _traversal_edge_allowed(item, edge):
     if edge.get("relationType") not in SEASON_CHAIN_RELATIONS:
         return False
     node = edge.get("node") or {}
-    return bool(node.get("id")) and _same_media_family(item, node)
+    return bool(_get(node, "id")) and _same_media_family(item, node)
 
 
 def _related_placeholder(node):
@@ -566,7 +566,7 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
                     continue
 
                 node = edge.get("node") or {}
-                target_id = int(node["id"])
+                target_id = int(_get(node, "id"))
                 if target_id in known_ids:
                     continue
 
