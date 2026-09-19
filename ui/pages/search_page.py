@@ -265,6 +265,9 @@ class SearchPage(QWidget):
         self.fast_search.setToolTip("Skip series and bundle enrichment. Results are shown directly from AniList.")
         self.fast_search.setCursor(Qt.PointingHandCursor)
         self.fast_search.stateChanged.connect(self.fast_search_changed)
+        if self.selection_mode:
+            self.fast_search.setChecked(True)
+            self.fast_search.hide()
 
         fields = [
             ("Type", self.media_filter, 0, 0),
