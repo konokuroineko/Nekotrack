@@ -3,7 +3,7 @@ from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import QFrame, QLabel, QHBoxLayout, QVBoxLayout
 
-from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
+from ui.theme import COLORS, muted_label_stylesheet
 
 
 class CharacterArtwork(QFrame):
@@ -56,7 +56,7 @@ class CharacterCard(QFrame):
         super().__init__(parent)
         self.character = character
         self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet(card_stylesheet())
+        self.setStyleSheet("QFrame { background: transparent; border: none; }")
         self._network_manager = QNetworkAccessManager(self)
         self._image_reply = None
 
