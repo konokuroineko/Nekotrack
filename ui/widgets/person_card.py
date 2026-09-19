@@ -1,12 +1,55 @@
 from pathlib import Path
 
 from PySide6.QtCore import Signal, Qt, QUrl
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
 
 from database import save_person_image_path
 from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
+
+
+class PersonArtwork(QFrame):
+    """Portrait artwork clipped to a rounded frame like character artwork."""
+    def __init__(self, width=120, height=120, radius=14, parent=None):
+        super().__init__(parent)
+        self._pixmap = QPixmap()
+        self.setFixedSize(width, height)
+        self._radius = radius
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def set_pixmap(self, pixmap):
+        self._pixmap = pixmap
+        self.update()
+
+    def paintEvent(self, event):
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+        rect = self.rect().adjusted(2, 2, -2, -2)
+        path = QPainterPath()
+        path.addRoundedRect(rect, self._radius, self._radius)
+
+        if not self._pixmap.isNull():
+            scaled = self._pixmap.scaled(
+                rect.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+            )
+            x = max(0, (scaled.width() - rect.width()) // 2)
+            y = max(0, (scaled.height() - rect.height()) // 2)
+            cropped = scaled.copy(x, y, rect.width(), rect.height())
+
+            painter.save()
+            painter.setClipPath(path)
+            painter.drawPixmap(rect.topLeft(), cropped)
+            painter.restore()
+
+            painter.setPen(QPen(QColor(COLORS["frame"]), 3.0))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(path)
+
+        painter.end()
 
 
 class PersonCard(QFrame):
@@ -23,16 +66,12 @@ class PersonCard(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
-        self.image = QLabel()
-        self.image.setFixedSize(120, 120)
-        self.image.setAlignment(Qt.AlignCenter)
+        self.image = PersonArtwork(120, 120, 14)
         image_path = self._value("image_path")
         if image_path:
             pixmap = QPixmap(str(image_path))
             if not pixmap.isNull():
-                self.image.setPixmap(pixmap.scaled(
-                    self.image.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
-                ))
+                self.image.set_pixmap(pixmap)
         else:
             self._load_image_url(self._value("image_url"))
         layout.addWidget(self.image, alignment=Qt.AlignCenter)
@@ -64,11 +103,7 @@ class PersonCard(QFrame):
         if reply is not None and reply.error() == reply.NetworkError.NoError:
             pixmap = QPixmap()
             if pixmap.loadFromData(reply.readAll()):
-                self.image.setPixmap(pixmap.scaled(
-                    self.image.size(),
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation,
-                ))
+                self.image.set_pixmap(pixmap)
                 person_id = self._value("person_id")
                 if person_id is not None:
                     try:
