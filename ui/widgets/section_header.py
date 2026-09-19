@@ -13,6 +13,6 @@ class SectionHeader(QLabel):
                 font-size: {FONT_SIZES['heading']}px;
                 font-weight: 600;
                 padding: 4px 0 8px;
-                border-bottom: 1px solid {COLORS['border']};
+                border-bottom: 1px solid {COLORS['frame']};
             }}
         """)
