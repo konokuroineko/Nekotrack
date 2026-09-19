@@ -126,10 +126,15 @@ def initialize_database():
         CREATE TABLE IF NOT EXISTS episodes (
             id INTEGER PRIMARY KEY AUTOINCREMENT, work_id INTEGER NOT NULL,
             episode_number INTEGER NOT NULL, title TEXT, description TEXT, air_date TEXT,
-            watched INTEGER NOT NULL DEFAULT 0, UNIQUE (work_id, episode_number),
+            thumbnail_url TEXT, watched INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (work_id, episode_number),
             FOREIGN KEY (work_id) REFERENCES works(id)
         )
     """)
+    episode_columns = cursor.execute("PRAGMA table_info(episodes)").fetchall()
+    episode_column_names = {column["name"] for column in episode_columns}
+    if "thumbnail_url" not in episode_column_names:
+        cursor.execute("ALTER TABLE episodes ADD COLUMN thumbnail_url TEXT")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS songs (
             id INTEGER PRIMARY KEY, title TEXT NOT NULL, artist TEXT, image_url TEXT
@@ -364,11 +369,23 @@ def save_episodes(work_id, episode_data):
         if number is None:
             continue
         connection.execute("""
-            INSERT INTO episodes (work_id, episode_number, title, description, air_date)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO episodes (
+                work_id, episode_number, title, description, air_date, thumbnail_url
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(work_id, episode_number) DO UPDATE SET
-                title = excluded.title, description = excluded.description, air_date = excluded.air_date
-        """, (work_id, number, episode.get("title"), episode.get("description"), episode.get("airdate")))
+                title = COALESCE(excluded.title, episodes.title),
+                description = COALESCE(excluded.description, episodes.description),
+                air_date = COALESCE(excluded.air_date, episodes.air_date),
+                thumbnail_url = COALESCE(excluded.thumbnail_url, episodes.thumbnail_url)
+        """, (
+            work_id,
+            number,
+            episode.get("title"),
+            episode.get("description"),
+            episode.get("airdate"),
+            episode.get("thumbnail"),
+        ))
     connection.commit()
     connection.close()
 
