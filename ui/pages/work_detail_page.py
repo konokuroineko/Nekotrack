@@ -164,7 +164,6 @@ class WorkDetailPage(QWidget):
     character_selected = Signal(object)
     relation_selected = Signal(object)
     bundle_changed = Signal()
-    auto_bundle_requested = Signal(object)
     bundle_edit_requested = Signal(object)
 
     _cover_cache = {}
@@ -373,7 +372,6 @@ class WorkDetailPage(QWidget):
         add_item("Remove from bundle", "detailMenuItem", self._open_remove_bundle_dialog)
 
         menu.addSeparator()
-        add_item("Auto Bundle", "detailMenuItem", lambda: self.auto_bundle_requested.emit(group))
 
         try:
             has_bundle = len(group.get("_series_members") or []) > 1
