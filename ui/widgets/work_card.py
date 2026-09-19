@@ -44,7 +44,7 @@ class CoverFrame(QFrame):
             painter.setClipPath(path)
             painter.drawPixmap(rect.topLeft(), cropped)
             painter.restore()
-        painter.setPen(QPen(QColor(COLORS["accent"]), 3.0))
+        painter.setPen(QPen(QColor(COLORS["frame"]), 3.0))
         painter.setBrush(Qt.NoBrush)
         painter.drawPath(path)
         painter.end()
@@ -69,9 +69,9 @@ class WorkCard(QFrame):
         card_width = get("card_size") + 8
         self.setFixedWidth(card_width)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        hover_css = f"background: {COLORS['surface_hover']}; border-color: {COLORS['accent']};" if get("hover_highlight") else ""
+        hover_css = f"background: {COLORS['surface_hover']}; border-color: {COLORS["frame"]};" if get("hover_highlight") else ""
         self.setStyleSheet(f"""
-            QFrame#posterCard {{ background: transparent; border: 2px solid transparent; border-radius: {get('corner_radius') + 2}px; }}
+            QFrame#posterCard {{ background: transparent; border: 2px solid {COLORS["frame"]}; border-radius: {get('corner_radius') + 2}px; }}
             QFrame#posterCard:hover {{ {hover_css} }}
             QLabel {{ background: transparent; border: none; }}
             QLabel#title {{ color: {COLORS['primary']}; font-size: {get('font_size')}px; font-weight: 760; }}
