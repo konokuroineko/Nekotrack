@@ -267,7 +267,7 @@ class WorkDetailPage(QWidget):
         info.addSpacing(10)
         description = QLabel(self._value("description") or "No description saved locally.")
         description.setWordWrap(True)
-        description.setTextFormat(Qt.PlainText)
+        description.setTextFormat(Qt.RichText)
         description.setStyleSheet(f"color:{COLORS['secondary']};font-size:14px;")
         info.addWidget(description)
         info.addStretch()
