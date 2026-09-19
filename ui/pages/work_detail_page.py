@@ -1,3 +1,4 @@
+from api import get_media_details
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QUrl
