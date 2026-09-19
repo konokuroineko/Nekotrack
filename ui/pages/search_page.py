@@ -45,12 +45,12 @@ class SkeletonCard(QFrame):
         self.setStyleSheet(f"""
             QFrame#skeleton {{
                 background: transparent;
-                border: 2px solid {COLORS['border']};
+                border: 2px solid {COLORS['frame']};
                 border-radius: {get('corner_radius') + 2}px;
             }}
             QFrame#skeletonFill {{
                 background: {COLORS['surface_hover']};
-                border: 1px solid {COLORS['border']};
+                border: 1px solid {COLORS['frame']};
                 border-radius: {get('corner_radius')}px;
             }}
         """)
@@ -209,7 +209,7 @@ class SearchPage(QWidget):
 
         search_panel = QFrame()
         search_panel.setStyleSheet(
-            f"QFrame {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 16px; }}"
+            f"QFrame {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: 16px; }}"
         )
         panel = QVBoxLayout(search_panel)
         panel.setContentsMargins(12, 12, 12, 12)
@@ -236,7 +236,7 @@ class SearchPage(QWidget):
         self.filters_panel = QFrame()
         self.filters_panel.setVisible(False)
         self.filters_panel.setStyleSheet(
-            f"QFrame {{ background: {COLORS['background']}; border: 1px solid {COLORS['border']}; border-radius: 12px; }} QLabel {{ background: transparent; border: none; }}"
+            f"QFrame {{ background: {COLORS['background']}; border: 1px solid {COLORS['frame']}; border-radius: 12px; }} QLabel {{ background: transparent; border: none; }}"
         )
         filters_layout = QGridLayout(self.filters_panel)
         filters_layout.setContentsMargins(12, 12, 12, 12)
