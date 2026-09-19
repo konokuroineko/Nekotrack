@@ -76,7 +76,7 @@ class LibraryPage(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.all_anime = []; self.anime_list = []; self.current_filter = "All"; self.current_sort = "Recently Added"; self._cards = []; self._empty_label = None
+        self.all_anime = []; self.anime_list = []; self.current_filter = "All"; self._cards = []; self._empty_label = None
         self._sync_thread = None; self._sync_worker = None; self._sync_done_ids = set(); self._sync_failed_ids = set()
         self._resize_timer = QTimer(self); self._resize_timer.setSingleShot(True); self._resize_timer.setInterval(140); self._resize_timer.timeout.connect(self._finish_resize)
         self._resize_layout_was_enabled = True; self._last_target_positions = None; self._animations = []; self._build_shell(); self.refresh()
@@ -91,9 +91,7 @@ class LibraryPage(QWidget):
         row = QHBoxLayout(controls); row.setContentsMargins(9, 8, 9, 8); row.setSpacing(6); self.filter_buttons = {}
         for name in ["All", "Watching", "Completed", "Planned"]:
             b = QPushButton(name); b.setCheckable(True); b.setCursor(Qt.PointingHandCursor); b.clicked.connect(lambda checked=False, value=name:self._set_filter(value)); self.filter_buttons[name] = b; row.addWidget(b)
-        divider = QFrame(); divider.setFixedWidth(1); divider.setStyleSheet(f"background:{COLORS['border']};border:0;"); row.addWidget(divider)
-        label = QLabel("SORT"); label.setStyleSheet(f"font-size:10px;font-weight:800;color:{COLORS['muted']};letter-spacing:1px;"); row.addWidget(label)
-        self.sort_box = QComboBox(); self.sort_box.addItems(["Recently Added", "Title", "Release Year"]); self.sort_box.setMinimumWidth(150); self.sort_box.currentTextChanged.connect(self._sort_changed); row.addWidget(self.sort_box); row.addStretch(); root.addWidget(controls)
+        row.addStretch(); root.addWidget(controls)
         self.scroll_area = QScrollArea(); self.scroll_area.setWidgetResizable(True); self.scroll_area.setFrameShape(QFrame.NoFrame); self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.container = QWidget(); self.container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum); self.container.installEventFilter(self); self.flow_layout = FlowLayout(self.container)
         self.scroll_area.setWidget(self.container); root.addWidget(self.scroll_area, 1); self._set_filter("All")
@@ -115,7 +113,7 @@ class LibraryPage(QWidget):
     def refresh(self, retry_failed=True):
         if retry_failed:
             self._sync_failed_ids.clear()
-        self._cancel_resize_animation(); self.all_anime = get_library_series(); self._apply_filter(); self._apply_sort(); self._populate(); self._start_relation_sync()
+        self._cancel_resize_animation(); self.all_anime = get_library_series(); self._apply_filter(); self._populate(); self._start_relation_sync()
 
     def _start_relation_sync(self):
         if self._sync_thread is not None and self._sync_thread.isRunning(): return
@@ -399,17 +397,12 @@ class LibraryPage(QWidget):
     def _set_filter(self,value):
         self.current_filter=value
         for name,button in self.filter_buttons.items(): button.setChecked(name==value); button.setStyleSheet(self._filter_style(name==value))
-        self._cancel_resize_animation(); self._apply_filter(); self._apply_sort(); self._populate()
+        self._cancel_resize_animation(); self._apply_filter(); self._populate()
     def _filter_style(self,active):
         if active: return f"QPushButton{{background:{COLORS['accent']};color:#101216;border:0;border-radius:9px;padding:8px 15px;font-weight:800;}}"
         return f"QPushButton{{background:transparent;color:{COLORS['secondary']};border:0;border-radius:9px;padding:8px 15px;font-weight:650;}}QPushButton:hover{{background:{COLORS['surface_hover']};color:{COLORS['primary']};}}"
     def _apply_filter(self):
         wanted={"All":None,"Watching":"Watching","Completed":"Completed","Planned":"Planning"}[self.current_filter]; self.anime_list=[x for x in self.all_anime if wanted is None or x["status"]==wanted]
-    def _apply_sort(self):
-        if self.current_sort=="Title": self.anime_list.sort(key=lambda x:(x["title"] or "").lower())
-        elif self.current_sort=="Release Year": self.anime_list.sort(key=lambda x:x["start_year"] or 0,reverse=True)
-        else: self.anime_list.sort(key=lambda x:x["id"],reverse=True)
-    def _sort_changed(self,value): self.current_sort=value; self._cancel_resize_animation(); self._populate()
     def _clear_cards(self):
         self._cancel_resize_animation()
         while self.flow_layout.count():
