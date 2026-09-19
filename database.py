@@ -170,16 +170,63 @@ def save_characters(work_id, characters):
 
 
 def get_characters(work_id):
+    """Return one row per character, with the preferred Japanese voice actor when available."""
     connection = get_connection()
     results = connection.execute("""
-        SELECT characters.id, characters.name AS character_name,
-               characters.image_path AS character_image_path, characters.image_url AS character_image_url,
-               people.name AS person_name, people.image_path AS person_image_path,
-               people.image_url AS person_image_url, character_voice_actors.language
-        FROM work_characters JOIN characters ON characters.id = work_characters.character_id
-        LEFT JOIN character_voice_actors ON character_voice_actors.character_id = characters.id
-        LEFT JOIN people ON people.id = character_voice_actors.person_id
-        WHERE work_characters.work_id = ? ORDER BY characters.name, character_voice_actors.language
+        SELECT
+            characters.id,
+            characters.name AS character_name,
+            characters.image_path AS character_image_path,
+            characters.image_url AS character_image_url,
+            (
+                SELECT people.name
+                FROM character_voice_actors
+                JOIN people ON people.id = character_voice_actors.person_id
+                WHERE character_voice_actors.character_id = characters.id
+                ORDER BY
+                    CASE
+                        WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
+                             ('japanese', 'ja', 'jpn') THEN 0
+                        ELSE 1
+                    END,
+                    character_voice_actors.language,
+                    people.name
+                LIMIT 1
+            ) AS person_name,
+            (
+                SELECT people.image_path
+                FROM character_voice_actors
+                JOIN people ON people.id = character_voice_actors.person_id
+                WHERE character_voice_actors.character_id = characters.id
+                ORDER BY
+                    CASE
+                        WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
+                             ('japanese', 'ja', 'jpn') THEN 0
+                        ELSE 1
+                    END,
+                    character_voice_actors.language,
+                    people.name
+                LIMIT 1
+            ) AS person_image_path,
+            (
+                SELECT people.image_url
+                FROM character_voice_actors
+                JOIN people ON people.id = character_voice_actors.person_id
+                WHERE character_voice_actors.character_id = characters.id
+                ORDER BY
+                    CASE
+                        WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
+                             ('japanese', 'ja', 'jpn') THEN 0
+                        ELSE 1
+                    END,
+                    character_voice_actors.language,
+                    people.name
+                LIMIT 1
+            ) AS person_image_url
+        FROM work_characters
+        JOIN characters ON characters.id = work_characters.character_id
+        WHERE work_characters.work_id = ?
+        ORDER BY characters.name
     """, (work_id,)).fetchall()
     connection.close()
     return results
