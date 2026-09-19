@@ -101,7 +101,8 @@ def initialize_database():
     column_names = {column["name"] for column in columns}
     for column, definition in {
         "format": "TEXT", "cover_path": "TEXT", "chapters": "INTEGER", "volumes": "INTEGER",
-        "source": "TEXT", "end_year": "INTEGER", "duration": "INTEGER", "characters_loaded": "INTEGER NOT NULL DEFAULT 0",
+        "source": "TEXT", "end_year": "INTEGER", "duration": "INTEGER", "mal_id": "INTEGER",
+        "characters_loaded": "INTEGER NOT NULL DEFAULT 0",
     }.items():
         if column not in column_names:
             cursor.execute(f"ALTER TABLE works ADD COLUMN {column} {definition}")
@@ -443,18 +444,18 @@ def save_anime(anime):
     connection = get_connection()
     connection.execute("""
         INSERT INTO works (id, title, type, description, episodes, score, start_year, cover_url,
-                           format, chapters, volumes, source, end_year, duration)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           format, chapters, volumes, source, end_year, duration, mal_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             title=excluded.title, type=excluded.type, description=excluded.description,
             episodes=excluded.episodes, score=excluded.score, start_year=excluded.start_year,
             cover_url=excluded.cover_url, format=excluded.format, chapters=excluded.chapters,
             volumes=excluded.volumes, source=excluded.source, end_year=excluded.end_year,
-            duration=excluded.duration
+            duration=excluded.duration, mal_id=COALESCE(excluded.mal_id, works.mal_id)
     """, (anime["id"], title, anime.get("type") or "ANIME", anime.get("description"), anime.get("episodes"),
           anime.get("averageScore"), start_year, cover_image.get("large"), anime.get("format"),
           anime.get("chapters"), anime.get("volumes"), anime.get("source"), (anime.get("endDate") or {}).get("year"),
-          anime.get("duration")))
+          anime.get("duration"), anime.get("idMal")))
     for synonym in anime.get("synonyms") or []:
         connection.execute("INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
                            (anime["id"], synonym, None))
