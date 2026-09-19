@@ -84,13 +84,30 @@ class CharacterCard(QFrame):
         text_layout = QHBoxLayout()
         text_layout.setSpacing(18)
 
+        character_info = QVBoxLayout()
+        character_info.setSpacing(4)
+
         name = QLabel(self._value("character_name") or "Unknown character")
         name.setWordWrap(True)
         name.setFrameShape(QFrame.NoFrame)
         name.setLineWidth(0)
         name.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 600;")
         name.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        text_layout.addWidget(name, 1)
+        character_info.addWidget(name)
+
+        character_role = self._value("character_role")
+        if character_role:
+            role_text = str(character_role).replace("_", " ").title()
+            role = QLabel(role_text)
+            role.setWordWrap(True)
+            role.setFrameShape(QFrame.NoFrame)
+            role.setLineWidth(0)
+            role.setStyleSheet(f"background: transparent; border: none; color: {COLORS['secondary']}; font-size: 11px; font-weight: 600;")
+            role.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            character_info.addWidget(role)
+
+        character_info.addStretch()
+        text_layout.addLayout(character_info, 1)
 
         person_name = self._value("person_name")
         if person_name:
