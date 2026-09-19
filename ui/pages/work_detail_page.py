@@ -1,11 +1,11 @@
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSize, QThread, Qt, Signal, QUrl
+from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QListWidget, QListWidgetItem, QLineEdit, QMenu, QMessageBox, QPushButton,
+    QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 )
 
@@ -16,6 +16,7 @@ from database import (
 )
 from series import get_library_series
 from ui.preferences import get
+from ui.pages.search_page import SearchPage
 from ui.theme import COLORS, muted_label_stylesheet
 from ui.widgets.character_card import CharacterCard
 from ui.widgets.person_card import PersonCard
@@ -26,206 +27,40 @@ IMAGE_DIRECTORY = Path("data") / "images" / "works"
 
 
 
-class BundleSearchWorker(QObject):
-    finished = Signal(object)
-    error = Signal(str)
-
-    def __init__(self, query):
-        super().__init__()
-        self.query = query
-
-    def run(self):
-        try:
-            data = search_anime(
-                self.query,
-                page=1,
-                per_page=20,
-                include_relations=False,
-            )
-            self.finished.emit(data.get("media") or [])
-        except Exception as error:
-            self.error.emit(str(error))
-
-
 class BundleSearchDialog(QDialog):
     def __init__(self, excluded_ids=None, parent=None):
         super().__init__(parent)
         self.selected_work = None
         self.excluded_ids = {int(work_id) for work_id in (excluded_ids or set())}
-        self._thread = None
-        self._worker = None
 
         self.setWindowTitle("Add to bundle")
-        self.setMinimumSize(620, 560)
+        self.setMinimumSize(1120, 760)
+        self.resize(1180, 800)
+
+        self.search_page = SearchPage(
+            lambda *_args: None,
+            selection_mode=True,
+            parent=self,
+        )
+        self.search_page.anime_selected.connect(self._select_work)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 20)
-        root.setSpacing(12)
-
-        heading = QLabel("Add to bundle")
-        heading.setStyleSheet(
-            f"font-size:21px;font-weight:850;color:{COLORS['primary']};"
-        )
-        root.addWidget(heading)
-
-        subtitle = QLabel(
-            "Search AniList for the anime, manga, novel, or other work you want to add."
-        )
-        subtitle.setStyleSheet(f"color:{COLORS['secondary']};font-size:12px;")
-        subtitle.setWordWrap(True)
-        root.addWidget(subtitle)
-
-        search_row = QHBoxLayout()
-        search_row.setSpacing(8)
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search titles…")
-        self.search_edit.returnPressed.connect(self._start_search)
-        search_row.addWidget(self.search_edit, 1)
-
-        self.search_button = QPushButton("Search")
-        self.search_button.setCursor(Qt.PointingHandCursor)
-        self.search_button.clicked.connect(self._start_search)
-        search_row.addWidget(self.search_button)
-        root.addLayout(search_row)
-
-        self.results = QListWidget()
-        self.results.setSelectionMode(QListWidget.SingleSelection)
-        self.results.setSpacing(5)
-        self.results.itemDoubleClicked.connect(self._choose_item)
-        root.addWidget(self.results, 1)
-
-        hint = QLabel("Double-click a result or select one and press Add.")
-        hint.setStyleSheet(f"color:{COLORS['muted']};font-size:11px;")
-        root.addWidget(hint)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
-        self.add_button = buttons.addButton("Add", QDialogButtonBox.AcceptRole)
-        self.add_button.setEnabled(False)
-        self.add_button.clicked.connect(self._choose_selected)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(self.search_page)
 
         self.setStyleSheet(
-            f"""
-            QDialog {{ background:{COLORS['background']}; }}
-            QListWidget {{
-                background:{COLORS['surface']};
-                color:{COLORS['primary']};
-                border:1px solid {COLORS['border']};
-                border-radius:12px;
-                padding:6px;
-            }}
-            QListWidget::item {{
-                background:transparent;
-                border:1px solid transparent;
-                border-radius:9px;
-                padding:10px 12px;
-            }}
-            QListWidget::item:hover {{
-                background:{COLORS['surface_hover']};
-                border-color:{COLORS['accent']};
-            }}
-            QListWidget::item:selected {{
-                background:{COLORS['surface_hover']};
-                border-color:{COLORS['accent']};
-            }}
-        """
+            f"QDialog {{ background:{COLORS['background']}; }}"
         )
+        self.finished.connect(lambda _result: self.search_page.shutdown_workers())
 
-    def _start_search(self):
-        query = self.search_edit.text().strip()
-        if not query or self._thread is not None:
+    def _select_work(self, work):
+        try:
+            work_id = int(work["id"])
+        except (KeyError, TypeError, ValueError):
+            return
+        if work_id in self.excluded_ids:
             return
 
-        self.results.clear()
-        item = QListWidgetItem("Searching…")
-        item.setFlags(Qt.NoItemFlags)
-        self.results.addItem(item)
-        self.add_button.setEnabled(False)
-        self.search_button.setEnabled(False)
-
-        self._thread = QThread(self)
-        self._worker = BundleSearchWorker(query)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.finished.connect(self._search_finished)
-        self._worker.error.connect(self._search_error)
-        self._worker.finished.connect(self._thread.quit)
-        self._worker.error.connect(lambda _message: self._thread.quit())
-        self._thread.finished.connect(self._worker.deleteLater)
-        self._thread.finished.connect(self._thread_finished)
-        self._thread.start()
-
-    def _thread_finished(self):
-        thread = self._thread
-        self._thread = None
-        self._worker = None
-        if thread is not None:
-            thread.deleteLater()
-        self.search_button.setEnabled(True)
-
-    def _search_finished(self, results):
-        self.results.clear()
-        visible = 0
-
-        for work in results or []:
-            try:
-                work_id = int(work["id"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if work_id in self.excluded_ids:
-                continue
-
-            title_data = work.get("title") or {}
-            title = (
-                title_data.get("english")
-                or title_data.get("romaji")
-                or title_data.get("native")
-                or "Untitled"
-            )
-            media_type = str(work.get("type") or "").title()
-            media_format = str(work.get("format") or "").title()
-            year = (work.get("startDate") or {}).get("year")
-            meta = " · ".join(
-                str(value)
-                for value in (media_type, media_format, year)
-                if value
-            )
-
-            label = str(title)
-            if meta:
-                label += f"\n{meta}"
-
-            item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, work)
-            item.setSizeHint(QSize(0, 58))
-            self.results.addItem(item)
-            visible += 1
-
-        if visible == 0:
-            empty = QListWidgetItem("No matching works found.")
-            empty.setFlags(Qt.NoItemFlags)
-            self.results.addItem(empty)
-            return
-
-        self.results.setCurrentRow(0)
-        self.add_button.setEnabled(True)
-
-    def _search_error(self, message):
-        self.results.clear()
-        item = QListWidgetItem(f"Search failed:\n{message}")
-        item.setFlags(Qt.NoItemFlags)
-        self.results.addItem(item)
-
-    def _choose_selected(self):
-        self._choose_item(self.results.currentItem())
-
-    def _choose_item(self, item):
-        if item is None:
-            return
-        work = item.data(Qt.UserRole)
-        if not isinstance(work, dict) or work.get("id") is None:
-            return
         self.selected_work = work
         self.accept()
 
