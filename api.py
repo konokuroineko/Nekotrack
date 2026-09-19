@@ -1,5 +1,6 @@
 import requests
 import time
+import re
 from urllib.parse import urlparse
 
 
@@ -493,7 +494,7 @@ def get_media_episodes(media_id):
 
 
 def get_episode_data(media_id, mal_id=None):
-    """Fetch episode dates/art from AniList and synopsis metadata from Jikan."""
+    """Fetch episode dates, titles, thumbnails and synopses for one anime."""
     anilist_query = """
     query ($id: Int, $page: Int) {
         Media(id: $id) {
@@ -521,8 +522,10 @@ def get_episode_data(media_id, mal_id=None):
 
     page = 1
     schedule = []
+    stream_rows = []
     media = {}
 
+    # AniList supplies the schedule and any legal streaming thumbnails.
     while True:
         data = anilist_request(
             anilist_query,
@@ -532,6 +535,9 @@ def get_episode_data(media_id, mal_id=None):
         connection = media.get("airingSchedule") or {}
         schedule.extend(connection.get("nodes") or [])
 
+        if page == 1:
+            stream_rows = list(media.get("streamingEpisodes") or [])
+
         page_info = connection.get("pageInfo") or {}
         if not page_info.get("hasNextPage"):
             break
@@ -539,14 +545,11 @@ def get_episode_data(media_id, mal_id=None):
 
     resolved_mal_id = mal_id or media.get("idMal")
 
-    # AniList streamingEpisodes does not expose a reliable episode number.
-    # Do not pair it positionally with the airing schedule; that can assign
-    # Season 3 artwork to Season 1 episodes when the lists differ.
-    stream_rows = media.get("streamingEpisodes") or []
-
     jikan_by_number = {}
     video_by_number = {}
 
+    # Keep episode-list data and video thumbnails independent. A videos
+    # endpoint failure must never erase the episode/synopsis data.
     if resolved_mal_id:
         try:
             page = 1
@@ -568,7 +571,10 @@ def get_episode_data(media_id, mal_id=None):
                 if not pagination.get("has_next_page"):
                     break
                 page += 1
+        except requests.RequestException:
+            jikan_by_number = {}
 
+        try:
             page = 1
             while True:
                 response = requests.get(
@@ -582,14 +588,16 @@ def get_episode_data(media_id, mal_id=None):
                 for row in payload.get("data") or []:
                     number = row.get("episode")
                     if number is not None:
-                        video_by_number[int(number)] = row
+                        try:
+                            video_by_number[int(str(number).strip())] = row
+                        except ValueError:
+                            continue
 
                 pagination = payload.get("pagination") or {}
                 if not pagination.get("has_next_page"):
                     break
                 page += 1
         except requests.RequestException:
-            jikan_by_number = {}
             video_by_number = {}
 
     def _date_from_timestamp(value):
@@ -608,8 +616,48 @@ def get_episode_data(media_id, mal_id=None):
         if node.get("episode") is not None
     }
 
+    # AniList streamingEpisodes has no dedicated episode-number field.
+    # Parse one only when the title or URL explicitly identifies it.
+    stream_by_number = {}
+    for stream in stream_rows:
+        if not isinstance(stream, dict):
+            continue
+        haystack = " ".join(
+            str(stream.get(key) or "")
+            for key in ("title", "url")
+        )
+        match = re.search(
+            r"\b(?:episode|ep)\s*#?\s*(\d+)\b",
+            haystack,
+            re.IGNORECASE,
+        )
+        if match:
+            stream_by_number[int(match.group(1))] = stream
+
     all_numbers = set(schedule_by_number)
     all_numbers.update(jikan_by_number)
+
+    # Jikan's list endpoint does not include synopsis text. Fetch the full
+    # record for each episode so the card gets the actual episode synopsis.
+    if resolved_mal_id and jikan_by_number:
+        missing_synopsis = [
+            number
+            for number, row in jikan_by_number.items()
+            if not row.get("synopsis")
+        ]
+        for number in missing_synopsis:
+            try:
+                response = requests.get(
+                    f"https://api.jikan.moe/v4/anime/{int(resolved_mal_id)}/episodes/{number}",
+                    timeout=20,
+                )
+                response.raise_for_status()
+                detail = response.json().get("data") or {}
+                if detail:
+                    jikan_by_number[number].update(detail)
+            except requests.RequestException:
+                continue
+
     result = []
     for number in sorted(all_numbers):
         jikan = jikan_by_number.get(number) or {}
@@ -619,10 +667,16 @@ def get_episode_data(media_id, mal_id=None):
         video_images = video.get("images") or {}
         video_jpg = video_images.get("jpg") or {}
         video_webp = video_images.get("webp") or {}
+        stream = stream_by_number.get(number) or {}
 
         result.append({
             "episodeNumber": number,
-            "title": jikan.get("title") or video.get("title") or f"Episode {number}",
+            "title": (
+                jikan.get("title")
+                or stream.get("title")
+                or video.get("title")
+                or f"Episode {number}"
+            ),
             "description": jikan.get("synopsis"),
             "airdate": (
                 _date_from_timestamp(airing.get("airingAt"))
@@ -632,6 +686,7 @@ def get_episode_data(media_id, mal_id=None):
             "thumbnail": (
                 video_jpg.get("image_url")
                 or video_webp.get("image_url")
+                or stream.get("thumbnail")
                 or None
             ),
         })
