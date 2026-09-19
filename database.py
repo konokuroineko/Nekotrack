@@ -331,10 +331,28 @@ def save_staff(work_id, staff_edges):
 def get_staff(work_id):
     connection = get_connection()
     results = connection.execute("""
-        SELECT people.id AS person_id, people.name, people.image_path, people.image_url, work_staff.role
-        FROM work_staff JOIN people ON people.id = work_staff.person_id
-        WHERE work_staff.work_id = ? ORDER BY work_staff.role, people.name
-    """, (work_id,)).fetchall()
+        SELECT
+            people.id AS person_id,
+            people.name,
+            people.image_path,
+            people.image_url,
+            (
+                SELECT group_concat(role, char(10))
+                FROM (
+                    SELECT role
+                    FROM work_staff AS ws
+                    WHERE ws.work_id = ? AND ws.person_id = people.id
+                    ORDER BY role
+                )
+            ) AS role
+        FROM people
+        WHERE EXISTS (
+            SELECT 1
+            FROM work_staff AS ws
+            WHERE ws.work_id = ? AND ws.person_id = people.id
+        )
+        ORDER BY people.name
+    """, (work_id, work_id)).fetchall()
     connection.close()
     return results
 
