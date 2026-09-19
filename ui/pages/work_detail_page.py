@@ -708,18 +708,65 @@ class WorkDetailPage(QWidget):
         set_episode_watched(self._value("id"), number, checked); refreshed = get_work(self._value("id")); self.set_work(refreshed or self.work)
 
     def _grid_section(self, title, items, cls, signal, columns):
-        frame = QFrame(); frame.setObjectName("charactersSection" if title == "Characters" else "section"); frame.setStyleSheet(f"QFrame#charactersSection {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }} QFrame#section {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"); lay = QVBoxLayout(frame); lay.setContentsMargins(20, 18, 20, 20); lay.setSpacing(12); header = QLabel(title); header.setStyleSheet(f"font-size:17px;font-weight:800;color:{COLORS['primary']};"); lay.addWidget(header); container = QWidget(); grid = QGridLayout(container); grid.setContentsMargins(0, 0, 0, 0); grid.setHorizontalSpacing(12 if title != "Staff" else 8); grid.setVerticalSpacing(12)
+        frame = QFrame()
+        frame.setObjectName("charactersSection" if title == "Characters" else "section")
+        frame.setStyleSheet(
+            f"QFrame#charactersSection {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
+            f" QFrame#section {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
+        )
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(20, 18, 20, 20)
+        lay.setSpacing(12)
+
+        header = QLabel(title)
+        header.setStyleSheet(
+            f"font-size:17px;font-weight:800;color:{COLORS['primary']};"
+        )
+        lay.addWidget(header)
+
+        if title == "Staff":
+            container = QWidget()
+            rows = QVBoxLayout(container)
+            rows.setContentsMargins(0, 0, 0, 0)
+            rows.setSpacing(12)
+
+            if not items:
+                empty = QLabel("Nothing stored locally yet.")
+                empty.setStyleSheet(muted_label_stylesheet())
+                rows.addWidget(empty)
+            else:
+                for start_index in range(0, len(items), columns):
+                    row = QHBoxLayout()
+                    row.setContentsMargins(0, 0, 0, 0)
+                    row.setSpacing(8)
+                    for item in items[start_index:start_index + columns]:
+                        card = cls(item)
+                        card.clicked.connect(signal)
+                        row.addWidget(card, 0, Qt.AlignTop)
+                    row.addStretch(1)
+                    rows.addLayout(row)
+
+            lay.addWidget(container)
+            return frame
+
+        container = QWidget()
+        grid = QGridLayout(container)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(12)
+
         if not items:
-            x = QLabel("Nothing stored locally yet."); x.setStyleSheet(muted_label_stylesheet()); grid.addWidget(x, 0, 0)
+            x = QLabel("Nothing stored locally yet.")
+            x.setStyleSheet(muted_label_stylesheet())
+            grid.addWidget(x, 0, 0)
         else:
             for i, item in enumerate(items):
                 card = cls(item)
                 card.clicked.connect(signal)
-                if title == "Staff":
-                    grid.addWidget(card, i // columns, i % columns, Qt.AlignHCenter | Qt.AlignTop)
-                else:
-                    grid.addWidget(card, i // columns, i % columns)
-        lay.addWidget(container); return frame
+                grid.addWidget(card, i // columns, i % columns)
+
+        lay.addWidget(container)
+        return frame
 
     def _relations(self):
         return self._grid_section("Relations", get_relations(self._value("id")), RelationCard, self.relation_selected, 2)
