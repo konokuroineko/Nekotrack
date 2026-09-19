@@ -63,8 +63,8 @@ class CharacterCard(QFrame):
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
-        image = CharacterArtwork(72, 96, 14)
+        layout.setSpacing(8)
+        image = CharacterArtwork(88, 116, 14)
         image_path = self._value("character_image_path")
         image_url = self._value("character_image_url")
 
@@ -101,7 +101,7 @@ class CharacterCard(QFrame):
         text_layout.addStretch()
         layout.addLayout(text_layout, 1)
 
-        person_image = CharacterArtwork(72, 96, 14)
+        person_image = CharacterArtwork(88, 116, 14)
         person_image_path = self._value("person_image_path")
         person_image_url = self._value("person_image_url")
 
