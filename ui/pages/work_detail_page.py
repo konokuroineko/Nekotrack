@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 
 from database import (
     add_manual_bundle_link, add_to_library, delete_work_data, get_characters, get_connection,
-    get_episodes, get_relations, get_staff, get_work, remove_bundle_member,
+    get_episodes, get_relations, get_staff, get_work,
     save_anime, save_characters, save_cover_path, save_episodes, save_staff,
     set_episode_progress, set_episode_watched,
 )
@@ -84,7 +84,7 @@ class BundleRemoveDialog(QDialog):
         )
         root.addWidget(heading)
 
-        subtitle = QLabel("Choose the bundled item you want to remove from this bundle.")
+        subtitle = QLabel("Choose the bundled item you want to remove from your Library.")
         subtitle.setStyleSheet(f"color:{COLORS['secondary']};font-size:12px;")
         root.addWidget(subtitle)
 
@@ -113,7 +113,7 @@ class BundleRemoveDialog(QDialog):
             self.list.addItem(empty)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
-        remove_button = buttons.addButton("Remove", QDialogButtonBox.AcceptRole)
+        remove_button = buttons.addButton("Delete selected item", QDialogButtonBox.AcceptRole)
         remove_button.setEnabled(bool(partners))
         remove_button.clicked.connect(self._choose_selected)
         buttons.rejected.connect(self.reject)
@@ -490,15 +490,44 @@ class WorkDetailPage(QWidget):
         if dialog.exec() != QDialog.Accepted or dialog.selected_id is None:
             return
 
-        if remove_bundle_member(
-            int(work_id),
-            dialog.selected_id,
-            [int(member["id"]) for member in members],
-        ):
-            self.bundle_changed.emit()
-            refreshed = get_work(int(work_id))
-            if refreshed:
-                self.set_work(refreshed)
+        selected_id = int(dialog.selected_id)
+
+        # "Remove from bundle" means remove that bundled library entry entirely.
+        # It must not merely unlink the item and leave it in the Library.
+        if not delete_work_data(selected_id):
+            QMessageBox.critical(
+                self,
+                "Could not remove bundled item",
+                "The selected bundled item could not be removed from NekoTrack.",
+            )
+            return
+
+        connection = get_connection()
+        still_exists = connection.execute(
+            "SELECT 1 FROM works WHERE id = ? LIMIT 1",
+            (selected_id,),
+        ).fetchone() is not None
+        still_in_library = connection.execute(
+            "SELECT 1 FROM user_library WHERE work_id = ? LIMIT 1",
+            (selected_id,),
+        ).fetchone() is not None
+        connection.close()
+
+        if still_exists or still_in_library:
+            QMessageBox.critical(
+                self,
+                "Remove failed",
+                "The selected bundled item was not fully removed from NekoTrack.",
+            )
+            return
+
+        self.bundle_changed.emit()
+        refreshed = get_work(int(work_id))
+        if refreshed:
+            self.set_work(refreshed)
+        else:
+            self.work = None
+            self.back_requested.emit()
 
     def _show_delete_confirmation(self, group):
         if self._delete_overlay is not None:
