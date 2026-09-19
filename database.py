@@ -97,7 +97,7 @@ def initialize_database():
     column_names = {column["name"] for column in columns}
     for column, definition in {
         "format": "TEXT", "cover_path": "TEXT", "chapters": "INTEGER", "volumes": "INTEGER",
-        "source": "TEXT", "end_year": "INTEGER", "duration": "INTEGER",
+        "source": "TEXT", "end_year": "INTEGER", "duration": "INTEGER", "characters_loaded": "INTEGER NOT NULL DEFAULT 0",
     }.items():
         if column not in column_names:
             cursor.execute(f"ALTER TABLE works ADD COLUMN {column} {definition}")
@@ -165,8 +165,22 @@ def save_characters(work_id, characters):
                 INSERT OR REPLACE INTO character_voice_actors (character_id, person_id, language)
                 VALUES (?, ?, ?)
             """, (character_id, person_id, actor.get("language")))
+    connection.execute(
+        "UPDATE works SET characters_loaded = 1 WHERE id = ?",
+        (work_id,),
+    )
     connection.commit()
     connection.close()
+
+
+def characters_are_loaded(work_id):
+    connection = get_connection()
+    row = connection.execute(
+        "SELECT characters_loaded FROM works WHERE id = ? LIMIT 1",
+        (work_id,),
+    ).fetchone()
+    connection.close()
+    return bool(row and row["characters_loaded"])
 
 
 def get_characters(work_id):
