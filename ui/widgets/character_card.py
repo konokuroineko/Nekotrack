@@ -145,6 +145,9 @@ class CharacterCard(QFrame):
             if person_image._pixmap.isNull():
                 self._load_voice_image_url(person_image_url)
             layout.addWidget(person_image, alignment=Qt.AlignTop)
+        else:
+            # Reserve the same width as the voice-actor portrait so the text stays centered.
+            layout.addSpacing(88)
 
     def _load_image_url(self, url):
         if not url:
