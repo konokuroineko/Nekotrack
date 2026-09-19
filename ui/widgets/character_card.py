@@ -1,7 +1,7 @@
 from PySide6.QtCore import Signal, Qt, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PySide6.QtWidgets import QFrame, QLabel, QHBoxLayout, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QLabel, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
 from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
 
