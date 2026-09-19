@@ -60,6 +60,7 @@ class PersonCard(QFrame):
         self.person = person
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedWidth(180)
+        self.setMinimumHeight(215)
         self.setStyleSheet(card_stylesheet())
         self._network_manager = QNetworkAccessManager(self)
         self._image_reply = None
@@ -88,6 +89,7 @@ class PersonCard(QFrame):
         role = self._value("role")
         if role:
             role_label = QLabel(role)
+            role_label.setWordWrap(True)
             role_label.setStyleSheet(
                 f"background: transparent; border: none; {muted_label_stylesheet()}"
             )
