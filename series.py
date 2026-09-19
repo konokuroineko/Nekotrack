@@ -3,7 +3,7 @@ import re
 import time
 
 from api import get_media_details, get_media_relations_batch
-from database import get_all_library, get_bundle_override, get_connection, get_manual_bundle_links, get_work, save_anime
+from database import get_all_library, get_bundle_override, get_bundle_exclusions, get_connection, get_manual_bundle_links, get_work, save_anime
 
 
 SERIES_RELATIONS = {
@@ -615,6 +615,10 @@ def _group_discovered(results, discovered):
     # they belong to the same display bundle regardless of AniList relation type
     # or whether one entry has a missing/unrecognized format.
     manual_links = get_manual_bundle_links(ids)
+    excluded_links = {
+        tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
+        for link in get_bundle_exclusions(ids)
+    }
     manual_ids = set()
     for link in manual_links:
         left_id = int(link["work_a"])
@@ -633,6 +637,8 @@ def _group_discovered(results, discovered):
             target_id = int(target_id)
             if target_id not in ids:
                 continue
+            if tuple(sorted((item_id, target_id))) in excluded_links:
+                continue
             if not _relation_group_compatible(item, edge, target):
                 continue
             union(item_id, target_id)
@@ -645,7 +651,9 @@ def _group_discovered(results, discovered):
         item_id = int(item["id"])
         if key[1]:
             if key in by_key:
-                union(item_id, by_key[key])
+                partner_id = by_key[key]
+                if tuple(sorted((item_id, partner_id))) not in excluded_links:
+                    union(item_id, partner_id)
             else:
                 by_key[key] = item_id
 
@@ -682,7 +690,9 @@ def _group_discovered(results, discovered):
                 else (other_tokens, item_tokens)
             )
             if longer[:len(shorter)] == shorter:
-                union(item_id, int(_get(other, "id")))
+                other_id = int(_get(other, "id"))
+                if tuple(sorted((item_id, other_id))) not in excluded_links:
+                    union(item_id, other_id)
 
     groups = defaultdict(list)
     for item in discovered:
@@ -896,8 +906,15 @@ def get_library_series():
             "relationType": relation["relation_type"],
             "node": target,
         }
+        if tuple(sorted((source_id, target_id))) in excluded_links:
+            continue
         if _relation_group_compatible(source, edge, target):
             union(source_id, target_id)
+
+    excluded_links = {
+        tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
+        for link in get_bundle_exclusions(ids)
+    }
 
     # Manual bundle links are explicit user overrides and may join works
     # even when AniList relations or formats would not allow automatic bundling.
@@ -916,7 +933,9 @@ def get_library_series():
         if key[1]:
             work_id = int(row["id"])
             if key in by_key:
-                union(work_id, by_key[key])
+                partner_id = by_key[key]
+                if tuple(sorted((work_id, partner_id))) not in excluded_links:
+                    union(work_id, partner_id)
             else:
                 by_key[key] = work_id
 
