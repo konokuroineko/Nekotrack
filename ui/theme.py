@@ -15,6 +15,7 @@ COLORS = {
     "muted": "#687384",
     "accent": get("accent"),
     "accent_hover": get("accent_hover"),
+    "frame": get("frame_color"),
     "accent_soft": "#302116",
     "success": "#67d391",
     "danger": "#ef7474",
@@ -37,6 +38,7 @@ def refresh_theme():
         "card_hover": get("card_hover"),
         "accent": get("accent"),
         "accent_hover": get("accent_hover"),
+        "frame": get("frame_color"),
     })
     FONT_SIZES["body"] = get("font_size")
 
@@ -69,12 +71,12 @@ def application_stylesheet():
 
 def panel_stylesheet(radius=None):
     radius = get("corner_radius") if radius is None else radius
-    return f"QFrame {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: {radius}px; }}"
+    return f"QFrame {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: {radius}px; }}"
 
 
 def card_stylesheet(radius=None):
     radius = get("corner_radius") if radius is None else radius
-    return f"QFrame {{ background: {COLORS['card']}; border: 1px solid {COLORS['border']}; border-radius: {radius}px; }} QFrame:hover {{ background: {COLORS['card_hover']}; border-color: {COLORS['border_hover']}; }}"
+    return f"QFrame {{ background: {COLORS['card']}; border: 2px solid {COLORS['frame']}; border-radius: {radius}px; }} QFrame:hover {{ background: {COLORS['card_hover']}; border-color: {COLORS['frame']}; }}"
 
 
 def muted_label_stylesheet():
