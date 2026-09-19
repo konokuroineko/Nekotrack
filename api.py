@@ -485,6 +485,57 @@ def get_media_episodes(media_id):
     ]
 
 
+def get_episode_data(media_id):
+    """Fetch and normalize the complete airing schedule for one media entry."""
+    query = """
+    query ($id: Int, $page: Int) {
+        Media(id: $id) {
+            airingSchedule(page: $page, perPage: 50) {
+                nodes {
+                    airingAt
+                    episode
+                }
+                pageInfo {
+                    currentPage
+                    lastPage
+                    hasNextPage
+                }
+            }
+        }
+    }
+    """
+    page = 1
+    schedule = []
+
+    while True:
+        data = anilist_request(
+            query,
+            {"id": int(media_id), "page": page},
+        )
+        connection = ((data.get("Media") or {}).get("airingSchedule") or {})
+        schedule.extend(connection.get("nodes") or [])
+        page_info = connection.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            break
+        page += 1
+
+    return [
+        {
+            "episodeNumber": node.get("episode"),
+            "title": f"Episode {node.get('episode')}",
+            "description": None,
+            "airdate": (
+                __import__("datetime").datetime.fromtimestamp(
+                    int(node["airingAt"])
+                ).strftime("%Y-%m-%d")
+                if node.get("airingAt") is not None
+                else None
+            ),
+        }
+        for node in schedule
+        if node.get("episode") is not None
+    ]
+
 def get_media_details(media_id):
     """Fetch the complete media record needed by detail/import workflows."""
     query = """
