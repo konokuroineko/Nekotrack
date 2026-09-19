@@ -494,6 +494,21 @@ class SearchPage(QWidget):
 
         new_results = data["media"]
 
+        # Keep the displayed results consistent with the selected filters even
+        # if the upstream API returns an unexpected media type/format.
+        if self.current_media_type:
+            new_results = [
+                item for item in new_results
+                if str(item.get("type") or "").upper() == self.current_media_type
+            ]
+
+        selected_format = self.current_media_format or self.current_filters.get("format_filter")
+        if selected_format:
+            new_results = [
+                item for item in new_results
+                if str(item.get("format") or "").upper() == selected_format
+            ]
+
         if self.current_page == 1:
             self.raw_results = []
         self.raw_results.extend(new_results)
