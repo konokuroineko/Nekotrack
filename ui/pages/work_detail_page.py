@@ -504,7 +504,7 @@ class WorkDetailPage(QWidget):
         message = QLabel(
             "This will permanently remove the selected local data and cached cover."
             if not is_bundle
-            else "This entry is part of a bundle. Choose what you want to remove."
+            else "Choose the bundle entry you want to permanently remove, or delete the entire bundle."
         )
         message.setObjectName("deleteMessage")
         message.setWordWrap(True)
@@ -520,11 +520,52 @@ class WorkDetailPage(QWidget):
         buttons.addWidget(cancel)
 
         if is_bundle:
-            entry_button = QPushButton("Delete this entry")
+            member_list = QListWidget()
+            member_list.setObjectName("deleteMemberList")
+            member_list.setMinimumHeight(min(220, max(90, 58 * min(len(members), 4))))
+            member_list.setMaximumHeight(260)
+            member_list.setStyleSheet(
+                f"""
+                QListWidget#deleteMemberList {{
+                    background: {COLORS['background_alt']};
+                    border: 1px solid {COLORS['border']};
+                    border-radius: 9px;
+                    padding: 4px;
+                    color: {COLORS['primary']};
+                }}
+                QListWidget#deleteMemberList::item {{
+                    padding: 9px 10px;
+                    border: 1px solid transparent;
+                    border-radius: 7px;
+                    color: {COLORS['secondary']};
+                }}
+                QListWidget#deleteMemberList::item:hover {{
+                    background: {COLORS['surface_hover']};
+                    border-color: {COLORS['accent']};
+                    color: {COLORS['primary']};
+                }}
+                QListWidget#deleteMemberList::item:selected {{
+                    background: {COLORS['accent_soft']};
+                    border-color: {COLORS['accent']};
+                    color: {COLORS['primary']};
+                }}
+                """
+            )
+            selected_row = 0
+            for index, member in enumerate(members):
+                item = QListWidgetItem(self._member_title(member))
+                item.setData(Qt.UserRole, int(member["id"]))
+                member_list.addItem(item)
+                if int(member["id"]) == current_id:
+                    selected_row = index
+            member_list.setCurrentRow(selected_row)
+            layout.addWidget(member_list)
+
+            entry_button = QPushButton("Delete selected entry")
             entry_button.setObjectName("deleteConfirm")
             entry_button.setCursor(Qt.PointingHandCursor)
             entry_button.clicked.connect(
-                lambda: self._delete_from_detail([current_id], overlay)
+                lambda: self._delete_selected_bundle_member(member_list, overlay)
             )
             buttons.addWidget(entry_button)
 
@@ -560,6 +601,12 @@ class WorkDetailPage(QWidget):
         if overlay is self._delete_overlay:
             self._delete_overlay = None
         overlay.deleteLater()
+
+    def _delete_selected_bundle_member(self, member_list, overlay):
+        item = member_list.currentItem()
+        if item is None:
+            return
+        self._delete_from_detail([int(item.data(Qt.UserRole))], overlay)
 
     def _delete_from_detail(self, work_ids, overlay):
         deleted = False
