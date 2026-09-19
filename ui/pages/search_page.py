@@ -266,7 +266,7 @@ class SearchPage(QWidget):
         self.fast_search.setCursor(Qt.PointingHandCursor)
         self.fast_search.stateChanged.connect(self.fast_search_changed)
         if self.selection_mode:
-            self.fast_search.setChecked(True)
+            self.fast_search.setChecked(False)
             self.fast_search.hide()
 
         fields = [
@@ -710,9 +710,54 @@ class SearchPage(QWidget):
 
     def _render_grouped_preserving_skeletons(self, grouped, skeleton_count):
         self._clear_results()
+
+        if self.selection_mode:
+            # The normal search pipeline may combine related works into a
+            # bundle. For the bundle picker, expose the individual members
+            # instead of the bundle representative so one work is selectable.
+            flattened = []
+            seen_ids = set()
+
+            for item in grouped:
+                members = item.get("_series_members") or []
+                if len(members) > 1:
+                    candidates = members
+                else:
+                    candidates = [item]
+
+                for member in candidates:
+                    try:
+                        work_id = int(member["id"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if work_id in seen_ids:
+                        continue
+                    seen_ids.add(work_id)
+                    flattened.append(member)
+
+            self.displayed_items = flattened
+            for item in flattened:
+                card = WorkCard(
+                    item,
+                    mode="search",
+                    add_callback=self.add_to_library,
+                    show_add_button=False,
+                )
+                card.clicked.connect(self.anime_selected)
+                self.grid_layout.addWidget(card)
+
+            self._reflow_results()
+            self._update_results_title()
+            return
+
         self.displayed_items = list(grouped)
         for item in grouped:
-            card = WorkCard(item, mode="search", add_callback=self.add_to_library, show_add_button=not self.selection_mode)
+            card = WorkCard(
+                item,
+                mode="search",
+                add_callback=self.add_to_library,
+                show_add_button=True,
+            )
             card.clicked.connect(self.anime_selected)
             self.grid_layout.addWidget(card)
         self._append_skeletons(skeleton_count)
