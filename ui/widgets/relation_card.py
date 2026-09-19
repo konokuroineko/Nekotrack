@@ -43,7 +43,9 @@ class RelationCard(QFrame):
 
         text_layout = QVBoxLayout()
         title = QLabel(self._title())
-        title.setStyleSheet(f"color: {COLORS['primary']}; font-weight: 650;")
+        title.setStyleSheet(
+            f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 650;"
+        )
         title.setWordWrap(True)
         text_layout.addWidget(title)
 
@@ -54,7 +56,9 @@ class RelationCard(QFrame):
             f"{source_title or 'Related work'}  →  {relation_label}"
         )
         connection_label.setWordWrap(True)
-        connection_label.setStyleSheet(f"color: {COLORS['muted']}; font-size: 11px;")
+        connection_label.setStyleSheet(
+            f"background: transparent; border: none; color: {COLORS['muted']}; font-size: 11px;"
+        )
         text_layout.addWidget(connection_label)
         text_layout.addStretch()
         layout.addLayout(text_layout)
