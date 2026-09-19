@@ -1,7 +1,7 @@
 import threading
 
 from api import get_media_details
-from PySide6.QtCore import QObject, Signal, Qt, QTimer
+from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
 from database import add_to_library, characters_are_loaded, get_work, initialize_database, save_anime, save_characters, save_cover_path, save_episodes, save_staff
