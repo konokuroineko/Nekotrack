@@ -33,11 +33,14 @@ class RelationCard(QFrame):
         self._network_manager = QNetworkAccessManager(self)
         self._cover_reply = None
         self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(128)
         self.setStyleSheet(card_stylesheet())
 
         layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
         self.image = QLabel()
-        self.image.setFixedSize(60, 84)
+        self.image.setFixedSize(72, 100)
         layout.addWidget(self.image)
         self._load_cover()
 
