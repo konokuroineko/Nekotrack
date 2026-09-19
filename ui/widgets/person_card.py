@@ -6,7 +6,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
 
 from database import save_person_image_path
-from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
+from ui.theme import COLORS, muted_label_stylesheet
 
 
 class PersonArtwork(QFrame):
@@ -59,7 +59,8 @@ class PersonCard(QFrame):
         super().__init__(parent)
         self.person = person
         self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet(card_stylesheet())
+        self.setFixedWidth(152)
+        self.setStyleSheet("QFrame { background: transparent; border: none; }")
         self._network_manager = QNetworkAccessManager(self)
         self._image_reply = None
 
