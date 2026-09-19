@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (
 )
 
 from database import (
-    add_manual_bundle_link, add_to_library, delete_work_data, get_characters, get_connection,
-    get_episodes, get_relations, get_staff, get_work,
+    add_manual_bundle_link, add_to_library, delete_work_data, get_bundle_characters,
+    get_bundle_relations, get_bundle_staff, get_connection, get_episodes, get_work,
     save_anime, save_characters, save_cover_path, save_episodes, save_staff,
     set_episode_progress, set_episode_watched,
 )
@@ -297,9 +297,9 @@ class WorkDetailPage(QWidget):
         root.addWidget(self._hero())
         root.addWidget(self._episodes_section())
         detail_ids = self._detail_work_ids()
-        root.addWidget(self._grid_section("Characters", get_characters(detail_ids), CharacterCard, self.character_selected, 4))
-        root.addWidget(self._grid_section("Staff", get_staff(detail_ids), PersonCard, self.person_selected, 6))
-        root.addWidget(self._grid_section("Relations", self._detail_relations(detail_ids), RelationCard, self.relation_selected, 6))
+        root.addWidget(self._grid_section("Characters", get_bundle_characters(detail_ids), CharacterCard, self.character_selected, 4))
+        root.addWidget(self._grid_section("Staff", get_bundle_staff(detail_ids), PersonCard, self.person_selected, 6))
+        root.addWidget(self._grid_section("Relations", get_bundle_relations(detail_ids), RelationCard, self.relation_selected, 6))
         root.addStretch()
         self.scroll_area.setWidget(content)
         self.setStyleSheet(f"""
@@ -806,40 +806,6 @@ class WorkDetailPage(QWidget):
 
     def _episode_toggled(self, number, checked):
         set_episode_watched(self._value("id"), number, checked); refreshed = get_work(self._value("id")); self.set_work(refreshed or self.work)
-
-    def _detail_work_ids(self):
-        """Return every work ID represented by this detail page."""
-        members = self._value("_series_members") or []
-        ids = []
-        for member in members:
-            try:
-                work_id = int(member["id"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if work_id not in ids:
-                ids.append(work_id)
-
-        if ids:
-            return ids
-
-        work_id = self._value("id")
-        try:
-            return [int(work_id)] if work_id is not None else []
-        except (TypeError, ValueError):
-            return []
-
-    def _detail_relations(self, work_ids=None):
-        """Merge relations from all represented works and hide internal bundle links."""
-        ids = self._detail_work_ids() if work_ids is None else list(work_ids)
-        if not ids:
-            return []
-
-        internal_ids = {int(work_id) for work_id in ids}
-        return [
-            relation
-            for relation in get_relations(ids)
-            if int(relation["target_id"]) not in internal_ids
-        ]
 
     def _grid_section(self, title, items, cls, signal, columns):
         frame = QFrame()
