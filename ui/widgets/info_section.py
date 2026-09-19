@@ -11,7 +11,7 @@ class InfoSection(QFrame):
         self.setStyleSheet(f"""
             QFrame {{
                 background: {COLORS['panel']};
-                border: 1px solid {COLORS['border']};
+                border: 1px solid {COLORS['frame']};
                 border-radius: 8px;
             }}
         """)
