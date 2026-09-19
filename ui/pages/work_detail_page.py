@@ -271,6 +271,7 @@ class WorkDetailPage(QWidget):
     def __init__(self):
         super().__init__()
         self.work = None
+        self._selected_episode_work_id = None
         self._cover_manager = QNetworkAccessManager(self)
         self._cover_reply = None
         self._delete_overlay = None
@@ -282,7 +283,17 @@ class WorkDetailPage(QWidget):
         root.addWidget(self.scroll_area)
 
     def set_work(self, work):
+        previous_selected_episode_id = self._selected_episode_work_id
         self.work = work
+
+        detail_ids = self._detail_work_ids()
+        if previous_selected_episode_id in detail_ids:
+            self._selected_episode_work_id = previous_selected_episode_id
+        elif detail_ids:
+            self._selected_episode_work_id = detail_ids[0]
+        else:
+            self._selected_episode_work_id = self._value("id")
+
         if self._delete_overlay is not None:
             self._delete_overlay.deleteLater()
             self._delete_overlay = None
@@ -295,7 +306,9 @@ class WorkDetailPage(QWidget):
         back.clicked.connect(self.back_requested)
         root.addWidget(back, alignment=Qt.AlignLeft)
         root.addWidget(self._hero())
-        root.addWidget(self._episodes_section())
+        episodes_frame = self._episodes_section()
+        episodes_frame.setProperty("_episodes_section", True)
+        root.addWidget(episodes_frame)
         detail_ids = self._detail_work_ids()
         root.addWidget(self._grid_section("Characters", get_bundle_characters(detail_ids), CharacterCard, self.character_selected, 4))
         root.addWidget(self._grid_section("Staff", get_bundle_staff(detail_ids), PersonCard, self.person_selected, 6))
@@ -796,16 +809,217 @@ class WorkDetailPage(QWidget):
         return result
 
     def _episodes_section(self):
-        episodes = get_episodes(self._value("id")); frame = QFrame(); frame.setObjectName("section"); lay = QVBoxLayout(frame); lay.setContentsMargins(20, 18, 20, 20); lay.setSpacing(10)
-        header = QHBoxLayout(); title = QLabel("Episodes"); title.setStyleSheet(f"font-size:17px;font-weight:800;color:{COLORS['primary']};"); header.addWidget(title); header.addStretch(); watched = sum(1 for ep in episodes if ep["watched"]); total = len(episodes); count = QLabel(f"{watched} / {total} watched" if total else "No episode list saved"); count.setStyleSheet(f"color:{COLORS['accent']};font-weight:800;"); header.addWidget(count); lay.addLayout(header)
+        members = self._episode_members()
+        member_ids = {int(member["id"]) for member in members}
+        if self._selected_episode_work_id not in member_ids:
+            self._selected_episode_work_id = (
+                int(members[0]["id"])
+                if members
+                else self._value("id")
+            )
+
+        selected_id = self._selected_episode_work_id
+        episodes = get_episodes(selected_id) if selected_id is not None else []
+
+        frame = QFrame()
+        frame.setObjectName("section")
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(20, 18, 20, 20)
+        lay.setSpacing(10)
+
+        header = QHBoxLayout()
+
+        if len(members) > 1:
+            selected_season = next(
+                (
+                    index
+                    for index, member in enumerate(members, start=1)
+                    if int(member["id"]) == int(selected_id)
+                ),
+                1,
+            )
+            title = QLabel(f"Season {selected_season} Episodes")
+        else:
+            title = QLabel("Episodes")
+
+        title.setStyleSheet(
+            f"font-size:17px;font-weight:800;color:{COLORS['primary']};"
+        )
+        header.addWidget(title)
+        header.addStretch()
+
+        watched = sum(1 for ep in episodes if ep["watched"])
+        total = len(episodes)
+        count = QLabel(
+            f"{watched} / {total} watched"
+            if total
+            else "No episode list saved"
+        )
+        count.setStyleSheet(f"color:{COLORS['accent']};font-weight:800;")
+        header.addWidget(count)
+
+        if len(members) > 1:
+            season_button = QToolButton()
+            season_button.setText(f"Season {selected_season}  ▾")
+            season_button.setPopupMode(QToolButton.InstantPopup)
+            season_button.setCursor(Qt.PointingHandCursor)
+            season_button.setStyleSheet(
+                f"""
+                QToolButton {{
+                    background:{COLORS['surface_alt']};
+                    color:{COLORS['primary']};
+                    border:1px solid {COLORS['border']};
+                    border-radius:9px;
+                    padding:7px 12px;
+                    font-weight:800;
+                }}
+                QToolButton:hover {{
+                    background:{COLORS['surface_hover']};
+                    border-color:{COLORS['accent']};
+                }}
+                QToolButton::menu-indicator {{
+                    image:none;
+                    width:0px;
+                }}
+                """
+            )
+
+            menu = QMenu(season_button)
+            for index, member in enumerate(members, start=1):
+                member_id = int(member["id"])
+                year = member["start_year"] or "Unknown date"
+                member_title = self._member_title(member)
+                action = menu.addAction(
+                    f"Season {index}  —  {member_title}  ·  {year}"
+                )
+                action.setCheckable(True)
+                action.setChecked(member_id == int(selected_id))
+                action.triggered.connect(
+                    lambda checked=False, work_id=member_id:
+                        self._episode_season_changed(work_id)
+                )
+            season_button.setMenu(menu)
+            header.addWidget(season_button)
+
+        lay.addLayout(header)
+
         if not episodes:
-            x = QLabel("Use the episode counter above to track progress. Detailed episode data will appear here when saved locally."); x.setStyleSheet(muted_label_stylesheet()); x.setWordWrap(True); lay.addWidget(x); return frame
+            x = QLabel(
+                "Detailed episode data has not been saved locally for this season yet."
+            )
+            x.setStyleSheet(muted_label_stylesheet())
+            x.setWordWrap(True)
+            lay.addWidget(x)
+            return frame
+
         for ep in episodes:
-            row = QFrame(); row.setObjectName("episode"); r = QHBoxLayout(row); r.setContentsMargins(12, 9, 14, 9); cb = QCheckBox(); cb.setChecked(bool(ep["watched"])); r.addWidget(cb); num = QLabel(f"EP {ep['episode_number']:02d}"); num.setMinimumWidth(52); num.setStyleSheet(f"color:{COLORS['accent']};font-weight:850;"); r.addWidget(num); ep_title = QLabel(ep["title"] or "Episode"); ep_title.setStyleSheet(f"color:{COLORS['primary']};font-weight:650;"); r.addWidget(ep_title, 1); date = QLabel(str(ep["air_date"] or "")); date.setStyleSheet(muted_label_stylesheet()); r.addWidget(date); cb.toggled.connect(lambda checked, n=ep["episode_number"]: self._episode_toggled(n, checked)); lay.addWidget(row)
+            row = QFrame()
+            row.setObjectName("episode")
+            r = QHBoxLayout(row)
+            r.setContentsMargins(12, 9, 14, 9)
+
+            cb = QCheckBox()
+            cb.setChecked(bool(ep["watched"]))
+            r.addWidget(cb)
+
+            num = QLabel(f"EP {ep['episode_number']:02d}")
+            num.setMinimumWidth(52)
+            num.setStyleSheet(
+                f"color:{COLORS['accent']};font-weight:850;"
+            )
+            r.addWidget(num)
+
+            ep_title = QLabel(ep["title"] or "Episode")
+            ep_title.setStyleSheet(
+                f"color:{COLORS['primary']};font-weight:650;"
+            )
+            r.addWidget(ep_title, 1)
+
+            date = QLabel(str(ep["air_date"] or ""))
+            date.setStyleSheet(muted_label_stylesheet())
+            r.addWidget(date)
+
+            cb.toggled.connect(
+                lambda checked, n=ep["episode_number"]:
+                    self._episode_toggled(n, checked)
+            )
+            lay.addWidget(row)
+
         return frame
 
+    def _episode_members(self):
+        members = list(self._value("_series_members") or [])
+        if not members:
+            current = self.work
+            return [current] if current is not None else []
+
+        def sort_key(member):
+            return (
+                member["start_year"] is None,
+                member["start_year"] or 9999,
+                int(member["id"]),
+            )
+
+        return sorted(members, key=sort_key)
+
+    def _episode_season_changed(self, work_id):
+        self._selected_episode_work_id = int(work_id)
+        self._replace_episode_section()
+
+    def _replace_episode_section(self):
+        content = self.scroll_area.widget()
+        if content is None:
+            return
+
+        root = content.layout()
+        if root is None:
+            return
+
+        for index in range(root.count()):
+            item = root.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is None or not widget.property("_episodes_section"):
+                continue
+
+            old_frame = widget
+            new_frame = self._episodes_section()
+            new_frame.setProperty("_episodes_section", True)
+            root.replaceWidget(old_frame, new_frame)
+            old_frame.deleteLater()
+            return
+
     def _episode_toggled(self, number, checked):
-        set_episode_watched(self._value("id"), number, checked); refreshed = get_work(self._value("id")); self.set_work(refreshed or self.work)
+        work_id = self._selected_episode_work_id
+        if work_id is None:
+            work_id = self._value("id")
+
+        set_episode_watched(work_id, number, checked)
+
+        episodes = get_episodes(work_id)
+        watched = sum(1 for ep in episodes if ep["watched"])
+        total = len(episodes)
+
+        content = self.scroll_area.widget()
+        if content is None or content.layout() is None:
+            return
+
+        root = content.layout()
+        for index in range(root.count()):
+            item = root.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is None or not widget.property("_episodes_section"):
+                continue
+
+            labels = widget.findChildren(QLabel)
+            for label in labels:
+                if label.text().endswith("watched") or label.text() == "No episode list saved":
+                    label.setText(
+                        f"{watched} / {total} watched"
+                        if total
+                        else "No episode list saved"
+                    )
+                    break
+            return
 
     def _detail_work_ids(self):
         """Return every work ID represented by this detail page."""
