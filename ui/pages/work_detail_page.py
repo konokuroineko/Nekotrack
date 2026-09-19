@@ -24,6 +24,302 @@ from ui.widgets.relation_card import RelationCard
 IMAGE_DIRECTORY = Path("data") / "images" / "works"
 
 
+
+class BundleSearchWorker(QObject):
+    finished = Signal(object)
+    error = Signal(str)
+
+    def __init__(self, query):
+        super().__init__()
+        self.query = query
+
+    def run(self):
+        try:
+            data = search_anime(
+                self.query,
+                page=1,
+                per_page=20,
+                include_relations=False,
+            )
+            self.finished.emit(data.get("media") or [])
+        except Exception as error:
+            self.error.emit(str(error))
+
+
+class BundleSearchDialog(QDialog):
+    def __init__(self, excluded_ids=None, parent=None):
+        super().__init__(parent)
+        self.selected_work = None
+        self.excluded_ids = {int(work_id) for work_id in (excluded_ids or set())}
+        self._thread = None
+        self._worker = None
+
+        self.setWindowTitle("Add to bundle")
+        self.setMinimumSize(620, 560)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 20, 22, 20)
+        root.setSpacing(12)
+
+        heading = QLabel("Add to bundle")
+        heading.setStyleSheet(
+            f"font-size:21px;font-weight:850;color:{COLORS['primary']};"
+        )
+        root.addWidget(heading)
+
+        subtitle = QLabel(
+            "Search AniList for the anime, manga, novel, or other work you want to add."
+        )
+        subtitle.setStyleSheet(f"color:{COLORS['secondary']};font-size:12px;")
+        subtitle.setWordWrap(True)
+        root.addWidget(subtitle)
+
+        search_row = QHBoxLayout()
+        search_row.setSpacing(8)
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Search titles…")
+        self.search_edit.returnPressed.connect(self._start_search)
+        search_row.addWidget(self.search_edit, 1)
+
+        self.search_button = QPushButton("Search")
+        self.search_button.setCursor(Qt.PointingHandCursor)
+        self.search_button.clicked.connect(self._start_search)
+        search_row.addWidget(self.search_button)
+        root.addLayout(search_row)
+
+        self.results = QListWidget()
+        self.results.setSelectionMode(QListWidget.SingleSelection)
+        self.results.setSpacing(5)
+        self.results.itemDoubleClicked.connect(self._choose_item)
+        root.addWidget(self.results, 1)
+
+        hint = QLabel("Double-click a result or select one and press Add.")
+        hint.setStyleSheet(f"color:{COLORS['muted']};font-size:11px;")
+        root.addWidget(hint)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        self.add_button = buttons.addButton("Add", QDialogButtonBox.AcceptRole)
+        self.add_button.setEnabled(False)
+        self.add_button.clicked.connect(self._choose_selected)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+        self.setStyleSheet(
+            f"""
+            QDialog {{ background:{COLORS['background']}; }}
+            QListWidget {{
+                background:{COLORS['surface']};
+                color:{COLORS['primary']};
+                border:1px solid {COLORS['border']};
+                border-radius:12px;
+                padding:6px;
+            }}
+            QListWidget::item {{
+                background:transparent;
+                border:1px solid transparent;
+                border-radius:9px;
+                padding:10px 12px;
+            }}
+            QListWidget::item:hover {{
+                background:{COLORS['surface_hover']};
+                border-color:{COLORS['accent']};
+            }}
+            QListWidget::item:selected {{
+                background:{COLORS['surface_hover']};
+                border-color:{COLORS['accent']};
+            }}
+        """
+        )
+
+    def _start_search(self):
+        query = self.search_edit.text().strip()
+        if not query or self._thread is not None:
+            return
+
+        self.results.clear()
+        item = QListWidgetItem("Searching…")
+        item.setFlags(Qt.NoItemFlags)
+        self.results.addItem(item)
+        self.add_button.setEnabled(False)
+        self.search_button.setEnabled(False)
+
+        self._thread = QThread(self)
+        self._worker = BundleSearchWorker(query)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._search_finished)
+        self._worker.error.connect(self._search_error)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.error.connect(lambda _message: self._thread.quit())
+        self._thread.finished.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._thread_finished)
+        self._thread.start()
+
+    def _thread_finished(self):
+        thread = self._thread
+        self._thread = None
+        self._worker = None
+        if thread is not None:
+            thread.deleteLater()
+        self.search_button.setEnabled(True)
+
+    def _search_finished(self, results):
+        self.results.clear()
+        visible = 0
+
+        for work in results or []:
+            try:
+                work_id = int(work["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if work_id in self.excluded_ids:
+                continue
+
+            title_data = work.get("title") or {}
+            title = (
+                title_data.get("english")
+                or title_data.get("romaji")
+                or title_data.get("native")
+                or "Untitled"
+            )
+            media_type = str(work.get("type") or "").title()
+            media_format = str(work.get("format") or "").title()
+            year = (work.get("startDate") or {}).get("year")
+            meta = " · ".join(
+                str(value)
+                for value in (media_type, media_format, year)
+                if value
+            )
+
+            label = str(title)
+            if meta:
+                label += f"\n{meta}"
+
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, work)
+            item.setSizeHint(QSize(0, 58))
+            self.results.addItem(item)
+            visible += 1
+
+        if visible == 0:
+            empty = QListWidgetItem("No matching works found.")
+            empty.setFlags(Qt.NoItemFlags)
+            self.results.addItem(empty)
+            return
+
+        self.results.setCurrentRow(0)
+        self.add_button.setEnabled(True)
+
+    def _search_error(self, message):
+        self.results.clear()
+        item = QListWidgetItem(f"Search failed:\n{message}")
+        item.setFlags(Qt.NoItemFlags)
+        self.results.addItem(item)
+
+    def _choose_selected(self):
+        self._choose_item(self.results.currentItem())
+
+    def _choose_item(self, item):
+        if item is None:
+            return
+        work = item.data(Qt.UserRole)
+        if not isinstance(work, dict) or work.get("id") is None:
+            return
+        self.selected_work = work
+        self.accept()
+
+
+class BundleRemoveDialog(QDialog):
+    def __init__(self, partners, parent=None):
+        super().__init__(parent)
+        self.selected_id = None
+        self.setWindowTitle("Remove from bundle")
+        self.setMinimumSize(500, 420)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 20, 22, 20)
+        root.setSpacing(12)
+
+        heading = QLabel("Remove from bundle")
+        heading.setStyleSheet(
+            f"font-size:21px;font-weight:850;color:{COLORS['primary']};"
+        )
+        root.addWidget(heading)
+
+        subtitle = QLabel("Choose the manual bundle link you want to remove.")
+        subtitle.setStyleSheet(f"color:{COLORS['secondary']};font-size:12px;")
+        root.addWidget(subtitle)
+
+        self.list = QListWidget()
+        self.list.setSpacing(5)
+        self.list.itemDoubleClicked.connect(self._choose_item)
+        root.addWidget(self.list, 1)
+
+        for row in partners or []:
+            label = str(row["partner_title"] or "Untitled")
+            meta = " · ".join(
+                str(value)
+                for value in (row["partner_type"], row["partner_format"])
+                if value
+            )
+            if meta:
+                label += f"\n{meta}"
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, int(row["partner_id"]))
+            item.setSizeHint(QSize(0, 58))
+            self.list.addItem(item)
+
+        if not partners:
+            empty = QListWidgetItem("No manual bundle links.")
+            empty.setFlags(Qt.NoItemFlags)
+            self.list.addItem(empty)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        remove_button = buttons.addButton("Remove", QDialogButtonBox.AcceptRole)
+        remove_button.setEnabled(bool(partners))
+        remove_button.clicked.connect(self._choose_selected)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+        self.setStyleSheet(
+            f"""
+            QDialog {{ background:{COLORS['background']}; }}
+            QListWidget {{
+                background:{COLORS['surface']};
+                color:{COLORS['primary']};
+                border:1px solid {COLORS['border']};
+                border-radius:12px;
+                padding:6px;
+            }}
+            QListWidget::item {{
+                background:transparent;
+                border:1px solid transparent;
+                border-radius:9px;
+                padding:10px 12px;
+            }}
+            QListWidget::item:hover, QListWidget::item:selected {{
+                background:{COLORS['surface_hover']};
+                border-color:{COLORS['accent']};
+            }}
+        """
+        )
+
+        if partners:
+            self.list.setCurrentRow(0)
+
+    def _choose_selected(self):
+        self._choose_item(self.list.currentItem())
+
+    def _choose_item(self, item):
+        if item is None:
+            return
+        partner_id = item.data(Qt.UserRole)
+        if partner_id is None:
+            return
+        self.selected_id = int(partner_id)
+        self.accept()
+
+
 class WorkDetailPage(QWidget):
     back_requested = Signal()
     person_selected = Signal(object)
@@ -84,10 +380,6 @@ class WorkDetailPage(QWidget):
             QSpinBox#episodeCounter::up-button, QSpinBox#episodeCounter::down-button {{ width: 0; height: 0; border: 0; }}
             QPushButton#counterButton {{ background: {COLORS['surface_alt']}; color: {COLORS['primary']}; border: 1px solid {COLORS['border']}; border-radius: 10px; font-size: 18px; font-weight: 850; min-width: 38px; min-height: 38px; }}
             QPushButton#counterButton:hover {{ background: {COLORS['surface_hover']}; border-color: {COLORS['accent']}; }}
-            QPushButton#bundleAction {{ background:{COLORS['accent']}; color:#111318; border:0; border-radius:10px; padding:8px 12px; font-weight:800; }}
-            QPushButton#bundleAction:hover {{ background:{COLORS['accent_hover']}; }}
-            QPushButton#bundleRemove {{ background:{COLORS['surface_alt']}; color:{COLORS['secondary']}; border:1px solid {COLORS['border']}; border-radius:10px; padding:8px 12px; font-weight:700; }}
-            QPushButton#bundleRemove:hover {{ background:{COLORS['surface_hover']}; border-color:{COLORS['border_hover']}; color:{COLORS['primary']}; }}
             QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:2px solid transparent; border-radius:{get('corner_radius') + 2}px; font-size:30px; font-weight:900; padding:0; }}
             QToolButton#detailMenu:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
             QFrame#deleteOverlay {{ background:{COLORS['surface']}; border:1px solid {COLORS['border_hover']}; border-radius:18px; }}
@@ -141,21 +433,6 @@ class WorkDetailPage(QWidget):
             metadata = QLabel(meta); metadata.setStyleSheet(f"color:{COLORS['secondary']};font-size:13px;"); info.addWidget(metadata)
         score = self._value("score") or self._value("averageScore")
         score_label = QLabel(f"★  {score}%" if score else "—  No score"); score_label.setStyleSheet(f"color:{COLORS['accent']};font-size:18px;font-weight:800;"); info.addWidget(score_label)
-
-        bundle_row = QHBoxLayout()
-        bundle_row.setSpacing(8)
-        add_bundle = QPushButton("＋  Add to bundle")
-        add_bundle.setObjectName("bundleAction")
-        add_bundle.setCursor(Qt.PointingHandCursor)
-        add_bundle.clicked.connect(self._add_to_bundle)
-        remove_bundle = QPushButton("Remove manual link")
-        remove_bundle.setObjectName("bundleRemove")
-        remove_bundle.setCursor(Qt.PointingHandCursor)
-        remove_bundle.clicked.connect(self._remove_manual_bundle_link)
-        bundle_row.addWidget(add_bundle)
-        bundle_row.addWidget(remove_bundle)
-        bundle_row.addStretch()
-        info.addLayout(bundle_row)
 
         info.addSpacing(10)
         progress_title = QLabel("Episode progress"); progress_title.setStyleSheet(f"color:{COLORS['secondary']};font-size:12px;font-weight:800;"); info.addWidget(progress_title)
@@ -269,6 +546,10 @@ class WorkDetailPage(QWidget):
             action.setDefaultWidget(button)
             menu.addAction(action)
 
+        add_item("Add to bundle", "detailMenuItem", self._open_add_bundle_dialog)
+        add_item("Remove from bundle", "detailMenuItem", self._open_remove_bundle_dialog)
+
+        menu.addSeparator()
         add_item("Auto Bundle", "detailMenuItem", lambda: self.auto_bundle_requested.emit(group))
 
         try:
@@ -292,6 +573,75 @@ class WorkDetailPage(QWidget):
             if isinstance(button, QToolButton)
             else self.mapToGlobal(self.rect().center())
         )
+
+    def _open_add_bundle_dialog(self):
+        group = self._library_group()
+        if group is None:
+            return
+
+        excluded_ids = {
+            int(member["id"])
+            for member in (group.get("_series_members") or [])
+            if member.get("id") is not None
+        }
+        dialog = BundleSearchDialog(excluded_ids=excluded_ids, parent=self)
+        if dialog.exec() != QDialog.Accepted or dialog.selected_work is None:
+            return
+
+        selected = dialog.selected_work
+        work_id = int(selected["id"])
+        current_id = int(self._value("id"))
+
+        try:
+            details = get_media_details(work_id)
+            if not details:
+                raise RuntimeError("Could not load that work.")
+
+            save_anime(details)
+            save_characters(work_id, (details.get("characters") or {}).get("edges"))
+            save_staff(work_id, (details.get("staff") or {}).get("edges"))
+            save_episodes(work_id, details.get("streamingEpisodes"))
+
+            connection = get_connection()
+            in_library = connection.execute(
+                "SELECT 1 FROM user_library WHERE work_id = ? LIMIT 1",
+                (work_id,),
+            ).fetchone() is not None
+            connection.close()
+
+            if not in_library:
+                add_to_library(work_id, "Planning")
+
+            if not add_manual_bundle_link(current_id, work_id):
+                QMessageBox.information(
+                    self,
+                    "Bundle unchanged",
+                    "That work is already linked to this bundle.",
+                )
+                return
+
+            self.bundle_changed.emit()
+            refreshed = get_work(current_id)
+            if refreshed:
+                self.set_work(refreshed)
+        except Exception as error:
+            QMessageBox.critical(self, "Could not add to bundle", str(error))
+
+    def _open_remove_bundle_dialog(self):
+        work_id = self._value("id")
+        if work_id is None:
+            return
+
+        partners = get_manual_bundle_partners(int(work_id))
+        dialog = BundleRemoveDialog(partners, parent=self)
+        if dialog.exec() != QDialog.Accepted or dialog.selected_id is None:
+            return
+
+        if remove_manual_bundle_link(int(work_id), dialog.selected_id):
+            self.bundle_changed.emit()
+            refreshed = get_work(int(work_id))
+            if refreshed:
+                self.set_work(refreshed)
 
     def _show_delete_confirmation(self, group):
         if self._delete_overlay is not None:
@@ -385,137 +735,6 @@ class WorkDetailPage(QWidget):
             self.bundle_changed.emit()
             self.work = None
             self.back_requested.emit()
-
-    def _add_to_bundle(self):
-        work_id = self._value("id")
-        if work_id is None:
-            return
-
-        current_id = int(work_id)
-        groups = get_library_series()
-        options = []
-        current_group_ids = set()
-        used_labels = set()
-
-        for group in groups:
-            members = group.get("_series_members") if hasattr(group, "get") else None
-            members = members or []
-            member_ids = {
-                int(member["id"])
-                for member in members
-                if member["id"] is not None
-            }
-            if current_id in member_ids:
-                current_group_ids = member_ids
-                break
-
-        for group in groups:
-            members = group.get("_series_members") if hasattr(group, "get") else None
-            members = members or []
-            member_ids = {
-                int(member["id"])
-                for member in members
-                if member["id"] is not None
-            }
-            representative_id = group.get("id") if hasattr(group, "get") else None
-            if representative_id is None:
-                continue
-            representative_id = int(representative_id)
-            if current_id in member_ids or member_ids & current_group_ids:
-                continue
-
-            summary = group.get("_bundle_summary") if hasattr(group, "get") else ""
-            base_label = str(group.get("title") or "Untitled")
-            if summary:
-                base_label = f"{base_label}  —  {summary}"
-            label = base_label
-            suffix = 2
-            while label in used_labels:
-                label = f"{base_label} ({suffix})"
-                suffix += 1
-            used_labels.add(label)
-            options.append((label, representative_id))
-
-        if not options:
-            QMessageBox.information(
-                self,
-                "Add to bundle",
-                "There are no other library bundles to add this work to yet.",
-            )
-            return
-
-        labels = [label for label, _ in options]
-        selected, ok = QInputDialog.getItem(
-            self,
-            "Add to bundle",
-            "Choose the bundle:",
-            labels,
-            0,
-            False,
-        )
-        if not ok:
-            return
-
-        target_id = dict(options)[selected]
-        if add_manual_bundle_link(current_id, target_id):
-            self.bundle_changed.emit()
-            refreshed = get_work(current_id)
-            if refreshed:
-                self.set_work(refreshed)
-            QMessageBox.information(
-                self,
-                "Bundle updated",
-                "The work was added to the selected bundle.",
-            )
-
-
-    def _remove_manual_bundle_link(self):
-        work_id = self._value("id")
-        if work_id is None:
-            return
-
-        partners = get_manual_bundle_partners(int(work_id))
-        if not partners:
-            QMessageBox.information(
-                self,
-                "Remove manual link",
-                "This work has no manual bundle links.",
-            )
-            return
-
-        options = []
-        used_labels = set()
-        for row in partners:
-            base_label = str(row["partner_title"] or "Untitled")
-            if row["partner_format"]:
-                base_label += f"  —  {row['partner_format']}"
-            label = base_label
-            suffix = 2
-            while label in used_labels:
-                label = f"{base_label} ({suffix})"
-                suffix += 1
-            used_labels.add(label)
-            options.append((label, int(row["partner_id"])))
-
-        labels = [label for label, _ in options]
-        selected, ok = QInputDialog.getItem(
-            self,
-            "Remove manual link",
-            "Choose the manual link to remove:",
-            labels,
-            0,
-            False,
-        )
-        if not ok:
-            return
-
-        target_id = next(target_id for label, target_id in options if label == selected)
-        if remove_manual_bundle_link(int(work_id), target_id):
-            self.bundle_changed.emit()
-            refreshed = get_work(int(work_id))
-            if refreshed:
-                self.set_work(refreshed)
-
 
     def _progress_counter_changed(self, value):
         if self.work is None: return
