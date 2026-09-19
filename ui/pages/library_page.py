@@ -141,27 +141,6 @@ class LibraryPage(QWidget):
         self._sync_thread = None; self._sync_worker = None
         self.refresh(retry_failed=False)
 
-    def _auto_bundle_item(self, group):
-        members = list(group.get("_series_members") or [])
-        if not members:
-            work_id = group.get("id")
-            members = [group] if work_id is not None else []
-        if not members:
-            return
-        if self._sync_thread is not None and self._sync_thread.isRunning():
-            return
-
-        work_ids = [int(member["id"]) for member in members]
-        self._sync_thread = QThread(self)
-        self._sync_worker = RelationSyncWorker(work_ids)
-        self._sync_worker.moveToThread(self._sync_thread)
-        self._sync_thread.started.connect(self._sync_worker.run)
-        self._sync_worker.finished.connect(self._relation_sync_finished)
-        self._sync_worker.finished.connect(self._sync_thread.quit)
-        self._sync_thread.finished.connect(self._sync_worker.deleteLater)
-        self._sync_thread.finished.connect(self._sync_thread.deleteLater)
-        self._sync_thread.start()
-
     def _delete_item(self, group):
         members = list(group.get("_series_members") or [])
         if not members:
