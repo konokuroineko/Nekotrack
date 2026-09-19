@@ -225,127 +225,90 @@ def save_person_image_path(person_id, image_path):
     connection.close()
 
 
-def _normalize_work_ids(work_id):
-    if isinstance(work_id, (list, tuple, set)):
-        values = work_id
-    else:
-        values = [work_id]
-
-    ids = []
-    for value in values:
-        try:
-            media_id = int(value)
-        except (TypeError, ValueError):
-            continue
-        if media_id not in ids:
-            ids.append(media_id)
-    return ids
-
-
 def get_characters(work_id):
-    """Return one row per character across one work or a bundle of works."""
-    ids = _normalize_work_ids(work_id)
-    if not ids:
-        return []
-
+    """Return one row per character, with the preferred Japanese voice actor when available."""
     connection = get_connection()
-    combined = {}
-    for current_id in ids:
-        rows = connection.execute("""
-            SELECT
-                characters.id,
-                characters.name AS character_name,
-                characters.image_path AS character_image_path,
-                characters.image_url AS character_image_url,
-                work_characters.role AS character_role,
-                (
-                    SELECT people.id
-                    FROM character_voice_actors
-                    JOIN people ON people.id = character_voice_actors.person_id
-                    WHERE character_voice_actors.character_id = characters.id
-                    ORDER BY
-                        CASE
-                            WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
-                                 ('japanese', 'ja', 'jpn') THEN 0
-                            ELSE 1
-                        END,
-                        character_voice_actors.language,
-                        people.name
-                    LIMIT 1
-                ) AS person_id,
-                (
-                    SELECT people.name
-                    FROM character_voice_actors
-                    JOIN people ON people.id = character_voice_actors.person_id
-                    WHERE character_voice_actors.character_id = characters.id
-                    ORDER BY
-                        CASE
-                            WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
-                                 ('japanese', 'ja', 'jpn') THEN 0
-                            ELSE 1
-                        END,
-                        character_voice_actors.language,
-                        people.name
-                    LIMIT 1
-                ) AS person_name,
-                (
-                    SELECT people.image_path
-                    FROM character_voice_actors
-                    JOIN people ON people.id = character_voice_actors.person_id
-                    WHERE character_voice_actors.character_id = characters.id
-                    ORDER BY
-                        CASE
-                            WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
-                                 ('japanese', 'ja', 'jpn') THEN 0
-                            ELSE 1
-                        END,
-                        character_voice_actors.language,
-                        people.name
-                    LIMIT 1
-                ) AS person_image_path,
-                (
-                    SELECT people.image_url
-                    FROM character_voice_actors
-                    JOIN people ON people.id = character_voice_actors.person_id
-                    WHERE character_voice_actors.character_id = characters.id
-                    ORDER BY
-                        CASE
-                            WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
-                                 ('japanese', 'ja', 'jpn') THEN 0
-                            ELSE 1
-                        END,
-                        character_voice_actors.language,
-                        people.name
-                    LIMIT 1
-                ) AS person_image_url
-            FROM work_characters
-            JOIN characters ON characters.id = work_characters.character_id
-            WHERE work_characters.work_id = ?
-        """, (current_id,)).fetchall()
-
-        for row in rows:
-            character_id = int(row["id"])
-            existing = combined.get(character_id)
-            if existing is None:
-                combined[character_id] = row
-                continue
-
-            old_role = str(existing["character_role"] or "UNKNOWN").upper()
-            new_role = str(row["character_role"] or "UNKNOWN").upper()
-            priority = {"MAIN": 0, "SUPPORTING": 1, "BACKGROUND": 2}
-            if priority.get(new_role, 3) < priority.get(old_role, 3):
-                combined[character_id] = row
-
+    results = connection.execute("""
+        SELECT
+            characters.id,
+            characters.name AS character_name,
+            characters.image_path AS character_image_path,
+            characters.image_url AS character_image_url,
+            work_characters.role AS character_role,
+            (
+                SELECT people.id
+                FROM character_voice_actors
+                JOIN people ON people.id = character_voice_actors.person_id
+                WHERE character_voice_actors.character_id = characters.id
+                ORDER BY
+                    CASE
+                        WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
+                             ('japanese', 'ja', 'jpn') THEN 0
+                        ELSE 1
+                    END,
+                    character_voice_actors.language,
+                    people.name
+                LIMIT 1
+            ) AS person_id,
+            (
+                SELECT people.name
+                FROM character_voice_actors
+                JOIN people ON people.id = character_voice_actors.person_id
+                WHERE character_voice_actors.character_id = characters.id
+                ORDER BY
+                    CASE
+                        WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
+                             ('japanese', 'ja', 'jpn') THEN 0
+                        ELSE 1
+                    END,
+                    character_voice_actors.language,
+                    people.name
+                LIMIT 1
+            ) AS person_name,
+            (
+                SELECT people.image_path
+                FROM character_voice_actors
+                JOIN people ON people.id = character_voice_actors.person_id
+                WHERE character_voice_actors.character_id = characters.id
+                ORDER BY
+                    CASE
+                        WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
+                             ('japanese', 'ja', 'jpn') THEN 0
+                        ELSE 1
+                    END,
+                    character_voice_actors.language,
+                    people.name
+                LIMIT 1
+            ) AS person_image_path,
+            (
+                SELECT people.image_url
+                FROM character_voice_actors
+                JOIN people ON people.id = character_voice_actors.person_id
+                WHERE character_voice_actors.character_id = characters.id
+                ORDER BY
+                    CASE
+                        WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
+                             ('japanese', 'ja', 'jpn') THEN 0
+                        ELSE 1
+                    END,
+                    character_voice_actors.language,
+                    people.name
+                LIMIT 1
+            ) AS person_image_url
+        FROM work_characters
+        JOIN characters ON characters.id = work_characters.character_id
+        WHERE work_characters.work_id = ?
+        ORDER BY
+            CASE UPPER(COALESCE(work_characters.role, 'UNKNOWN'))
+                WHEN 'MAIN' THEN 0
+                WHEN 'SUPPORTING' THEN 1
+                WHEN 'BACKGROUND' THEN 2
+                ELSE 3
+            END,
+            characters.name
+    """, (work_id,)).fetchall()
     connection.close()
-    return sorted(
-        combined.values(),
-        key=lambda row: (
-            {"MAIN": 0, "SUPPORTING": 1, "BACKGROUND": 2}.get(
-                str(row["character_role"] or "UNKNOWN").upper(), 3
-            ),
-            row["character_name"],
-        ),
-    )
+    return results
 
 
 def save_staff(work_id, staff_edges):
@@ -366,52 +329,32 @@ def save_staff(work_id, staff_edges):
 
 
 def get_staff(work_id):
-    """Return one row per staff person, combining unique roles across works."""
-    ids = _normalize_work_ids(work_id)
-    if not ids:
-        return []
-
     connection = get_connection()
-    people_by_id = {}
-
-    for current_id in ids:
-        rows = connection.execute("""
-            SELECT people.id AS person_id, people.name, people.image_path, people.image_url, work_staff.role
-            FROM work_staff
-            JOIN people ON people.id = work_staff.person_id
-            WHERE work_staff.work_id = ?
-            ORDER BY people.name, work_staff.role
-        """, (current_id,)).fetchall()
-
-        for row in rows:
-            person_id = int(row["person_id"])
-            entry = people_by_id.setdefault(
-                person_id,
-                {
-                    "person_id": person_id,
-                    "name": row["name"],
-                    "image_path": row["image_path"],
-                    "image_url": row["image_url"],
-                    "roles": [],
-                },
-            )
-            role = str(row["role"] or "").strip()
-            if role and role not in entry["roles"]:
-                entry["roles"].append(role)
-
+    results = connection.execute("""
+        SELECT
+            people.id AS person_id,
+            people.name,
+            people.image_path,
+            people.image_url,
+            (
+                SELECT group_concat(role, char(10))
+                FROM (
+                    SELECT DISTINCT role
+                    FROM work_staff AS ws
+                    WHERE ws.work_id = ? AND ws.person_id = people.id
+                    ORDER BY role
+                )
+            ) AS role
+        FROM people
+        WHERE EXISTS (
+            SELECT 1
+            FROM work_staff AS ws
+            WHERE ws.work_id = ? AND ws.person_id = people.id
+        )
+        ORDER BY people.name
+    """, (work_id, work_id)).fetchall()
     connection.close()
-
-    results = []
-    for entry in people_by_id.values():
-        results.append({
-            "person_id": entry["person_id"],
-            "name": entry["name"],
-            "image_path": entry["image_path"],
-            "image_url": entry["image_url"],
-            "role": "\n".join(sorted(entry["roles"])),
-        })
-
-    return sorted(results, key=lambda row: row["name"])
+    return results
 
 
 def save_episodes(work_id, episode_data):
@@ -558,61 +501,101 @@ def get_work(work_id):
 
 
 def get_relations(work_id):
-    """Return one row per related work across one work or a bundle."""
-    ids = _normalize_work_ids(work_id)
-    if not ids:
-        return []
-
     connection = get_connection()
-    combined = {}
+    results = connection.execute("""
+        SELECT work_relations.*, works.title, works.format, works.type, works.cover_url, works.cover_path
+        FROM work_relations LEFT JOIN works ON works.id = work_relations.target_id
+        WHERE work_relations.source_id = ? ORDER BY relation_type, title
+    """, (work_id,)).fetchall()
+    connection.close()
+    return results
 
-    for current_id in ids:
-        rows = connection.execute("""
-            SELECT
-                work_relations.source_id,
-                work_relations.target_id,
-                work_relations.relation_type,
-                works.title,
-                works.format,
-                works.type,
-                works.cover_url,
-                works.cover_path
-            FROM work_relations
-            LEFT JOIN works ON works.id = work_relations.target_id
-            WHERE work_relations.source_id = ?
-            ORDER BY work_relations.relation_type, works.title
-        """, (current_id,)).fetchall()
+def get_bundle_characters(work_ids):
+    """Return unique characters from every work represented by a bundle."""
+    unique = {}
 
-        for row in rows:
-            target_id = int(row["target_id"])
-            entry = combined.get(target_id)
+    for work_id in work_ids or []:
+        for row in get_characters(work_id):
+            character_id = row["id"]
+            if character_id not in unique:
+                unique[int(character_id)] = dict(row)
+
+    return sorted(
+        unique.values(),
+        key=lambda row: (
+            0 if str(row.get("character_role") or "").upper() == "MAIN" else
+            1 if str(row.get("character_role") or "").upper() == "SUPPORTING" else
+            2 if str(row.get("character_role") or "").upper() == "BACKGROUND" else
+            3,
+            str(row.get("character_name") or "").lower(),
+        ),
+    )
+
+
+def get_bundle_staff(work_ids):
+    """Return one card per staff person with unique roles merged across the bundle."""
+    unique = {}
+
+    for work_id in work_ids or []:
+        for row in get_staff(work_id):
+            person_id = int(row["person_id"])
+            entry = unique.get(person_id)
+
             if entry is None:
-                combined[target_id] = {
-                    "source_id": int(row["source_id"]),
-                    "target_id": target_id,
-                    "relation_type": row["relation_type"],
-                    "relation_types": [str(row["relation_type"])] if row["relation_type"] else [],
-                    "title": row["title"],
-                    "format": row["format"],
-                    "type": row["type"],
-                    "cover_url": row["cover_url"],
-                    "cover_path": row["cover_path"],
-                }
+                entry = dict(row)
+                entry["_roles"] = []
+                unique[person_id] = entry
+
+            role_text = str(row["role"] or "")
+            for role in role_text.split("\n"):
+                role = role.strip()
+                if role and role not in entry["_roles"]:
+                    entry["_roles"].append(role)
+
+    for entry in unique.values():
+        entry["role"] = "\n".join(entry.pop("_roles", []))
+
+    return sorted(
+        unique.values(),
+        key=lambda row: str(row.get("name") or "").lower(),
+    )
+
+
+def get_bundle_relations(work_ids):
+    """Return unique external relations from every work in a bundle."""
+    ids = {int(work_id) for work_id in (work_ids or [])}
+    unique = {}
+
+    for work_id in ids:
+        for row in get_relations(work_id):
+            target_id = row["target_id"]
+            if target_id is None:
                 continue
 
-            relation_type = row["relation_type"]
-            if relation_type and str(relation_type) not in entry["relation_types"]:
-                entry["relation_types"].append(str(relation_type))
+            target_id = int(target_id)
 
-    connection.close()
+            # A relation between two members of the same bundle is internal,
+            # so it should not appear in the combined Relations section.
+            if target_id in ids:
+                continue
 
-    results = []
-    for entry in combined.values():
-        item = dict(entry)
-        item["relation_types"] = "\n".join(entry["relation_types"])
-        results.append(item)
+            entry = unique.get(target_id)
+            if entry is None:
+                entry = dict(row)
+                entry["_relation_types"] = []
+                unique[target_id] = entry
 
-    return sorted(results, key=lambda row: (row["title"] or "", row["target_id"]))
+            relation_type = str(row["relation_type"] or "OTHER")
+            if relation_type not in entry["_relation_types"]:
+                entry["_relation_types"].append(relation_type)
+
+    for entry in unique.values():
+        entry["relation_types"] = "\n".join(entry.pop("_relation_types", []))
+
+    return sorted(
+        unique.values(),
+        key=lambda row: str(row.get("title") or "").lower(),
+    )
 
 
 def add_manual_bundle_link(work_a, work_b):
