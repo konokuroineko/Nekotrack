@@ -889,6 +889,10 @@ def get_library_series():
             parent[right] = left
 
     row_by_id = {int(row["id"]): row for row in rows}
+    excluded_links = {
+        tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
+        for link in get_bundle_exclusions(ids)
+    }
 
     for relation in _relation_data_for(ids):
         source_id = int(relation["source_id"])
@@ -910,11 +914,6 @@ def get_library_series():
             continue
         if _relation_group_compatible(source, edge, target):
             union(source_id, target_id)
-
-    excluded_links = {
-        tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
-        for link in get_bundle_exclusions(ids)
-    }
 
     # Manual bundle links are explicit user overrides and may join works
     # even when AniList relations or formats would not allow automatic bundling.
