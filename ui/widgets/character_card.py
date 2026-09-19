@@ -1,8 +1,11 @@
 from PySide6.QtCore import Signal, Qt, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+from pathlib import Path
+
 from PySide6.QtWidgets import QFrame, QLabel, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
+from database import save_character_image_path, save_person_image_path
 from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
 
 
@@ -60,6 +63,8 @@ class CharacterCard(QFrame):
         self._network_manager = QNetworkAccessManager(self)
         self._image_reply = None
         self._voice_image_reply = None
+        self._character_id = self._value("id")
+        self._person_id = self._value("person_id")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -156,6 +161,15 @@ class CharacterCard(QFrame):
             pixmap = QPixmap()
             if pixmap.loadFromData(reply.readAll()) and getattr(self, "_image_artwork", None) is not None:
                 self._image_artwork.set_pixmap(pixmap)
+                if self._character_id is not None:
+                    try:
+                        directory = Path("data") / "images" / "characters"
+                        directory.mkdir(parents=True, exist_ok=True)
+                        path = directory / f"{int(self._character_id)}.jpg"
+                        if pixmap.save(str(path), "JPG", 90):
+                            save_character_image_path(self._character_id, path)
+                    except Exception:
+                        pass
         if reply is not None:
             reply.deleteLater()
 
@@ -177,6 +191,15 @@ class CharacterCard(QFrame):
                 and getattr(self, "_voice_image_artwork", None) is not None
             ):
                 self._voice_image_artwork.set_pixmap(pixmap)
+                if self._person_id is not None:
+                    try:
+                        directory = Path("data") / "images" / "people"
+                        directory.mkdir(parents=True, exist_ok=True)
+                        path = directory / f"{int(self._person_id)}.jpg"
+                        if pixmap.save(str(path), "JPG", 90):
+                            save_person_image_path(self._person_id, path)
+                    except Exception:
+                        pass
         if reply is not None:
             reply.deleteLater()
 
