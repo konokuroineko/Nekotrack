@@ -704,6 +704,18 @@ class WorkDetailPage(QWidget):
     def _relations(self):
         return self._grid_section("Relations", get_relations(self._value("id")), RelationCard, self.relation_selected, 2)
 
+    @staticmethod
+    def _member_title(member):
+        title = member["title"]
+        if isinstance(title, dict):
+            return str(
+                title.get("english")
+                or title.get("romaji")
+                or title.get("native")
+                or "Untitled"
+            )
+        return str(title or "Untitled")
+
     def _value(self, key):
         if hasattr(self.work, "get"): return self.work.get(key)
         try: return self.work[key]
