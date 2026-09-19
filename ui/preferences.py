@@ -4,6 +4,7 @@ from PySide6.QtCore import QSettings
 _DEFAULTS = {
     "accent": "#ff9f43",
     "accent_hover": "#ffb765",
+    "frame_color": "#ff9f43",
     "background": "#0a0b0e",
     "surface": "#13161c",
     "surface_hover": "#202631",
