@@ -93,11 +93,23 @@ class RelationCard(QFrame):
         title.setToolTip(title_text)
         root.addWidget(title)
 
-        relation_type = self._value("relation_type") or "OTHER"
-        relation_label = RELATION_LABELS.get(
-            relation_type,
-            relation_type.replace("_", " ").title(),
-        )
+        relation_types = self._value("relation_types")
+        if relation_types:
+            relation_labels = [
+                RELATION_LABELS.get(
+                    value,
+                    value.replace("_", " ").title(),
+                )
+                for value in str(relation_types).split("\n")
+                if value
+            ]
+            relation_label = " · ".join(dict.fromkeys(relation_labels))
+        else:
+            relation_type = self._value("relation_type") or "OTHER"
+            relation_label = RELATION_LABELS.get(
+                relation_type,
+                relation_type.replace("_", " ").title(),
+            )
         source_title = self._value("source_title")
         connection = f"{source_title or 'Related work'}  →  {relation_label}"
 
