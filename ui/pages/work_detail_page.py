@@ -207,9 +207,9 @@ class WorkDetailPage(QWidget):
         self.setStyleSheet(f"""
             QPushButton#back {{ background: transparent; border: 0; color: {COLORS['secondary']}; padding: 5px 0; font-weight: 750; }}
             QPushButton#back:hover {{ color: {COLORS['primary']}; }}
-            QFrame#hero {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 22px; }}
-            QFrame#section {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 18px; }}
-            QFrame#episode {{ background: {COLORS['surface_alt']}; border: 1px solid {COLORS['border']}; border-radius: 10px; }}
+            QFrame#hero {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: 22px; }}
+            QFrame#section {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: 18px; }}
+            QFrame#episode {{ background: {COLORS['surface_alt']}; border: 1px solid {COLORS['frame']}; border-radius: 10px; }}
             QFrame#episode:hover {{ border-color: {COLORS['border_hover']}; }}
             QFrame#progressTrack {{ background: {COLORS['border']}; border: 0; border-radius: 5px; }}
             QFrame#progressFill {{ background: {COLORS['accent']}; border: 0; border-radius: 5px; }}
@@ -220,7 +220,7 @@ class WorkDetailPage(QWidget):
             QPushButton#counterButton:hover {{ background: {COLORS['surface_hover']}; border-color: {COLORS['accent']}; }}
             QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:2px solid transparent; border-radius:{get('corner_radius') + 2}px; font-size:30px; font-weight:900; padding:0; }}
             QToolButton#detailMenu:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
-            QFrame#deleteOverlay {{ background:{COLORS['surface']}; border:1px solid {COLORS['border_hover']}; border-radius:18px; }}
+            QFrame#deleteOverlay {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}
             QLabel#deleteTitle {{ color:{COLORS['primary']}; font-size:19px; font-weight:850; }}
             QLabel#deleteMessage {{ color:{COLORS['secondary']}; font-size:12px; }}
             QPushButton#deleteCancel {{ background:{COLORS['surface_alt']}; color:{COLORS['secondary']}; border:1px solid {COLORS['border']}; border-radius:9px; padding:9px 16px; font-weight:750; }}
@@ -576,7 +576,7 @@ class WorkDetailPage(QWidget):
                 f"""
                 QListWidget#deleteMemberList {{
                     background: {COLORS['background_alt']};
-                    border: 1px solid {COLORS['border']};
+                    border: 1px solid {COLORS['frame']};
                     border-radius: 9px;
                     padding: 4px;
                     color: {COLORS['primary']};
