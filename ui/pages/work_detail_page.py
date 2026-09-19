@@ -887,7 +887,12 @@ class WorkDetailPage(QWidget):
             menu = QMenu(season_button)
             for index, member in enumerate(members, start=1):
                 member_id = int(member["id"])
-                year = member["start_year"] or "Unknown date"
+                if hasattr(member, "get"):
+                    start_date = member.get("startDate") or {}
+                    year = start_date.get("year") or member.get("start_year")
+                else:
+                    year = member["start_year"]
+                year = year or "Unknown date"
                 member_title = self._member_title(member)
                 action = menu.addAction(
                     f"Season {index}  —  {member_title}  ·  {year}"
@@ -954,9 +959,21 @@ class WorkDetailPage(QWidget):
             return [current] if current is not None else []
 
         def sort_key(member):
+            if hasattr(member, "get"):
+                start_date = member.get("startDate") or {}
+                year = start_date.get("year") or member.get("start_year")
+                month = start_date.get("month") or 0
+                day = start_date.get("day") or 0
+            else:
+                year = member["start_year"]
+                month = 0
+                day = 0
+
             return (
-                member["start_year"] is None,
-                member["start_year"] or 9999,
+                year is None,
+                year or 9999,
+                month or 0,
+                day or 0,
                 int(member["id"]),
             )
 
