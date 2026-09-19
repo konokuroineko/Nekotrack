@@ -75,11 +75,15 @@ def initialize_database():
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS work_characters (
-            work_id INTEGER NOT NULL, character_id INTEGER NOT NULL,
+            work_id INTEGER NOT NULL, character_id INTEGER NOT NULL, role TEXT,
             PRIMARY KEY (work_id, character_id), FOREIGN KEY (work_id) REFERENCES works(id),
             FOREIGN KEY (character_id) REFERENCES characters(id)
         )
     """)
+    character_columns = cursor.execute("PRAGMA table_info(work_characters)").fetchall()
+    character_column_names = {column["name"] for column in character_columns}
+    if "role" not in character_column_names:
+        cursor.execute("ALTER TABLE work_characters ADD COLUMN role TEXT")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS character_voice_actors (
             character_id INTEGER NOT NULL, person_id INTEGER NOT NULL, language TEXT,
@@ -152,8 +156,11 @@ def save_characters(work_id, characters):
             continue
         connection.execute("INSERT OR REPLACE INTO characters (id, name, image_url) VALUES (?, ?, ?)",
                            (character_id, name, (character.get("image") or {}).get("large")))
-        connection.execute("INSERT OR IGNORE INTO work_characters (work_id, character_id) VALUES (?, ?)",
-                           (work_id, character_id))
+        connection.execute("""
+            INSERT INTO work_characters (work_id, character_id, role)
+            VALUES (?, ?, ?)
+            ON CONFLICT(work_id, character_id) DO UPDATE SET role = excluded.role
+        """, (work_id, character_id, edge.get("role") or "UNKNOWN"))
         for actor in edge.get("voiceActors") or []:
             person_id = actor.get("id")
             person_name = actor.get("name") or {}
@@ -179,8 +186,23 @@ def characters_are_loaded(work_id):
         "SELECT characters_loaded FROM works WHERE id = ? LIMIT 1",
         (work_id,),
     ).fetchone()
+    if not row or not row["characters_loaded"]:
+        connection.close()
+        return False
+
+    # Older character imports did not store the AniList role. Treat those
+    # entries as needing one refresh so existing titles get their role data.
+    missing_role = connection.execute(
+        """
+        SELECT 1
+        FROM work_characters
+        WHERE work_id = ? AND role IS NULL
+        LIMIT 1
+        """,
+        (work_id,),
+    ).fetchone()
     connection.close()
-    return bool(row and row["characters_loaded"])
+    return missing_role is None
 
 
 def get_characters(work_id):
@@ -192,6 +214,7 @@ def get_characters(work_id):
             characters.name AS character_name,
             characters.image_path AS character_image_path,
             characters.image_url AS character_image_url,
+            work_characters.role AS character_role,
             (
                 SELECT people.name
                 FROM character_voice_actors
@@ -240,7 +263,14 @@ def get_characters(work_id):
         FROM work_characters
         JOIN characters ON characters.id = work_characters.character_id
         WHERE work_characters.work_id = ?
-        ORDER BY characters.name
+        ORDER BY
+            CASE UPPER(COALESCE(work_characters.role, 'UNKNOWN'))
+                WHEN 'MAIN' THEN 0
+                WHEN 'SUPPORTING' THEN 1
+                WHEN 'BACKGROUND' THEN 2
+                ELSE 3
+            END,
+            characters.name
     """, (work_id,)).fetchall()
     connection.close()
     return results
