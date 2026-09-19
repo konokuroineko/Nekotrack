@@ -95,7 +95,7 @@ class CharacterCard(QFrame):
             role.setFrameShape(QFrame.NoFrame)
             role.setLineWidth(0)
             role.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-size: 13px; font-weight: 700;")
-            role.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+            role.setAlignment(Qt.AlignCenter)
             character_info.addWidget(role)
 
         name = QLabel(self._value("character_name") or "Unknown character")
@@ -103,7 +103,7 @@ class CharacterCard(QFrame):
         name.setFrameShape(QFrame.NoFrame)
         name.setLineWidth(0)
         name.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 600;")
-        name.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        name.setAlignment(Qt.AlignCenter)
         character_info.addWidget(name)
 
         character_info.addStretch()
