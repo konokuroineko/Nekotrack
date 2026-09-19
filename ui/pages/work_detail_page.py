@@ -1,7 +1,7 @@
-from api import get_media_details
+from api import get_episode_data, get_media_details
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QUrl, QSize, QPoint, QRect
+from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
@@ -26,6 +26,22 @@ from ui.widgets.relation_card import RelationCard
 
 
 IMAGE_DIRECTORY = Path("data") / "images" / "works"
+
+
+class EpisodeSyncWorker(QObject):
+    finished = Signal(int, object)
+    error = Signal(int, str)
+
+    def __init__(self, work_id):
+        super().__init__()
+        self.work_id = int(work_id)
+
+    def run(self):
+        try:
+            episodes = get_episode_data(self.work_id)
+            self.finished.emit(self.work_id, episodes)
+        except Exception as error:
+            self.error.emit(self.work_id, str(error))
 
 
 class StaffFlowLayout(QLayout):
@@ -272,6 +288,9 @@ class WorkDetailPage(QWidget):
         super().__init__()
         self.work = None
         self._selected_episode_work_id = None
+        self._episode_sync_thread = None
+        self._episode_sync_worker = None
+        self._episode_sync_work_id = None
         self._cover_manager = QNetworkAccessManager(self)
         self._cover_reply = None
         self._delete_overlay = None
@@ -909,12 +928,22 @@ class WorkDetailPage(QWidget):
         lay.addLayout(header)
 
         if not episodes:
-            x = QLabel(
-                "Detailed episode data has not been saved locally for this season yet."
-            )
-            x.setStyleSheet(muted_label_stylesheet())
-            x.setWordWrap(True)
-            lay.addWidget(x)
+            work = get_work(selected_id) if selected_id is not None else None
+            expected_total = int(work["episodes"] or 0) if work is not None else 0
+
+            if expected_total > 0 and selected_id is not None:
+                x = QLabel("Loading episode data…")
+                x.setStyleSheet(muted_label_stylesheet())
+                lay.addWidget(x)
+                self._start_episode_sync(selected_id)
+            else:
+                x = QLabel(
+                    "No episode data is available for this season."
+                )
+                x.setStyleSheet(muted_label_stylesheet())
+                x.setWordWrap(True)
+                lay.addWidget(x)
+
             return frame
 
         for ep in episodes:
@@ -982,6 +1011,65 @@ class WorkDetailPage(QWidget):
     def _episode_season_changed(self, work_id):
         self._selected_episode_work_id = int(work_id)
         self._replace_episode_section()
+
+    def _start_episode_sync(self, work_id):
+        work_id = int(work_id)
+
+        if self._episode_sync_thread is not None and self._episode_sync_thread.isRunning():
+            if self._episode_sync_work_id == work_id:
+                return
+            return
+
+        self._episode_sync_work_id = work_id
+        self._episode_sync_thread = QThread(self)
+        self._episode_sync_worker = EpisodeSyncWorker(work_id)
+        self._episode_sync_worker.moveToThread(self._episode_sync_thread)
+
+        self._episode_sync_thread.started.connect(self._episode_sync_worker.run)
+        self._episode_sync_worker.finished.connect(self._episode_sync_finished)
+        self._episode_sync_worker.error.connect(self._episode_sync_error)
+        self._episode_sync_worker.finished.connect(self._episode_sync_thread.quit)
+        self._episode_sync_worker.error.connect(self._episode_sync_thread.quit)
+        self._episode_sync_thread.finished.connect(self._episode_sync_worker.deleteLater)
+        self._episode_sync_thread.finished.connect(self._episode_sync_thread.deleteLater)
+        self._episode_sync_thread.start()
+
+    def _episode_sync_finished(self, work_id, episodes):
+        work_id = int(work_id)
+        save_episodes(work_id, episodes)
+
+        if self._episode_sync_work_id == work_id:
+            self._episode_sync_thread = None
+            self._episode_sync_worker = None
+            self._episode_sync_work_id = None
+
+        if self._selected_episode_work_id == work_id:
+            self._replace_episode_section()
+
+    def _episode_sync_error(self, work_id, error):
+        work_id = int(work_id)
+
+        if self._episode_sync_work_id == work_id:
+            self._episode_sync_thread = None
+            self._episode_sync_worker = None
+            self._episode_sync_work_id = None
+
+        if self._selected_episode_work_id == work_id:
+            content = self.scroll_area.widget()
+            root = content.layout() if content is not None else None
+            if root is not None:
+                for index in range(root.count()):
+                    item = root.itemAt(index)
+                    widget = item.widget() if item is not None else None
+                    if widget is None or not widget.property("_episodes_section"):
+                        continue
+                    labels = widget.findChildren(QLabel)
+                    for label in labels:
+                        if label.text() == "Loading episode data…":
+                            label.setText(f"Could not load episode data: {error}")
+                            label.setStyleSheet(muted_label_stylesheet())
+                            break
+                    break
 
     def _replace_episode_section(self):
         content = self.scroll_area.widget()
