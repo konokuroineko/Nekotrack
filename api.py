@@ -539,12 +539,10 @@ def get_episode_data(media_id, mal_id=None):
 
     resolved_mal_id = mal_id or media.get("idMal")
 
+    # AniList streamingEpisodes does not expose a reliable episode number.
+    # Do not pair it positionally with the airing schedule; that can assign
+    # Season 3 artwork to Season 1 episodes when the lists differ.
     stream_rows = media.get("streamingEpisodes") or []
-    stream_by_number = {
-        index: row
-        for index, row in enumerate(stream_rows, start=1)
-        if isinstance(row, dict)
-    }
 
     jikan_by_number = {}
     if resolved_mal_id:
@@ -589,29 +587,29 @@ def get_episode_data(media_id, mal_id=None):
 
     all_numbers = set(schedule_by_number)
     all_numbers.update(jikan_by_number)
-    all_numbers.update(stream_by_number)
-
     result = []
     for number in sorted(all_numbers):
-        stream = stream_by_number.get(number) or {}
         jikan = jikan_by_number.get(number) or {}
         airing = schedule_by_number.get(number) or {}
         aired = jikan.get("aired") or {}
+        images = jikan.get("images") or {}
+        jpg = images.get("jpg") or {}
+        webp = images.get("webp") or {}
 
         result.append({
             "episodeNumber": number,
-            "title": (
-                jikan.get("title")
-                or stream.get("title")
-                or f"Episode {number}"
-            ),
+            "title": jikan.get("title") or f"Episode {number}",
             "description": jikan.get("synopsis"),
             "airdate": (
                 _date_from_timestamp(airing.get("airingAt"))
                 or str(aired.get("from") or "")[:10]
                 or None
             ),
-            "thumbnail": stream.get("thumbnail"),
+            "thumbnail": (
+                jpg.get("image_url")
+                or webp.get("image_url")
+                or None
+            ),
         })
 
     return {
