@@ -613,58 +613,112 @@ def remove_from_library(work_id):
 
 
 def delete_work_data(work_id):
-    """Permanently delete one work and its work-specific cached/local data."""
+    """Permanently delete one exact work ID and verify all work-owned rows are gone."""
     from pathlib import Path
 
     work_id = int(work_id)
     connection = get_connection()
-    row = connection.execute(
-        "SELECT cover_path FROM works WHERE id = ?",
-        (work_id,),
-    ).fetchone()
-    if row is None:
-        connection.close()
-        return False
 
-    override_paths = [
-        item["custom_cover_path"]
-        for item in connection.execute(
-            """
-            SELECT custom_cover_path
-            FROM bundle_overrides
-            WHERE bundle_anchor_id = ? OR cover_work_id = ?
-            """,
+    try:
+        row = connection.execute(
+            "SELECT cover_path FROM works WHERE id = ?",
+            (work_id,),
+        ).fetchone()
+        if row is None:
+            connection.close()
+            return False
+
+        override_paths = [
+            item["custom_cover_path"]
+            for item in connection.execute(
+                """
+                SELECT custom_cover_path
+                FROM bundle_overrides
+                WHERE bundle_anchor_id = ? OR cover_work_id = ?
+                """,
+                (work_id, work_id),
+            ).fetchall()
+            if item["custom_cover_path"]
+        ]
+
+        # Delete every row that can keep this exact work in the Library,
+        # bundle system, relation graph, or cached work data.
+        for table in (
+            "episodes",
+            "work_characters",
+            "work_staff",
+            "work_studios",
+            "work_songs",
+            "alternate_titles",
+        ):
+            connection.execute(
+                f"DELETE FROM {table} WHERE work_id = ?",
+                (work_id,),
+            )
+
+        connection.execute(
+            "DELETE FROM manual_bundle_links WHERE work_a = ? OR work_b = ?",
             (work_id, work_id),
-        ).fetchall()
-        if item["custom_cover_path"]
-    ]
+        )
+        connection.execute(
+            "DELETE FROM bundle_overrides WHERE bundle_anchor_id = ? OR cover_work_id = ?",
+            (work_id, work_id),
+        )
+        connection.execute(
+            "DELETE FROM work_relations WHERE source_id = ? OR target_id = ?",
+            (work_id, work_id),
+        )
+        connection.execute(
+            "DELETE FROM user_library WHERE work_id = ?",
+            (work_id,),
+        )
+        connection.execute(
+            "DELETE FROM works WHERE id = ?",
+            (work_id,),
+        )
 
-    for table in (
-        "episodes",
-        "work_characters",
-        "work_staff",
-        "work_studios",
-        "work_songs",
-        "alternate_titles",
-    ):
-        connection.execute(f"DELETE FROM {table} WHERE work_id = ?", (work_id,))
+        # Do not claim success unless the exact ID is gone everywhere it can
+        # affect Library/bundle state. Roll back the whole deletion on failure.
+        checks = (
+            ("works", "SELECT 1 FROM works WHERE id = ? LIMIT 1"),
+            ("user_library", "SELECT 1 FROM user_library WHERE work_id = ? LIMIT 1"),
+            (
+                "manual_bundle_links",
+                "SELECT 1 FROM manual_bundle_links WHERE work_a = ? OR work_b = ? LIMIT 1",
+            ),
+            (
+                "bundle_overrides",
+                "SELECT 1 FROM bundle_overrides WHERE bundle_anchor_id = ? OR cover_work_id = ? LIMIT 1",
+            ),
+            (
+                "work_relations",
+                "SELECT 1 FROM work_relations WHERE source_id = ? OR target_id = ? LIMIT 1",
+            ),
+            ("episodes", "SELECT 1 FROM episodes WHERE work_id = ? LIMIT 1"),
+            ("work_characters", "SELECT 1 FROM work_characters WHERE work_id = ? LIMIT 1"),
+            ("work_staff", "SELECT 1 FROM work_staff WHERE work_id = ? LIMIT 1"),
+            ("work_studios", "SELECT 1 FROM work_studios WHERE work_id = ? LIMIT 1"),
+            ("work_songs", "SELECT 1 FROM work_songs WHERE work_id = ? LIMIT 1"),
+            ("alternate_titles", "SELECT 1 FROM alternate_titles WHERE work_id = ? LIMIT 1"),
+        )
 
-    connection.execute(
-        "DELETE FROM manual_bundle_links WHERE work_a = ? OR work_b = ?",
-        (work_id, work_id),
-    )
-    connection.execute(
-        "DELETE FROM bundle_overrides WHERE bundle_anchor_id = ? OR cover_work_id = ?",
-        (work_id, work_id),
-    )
-    connection.execute(
-        "DELETE FROM work_relations WHERE source_id = ? OR target_id = ?",
-        (work_id, work_id),
-    )
-    connection.execute("DELETE FROM user_library WHERE work_id = ?", (work_id,))
-    connection.execute("DELETE FROM works WHERE id = ?", (work_id,))
-    connection.commit()
-    connection.close()
+        residual = []
+        for table_name, query in checks:
+            params = (work_id, work_id) if " OR " in query else (work_id,)
+            if connection.execute(query, params).fetchone() is not None:
+                residual.append(table_name)
+
+        if residual:
+            connection.rollback()
+            connection.close()
+            return False
+
+        connection.commit()
+        connection.close()
+    except Exception:
+        connection.rollback()
+        connection.close()
+        raise
 
     paths = []
     if row["cover_path"]:
