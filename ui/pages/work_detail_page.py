@@ -40,8 +40,8 @@ class BundleSearchDialog(QDialog):
         self.search_page = SearchPage(
             lambda *_args: None,
             selection_mode=True,
-            parent=self,
         )
+        self.search_page.setParent(self)
         self.search_page.anime_selected.connect(self._select_work)
 
         root = QVBoxLayout(self)
