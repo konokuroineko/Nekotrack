@@ -35,6 +35,38 @@ class ImageWorker(QObject):
             self.error.emit(self.work_id, str(error))
 
 
+class LibraryImportWorker(QObject):
+    finished = Signal(int, object)
+    error = Signal(int, str)
+
+    def __init__(self, work_id):
+        super().__init__()
+        self.work_id = int(work_id)
+
+    def run(self):
+        try:
+            details = get_media_details(self.work_id)
+            if not details:
+                raise RuntimeError("AniList returned no details for this work.")
+
+            save_anime(details)
+            save_characters(
+                self.work_id,
+                (details.get("characters") or {}).get("edges"),
+            )
+            save_episodes(
+                self.work_id,
+                details.get("streamingEpisodes"),
+            )
+            save_staff(
+                self.work_id,
+                (details.get("staff") or {}).get("edges"),
+            )
+            self.finished.emit(self.work_id, details)
+        except Exception as error:
+            self.error.emit(self.work_id, str(error))
+
+
 class NavigationButton(QPushButton):
     def __init__(self, icon_text, label):
         super().__init__()
@@ -53,6 +85,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("NekoTrack")
         self.resize(1380, 860)
         self.image_threads = []
+        self.library_import_threads = []
+        self.library_import_workers = []
         self.navigation_buttons = {}
         self._settings_rebuild_pending = False
         self.setup_ui()
@@ -253,20 +287,62 @@ class MainWindow(QMainWindow):
 
     def add_to_library(self, anime, button):
         try:
-            from api import get_media_details
-            details = get_media_details(anime["id"])
-            save_anime(details)
-            save_characters(anime["id"], (details.get("characters") or {}).get("edges"))
-            save_episodes(anime["id"], details.get("streamingEpisodes"))
-            save_staff(anime["id"], (details.get("staff") or {}).get("edges"))
-            add_to_library(anime["id"], "Planning")
-            self.library_page.refresh()
+            work_id = int(anime["id"])
+
+            # Save the search result immediately so the button never waits on
+            # AniList's full character/voice-actor import.
+            save_anime(anime)
+            add_to_library(work_id, "Planning")
+
             button.setText("Added")
             button.setEnabled(False)
-            self.start_cover_download(anime["id"], (details.get("coverImage") or {}).get("large"), button)
+            self.library_page.refresh()
+
+            # Fetch the expensive detail payload in a worker thread.
+            worker = LibraryImportWorker(work_id)
+            thread = QThread(self)
+            worker.moveToThread(thread)
+
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._library_import_finished)
+            worker.error.connect(self._library_import_error)
+            worker.finished.connect(thread.quit)
+            worker.error.connect(thread.quit)
+            thread.finished.connect(worker.deleteLater)
+            thread.finished.connect(
+                lambda t=thread, w=worker: self._library_import_thread_finished(t, w)
+            )
+
+            self.library_import_threads.append(thread)
+            self.library_import_workers.append(worker)
+            thread.start()
+
+            self.start_cover_download(
+                work_id,
+                (anime.get("coverImage") or {}).get("large"),
+                button,
+            )
         except Exception as error:
             button.setText("Error")
             self.search_page.results_title.setText(f"Could not save: {error}")
+
+    def _library_import_finished(self, work_id, details):
+        # The library entry already exists. The worker has now filled in the
+        # heavier metadata such as characters, voice actors, episodes, and staff.
+        return
+
+    def _library_import_error(self, work_id, message):
+        # The basic library entry was already saved. Keep it usable even when
+        # the optional full metadata import fails.
+        return
+
+    def _library_import_thread_finished(self, thread, worker):
+        if thread in self.library_import_threads:
+            self.library_import_threads.remove(thread)
+        if worker in self.library_import_workers:
+            self.library_import_workers.remove(worker)
+        thread.deleteLater()
+
 
     def start_cover_download(self, work_id, image_url, button):
         if not image_url:
