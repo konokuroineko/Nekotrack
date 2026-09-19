@@ -326,7 +326,7 @@ def _bundle_summary(members):
 
 
 def _search_relation_edges(item):
-    return (item.get("relations") or {}).get("edges", [])
+    return (_get(item, "relations") or {}).get("edges", [])
 
 
 def _relation_edge_allowed(item, edge):
@@ -424,13 +424,13 @@ def _apply_relation_details(item, details):
     if not details:
         return
     item["relations"] = details.get("relations") or {}
-    item["type"] = details.get("type") or item.get("type")
-    item["format"] = details.get("format") or item.get("format")
-    item["title"] = details.get("title") or item.get("title") or {}
-    item["coverImage"] = details.get("coverImage") or item.get("coverImage") or {}
+    item["type"] = details.get("type") or _get(item, "type")
+    item["format"] = details.get("format") or _get(item, "format")
+    item["title"] = details.get("title") or _get(item, "title") or {}
+    item["coverImage"] = details.get("coverImage") or _get(item, "coverImage") or {}
     if details.get("episodes") is not None:
         item["episodes"] = details["episodes"]
-    item["startDate"] = details.get("startDate") or item.get("startDate") or {}
+    item["startDate"] = details.get("startDate") or _get(item, "startDate") or {}
     item["_relations_loaded"] = True
 
 
@@ -503,7 +503,7 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
             if item_id in processed_ids:
                 continue
 
-            if item.get("_relations_loaded"):
+            if _get(item, "_relations_loaded"):
                 continue
 
             if not hydrate_existing_nodes and (
@@ -549,7 +549,7 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
             if item_id in processed_ids:
                 continue
 
-            if not item.get("_relations_loaded"):
+            if not _get(item, "_relations_loaded"):
                 cached = _relation_cache.get(item_id)
                 if cached is not None:
                     _apply_relation_details(item, cached)
@@ -784,13 +784,13 @@ def has_pending_relation_enrichment(results):
             continue
         seen.add(item_id)
 
-        if item.get("_relations_loaded"):
+        if _get(item, "_relations_loaded"):
             edges = _search_relation_edges(item)
         else:
             cached = _relation_cache.get(item_id)
             if cached:
                 edges = (cached.get("relations") or {}).get("edges", [])
-            elif item.get("_related_only"):
+            elif _get(item, "_related_only"):
                 return True
             else:
                 edges = _search_relation_edges(item)
