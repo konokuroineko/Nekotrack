@@ -1028,11 +1028,13 @@ class WorkDetailPage(QWidget):
         self._episode_sync_thread.started.connect(self._episode_sync_worker.run)
         self._episode_sync_worker.finished.connect(self._episode_sync_finished)
         self._episode_sync_worker.error.connect(self._episode_sync_error)
-        self._episode_sync_worker.finished.connect(self._episode_sync_thread.quit)
-        self._episode_sync_worker.error.connect(self._episode_sync_thread.quit)
-        self._episode_sync_thread.finished.connect(self._episode_sync_worker.deleteLater)
-        self._episode_sync_thread.finished.connect(self._episode_sync_thread.deleteLater)
-        self._episode_sync_thread.start()
+        worker = self._episode_sync_worker
+        thread = self._episode_sync_thread
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
 
     def _episode_sync_finished(self, work_id, episodes):
         work_id = int(work_id)
