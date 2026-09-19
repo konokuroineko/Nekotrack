@@ -3,7 +3,7 @@ from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import QFrame, QLabel, QHBoxLayout, QVBoxLayout
 
-from ui.theme import COLORS, muted_label_stylesheet
+from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
 
 
 class CharacterArtwork(QFrame):
@@ -56,7 +56,7 @@ class CharacterCard(QFrame):
         super().__init__(parent)
         self.character = character
         self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet("QFrame { background: transparent; border: none; }")
+        self.setStyleSheet(card_stylesheet())
         self._network_manager = QNetworkAccessManager(self)
         self._image_reply = None
 
@@ -83,14 +83,18 @@ class CharacterCard(QFrame):
         text_layout = QVBoxLayout()
         name = QLabel(self._value("character_name") or "Unknown character")
         name.setWordWrap(True)
-        name.setStyleSheet(f"background: transparent; border: 0; color: {COLORS['primary']}; font-weight: 600;")
+        name.setFrameShape(QFrame.NoFrame)
+        name.setLineWidth(0)
+        name.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 600;")
         text_layout.addWidget(name)
 
         person_name = self._value("person_name")
         if person_name:
             voice = QLabel(f"Voice: {person_name}")
             voice.setWordWrap(True)
-            voice.setStyleSheet(f"background: transparent; border: 0; {muted_label_stylesheet()}")
+            voice.setFrameShape(QFrame.NoFrame)
+            voice.setLineWidth(0)
+            voice.setStyleSheet(f"background: transparent; border: none; {muted_label_stylesheet()}")
             text_layout.addWidget(voice)
         text_layout.addStretch()
         layout.addLayout(text_layout)
