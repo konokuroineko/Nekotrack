@@ -36,6 +36,15 @@ def initialize_database():
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bundle_exclusions (
+            work_a INTEGER NOT NULL, work_b INTEGER NOT NULL,
+            PRIMARY KEY (work_a, work_b),
+            FOREIGN KEY (work_a) REFERENCES works(id),
+            FOREIGN KEY (work_b) REFERENCES works(id),
+            CHECK (work_a < work_b)
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS bundle_overrides (
             bundle_anchor_id INTEGER PRIMARY KEY,
             custom_title TEXT,
@@ -376,6 +385,10 @@ def add_manual_bundle_link(work_a, work_b):
         "INSERT OR IGNORE INTO manual_bundle_links (work_a, work_b) VALUES (?, ?)",
         (work_a, work_b),
     )
+    connection.execute(
+        "DELETE FROM bundle_exclusions WHERE work_a = ? AND work_b = ?",
+        (work_a, work_b),
+    )
     changed = connection.total_changes > 0
     connection.commit()
     connection.close()
@@ -422,6 +435,108 @@ def get_manual_bundle_links(work_ids=None):
 
     connection.close()
     return rows
+
+
+def add_bundle_exclusion(work_a, work_b):
+    """Prevent two works from being automatically grouped together."""
+    work_a, work_b = sorted((int(work_a), int(work_b)))
+    if work_a == work_b:
+        return False
+
+    connection = get_connection()
+    try:
+        exists = connection.execute(
+            "SELECT COUNT(*) FROM works WHERE id IN (?, ?)",
+            (work_a, work_b),
+        ).fetchone()[0]
+        if exists != 2:
+            return False
+
+        cursor = connection.execute(
+            "INSERT OR IGNORE INTO bundle_exclusions (work_a, work_b) VALUES (?, ?)",
+            (work_a, work_b),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    finally:
+        connection.close()
+
+
+def remove_bundle_member(work_id, target_id, bundle_member_ids):
+    """Remove target_id from a bundle while keeping it in the Library."""
+    work_id = int(work_id)
+    target_id = int(target_id)
+    member_ids = {int(value) for value in (bundle_member_ids or []) if value is not None}
+    member_ids.discard(target_id)
+
+    if work_id == target_id or work_id not in member_ids:
+        return False
+
+    all_ids = member_ids | {work_id, target_id}
+    placeholders = ",".join("?" for _ in all_ids)
+
+    connection = get_connection()
+    try:
+        existing = connection.execute(
+            f"SELECT id FROM works WHERE id IN ({placeholders})",
+            tuple(all_ids),
+        ).fetchall()
+        if len(existing) != len(all_ids):
+            return False
+
+        changed = False
+        for other_id in member_ids | {work_id}:
+            if other_id == target_id:
+                continue
+
+            left, right = sorted((target_id, other_id))
+
+            cursor = connection.execute(
+                "DELETE FROM manual_bundle_links WHERE work_a = ? AND work_b = ?",
+                (left, right),
+            )
+            changed = cursor.rowcount > 0 or changed
+
+            cursor = connection.execute(
+                "INSERT OR IGNORE INTO bundle_exclusions (work_a, work_b) VALUES (?, ?)",
+                (left, right),
+            )
+            changed = cursor.rowcount > 0 or changed
+
+        connection.commit()
+        return changed
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def get_bundle_exclusions(work_ids=None):
+    """Return persisted bundle exclusions."""
+    connection = get_connection()
+    try:
+        if work_ids is None:
+            rows = connection.execute(
+                "SELECT work_a, work_b FROM bundle_exclusions ORDER BY work_a, work_b"
+            ).fetchall()
+        else:
+            ids = sorted({int(work_id) for work_id in work_ids if work_id is not None})
+            if not ids:
+                return []
+            placeholders = ",".join("?" for _ in ids)
+            rows = connection.execute(
+                f"""
+                SELECT work_a, work_b
+                FROM bundle_exclusions
+                WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
+                ORDER BY work_a, work_b
+                """,
+                [*ids, *ids],
+            ).fetchall()
+        return rows
+    finally:
+        connection.close()
 
 
 def get_manual_bundle_partners(work_id):
@@ -658,6 +773,10 @@ def delete_work_data(work_id):
 
         connection.execute(
             "DELETE FROM manual_bundle_links WHERE work_a = ? OR work_b = ?",
+            (work_id, work_id),
+        )
+        connection.execute(
+            "DELETE FROM bundle_exclusions WHERE work_a = ? OR work_b = ?",
             (work_id, work_id),
         )
         connection.execute(
