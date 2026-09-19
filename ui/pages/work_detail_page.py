@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QUrl
+from PySide6.QtCore import QObject, QSize, QThread, Qt, Signal, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
