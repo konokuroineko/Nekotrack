@@ -114,7 +114,7 @@ class MainWindow(QMainWindow):
         self.work_detail_page.auto_bundle_requested.connect(self.library_page._auto_bundle_item)
         self.work_detail_page.bundle_edit_requested.connect(self.library_page._edit_bundle)
         self.work_detail_page.relation_selected.connect(self.show_relation)
-        self.work_detail_page.bundle_changed.connect(self.library_page.refresh)
+        self.work_detail_page.bundle_changed.connect(self._refresh_library_after_bundle_change)
         self.relationship_page.work_selected.connect(self.show_relation)
         self.settings_page.settings_changed.connect(self.apply_settings)
 
@@ -133,6 +133,11 @@ class MainWindow(QMainWindow):
         """
         )
         self.navigation.show("home")
+
+    def _refresh_library_after_bundle_change(self):
+        # Wait until the detail-page deletion/link change has fully returned to
+        # the event loop, then rebuild the Library from the current database state.
+        QTimer.singleShot(0, self.library_page.refresh)
 
     def _page_changed(self, page_name):
         if page_name == "collections":
