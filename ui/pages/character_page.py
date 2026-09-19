@@ -13,7 +13,7 @@ class CharacterPage(QWidget):
         title.setStyleSheet(f"font-size: 30px; font-weight: 800; color: {COLORS['primary']};")
         layout.addWidget(title)
         panel = QFrame()
-        panel.setStyleSheet(f"QFrame {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 16px; }}")
+        panel.setStyleSheet(f"QFrame {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: 16px; }}")
         box = QVBoxLayout(panel)
         message = QLabel("Character records imported from title details will be surfaced here.")
         message.setWordWrap(True)
