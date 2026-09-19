@@ -197,7 +197,6 @@ class WorkDetailPage(QWidget):
         back.clicked.connect(self.back_requested)
         root.addWidget(back, alignment=Qt.AlignLeft)
         root.addWidget(self._hero())
-        root.addWidget(self._description())
         root.addWidget(self._episodes_section())
         root.addWidget(self._grid_section("Characters", get_characters(self._value("id")), CharacterCard, self.character_selected, 4))
         root.addWidget(self._grid_section("Staff", get_staff(self._value("id")), PersonCard, self.person_selected, 4))
@@ -211,13 +210,6 @@ class WorkDetailPage(QWidget):
             QFrame#section {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: 18px; }}
             QFrame#episode {{ background: {COLORS['surface_alt']}; border: 1px solid {COLORS['frame']}; border-radius: 10px; }}
             QFrame#episode:hover {{ border-color: {COLORS['border_hover']}; }}
-            QFrame#progressTrack {{ background: {COLORS['border']}; border: 0; border-radius: 5px; }}
-            QFrame#progressFill {{ background: {COLORS['accent']}; border: 0; border-radius: 5px; }}
-            QSpinBox#episodeCounter {{ background: {COLORS['background_alt']}; color: {COLORS['primary']}; border: 1px solid {COLORS['border_hover']}; border-radius: 10px; padding: 8px 12px; font-size: 18px; font-weight: 850; min-width: 92px; }}
-            QSpinBox#episodeCounter:focus {{ border-color: {COLORS['accent']}; }}
-            QSpinBox#episodeCounter::up-button, QSpinBox#episodeCounter::down-button {{ width: 0; height: 0; border: 0; }}
-            QPushButton#counterButton {{ background: {COLORS['surface_alt']}; color: {COLORS['primary']}; border: 1px solid {COLORS['border']}; border-radius: 10px; font-size: 18px; font-weight: 850; min-width: 38px; min-height: 38px; }}
-            QPushButton#counterButton:hover {{ background: {COLORS['surface_hover']}; border-color: {COLORS['accent']}; }}
             QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:2px solid transparent; border-radius:{get('corner_radius') + 2}px; font-size:30px; font-weight:900; padding:0; }}
             QToolButton#detailMenu:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
             QFrame#deleteOverlay {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}
@@ -273,20 +265,13 @@ class WorkDetailPage(QWidget):
         score_label = QLabel(f"★  {score}%" if score else "—  No score"); score_label.setStyleSheet(f"color:{COLORS['accent']};font-size:18px;font-weight:800;"); info.addWidget(score_label)
 
         info.addSpacing(10)
-        progress_title = QLabel("Episode progress"); progress_title.setStyleSheet(f"color:{COLORS['secondary']};font-size:12px;font-weight:800;"); info.addWidget(progress_title)
-        progress_row = QHBoxLayout(); progress_row.setSpacing(8)
-        minus = QPushButton("−"); minus.setObjectName("counterButton"); minus.setCursor(Qt.PointingHandCursor)
-        plus = QPushButton("+"); plus.setObjectName("counterButton"); plus.setCursor(Qt.PointingHandCursor)
-        counter = QSpinBox(); counter.setObjectName("episodeCounter")
-        total = max(0, int(self._value("episodes") or 0)); current = max(0, int(self._value("progress_episodes") or 0))
-        counter.setRange(0, total if total else 99999); counter.setValue(min(current, counter.maximum())); counter.setAlignment(Qt.AlignCenter); counter.setButtonSymbols(QSpinBox.NoButtons)
-        minus.clicked.connect(lambda: counter.setValue(counter.value() - 1)); plus.clicked.connect(lambda: counter.setValue(counter.value() + 1)); counter.valueChanged.connect(self._progress_counter_changed)
-        progress_row.addWidget(minus); progress_row.addWidget(counter); progress_row.addWidget(plus); progress_row.addStretch(); info.addLayout(progress_row)
-        progress_track = QFrame(); progress_track.setObjectName("progressTrack"); progress_track.setFixedHeight(8)
-        progress_fill = QFrame(progress_track); progress_fill.setObjectName("progressFill")
-        ratio = (current / total) if total else 0; progress_fill.setGeometry(0, 0, round(420 * min(1.0, ratio)), 8); info.addWidget(progress_track)
-        progress_count = QLabel(f"{current} of {total} episodes" if total else "Episode count unavailable"); progress_count.setStyleSheet(muted_label_stylesheet()); info.addWidget(progress_count); info.addStretch()
-        self._episode_counter = counter; self._progress_fill = progress_fill; self._progress_track = progress_track; self._progress_count = progress_count
+        description = QLabel(self._value("description") or "No description saved locally.")
+        description.setWordWrap(True)
+        description.setTextFormat(Qt.PlainText)
+        description.setStyleSheet(f"color:{COLORS['secondary']};font-size:14px;")
+        info.addWidget(description)
+        info.addStretch()
+
         box.addLayout(info, 1)
         return hero
 
@@ -692,12 +677,6 @@ class WorkDetailPage(QWidget):
             self.work = None
             self.back_requested.emit()
 
-    def _progress_counter_changed(self, value):
-        if self.work is None: return
-        set_episode_progress(self._value("id"), value)
-        refreshed = get_work(self._value("id"))
-        if refreshed: self.set_work(refreshed)
-
     def _cropped_cover(self, pixmap, size, radius):
         scaled = pixmap.scaled(size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
         x = max(0, (scaled.width() - size.width()) // 2); y = max(0, (scaled.height() - size.height()) // 2)
@@ -717,11 +696,6 @@ class WorkDetailPage(QWidget):
         painter.drawPath(path)
         painter.end()
         return result
-
-    def _description(self):
-        frame = QFrame(); frame.setObjectName("section"); lay = QVBoxLayout(frame); lay.setContentsMargins(20, 18, 20, 20); lay.setSpacing(10)
-        header = QLabel("Overview"); header.setStyleSheet(f"font-size:17px;font-weight:800;color:{COLORS['primary']};"); lay.addWidget(header)
-        label = QLabel(self._value("description") or "No description saved locally."); label.setWordWrap(True); label.setTextFormat(Qt.PlainText); label.setStyleSheet(f"color:{COLORS['secondary']};font-size:14px;"); lay.addWidget(label); return frame
 
     def _episodes_section(self):
         episodes = get_episodes(self._value("id")); frame = QFrame(); frame.setObjectName("section"); lay = QVBoxLayout(frame); lay.setContentsMargins(20, 18, 20, 20); lay.setSpacing(10)
