@@ -1,9 +1,10 @@
 import threading
 
+from api import get_media_details
 from PySide6.QtCore import QObject, Signal, Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
-from database import add_to_library, get_work, initialize_database, save_anime, save_characters, save_cover_path, save_episodes, save_staff
+from database import add_to_library, characters_are_loaded, get_work, initialize_database, save_anime, save_characters, save_cover_path, save_episodes, save_staff
 from image_cache import download_cover
 from ui.navigation import NavigationController
 from ui.preferences import get
@@ -209,6 +210,22 @@ class MainWindow(QMainWindow):
             button.setChecked(name == page_name)
 
     def show_work_details(self, work):
+        # Older library entries were imported with only AniList's first
+        # character page. Refresh them once so the detail page can show the
+        # complete character list without re-importing the work manually.
+        work_id = work.get("id") if hasattr(work, "get") else None
+        if work_id and not characters_are_loaded(work_id):
+            try:
+                details = get_media_details(work_id)
+                if details:
+                    save_anime(details)
+                    save_characters(work_id, (details.get("characters") or {}).get("edges"))
+                    save_staff(work_id, (details.get("staff") or {}).get("edges"))
+                    save_episodes(work_id, details.get("streamingEpisodes"))
+                    work = get_work(work_id) or work
+            except Exception:
+                pass
+
         self.work_detail_page.set_work(work)
         self.navigation.show("work_detail")
 
