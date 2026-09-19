@@ -890,7 +890,7 @@ class SearchPage(QWidget):
         if (
             watched is self.results_scroll.viewport()
             and event.type() == QEvent.Type.Resize
-            and self.displayed_items
+            and self._result_cards()
         ):
             target_positions = self._target_positions_for_width(event.size().width())
 
