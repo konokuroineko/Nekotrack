@@ -450,6 +450,41 @@ def get_media_relations_batch(media_ids):
     }
 
 
+def get_media_episodes(media_id):
+    """Fetch and normalize an AniList airing schedule into local episode rows."""
+    query = """
+    query ($id: Int) {
+        Media(id: $id) {
+            airingSchedule(perPage: 50) {
+                nodes {
+                    airingAt
+                    episode
+                }
+            }
+        }
+    }
+    """
+    data = anilist_request(query, {"id": media_id})
+    schedule = ((data.get("Media") or {}).get("airingSchedule") or {}).get("nodes") or []
+
+    import datetime
+
+    return [
+        {
+            "episodeNumber": node.get("episode"),
+            "title": f"Episode {node.get('episode')}",
+            "description": None,
+            "airdate": (
+                datetime.datetime.fromtimestamp(int(node["airingAt"])).strftime("%Y-%m-%d")
+                if node.get("airingAt") is not None
+                else None
+            ),
+        }
+        for node in schedule
+        if node.get("episode") is not None
+    ]
+
+
 def get_media_details(media_id):
     """Fetch the complete media record needed by detail/import workflows."""
     query = """
