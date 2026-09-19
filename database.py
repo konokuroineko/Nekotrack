@@ -339,7 +339,82 @@ def get_characters(work_id):
               AND wc.character_id = characters.id
         )
         ORDER BY
-            CASE UPPER(COALEdef get_staff(work_id):
+            CASE
+                WHEN UPPER(COALESCE((
+                    SELECT wc.role
+                    FROM work_characters AS wc
+                    WHERE wc.work_id IN ({placeholders})
+                      AND wc.character_id = characters.id
+                    ORDER BY
+                        CASE UPPER(COALESCE(wc.role, 'UNKNOWN'))
+                            WHEN 'MAIN' THEN 0
+                            WHEN 'SUPPORTING' THEN 1
+                            WHEN 'BACKGROUND' THEN 2
+                            ELSE 3
+                        END,
+                        wc.role
+                    LIMIT 1
+                ), 'UNKNOWN')) = 'MAIN' THEN 0
+                WHEN UPPER(COALESCE((
+                    SELECT wc.role
+                    FROM work_characters AS wc
+                    WHERE wc.work_id IN ({placeholders})
+                      AND wc.character_id = characters.id
+                    ORDER BY
+                        CASE UPPER(COALESCE(wc.role, 'UNKNOWN'))
+                            WHEN 'MAIN' THEN 0
+                            WHEN 'SUPPORTING' THEN 1
+                            WHEN 'BACKGROUND' THEN 2
+                            ELSE 3
+                        END,
+                        wc.role
+                    LIMIT 1
+                ), 'UNKNOWN')) = 'SUPPORTING' THEN 1
+                WHEN UPPER(COALESCE((
+                    SELECT wc.role
+                    FROM work_characters AS wc
+                    WHERE wc.work_id IN ({placeholders})
+                      AND wc.character_id = characters.id
+                    ORDER BY
+                        CASE UPPER(COALESCE(wc.role, 'UNKNOWN'))
+                            WHEN 'MAIN' THEN 0
+                            WHEN 'SUPPORTING' THEN 1
+                            WHEN 'BACKGROUND' THEN 2
+                            ELSE 3
+                        END,
+                        wc.role
+                    LIMIT 1
+                ), 'UNKNOWN')) = 'BACKGROUND' THEN 2
+                ELSE 3
+            END,
+            characters.name
+    """, [*ids, *ids, *ids, *ids, *ids]).fetchall()
+    connection.close()
+    return results
+
+
+def save_staff(work_id, staff_edges):
+    connection = get_connection()
+    for edge in staff_edges or []:
+        person = edge.get("node") or {}
+        person_id = person.get("id")
+        person_name = (person.get("name") or {}).get("full")
+        role = edge.get("role")
+        if not person_id or not person_name or not role:
+            continue
+        connection.execute(
+            "INSERT OR REPLACE INTO people (id, name, image_url) VALUES (?, ?, ?)",
+            (person_id, person_name, (person.get("image") or {}).get("large")),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO work_staff (work_id, person_id, role) VALUES (?, ?, ?)",
+            (work_id, person_id, role),
+        )
+    connection.commit()
+    connection.close()
+
+
+def get_staff(work_id):
     """Return one row per staff person, combining all of their roles."""
     ids = _normalize_work_ids(work_id)
     if not ids:
@@ -374,41 +449,6 @@ def get_characters(work_id):
     """, [*ids, *ids]).fetchall()
     connection.close()
     return results
-or {}).get("large")))
-        connection.execute("INSERT OR IGNORE INTO work_staff (work_id, person_id, role) VALUES (?, ?, ?)",
-                           (work_id, person_id, role))
-    connection.commit()
-    connection.close()
-
-
-def get_staff(work_id):
-    connection = get_connection()
-    results = connection.execute("""
-        SELECT
-            people.id AS person_id,
-            people.name,
-            people.image_path,
-            people.image_url,
-            (
-                SELECT group_concat(role, char(10))
-                FROM (
-                    SELECT role
-                    FROM work_staff AS ws
-                    WHERE ws.work_id = ? AND ws.person_id = people.id
-                    ORDER BY role
-                )
-            ) AS role
-        FROM people
-        WHERE EXISTS (
-            SELECT 1
-            FROM work_staff AS ws
-            WHERE ws.work_id = ? AND ws.person_id = people.id
-        )
-        ORDER BY people.name
-    """, (work_id, work_id)).fetchall()
-    connection.close()
-    return results
-
 
 def save_episodes(work_id, episode_data):
     connection = get_connection()
