@@ -8,10 +8,11 @@ from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
 
 class CharacterArtwork(QFrame):
     """Circular character artwork with the same accent frame used by poster covers."""
-    def __init__(self, size=88, parent=None):
+    def __init__(self, width=72, height=96, radius=14, parent=None):
         super().__init__(parent)
         self._pixmap = QPixmap()
-        self.setFixedSize(size, size)
+        self.setFixedSize(width, height)
+        self._radius = radius
         self.setAttribute(Qt.WA_TranslucentBackground)
 
     def set_pixmap(self, pixmap):
@@ -26,7 +27,7 @@ class CharacterArtwork(QFrame):
 
         rect = self.rect().adjusted(2, 2, -2, -2)
         path = QPainterPath()
-        path.addEllipse(rect)
+        path.addRoundedRect(rect, self._radius, self._radius)
 
         if not self._pixmap.isNull():
             scaled = self._pixmap.scaled(
@@ -62,7 +63,7 @@ class CharacterCard(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(12)
-        image = CharacterArtwork(88)
+        image = CharacterArtwork(72, 96, 14)
         image_path = self._value("character_image_path")
         image_url = self._value("character_image_url")
 
