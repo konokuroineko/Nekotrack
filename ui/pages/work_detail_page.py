@@ -29,7 +29,7 @@ IMAGE_DIRECTORY = Path("data") / "images" / "works"
 
 
 class StaffFlowLayout(QLayout):
-    """Tightly pack fixed-width staff cards into as many cards per row as fit."""
+    """Tightly pack fixed-width staff cards and center each row."""
     def __init__(self, parent=None, h_spacing=8, v_spacing=12):
         super().__init__(parent)
         self._items = []
@@ -79,34 +79,45 @@ class StaffFlowLayout(QLayout):
         effective = rect.adjusted(
             margins.left(), margins.top(), -margins.right(), -margins.bottom()
         )
-        x = effective.x()
-        y = effective.y()
-        line_height = 0
+
+        rows = []
+        current_row = []
+        current_width = 0
+        current_height = 0
 
         for item in self._items:
             size = item.sizeHint()
             if size.width() <= 0:
                 continue
 
-            next_x = x + size.width()
-            if x > effective.x() and next_x > effective.right() + 1:
-                x = effective.x()
-                y += line_height + self._v_spacing
-                next_x = x + size.width()
-                line_height = 0
+            added_width = size.width() if not current_row else self._h_spacing + size.width()
+            if current_row and current_width + added_width > effective.width():
+                rows.append((current_row, current_width, current_height))
+                current_row = []
+                current_width = 0
+                current_height = 0
+                added_width = size.width()
 
-            if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), size))
+            current_row.append((item, size))
+            current_width += added_width
+            current_height = max(current_height, size.height())
 
-            x = next_x + self._h_spacing
-            line_height = max(line_height, size.height())
+        if current_row:
+            rows.append((current_row, current_width, current_height))
 
-        return (
-            y + line_height - rect.y() + margins.bottom()
-            if self._items
-            else margins.top() + margins.bottom()
-        )
+        y = effective.y()
+        for row, row_width, row_height in rows:
+            x = effective.x() + max(0, (effective.width() - row_width) // 2)
+            for item, size in row:
+                if not test_only:
+                    item.setGeometry(QRect(QPoint(x, y), size))
+                x += size.width() + self._h_spacing
+            y += row_height + self._v_spacing
 
+        if not rows:
+            return margins.top() + margins.bottom()
+
+        return y - self._v_spacing - rect.y() + margins.bottom()
 
 
 class BundleSearchDialog(QDialog):
