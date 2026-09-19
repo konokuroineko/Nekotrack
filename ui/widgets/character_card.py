@@ -1,5 +1,5 @@
 from PySide6.QtCore import Signal, Qt, QUrl
-from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
+from PySide6.QtGui import QPixmap, QPainter, QPainterPath
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import QFrame, QLabel, QHBoxLayout, QVBoxLayout
 
@@ -40,11 +40,6 @@ class CharacterArtwork(QFrame):
             painter.setClipPath(path)
             painter.drawPixmap(rect.topLeft(), cropped)
             painter.restore()
-
-        if not self._pixmap.isNull():
-            painter.setPen(QPen(QColor(COLORS["frame"]), 3.0))
-            painter.setBrush(Qt.NoBrush)
-            painter.drawPath(path)
 
         painter.end()
 
