@@ -5,7 +5,7 @@ from PySide6.QtGui import QPixmap, QPainter, QPainterPath
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton, QWidgetAction,
-    QInputDialog, QMessageBox, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
+    QMessageBox, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 )
 
 from database import (
