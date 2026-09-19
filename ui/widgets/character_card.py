@@ -59,6 +59,7 @@ class CharacterCard(QFrame):
         self.setStyleSheet(card_stylesheet())
         self._network_manager = QNetworkAccessManager(self)
         self._image_reply = None
+        self._voice_image_reply = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -96,8 +97,24 @@ class CharacterCard(QFrame):
             voice.setLineWidth(0)
             voice.setStyleSheet(f"background: transparent; border: none; {muted_label_stylesheet()}")
             text_layout.addWidget(voice)
+
         text_layout.addStretch()
-        layout.addLayout(text_layout)
+        layout.addLayout(text_layout, 1)
+
+        person_image = CharacterArtwork(72, 96, 14)
+        person_image_path = self._value("person_image_path")
+        person_image_url = self._value("person_image_url")
+
+        if person_name and person_image_path:
+            pixmap = QPixmap(str(person_image_path))
+            if not pixmap.isNull():
+                person_image.set_pixmap(pixmap)
+
+        if person_name:
+            self._voice_image_artwork = person_image
+            if person_image._pixmap.isNull():
+                self._load_voice_image_url(person_image_url)
+            layout.addWidget(person_image, alignment=Qt.AlignTop)
 
     def _load_image_url(self, url):
         if not url:
@@ -114,6 +131,27 @@ class CharacterCard(QFrame):
             pixmap = QPixmap()
             if pixmap.loadFromData(reply.readAll()) and getattr(self, "_image_artwork", None) is not None:
                 self._image_artwork.set_pixmap(pixmap)
+        if reply is not None:
+            reply.deleteLater()
+
+    def _load_voice_image_url(self, url):
+        if not url:
+            return
+        self._voice_image_reply = self._network_manager.get(
+            QNetworkRequest(QUrl(str(url)))
+        )
+        self._voice_image_reply.finished.connect(self._voice_image_finished)
+
+    def _voice_image_finished(self):
+        reply = self._voice_image_reply
+        self._voice_image_reply = None
+        if reply is not None and reply.error() == reply.NetworkError.NoError:
+            pixmap = QPixmap()
+            if (
+                pixmap.loadFromData(reply.readAll())
+                and getattr(self, "_voice_image_artwork", None) is not None
+            ):
+                self._voice_image_artwork.set_pixmap(pixmap)
         if reply is not None:
             reply.deleteLater()
 
