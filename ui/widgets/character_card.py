@@ -104,9 +104,9 @@ class CharacterCard(QFrame):
         name.setLineWidth(0)
         name.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 600;")
         name.setAlignment(Qt.AlignCenter)
+        character_info.addStretch(1)
         character_info.addWidget(name)
-
-        character_info.addStretch()
+        character_info.addStretch(1)
         text_layout.addLayout(character_info, 1)
 
         person_name = self._value("person_name")
