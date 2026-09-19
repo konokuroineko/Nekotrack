@@ -83,14 +83,14 @@ class CharacterCard(QFrame):
         text_layout = QVBoxLayout()
         name = QLabel(self._value("character_name") or "Unknown character")
         name.setWordWrap(True)
-        name.setStyleSheet(f"color: {COLORS['primary']}; font-weight: 600;")
+        name.setStyleSheet(f"background: transparent; border: 0; color: {COLORS['primary']}; font-weight: 600;")
         text_layout.addWidget(name)
 
         person_name = self._value("person_name")
         if person_name:
             voice = QLabel(f"Voice: {person_name}")
             voice.setWordWrap(True)
-            voice.setStyleSheet(muted_label_stylesheet())
+            voice.setStyleSheet(f"background: transparent; border: 0; {muted_label_stylesheet()}")
             text_layout.addWidget(voice)
         text_layout.addStretch()
         layout.addLayout(text_layout)
