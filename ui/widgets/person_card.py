@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from PySide6.QtCore import Signal, Qt, QUrl
-from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
+from PySide6.QtCore import Signal, Qt, QUrl, QRect
+from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QFontMetrics
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QSizePolicy
 
 from database import save_person_image_path
 from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
@@ -78,23 +78,45 @@ class PersonCard(QFrame):
             self._load_image_url(self._value("image_url"))
         layout.addWidget(self.image, alignment=Qt.AlignCenter)
 
+        text_width = 156
+
         name = QLabel(self._value("name") or "Unknown person")
         name.setWordWrap(True)
+        name.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         name.setStyleSheet(
             f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 600;"
         )
         name.setAlignment(Qt.AlignCenter)
         layout.addWidget(name)
 
+        name_height = QFontMetrics(name.font()).boundingRect(
+            QRect(0, 0, text_width, 1000),
+            Qt.TextWordWrap,
+            name.text(),
+        ).height()
+
+        role_height = 0
         role = self._value("role")
         if role:
             role_label = QLabel(role)
             role_label.setWordWrap(True)
+            role_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
             role_label.setStyleSheet(
                 f"background: transparent; border: none; {muted_label_stylesheet()}"
             )
             role_label.setAlignment(Qt.AlignCenter)
             layout.addWidget(role_label)
+
+            role_height = QFontMetrics(role_label.font()).boundingRect(
+                QRect(0, 0, text_width, 1000),
+                Qt.TextWordWrap,
+                role_label.text(),
+            ).height()
+
+        content_height = 24 + 120 + 8 + name_height
+        if role:
+            content_height += 8 + role_height
+        self.setMinimumHeight(max(215, content_height))
 
     def _load_image_url(self, url):
         if not url:
