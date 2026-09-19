@@ -713,7 +713,12 @@ class WorkDetailPage(QWidget):
             x = QLabel("Nothing stored locally yet."); x.setStyleSheet(muted_label_stylesheet()); grid.addWidget(x, 0, 0)
         else:
             for i, item in enumerate(items):
-                card = cls(item); card.clicked.connect(signal); grid.addWidget(card, i // columns, i % columns)
+                card = cls(item)
+                card.clicked.connect(signal)
+                if title == "Staff":
+                    grid.addWidget(card, i // columns, i % columns, Qt.AlignHCenter | Qt.AlignTop)
+                else:
+                    grid.addWidget(card, i // columns, i % columns)
         lay.addWidget(container); return frame
 
     def _relations(self):
