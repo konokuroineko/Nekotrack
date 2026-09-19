@@ -6,7 +6,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
 
 from database import save_person_image_path
-from ui.theme import COLORS, muted_label_stylesheet
+from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
 
 
 class PersonArtwork(QFrame):
@@ -59,8 +59,8 @@ class PersonCard(QFrame):
         super().__init__(parent)
         self.person = person
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedWidth(152)
-        self.setStyleSheet("QFrame { background: transparent; border: none; }")
+        self.setFixedWidth(180)
+        self.setStyleSheet(card_stylesheet())
         self._network_manager = QNetworkAccessManager(self)
         self._image_reply = None
 
@@ -79,14 +79,18 @@ class PersonCard(QFrame):
 
         name = QLabel(self._value("name") or "Unknown person")
         name.setWordWrap(True)
-        name.setStyleSheet(f"color: {COLORS['primary']}; font-weight: 600;")
+        name.setStyleSheet(
+            f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 600;"
+        )
         name.setAlignment(Qt.AlignCenter)
         layout.addWidget(name)
 
         role = self._value("role")
         if role:
             role_label = QLabel(role)
-            role_label.setStyleSheet(muted_label_stylesheet())
+            role_label.setStyleSheet(
+                f"background: transparent; border: none; {muted_label_stylesheet()}"
+            )
             role_label.setAlignment(Qt.AlignCenter)
             layout.addWidget(role_label)
 
