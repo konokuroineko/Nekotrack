@@ -57,7 +57,7 @@ class WorkCard(QFrame):
     _cover_cache = {}
     _cover_failures = set()
 
-    def __init__(self, work, progress_editable=False, mode="library", add_callback=None, parent=None):
+    def __init__(self, work, progress_editable=False, mode="library", add_callback=None, show_add_button=True, parent=None):
         super().__init__(parent)
         self.work = work
         self.mode = mode
@@ -157,7 +157,7 @@ class WorkCard(QFrame):
         root.addLayout(content)
 
         add_button = None
-        if mode == "search":
+        if mode == "search" and show_add_button:
             add_button = QPushButton("+  Add to Library")
             add_button.setObjectName("add")
             add_button.setCursor(Qt.PointingHandCursor)
