@@ -81,13 +81,16 @@ class CharacterCard(QFrame):
         else:
             self._image_artwork = image
 
-        text_layout = QVBoxLayout()
+        text_layout = QHBoxLayout()
+        text_layout.setSpacing(18)
+
         name = QLabel(self._value("character_name") or "Unknown character")
         name.setWordWrap(True)
         name.setFrameShape(QFrame.NoFrame)
         name.setLineWidth(0)
         name.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 600;")
-        text_layout.addWidget(name)
+        name.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        text_layout.addWidget(name, 1)
 
         person_name = self._value("person_name")
         if person_name:
@@ -96,9 +99,9 @@ class CharacterCard(QFrame):
             voice.setFrameShape(QFrame.NoFrame)
             voice.setLineWidth(0)
             voice.setStyleSheet(f"background: transparent; border: none; {muted_label_stylesheet()}")
-            text_layout.addWidget(voice)
+            voice.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            text_layout.addWidget(voice, 1)
 
-        text_layout.addStretch()
         layout.addLayout(text_layout, 1)
 
         person_image = CharacterArtwork(88, 116, 14)
