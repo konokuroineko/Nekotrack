@@ -609,14 +609,37 @@ class WorkDetailPage(QWidget):
         self._delete_from_detail([int(item.data(Qt.UserRole))], overlay)
 
     def _delete_from_detail(self, work_ids, overlay):
-        deleted = False
-        for work_id in work_ids:
-            deleted = delete_work_data(int(work_id)) or deleted
+        target_ids = [int(work_id) for work_id in work_ids]
+        deleted_ids = []
+
+        for work_id in target_ids:
+            if delete_work_data(work_id):
+                deleted_ids.append(work_id)
 
         overlay.deleteLater()
         self._delete_overlay = None
 
-        if deleted:
+        # Verify the exact selected entries are gone before rebuilding the
+        # Library. This prevents a stale bundle view from hiding a failed delete.
+        remaining_ids = []
+        connection = get_connection()
+        for work_id in target_ids:
+            if connection.execute(
+                "SELECT 1 FROM works WHERE id = ? LIMIT 1",
+                (work_id,),
+            ).fetchone() is not None:
+                remaining_ids.append(work_id)
+        connection.close()
+
+        if remaining_ids:
+            QMessageBox.critical(
+                self,
+                "Delete failed",
+                "NekoTrack could not remove the selected entry from its local database.",
+            )
+            return
+
+        if deleted_ids:
             self.bundle_changed.emit()
             self.work = None
             self.back_requested.emit()
