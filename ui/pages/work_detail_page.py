@@ -105,19 +105,17 @@ class StaffFlowLayout(QLayout):
         if current_row:
             rows.append((current_row, current_width, current_height))
 
-        y = effective.y()
-        for row_index, (row, row_width, row_height) in enumerate(rows):
-            # Keep complete rows centered, but start an incomplete final row at the left.
-            is_last_row = row_index == len(rows) - 1
-            is_incomplete = len(row) < max(
-                1,
-                int((effective.width() + self._h_spacing) // max(1, row[0][1].width() + self._h_spacing))
-            )
-            if is_last_row and is_incomplete:
-                x = effective.x()
-            else:
-                x = effective.x() + max(0, (effective.width() - row_width) // 2)
+        if rows:
+            # Use the full-row width as the common anchor so an incomplete
+            # final row starts at exactly the same horizontal position.
+            anchor_width = rows[0][1]
+            anchor_x = effective.x() + max(0, (effective.width() - anchor_width) // 2)
+        else:
+            anchor_x = effective.x()
 
+        y = effective.y()
+        for row, row_width, row_height in rows:
+            x = anchor_x
             for item, size in row:
                 if not test_only:
                     item.setGeometry(QRect(QPoint(x, y), size))
