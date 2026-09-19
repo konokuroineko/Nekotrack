@@ -112,7 +112,6 @@ class MainWindow(QMainWindow):
         self.library_page.work_selected.connect(self.show_work_details)
         self.search_page.anime_selected.connect(self.show_search_work)
         self.work_detail_page.back_requested.connect(lambda: self.navigation.show("collections"))
-        self.work_detail_page.auto_bundle_requested.connect(self.library_page._auto_bundle_item)
         self.work_detail_page.bundle_edit_requested.connect(self.library_page._edit_bundle)
         self.work_detail_page.relation_selected.connect(self.show_relation)
         self.work_detail_page.bundle_changed.connect(self._refresh_library_after_bundle_change)
