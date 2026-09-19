@@ -323,7 +323,13 @@ class MainWindow(QMainWindow):
             return
 
         members = list(current.get("_series_members") or []) if hasattr(current, "get") else []
-        ids = {int(member["id"]) for member in members if member.get("id") is not None}
+        ids = set()
+        for member in members:
+            try:
+                ids.add(int(member["id"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+
         current_id = current.get("id") if hasattr(current, "get") else None
 
         if current_id is not None:
