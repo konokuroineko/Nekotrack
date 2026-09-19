@@ -81,7 +81,7 @@ class RelationshipPage(QWidget):
         root.addLayout(header)
 
         controls = QFrame()
-        controls.setStyleSheet(f"QFrame {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 14px; }}")
+        controls.setStyleSheet(f"QFrame {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: 14px; }}")
         controls_row = QHBoxLayout(controls)
         controls_row.setContentsMargins(10, 8, 10, 8)
         controls_row.setSpacing(8)
