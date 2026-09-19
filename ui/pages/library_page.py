@@ -87,7 +87,7 @@ class LibraryPage(QWidget):
         title = QLabel("Library"); title.setStyleSheet(f"font-size:32px;font-weight:850;color:{COLORS['primary']};")
         self.count_label = QLabel("0 titles"); self.count_label.setStyleSheet(f"font-size:12px;color:{COLORS['muted']};")
         title_box.addWidget(title); title_box.addWidget(self.count_label); header.addLayout(title_box); header.addStretch(); root.addLayout(header)
-        controls = QFrame(); controls.setStyleSheet(f"QFrame{{background:{COLORS['surface']};border:1px solid {COLORS['border']};border-radius:14px;}}")
+        controls = QFrame(); controls.setStyleSheet(f"QFrame{{background:{COLORS['surface']};border:1px solid {COLORS['frame']};border-radius:14px;}}")
         row = QHBoxLayout(controls); row.setContentsMargins(9, 8, 9, 8); row.setSpacing(6); self.filter_buttons = {}
         for name in ["All", "Watching", "Completed", "Planned"]:
             b = QPushButton(name); b.setCheckable(True); b.setCursor(Qt.PointingHandCursor); b.clicked.connect(lambda checked=False, value=name:self._set_filter(value)); self.filter_buttons[name] = b; row.addWidget(b)
