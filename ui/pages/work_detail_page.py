@@ -736,7 +736,7 @@ class WorkDetailPage(QWidget):
         set_episode_watched(self._value("id"), number, checked); refreshed = get_work(self._value("id")); self.set_work(refreshed or self.work)
 
     def _grid_section(self, title, items, cls, signal, columns):
-        frame = QFrame(); frame.setObjectName("section"); frame.setStyleSheet(f"QFrame#section {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"); lay = QVBoxLayout(frame); lay.setContentsMargins(20, 18, 20, 20); lay.setSpacing(12); header = QLabel(title); header.setStyleSheet(f"font-size:17px;font-weight:800;color:{COLORS['primary']};"); lay.addWidget(header); container = QWidget(); grid = QGridLayout(container); grid.setContentsMargins(0, 0, 0, 0); grid.setHorizontalSpacing(12); grid.setVerticalSpacing(12)
+        frame = QFrame(); frame.setObjectName("charactersSection" if title == "Characters" else "section"); frame.setStyleSheet(f"QFrame#charactersSection {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }} QFrame#section {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"); lay = QVBoxLayout(frame); lay.setContentsMargins(20, 18, 20, 20); lay.setSpacing(12); header = QLabel(title); header.setStyleSheet(f"font-size:17px;font-weight:800;color:{COLORS['primary']};"); lay.addWidget(header); container = QWidget(); grid = QGridLayout(container); grid.setContentsMargins(0, 0, 0, 0); grid.setHorizontalSpacing(12); grid.setVerticalSpacing(12)
         if not items:
             x = QLabel("Nothing stored locally yet."); x.setStyleSheet(muted_label_stylesheet()); grid.addWidget(x, 0, 0)
         else:
