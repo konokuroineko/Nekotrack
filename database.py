@@ -211,6 +211,19 @@ def characters_are_loaded(work_id):
     return missing_role is None
 
 
+def save_work_mal_id(work_id, mal_id):
+    """Store the MyAnimeList ID resolved from AniList for future episode metadata syncs."""
+    if mal_id is None:
+        return
+
+    connection = get_connection()
+    connection.execute(
+        "UPDATE works SET mal_id = ? WHERE id = ?",
+        (int(mal_id), int(work_id)),
+    )
+    connection.commit()
+    connection.close()
+
 def save_character_image_path(character_id, image_path):
     connection = get_connection()
     connection.execute(
