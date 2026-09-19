@@ -205,6 +205,26 @@ def characters_are_loaded(work_id):
     return missing_role is None
 
 
+def save_character_image_path(character_id, image_path):
+    connection = get_connection()
+    connection.execute(
+        "UPDATE characters SET image_path = ? WHERE id = ?",
+        (str(image_path), int(character_id)),
+    )
+    connection.commit()
+    connection.close()
+
+
+def save_person_image_path(person_id, image_path):
+    connection = get_connection()
+    connection.execute(
+        "UPDATE people SET image_path = ? WHERE id = ?",
+        (str(image_path), int(person_id)),
+    )
+    connection.commit()
+    connection.close()
+
+
 def get_characters(work_id):
     """Return one row per character, with the preferred Japanese voice actor when available."""
     connection = get_connection()
@@ -215,6 +235,21 @@ def get_characters(work_id):
             characters.image_path AS character_image_path,
             characters.image_url AS character_image_url,
             work_characters.role AS character_role,
+            (
+                SELECT people.id
+                FROM character_voice_actors
+                JOIN people ON people.id = character_voice_actors.person_id
+                WHERE character_voice_actors.character_id = characters.id
+                ORDER BY
+                    CASE
+                        WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
+                             ('japanese', 'ja', 'jpn') THEN 0
+                        ELSE 1
+                    END,
+                    character_voice_actors.language,
+                    people.name
+                LIMIT 1
+            ) AS person_id,
             (
                 SELECT people.name
                 FROM character_voice_actors
@@ -296,7 +331,7 @@ def save_staff(work_id, staff_edges):
 def get_staff(work_id):
     connection = get_connection()
     results = connection.execute("""
-        SELECT people.name, people.image_path, people.image_url, work_staff.role
+        SELECT people.id AS person_id, people.name, people.image_path, people.image_url, work_staff.role
         FROM work_staff JOIN people ON people.id = work_staff.person_id
         WHERE work_staff.work_id = ? ORDER BY work_staff.role, people.name
     """, (work_id,)).fetchall()
