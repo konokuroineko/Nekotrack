@@ -11,9 +11,10 @@ from PySide6.QtWidgets import (
 )
 
 from database import (
-    add_manual_bundle_link, delete_work_data, get_characters, get_episodes,
-    get_manual_bundle_partners, get_relations, get_staff, get_work,
-    remove_manual_bundle_link, save_cover_path, set_episode_progress, set_episode_watched,
+    add_manual_bundle_link, add_to_library, delete_work_data, get_characters, get_connection,
+    get_episodes, get_manual_bundle_partners, get_relations, get_staff, get_work,
+    remove_manual_bundle_link, save_anime, save_characters, save_cover_path, save_episodes,
+    save_staff, set_episode_progress, set_episode_watched,
 )
 from series import get_library_series
 from ui.preferences import get
