@@ -1,9 +1,11 @@
 from PySide6.QtCore import Signal, Qt, QUrl
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QFont, QFontMetrics
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PySide6.QtWidgets import QFrame, QLabel, QHBoxLayout, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QSizePolicy
 
-from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
+from ui.preferences import get
+from ui.theme import COLORS
+from ui.widgets.work_card import CoverFrame
 
 
 RELATION_LABELS = {
@@ -26,45 +28,141 @@ RELATION_LABELS = {
 
 class RelationCard(QFrame):
     clicked = Signal(object)
+    _cover_cache = {}
+    _cover_failures = set()
 
     def __init__(self, relation, parent=None):
         super().__init__(parent)
         self.relation = relation
         self._network_manager = QNetworkAccessManager(self)
         self._cover_reply = None
-        self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(128)
-        self.setStyleSheet(card_stylesheet())
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
-        self.image = QLabel()
-        self.image.setFixedSize(72, 100)
-        layout.addWidget(self.image)
+        self.setObjectName("relationCard")
+        self.setCursor(Qt.PointingHandCursor)
+        card_width = get("card_size") + 8
+        self.setFixedWidth(card_width)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.setStyleSheet(
+            f"""
+            QFrame#relationCard {{
+                background: transparent;
+                border: 2px solid {COLORS['frame']};
+                border-radius: {get('corner_radius') + 2}px;
+            }}
+            QFrame#relationCard:hover {{
+                background: {COLORS['surface_hover']};
+            }}
+            QLabel {{
+                background: transparent;
+                border: none;
+            }}
+            QLabel#title {{
+                color: {COLORS['primary']};
+                font-size: {get('font_size')}px;
+                font-weight: 760;
+            }}
+            QFrame#relationCard:hover QLabel#title {{
+                color: {COLORS['accent_hover']};
+            }}
+            QLabel#meta {{
+                color: {COLORS['muted']};
+                font-size: 11px;
+            }}
+            """
+        )
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(2, 2, 2, 2)
+        root.setSpacing(8)
+
+        self.cover = CoverFrame(get("card_size"))
+        root.addWidget(self.cover, 0, Qt.AlignHCenter)
         self._load_cover()
 
-        text_layout = QVBoxLayout()
-        title = QLabel(self._title())
-        title.setStyleSheet(
-            f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 650;"
-        )
-        title.setWordWrap(True)
-        text_layout.addWidget(title)
+        title_font = QFont("Segoe UI", max(8, int(get("font_size") or 13)))
+        title_font.setWeight(QFont.Weight.Bold)
+        title_metrics = QFontMetrics(title_font)
+        title_text = self._title()
+        title = QLabel(self._fit_title_to_two_lines(title_text, card_width - 12, title_font))
+        title.setObjectName("title")
+        title.setFont(title_font)
+        title.setWordWrap(False)
+        title.setFixedHeight(title_metrics.lineSpacing() * 2)
+        title.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        title.setMargin(0)
+        title.setToolTip(title_text)
+        root.addWidget(title)
 
         relation_type = self._value("relation_type") or "OTHER"
-        relation_label = RELATION_LABELS.get(relation_type, relation_type.replace("_", " ").title())
+        relation_label = RELATION_LABELS.get(
+            relation_type,
+            relation_type.replace("_", " ").title(),
+        )
         source_title = self._value("source_title")
-        connection_label = QLabel(
-            f"{source_title or 'Related work'}  →  {relation_label}"
+        connection = f"{source_title or 'Related work'}  →  {relation_label}"
+
+        meta = QLabel(connection)
+        meta.setObjectName("meta")
+        meta.setWordWrap(True)
+        meta.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        meta.setMargin(0)
+        root.addWidget(meta)
+
+        root.addStretch(1)
+        self.setFixedHeight(
+            self.cover.height()
+            + (2 * title_metrics.lineSpacing())
+            + meta.sizeHint().height()
+            + root.contentsMargins().top()
+            + root.contentsMargins().bottom()
+            + root.spacing() * 2
         )
-        connection_label.setWordWrap(True)
-        connection_label.setStyleSheet(
-            f"background: transparent; border: none; color: {COLORS['muted']}; font-size: 11px;"
+
+    @staticmethod
+    def _fit_title_to_two_lines(text, width, font):
+        text = " ".join(str(text).split())
+        if not text:
+            return ""
+
+        metrics = QFontMetrics(font)
+        words = text.split()
+
+        first = ""
+        first_end = 0
+        for index, word in enumerate(words):
+            candidate = word if not first else f"{first} {word}"
+            if metrics.horizontalAdvance(candidate) <= width:
+                first = candidate
+                first_end = index + 1
+            else:
+                break
+
+        if first_end >= len(words):
+            return first
+
+        second = ""
+        second_end = first_end
+        for index in range(first_end, len(words)):
+            candidate = words[index] if not second else f"{second} {words[index]}"
+            if metrics.horizontalAdvance(candidate) <= width:
+                second = candidate
+                second_end = index + 1
+            else:
+                break
+
+        if second_end < len(words):
+            overflow = " ".join(words[second_end:])
+            second = metrics.elidedText(
+                f"{second} {overflow}" if second else overflow,
+                Qt.TextElideMode.ElideRight,
+                width,
+            )
+
+        return (
+            f"{first}\n{second}"
+            if second
+            else f"{first}\n{metrics.elidedText(' '.join(words[first_end:]), Qt.TextElideMode.ElideRight, width)}"
         )
-        text_layout.addWidget(connection_label)
-        text_layout.addStretch()
-        layout.addLayout(text_layout)
 
     def _title(self):
         title = self._value("title")
@@ -74,34 +172,59 @@ class RelationCard(QFrame):
         return f"Related work · {target_id}" if target_id else "Related work"
 
     def _load_cover(self):
-        image_path = self._value("cover_path")
-        if image_path:
-            pixmap = QPixmap(str(image_path))
+        cover_path = self._value("cover_path")
+        if cover_path:
+            pixmap = QPixmap(str(cover_path))
             if not pixmap.isNull():
-                self._set_cover(pixmap)
+                self.cover.set_pixmap(pixmap)
                 return
 
-        image_url = self._value("cover_url")
-        if not image_url:
-            cover_image = self._value("coverImage") or {}
-            image_url = cover_image.get("large")
-        if image_url:
-            self._cover_reply = self._network_manager.get(QNetworkRequest(QUrl(str(image_url))))
-            self._cover_reply.finished.connect(self._cover_finished)
+        cover_url = self._value("cover_url")
+        if not cover_url:
+            image = self._value("coverImage") or {}
+            cover_url = image.get("large")
+
+        if not cover_url:
+            return
+
+        cover_url = str(cover_url)
+        cached = self._cover_cache.get(cover_url)
+        if cached is not None and not cached.isNull():
+            self.cover.set_pixmap(cached)
+            return
+
+        if cover_url in self._cover_failures:
+            return
+
+        self._cover_reply = self._network_manager.get(
+            QNetworkRequest(QUrl(cover_url))
+        )
+        self._cover_reply.finished.connect(self._cover_finished)
 
     def _cover_finished(self):
         reply = self._cover_reply
         self._cover_reply = None
         if reply is None or self._is_deleted():
             return
+
         if reply.error() == reply.NetworkError.NoError:
             pixmap = QPixmap()
             if pixmap.loadFromData(reply.readAll()) and not self._is_deleted():
-                self._set_cover(pixmap)
+                self._cover_cache[self._current_cover_url()] = pixmap
+                self.cover.set_pixmap(pixmap)
+            else:
+                self._cover_failures.add(self._current_cover_url())
+        else:
+            self._cover_failures.add(self._current_cover_url())
+
         reply.deleteLater()
 
-    def _set_cover(self, pixmap):
-        self.image.setPixmap(pixmap.scaled(self.image.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+    def _current_cover_url(self):
+        cover_url = self._value("cover_url")
+        if not cover_url:
+            image = self._value("coverImage") or {}
+            cover_url = image.get("large")
+        return str(cover_url) if cover_url else ""
 
     def _value(self, key):
         if hasattr(self.relation, "get"):
