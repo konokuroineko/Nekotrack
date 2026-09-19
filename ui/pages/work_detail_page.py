@@ -743,7 +743,6 @@ class WorkDetailPage(QWidget):
                         card = cls(item)
                         card.clicked.connect(signal)
                         row.addWidget(card, 0, Qt.AlignTop)
-                    row.addStretch(1)
                     rows.addLayout(row)
 
             lay.addWidget(container)
