@@ -26,6 +26,41 @@ class ManualBundleDatabaseTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_remove_bundle_member_excludes_target_without_removing_library_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+
+                for work_id, title in ((1, "Work One"), (2, "Work Two"), (3, "Work Three")):
+                    database.save_anime({
+                        "id": work_id,
+                        "title": {"romaji": title, "english": None, "native": None},
+                        "type": "ANIME",
+                        "format": "TV",
+                    })
+                    database.add_to_library(work_id)
+
+                self.assertTrue(database.add_manual_bundle_link(1, 2))
+                self.assertTrue(database.add_manual_bundle_link(1, 3))
+
+                self.assertTrue(database.remove_bundle_member(1, 2, [1, 2, 3]))
+                self.assertIsNotNone(database.get_work(2))
+
+                links = database.get_manual_bundle_links()
+                self.assertEqual(
+                    [(row["work_a"], row["work_b"]) for row in links],
+                    [(1, 3)],
+                )
+                exclusions = database.get_bundle_exclusions()
+                self.assertEqual(
+                    [(row["work_a"], row["work_b"]) for row in exclusions],
+                    [(1, 2), (2, 3)],
+                )
+            finally:
+                os.chdir(old_cwd)
+
     def test_remove_from_library_keeps_work_data(self):
         with tempfile.TemporaryDirectory() as directory:
             old_cwd = os.getcwd()
