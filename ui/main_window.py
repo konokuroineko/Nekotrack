@@ -287,44 +287,71 @@ class MainWindow(QMainWindow):
 
     def add_to_library(self, anime, button):
         try:
-            work_id = int(anime["id"])
+            primary_id = int(anime["id"])
 
-            # Save the search result immediately so the button never waits on
-            # AniList's full character/voice-actor import.
-            save_anime(anime)
-            add_to_library(work_id, "Planning")
+            # A bundled Search result carries every member in _series_members.
+            # Add the whole bundle instead of only the representative result.
+            members = anime.get("_series_members") if hasattr(anime, "get") else None
+            if not members:
+                members = [anime]
+
+            bundle_members = []
+            seen_ids = set()
+            for member in members:
+                try:
+                    member_id = int(member["id"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if member_id in seen_ids:
+                    continue
+                seen_ids.add(member_id)
+                bundle_members.append(member)
+
+            if not bundle_members:
+                bundle_members = [anime]
+
+            for member in bundle_members:
+                member_id = int(member["id"])
+
+                # Save the lightweight Search/enriched result immediately so
+                # the Library knows about every bundle member.
+                save_anime(member)
+                add_to_library(member_id, "Planning")
+
+                # Fetch the expensive full payload in the background.
+                worker = LibraryImportWorker(member_id)
+                thread = QThread(self)
+                worker.moveToThread(thread)
+
+                thread.started.connect(worker.run)
+                worker.finished.connect(self._library_import_finished)
+                worker.error.connect(self._library_import_error)
+                worker.finished.connect(thread.quit)
+                worker.error.connect(thread.quit)
+                thread.finished.connect(worker.deleteLater)
+                thread.finished.connect(
+                    lambda t=thread, w=worker: self._library_import_thread_finished(t, w)
+                )
+
+                self.library_import_threads.append(thread)
+                self.library_import_workers.append(worker)
+                thread.start()
 
             button.setText("Added")
             button.setEnabled(False)
             self.library_page.refresh()
 
-            # Fetch the expensive detail payload in a worker thread.
-            worker = LibraryImportWorker(work_id)
-            thread = QThread(self)
-            worker.moveToThread(thread)
-
-            thread.started.connect(worker.run)
-            worker.finished.connect(self._library_import_finished)
-            worker.error.connect(self._library_import_error)
-            worker.finished.connect(thread.quit)
-            worker.error.connect(thread.quit)
-            thread.finished.connect(worker.deleteLater)
-            thread.finished.connect(
-                lambda t=thread, w=worker: self._library_import_thread_finished(t, w)
-            )
-
-            self.library_import_threads.append(thread)
-            self.library_import_workers.append(worker)
-            thread.start()
-
+            # Covers will be loaded/cached normally by the Library cards.
+            # Start the representative cover download as before.
             self.start_cover_download(
-                work_id,
+                primary_id,
                 (anime.get("coverImage") or {}).get("large"),
                 button,
             )
         except Exception as error:
             button.setText("Error")
             self.search_page.results_title.setText(f"Could not save: {error}")
+
 
     def _library_import_finished(self, work_id, details):
         # The library entry already exists. The worker has now filled in the
