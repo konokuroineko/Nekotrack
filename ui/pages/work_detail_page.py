@@ -12,9 +12,9 @@ from PySide6.QtWidgets import (
 
 from database import (
     add_manual_bundle_link, add_to_library, delete_work_data, get_characters, get_connection,
-    get_episodes, get_manual_bundle_partners, get_relations, get_staff, get_work,
-    remove_manual_bundle_link, save_anime, save_characters, save_cover_path, save_episodes,
-    save_staff, set_episode_progress, set_episode_watched,
+    get_episodes, get_relations, get_staff, get_work, remove_bundle_member,
+    save_anime, save_characters, save_cover_path, save_episodes, save_staff,
+    set_episode_progress, set_episode_watched,
 )
 from series import get_library_series
 from ui.preferences import get
@@ -84,7 +84,7 @@ class BundleRemoveDialog(QDialog):
         )
         root.addWidget(heading)
 
-        subtitle = QLabel("Choose the manual bundle link you want to remove.")
+        subtitle = QLabel("Choose the bundled item you want to remove from this bundle.")
         subtitle.setStyleSheet(f"color:{COLORS['secondary']};font-size:12px;")
         root.addWidget(subtitle)
 
@@ -108,7 +108,7 @@ class BundleRemoveDialog(QDialog):
             self.list.addItem(item)
 
         if not partners:
-            empty = QListWidgetItem("No manual bundle links.")
+            empty = QListWidgetItem("No other bundled items found.")
             empty.setFlags(Qt.NoItemFlags)
             self.list.addItem(empty)
 
@@ -470,12 +470,31 @@ class WorkDetailPage(QWidget):
         if work_id is None:
             return
 
-        partners = get_manual_bundle_partners(int(work_id))
+        group = self._library_group()
+        if group is None:
+            return
+
+        members = list(group.get("_series_members") or [])
+        partners = [
+            {
+                "partner_id": int(member["id"]),
+                "partner_title": self._member_title(member),
+                "partner_type": member["type"],
+                "partner_format": member["format"],
+            }
+            for member in members
+            if int(member["id"]) != int(work_id)
+        ]
+
         dialog = BundleRemoveDialog(partners, parent=self)
         if dialog.exec() != QDialog.Accepted or dialog.selected_id is None:
             return
 
-        if remove_manual_bundle_link(int(work_id), dialog.selected_id):
+        if remove_bundle_member(
+            int(work_id),
+            dialog.selected_id,
+            [int(member["id"]) for member in members],
+        ):
             self.bundle_changed.emit()
             refreshed = get_work(int(work_id))
             if refreshed:
