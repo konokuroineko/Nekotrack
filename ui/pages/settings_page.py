@@ -57,6 +57,7 @@ class SettingsPage(QWidget):
         layout.addWidget(self._section("Appearance", [
             self._color_row("Accent color", "The color used for highlights, selection and the cover outline.", "accent"),
             self._color_row("Accent hover", "The lighter version used while hovering accent elements.", "accent_hover"),
+            self._color_row("Frame color", "Color used for artwork outlines and UI frames.", "frame_color"),
             self._color_row("Background", "Main application background.", "background"),
             self._color_row("Surface", "Panels, controls and secondary surfaces.", "surface"),
             self._color_row("Surface hover", "Background used when interactive surfaces are hovered.", "surface_hover"),
@@ -94,7 +95,7 @@ class SettingsPage(QWidget):
         panel = QFrame()
         panel.setMinimumSize(0, 0)
         panel.setStyleSheet(
-            f"QFrame{{background:{COLORS['surface']};border:1px solid {COLORS['border']};border-radius:{get('corner_radius')}px;}}"
+            f"QFrame{{background:{COLORS['surface']};border:1px solid {COLORS['frame']};border-radius:{get('corner_radius')}px;}}"
         )
         box = QVBoxLayout(panel)
         box.setContentsMargins(22, 18, 22, 12)
