@@ -807,6 +807,41 @@ class WorkDetailPage(QWidget):
     def _episode_toggled(self, number, checked):
         set_episode_watched(self._value("id"), number, checked); refreshed = get_work(self._value("id")); self.set_work(refreshed or self.work)
 
+    def _detail_work_ids(self):
+        """Return every work ID represented by this detail page."""
+        members = self._value("_series_members") or []
+        ids = []
+
+        for member in members:
+            try:
+                work_id = int(member["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if work_id not in ids:
+                ids.append(work_id)
+
+        if ids:
+            return ids
+
+        work_id = self._value("id")
+        try:
+            return [int(work_id)] if work_id is not None else []
+        except (TypeError, ValueError):
+            return []
+
+    def _detail_relations(self, work_ids=None):
+        """Merge relations from represented works and hide internal bundle links."""
+        ids = self._detail_work_ids() if work_ids is None else list(work_ids)
+        if not ids:
+            return []
+
+        internal_ids = {int(work_id) for work_id in ids}
+        return [
+            relation
+            for relation in get_relations(ids)
+            if int(relation["target_id"]) not in internal_ids
+        ]
+
     def _grid_section(self, title, items, cls, signal, columns):
         frame = QFrame()
         frame.setObjectName("charactersSection" if title == "Characters" else "section")
