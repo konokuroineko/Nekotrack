@@ -4,8 +4,9 @@ from PySide6.QtCore import QObject, QSize, QThread, Qt, Signal, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton, QWidgetAction,
-    QMessageBox, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
+    QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
+    QListWidget, QListWidgetItem, QLineEdit, QMenu, QMessageBox, QPushButton,
+    QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 )
 
 from database import (
