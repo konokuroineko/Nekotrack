@@ -520,4 +520,26 @@ def get_media_details(media_id):
             },
         }
 
+        # Normalize AniList's airing schedule into the episode shape used by
+        # the local database. The detail/import code expects episodeNumber,
+        # title, and airdate, while the current AniList query provides
+        # episode numbers and timestamps through airingSchedule.
+        schedule = (media.get("airingSchedule") or {}).get("nodes") or []
+        media["streamingEpisodes"] = [
+            {
+                "episodeNumber": node.get("episode"),
+                "title": f"Episode {node.get('episode')}",
+                "description": None,
+                "airdate": (
+                    __import__("datetime").datetime.fromtimestamp(
+                        int(node["airingAt"])
+                    ).strftime("%Y-%m-%d")
+                    if node.get("airingAt") is not None
+                    else None
+                ),
+            }
+            for node in schedule
+            if node.get("episode") is not None
+        ]
+
     return media
