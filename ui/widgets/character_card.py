@@ -85,15 +85,7 @@ class CharacterCard(QFrame):
         text_layout.setSpacing(18)
 
         character_info = QVBoxLayout()
-        character_info.setSpacing(4)
-
-        name = QLabel(self._value("character_name") or "Unknown character")
-        name.setWordWrap(True)
-        name.setFrameShape(QFrame.NoFrame)
-        name.setLineWidth(0)
-        name.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 600;")
-        name.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        character_info.addWidget(name)
+        character_info.setSpacing(5)
 
         character_role = self._value("character_role")
         if character_role:
@@ -102,9 +94,17 @@ class CharacterCard(QFrame):
             role.setWordWrap(True)
             role.setFrameShape(QFrame.NoFrame)
             role.setLineWidth(0)
-            role.setStyleSheet(f"background: transparent; border: none; color: {COLORS['secondary']}; font-size: 11px; font-weight: 600;")
-            role.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            role.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-size: 13px; font-weight: 700;")
+            role.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
             character_info.addWidget(role)
+
+        name = QLabel(self._value("character_name") or "Unknown character")
+        name.setWordWrap(True)
+        name.setFrameShape(QFrame.NoFrame)
+        name.setLineWidth(0)
+        name.setStyleSheet(f"background: transparent; border: none; color: {COLORS['primary']}; font-weight: 600;")
+        name.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        character_info.addWidget(name)
 
         character_info.addStretch()
         text_layout.addLayout(character_info, 1)
