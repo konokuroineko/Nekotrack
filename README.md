@@ -4,10 +4,6 @@ Your personal anime & manga tracker.
 
 Track what you watch and read, explore characters and staff, manage your library, and keep your collection organized — all from a clean desktop app.
 
-> **Status: Beta — v0.1.0-beta.2**
->
-> NekoTrack is usable, but it is still under active development. Expect unfinished features, UI changes, and occasional bugs while the beta is being developed.
-
 ## Features
 
 - Search AniList
