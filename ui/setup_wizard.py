@@ -189,6 +189,7 @@ class SetupWizard(QDialog):
         root.addWidget(content, 1)
 
         self._apply_wizard_style()
+        self._select_theme(self.selected_theme)
         self._set_step(0)
 
     def _heading(self, title, subtitle):
