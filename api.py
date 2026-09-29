@@ -1500,6 +1500,20 @@ def _get_tmdb_movie_episode(
         tmdb_id = int(candidate["id"])
     else:
         candidate = _tmdb_get(f"/movie/{int(tmdb_id)}")
+        try:
+            _, similarity, release_date = _candidate_movie_score(
+                candidate,
+                title_variants,
+                target_date,
+            )
+        except Exception:
+            similarity = 0.0
+            release_date = None
+        if similarity < 0.70:
+            # A previous bad mapping (such as the old accidental Vagabond
+            # match) must not become permanent. Resolve the OVA again by title.
+            candidate = _find_tmdb_movie(title_variants, target_date)
+            tmdb_id = int(candidate["id"])
 
     release_date = _parse_date(candidate.get("release_date"))
     if release_date is None:
@@ -1532,25 +1546,15 @@ def get_tmdb_episode_data(
     tmdb_id=None,
     tmdb_season_number=None,
     media_format=None,
-    cache_work_id=None,
 ):
     """Resolve one NekoTrack season and fetch its TMDB episode data."""
     if str(media_format or "").upper() == "OVA":
-        payload = _get_tmdb_movie_episode(
+        return _get_tmdb_movie_episode(
             title_variants,
             start_date,
             expected_episodes,
             tmdb_id,
         )
-        if cache_work_id is not None:
-            for episode in payload.get("episodes") or []:
-                if episode.get("thumbnail"):
-                    episode["thumbnail"] = _cache_episode_image(
-                        episode["thumbnail"],
-                        cache_work_id,
-                        episode["episodeNumber"],
-                    )
-        return payload
 
     target_start = _parse_date(start_date)
     target_end = _parse_date(end_date)
@@ -1585,12 +1589,6 @@ def get_tmdb_episode_data(
             tmdb_season_number,
             episode,
         )
-        if cache_work_id is not None and thumbnail:
-            thumbnail = _cache_episode_image(
-                thumbnail,
-                cache_work_id,
-                episode["episode_number"],
-            )
 
         selected.append({
             "episodeNumber": int(episode["episode_number"]),
