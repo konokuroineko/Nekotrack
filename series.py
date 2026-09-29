@@ -4,6 +4,7 @@ import time
 
 from api import get_media_details, get_media_relations_batch
 from database import get_all_library, get_bundle_override, get_bundle_exclusions, get_connection, get_manual_bundle_links, get_work, save_anime
+from ui.preferences import get
 
 
 SERIES_RELATIONS = {
@@ -76,6 +77,15 @@ def _is_bundleable(item):
     if family in {"NOVEL", "ONE_SHOT"}:
         return True
     return False
+
+def _auto_bundleable(item):
+    """Return whether an entry is eligible for automatic series bundling."""
+    if not _is_bundleable(item):
+        return False
+    if str(get("bundle_mode") or "main") == "main":
+        fmt = str(_get(item, "format") or "").upper()
+        return fmt in {"TV", "TV_SHORT"}
+    return True
 
 
 def _series_key(title):
@@ -388,6 +398,8 @@ def _relation_group_compatible(item, edge, target):
     """
     if not _relation_edge_allowed(item, edge):
         return False
+    if not _auto_bundleable(item) or not _auto_bundleable(target):
+        return False
 
     source_format = str(_get(item, "format") or "").upper()
     target_format = str(_get(target, "format") or "").upper()
@@ -443,6 +455,8 @@ def _traversal_edge_allowed(item, edge):
     node = edge.get("node") or {}
 
     if not bool(_get(node, "id")) or not _same_media_family(item, node):
+        return False
+    if not _auto_bundleable(item) or not _auto_bundleable(node):
         return False
 
     if relation_type in SEASON_CHAIN_RELATIONS:
@@ -700,7 +714,7 @@ def _group_discovered(results, discovered):
 
     by_key = {}
     for item in discovered:
-        if not _is_bundleable(item):
+        if not _auto_bundleable(item):
             continue
         key = _series_group_key(item)
         item_id = int(item["id"])
@@ -769,7 +783,7 @@ def _group_discovered(results, discovered):
         bundle_members = [
             item
             for item in group_members
-            if _is_bundleable(item) or int(_get(item, "id")) in manual_ids
+            if _auto_bundleable(item) or int(_get(item, "id")) in manual_ids
         ]
         visible_bundle_members = [
             item for item in bundle_members
@@ -980,7 +994,7 @@ def get_library_series():
 
     by_key = {}
     for row in rows:
-        if not _is_bundleable(row):
+        if not _auto_bundleable(row):
             continue
 
         key = _series_group_key(row)
