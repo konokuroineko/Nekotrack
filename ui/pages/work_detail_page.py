@@ -663,13 +663,16 @@ class WorkDetailPage(QWidget):
         """)
 
 
+        # Give Qt a chance to paint the lightweight detail page before
+        # constructing the expensive episode/card sections. A zero-delay timer
+        # can still run before the first visible frame.
         QTimer.singleShot(
-            0,
+            50,
             lambda token=build_token, page=content, host=episode_host:
                 self._populate_episode_section(token, page, host),
         )
         QTimer.singleShot(
-            0,
+            150,
             lambda token=build_token, page=content, host=detail_host, ids=detail_ids:
                 self._populate_detail_sections(token, page, host, ids),
         )
