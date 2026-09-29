@@ -418,6 +418,36 @@ def save_episodes(work_id, episode_data):
         number = episode.get("episodeNumber")
         if number is None:
             continue
+
+        incoming_thumbnail = str(episode.get("thumbnail") or "").strip() or None
+        existing = connection.execute(
+            """
+            SELECT thumbnail_url
+            FROM episodes
+            WHERE work_id = ? AND episode_number = ?
+            """,
+            (int(work_id), int(number)),
+        ).fetchone()
+        existing_thumbnail = (
+            str(existing["thumbnail_url"]).strip()
+            if existing and existing["thumbnail_url"]
+            else None
+        )
+
+        # Once a thumbnail has been downloaded locally, never replace it
+        # with the provider's remote URL during a normal metadata refresh.
+        if (
+            existing_thumbnail
+            and Path(existing_thumbnail).is_file()
+            and (
+                not incoming_thumbnail
+                or not Path(incoming_thumbnail).is_file()
+            )
+        ):
+            thumbnail = existing_thumbnail
+        else:
+            thumbnail = incoming_thumbnail
+
         connection.execute("""
             INSERT INTO episodes (
                 work_id, episode_number, title, description, air_date, thumbnail_url
@@ -434,12 +464,9 @@ def save_episodes(work_id, episode_data):
             episode.get("title"),
             episode.get("description"),
             episode.get("airdate"),
-            episode.get("thumbnail"),
+            thumbnail,
         ))
 
-    # A successful provider sync is authoritative for the returned episode
-    # set. Remove stale local rows that this source no longer reports while
-    # preserving watched state for every episode that still exists.
     numbers = sorted({
         int(episode["episodeNumber"])
         for episode in episodes
