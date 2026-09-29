@@ -1307,49 +1307,6 @@ def _pick_best_episode_still(series_id, season_number, episode):
     return _episode_still_url(stills[0].get("file_path")), len(stills)
 
 
-def _movie_title_similarity(candidate, title_variants):
-    names = [
-        _normalize_title(candidate.get("title")),
-        _normalize_title(candidate.get("original_title")),
-    ]
-    names = [name for name in names if name]
-
-    queries = [
-        _normalize_title(value)
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    ]
-    queries = [query for query in queries if query]
-
-    best = 0.0
-    for name in names:
-        for query in queries:
-            if name == query:
-                return 1.0
-            if name in query or query in name:
-                best = max(best, min(len(name), len(query)) / max(len(name), len(query)))
-            else:
-                prefix = 0
-                for left, right in zip(name, query):
-                    if left != right:
-                        break
-                    prefix += 1
-                best = max(best, prefix / max(len(name), len(query)))
-    return best
-
-
-def _candidate_movie_score(candidate, title_variants, target_date):
-    similarity = _movie_title_similarity(candidate, title_variants)
-    score = similarity * 1000
-
-    release_date = _parse_date(candidate.get("release_date"))
-    if release_date and target_date:
-        score -= abs((release_date - target_date).days) / 10
-
-    score += min(float(candidate.get("popularity") or 0), 20)
-    return score, similarity, release_date
-
-
 def _find_tmdb_movie(title_variants, target_date):
     variants = [
         str(value).strip()
@@ -1362,7 +1319,7 @@ def _find_tmdb_movie(title_variants, target_date):
     candidates = {}
     year = target_date.year if target_date else None
 
-    for query in variants[:6]:
+    for query in variants[:10]:
         params = {
             "query": query,
             "include_adult": "false",
@@ -1377,7 +1334,7 @@ def _find_tmdb_movie(title_variants, target_date):
                 candidates[int(candidate["id"])] = candidate
 
     if not candidates:
-        for query in variants[:3]:
+        for query in variants[:10]:
             payload = _tmdb_get(
                 "/search/movie",
                 {
@@ -1426,6 +1383,108 @@ def _find_tmdb_movie(title_variants, target_date):
     return best
 
 
+def _find_tmdb_ova_movies(title_variants, target_date, expected_episodes):
+    """Resolve one TMDB movie per OVA episode using AniList alternate titles."""
+    variants = [
+        str(value).strip()
+        for value in (title_variants or [])
+        if str(value or "").strip()
+    ]
+    variants = list(dict.fromkeys(value for value in variants if value))
+    try:
+        expected = max(1, int(expected_episodes or 1))
+    except (TypeError, ValueError):
+        expected = 1
+
+    if expected == 1:
+        return [_find_tmdb_movie(variants, target_date)]
+
+    # Search every title independently. AniList alternate titles can contain
+    # the actual names of individual bundled OVA episodes (for example
+    # "Memory Snow" and "The Frozen Bond").
+    selected = []
+    selected_ids = set()
+
+    for query in variants:
+        candidates = _tmdb_search_movies(query, target_date)
+        candidates.sort(
+            key=lambda candidate: _candidate_movie_score(
+                candidate,
+                [query],
+                target_date,
+            ),
+            reverse=True,
+        )
+
+        for candidate in candidates:
+            _, similarity, release_date = _candidate_movie_score(
+                candidate,
+                [query],
+                target_date,
+            )
+            if similarity < 0.70:
+                continue
+            if (
+                release_date is not None
+                and target_date is not None
+                and abs((release_date - target_date).days) > 365
+                and similarity < 0.95
+            ):
+                continue
+            candidate_id = int(candidate["id"])
+            if candidate_id in selected_ids:
+                continue
+
+            selected.append(candidate)
+            selected_ids.add(candidate_id)
+            break
+
+        if len(selected) >= expected:
+            break
+
+    if len(selected) < expected:
+        raise RuntimeError(
+            f"TMDB matched only {len(selected)} of {expected} OVA episodes by title."
+        )
+
+    return selected[:expected]
+
+
+def _tmdb_search_movies(query, target_date):
+    params = {
+        "query": str(query).strip(),
+        "include_adult": "false",
+        "include_video": "false",
+    }
+    if target_date is not None:
+        params["primary_release_year"] = target_date.year
+
+    candidates = []
+    payload = _tmdb_get("/search/movie", params)
+    candidates.extend(
+        candidate
+        for candidate in payload.get("results") or []
+        if candidate.get("id") is not None
+    )
+
+    if not candidates:
+        payload = _tmdb_get(
+            "/search/movie",
+            {
+                "query": str(query).strip(),
+                "include_adult": "false",
+                "include_video": "false",
+            },
+        )
+        candidates.extend(
+            candidate
+            for candidate in payload.get("results") or []
+            if candidate.get("id") is not None
+        )
+
+    return candidates
+
+
 def _pick_best_movie_image(movie_id, movie):
     primary = _episode_still_url(movie.get("backdrop_path"))
     if primary:
@@ -1466,46 +1525,56 @@ def _get_tmdb_movie_episode(
     if target_date is None:
         raise RuntimeError("NekoTrack needs a valid start date to match the OVA.")
 
-    if tmdb_id is None:
-        candidate = _find_tmdb_movie(title_variants, target_date)
-        tmdb_id = int(candidate["id"])
-    else:
+    try:
+        expected = max(1, int(expected_episodes or 1))
+    except (TypeError, ValueError):
+        expected = 1
+
+    if expected > 1:
+        candidates = _find_tmdb_ova_movies(
+            title_variants,
+            target_date,
+            expected,
+        )
+    elif tmdb_id is not None:
         candidate = _tmdb_get(f"/movie/{int(tmdb_id)}")
-        try:
-            _, similarity, release_date = _candidate_movie_score(
-                candidate,
-                title_variants,
-                target_date,
-            )
-        except Exception:
-            similarity = 0.0
-            release_date = None
+        _, similarity, _ = _candidate_movie_score(
+            candidate,
+            title_variants,
+            target_date,
+        )
         if similarity < 0.70:
-            # A previous bad mapping (such as the old accidental Vagabond
-            # match) must not become permanent. Resolve the OVA again by title.
             candidate = _find_tmdb_movie(title_variants, target_date)
-            tmdb_id = int(candidate["id"])
+        candidates = [candidate]
+    else:
+        candidates = [_find_tmdb_movie(title_variants, target_date)]
 
-    release_date = _parse_date(candidate.get("release_date"))
-    if release_date is None:
-        release_date = target_date
+    episodes = []
+    for index, movie in enumerate(candidates, start=1):
+        movie_id = int(movie["id"])
+        release_date = _parse_date(movie.get("release_date")) or target_date
+        image_url, image_count = _pick_best_movie_image(movie_id, movie)
 
-    image_url, image_count = _pick_best_movie_image(tmdb_id, candidate)
-
-    return {
-        "tmdb_id": int(tmdb_id),
-        "tmdb_season_number": None,
-        "episodes": [{
-            "episodeNumber": 1,
-            "title": candidate.get("title") or candidate.get("original_title") or "Episode 1",
-            "description": candidate.get("overview") or None,
-            "airdate": release_date.isoformat(),
+        episodes.append({
+            "episodeNumber": index,
+            "title": (
+                movie.get("title")
+                or movie.get("original_title")
+                or f"Episode {index}"
+            ),
+            "description": movie.get("overview") or None,
+            "airdate": release_date.isoformat() if release_date else None,
             "thumbnail": image_url,
             "episode_type": "ova",
-            "tmdb_episode_id": int(tmdb_id),
+            "tmdb_episode_id": movie_id,
             "tmdb_image_count": image_count,
-        }],
-        "tmdb_count": 1,
+        })
+
+    return {
+        "tmdb_id": int(candidates[0]["id"]),
+        "tmdb_season_number": None,
+        "episodes": episodes,
+        "tmdb_count": len(episodes),
     }
 
 
