@@ -268,7 +268,6 @@ class MainWindow(QMainWindow):
         self.search_page = SearchPage(self.add_to_library)
         self.work_detail_page = WorkDetailPage()
         self.settings_page = SettingsPage()
-        self.relationship_page = RelationshipPage()
         pages = {
             "home": HomePage(),
             "collections": self.library_page,
