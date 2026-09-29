@@ -7,6 +7,33 @@ from PySide6.QtWidgets import QApplication
 from ui.preferences import get
 
 
+# Resolved colors used by widget styles from themes that existed before
+# the current preset system. Existing widgets can still carry these values
+# when a theme is changed without rebuilding the widget tree.
+LEGACY_STYLE_COLORS = {
+    "#ad8cff": "accent",
+    "#c4abff": "accent_hover",
+    "#9272df": "frame_color",
+    "#30283d": "border",
+    "#493d5b": "border_hover",
+    "#83758f": "muted",
+    "#c0b5cf": "secondary",
+    "#f6f1fc": "primary",
+    "#271d3b": "accent_soft",
+    "#121019": "panel",
+    "#191522": "panel_soft",
+    "#17141e": "card",
+    "#221c2b": "card_hover",
+    # One-off fixed colors from the pre-theme UI.
+    "#594025": "accent",
+    "#101216": "accent_text",
+    "#111318": "accent_text",
+    "#121417": "accent_text",
+    "#c94343": "danger",
+    "#e05252": "danger",
+    "#ff8585": "danger",
+}
+
 COLOR_KEYS = (
     "background",
     "background_alt",
@@ -136,6 +163,13 @@ def retint_widget_styles(old_theme_name, new_theme_name):
 
         def replace(match):
             source = match.group(0).lower()
+
+            # Clean up colors from removed/legacy styles even when the current
+            # widget was created under a different historical theme.
+            legacy_key = LEGACY_STYLE_COLORS.get(source)
+            if legacy_key:
+                return str(new_theme.get(legacy_key) or match.group(0))
+
             keys = ambiguous.get(source)
             if not keys:
                 return replacements.get(source, match.group(0))
