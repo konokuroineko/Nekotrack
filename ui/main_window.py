@@ -86,6 +86,7 @@ class MainWindow(QMainWindow):
         self.library_import_workers = []
         self.navigation_buttons = {}
         self._settings_rebuild_pending = False
+        self._detail_enrichment_ids = set()
         self.setup_ui()
 
     def setup_ui(self):
@@ -240,23 +241,56 @@ class MainWindow(QMainWindow):
             button.setChecked(name == page_name)
 
     def show_work_details(self, work):
-        # Older library entries were imported with only AniList's first
-        # character page. Refresh them once so the detail page can show the
-        # complete character list without re-importing the work manually.
-        work_id = work.get("id") if hasattr(work, "get") else None
-        if work_id and not characters_are_loaded(work_id):
-            try:
-                details = get_media_details(work_id)
-                if details:
-                    save_anime(details)
-                    save_characters(work_id, (details.get("characters") or {}).get("edges"))
-                    save_staff(work_id, (details.get("staff") or {}).get("edges"))
-                    work = get_work(work_id) or work
-            except Exception:
-                pass
-
+        # Open the detail page immediately. Older library entries may still
+        # need their full AniList character/staff payload, so enrich them in
+        # the existing background worker instead of blocking the click.
         self.work_detail_page.set_work(work)
         self.navigation.show("work_detail")
+
+        members = []
+        raw_members = work.get("_series_members") if hasattr(work, "get") else None
+        if raw_members:
+            members.extend(raw_members)
+        else:
+            members.append(work)
+
+        seen = set()
+        for member in members:
+            work_id = member.get("id") if hasattr(member, "get") else None
+            try:
+                work_id = int(work_id)
+            except (TypeError, ValueError):
+                continue
+            if work_id in seen or work_id in self._detail_enrichment_ids:
+                continue
+            seen.add(work_id)
+
+            try:
+                needs_enrichment = not characters_are_loaded(work_id)
+            except Exception:
+                needs_enrichment = False
+
+            if not needs_enrichment:
+                continue
+
+            self._detail_enrichment_ids.add(work_id)
+            worker = LibraryImportWorker(work_id)
+            thread = QThread(self)
+            worker.moveToThread(thread)
+
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._library_import_finished)
+            worker.error.connect(self._library_import_error)
+            worker.finished.connect(thread.quit)
+            worker.error.connect(thread.quit)
+            thread.finished.connect(worker.deleteLater)
+            thread.finished.connect(
+                lambda t=thread, w=worker: self._library_import_thread_finished(t, w)
+            )
+
+            self.library_import_threads.append(thread)
+            self.library_import_workers.append(worker)
+            thread.start()
 
 
     def show_search_work(self, work):
@@ -350,13 +384,30 @@ class MainWindow(QMainWindow):
 
 
     def _library_import_finished(self, work_id, details):
-        # The library entry already exists. The worker has now filled in the
-        # heavier metadata such as characters, voice actors, episodes, and staff.
-        return
+        work_id = int(work_id)
+        self._detail_enrichment_ids.discard(work_id)
+
+        # Refresh an already-open detail page after background enrichment so
+        # newly imported characters/staff appear without another click.
+        current_work = getattr(self.work_detail_page, "work", None)
+        if current_work is None:
+            return
+
+        try:
+            current_ids = {
+                int(member["id"])
+                for member in self.work_detail_page._detail_work_ids()
+            }
+        except Exception:
+            current_ids = set()
+
+        if work_id in current_ids:
+            self.work_detail_page.set_work(current_work)
 
     def _library_import_error(self, work_id, message):
-        # The basic library entry was already saved. Keep it usable even when
-        # the optional full metadata import fails.
+        self._detail_enrichment_ids.discard(int(work_id))
+        # The basic library entry remains usable when optional full metadata
+        # enrichment fails.
         return
 
     def _library_import_thread_finished(self, thread, worker):
