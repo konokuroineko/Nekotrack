@@ -1,5 +1,6 @@
 from api import get_media_details, get_tmdb_episode_data, get_tmdb_episode_sample
 from pathlib import Path
+import hashlib
 
 from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread
 from PySide6.QtGui import QGuiApplication
@@ -14,7 +15,8 @@ from PySide6.QtWidgets import (
 from database import (
     add_manual_bundle_link, add_to_library, delete_work_data, get_bundle_characters,
     get_bundle_relations, get_bundle_staff, get_connection, get_episodes, get_tmdb_mapping,
-    get_work, save_anime, save_characters, save_cover_path, save_episodes, save_staff,
+    get_work, save_anime, save_characters, save_cover_path, save_episode_thumbnail_path,
+    save_episodes, save_staff,
     save_tmdb_mapping, save_work_mal_id, set_episode_progress, set_episode_watched,
 )
 from series import get_library_series
@@ -115,8 +117,10 @@ class EpisodeArtwork(QLabel):
     _cache = {}
     _failures = set()
 
-    def __init__(self, parent=None):
+    def __init__(self, work_id=None, episode_number=None, parent=None):
         super().__init__(parent)
+        self.work_id = int(work_id) if work_id is not None else None
+        self.episode_number = int(episode_number) if episode_number is not None else None
         self.setFixedSize(180, 102)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
@@ -126,6 +130,26 @@ class EpisodeArtwork(QLabel):
         self._manager = QNetworkAccessManager(self)
         self._reply = None
         self._fallback_pixmap = QPixmap()
+
+    def _save_local_image(self, url, data):
+        if self.work_id is None or self.episode_number is None:
+            return None
+
+        try:
+            digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+            directory = Path("data") / "images" / "episodes" / str(self.work_id)
+            directory.mkdir(parents=True, exist_ok=True)
+            suffix = Path(QUrl(url).path()).suffix.lower() or ".jpg"
+            if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+                suffix = ".jpg"
+            path = directory / f"{self.episode_number}_{digest}{suffix}"
+            if not path.is_file():
+                path.write_bytes(data)
+            if not path.is_file() or path.stat().st_size == 0:
+                return None
+            return str(path)
+        except (OSError, ValueError):
+            return None
 
     def load(self, url):
         url = str(url or "").strip()
@@ -160,9 +184,19 @@ class EpisodeArtwork(QLabel):
         self._reply = None
 
         if reply is not None and reply.error() == reply.NetworkError.NoError:
+            data = bytes(reply.readAll())
             pixmap = QPixmap()
-            if pixmap.loadFromData(reply.readAll()):
+            if pixmap.loadFromData(data):
                 self._cache[url] = pixmap
+                local_path = self._save_local_image(url, data)
+                if local_path is not None:
+                    self._cache[local_path] = pixmap
+                    if self.work_id is not None and self.episode_number is not None:
+                        save_episode_thumbnail_path(
+                            self.work_id,
+                            self.episode_number,
+                            local_path,
+                        )
                 self.setText("")
                 self.setPixmap(self._cropped(pixmap))
             else:
@@ -227,7 +261,10 @@ class EpisodeCard(QFrame):
         layout.setContentsMargins(12, 12, 14, 12)
         layout.setSpacing(14)
 
-        artwork = EpisodeArtwork()
+        artwork = EpisodeArtwork(
+            episode["work_id"],
+            episode["episode_number"],
+        )
         artwork.load(episode["thumbnail_url"])
         layout.addWidget(artwork, 0, Qt.AlignTop)
 
