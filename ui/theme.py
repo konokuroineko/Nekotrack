@@ -1,45 +1,52 @@
 from ui.preferences import get
 
 
+COLOR_KEYS = (
+    "background",
+    "background_alt",
+    "sidebar",
+    "surface",
+    "surface_alt",
+    "surface_hover",
+    "border",
+    "border_hover",
+    "primary",
+    "secondary",
+    "muted",
+    "accent",
+    "accent_hover",
+    "frame_color",
+    "accent_soft",
+    "success",
+    "danger",
+    "panel",
+    "panel_soft",
+    "card",
+    "card_hover",
+)
+
+
 COLORS = {
-    "background": get("background"),
-    "background_alt": "#0f1116",
-    "sidebar": "#0b0d11",
-    "surface": get("surface"),
-    "surface_alt": "#191d25",
-    "surface_hover": get("surface_hover"),
-    "border": "#252b35",
-    "border_hover": "#394250",
-    "primary": "#f5f7fa",
-    "secondary": "#aeb7c4",
-    "muted": "#687384",
-    "accent": get("accent"),
-    "accent_hover": get("accent_hover"),
+    **{key: get(key) for key in COLOR_KEYS},
     "frame": get("frame_color"),
-    "accent_soft": "#302116",
-    "success": "#67d391",
-    "danger": "#ef7474",
-    "panel": "#11141a",
-    "panel_soft": "#171b22",
-    "card": get("card"),
-    "card_hover": get("card_hover"),
 }
 
-FONT_SIZES = {"tiny": 10, "small": 11, "body": get("font_size"), "subtitle": 12, "large": 16, "heading": 24, "page_title": 32}
+FONT_SIZES = {
+    "tiny": 10,
+    "small": 11,
+    "body": get("font_size"),
+    "subtitle": 12,
+    "large": 16,
+    "heading": 24,
+    "page_title": 32,
+}
 SPACING = {"xs": 4, "sm": 8, "md": 14, "lg": 20, "xl": 28, "xxl": 40}
 
 
 def refresh_theme():
-    COLORS.update({
-        "background": get("background"),
-        "surface": get("surface"),
-        "surface_hover": get("surface_hover"),
-        "card": get("card"),
-        "card_hover": get("card_hover"),
-        "accent": get("accent"),
-        "accent_hover": get("accent_hover"),
-        "frame": get("frame_color"),
-    })
+    for key in COLOR_KEYS:
+        COLORS[key] = get(key)
+    COLORS["frame"] = get("frame_color")
     FONT_SIZES["body"] = get("font_size")
 
 
