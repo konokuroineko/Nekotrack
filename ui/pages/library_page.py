@@ -398,6 +398,25 @@ class LibraryPage(QWidget):
         self.current_filter=value
         for name,button in self.filter_buttons.items(): button.setChecked(name==value); button.setStyleSheet(self._filter_style(name==value))
         self._cancel_resize_animation(); self._apply_filter(); self._populate()
+    def refresh_theme(self):
+        self.setStyleSheet("")
+        self._apply_filter_style_all()
+        if hasattr(self, "count_label"):
+            self.count_label.setStyleSheet(
+                f"font-size:12px;color:{COLORS['muted']};"
+            )
+        if hasattr(self, "filter_buttons"):
+            controls = self.scroll_area.parentWidget() if hasattr(self, "scroll_area") else None
+            del controls
+        for card in getattr(self, "_cards", []):
+            refresh = getattr(card, "refresh_theme", None)
+            if refresh is not None:
+                refresh()
+
+    def _apply_filter_style_all(self):
+        for name, button in getattr(self, "filter_buttons", {}).items():
+            button.setStyleSheet(self._filter_style(name == self.current_filter))
+
     def _filter_style(self,active):
         if active: return f"QPushButton{{background:{COLORS['accent']};color:{COLORS['accent_text']};border:0;border-radius:9px;padding:8px 15px;font-weight:800;}}"
         return f"QPushButton{{background:transparent;color:{COLORS['secondary']};border:0;border-radius:9px;padding:8px 15px;font-weight:650;}}QPushButton:hover{{background:{COLORS['surface_hover']};color:{COLORS['primary']};}}"
