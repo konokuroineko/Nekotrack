@@ -1,22 +1,89 @@
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
-    QColorDialog,
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QPushButton,
-    QScrollArea,
     QLineEdit,
+    QPushButton,
+    QRadioButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 from database import get_all_library
-from ui.preferences import THEME_PRESETS, apply_theme_preset, defaults, get, reset, set_value
+from ui.preferences import (
+    THEME_PRESETS,
+    apply_theme_preset,
+    defaults,
+    get,
+    reset,
+    set_value,
+)
 from ui.theme import COLORS, SPACING, refresh_theme
+
+
+class ThemePresetCard(QFrame):
+    clicked = Signal(str)
+
+    def __init__(self, name, theme, parent=None):
+        super().__init__(parent)
+        self.name = name
+        self.theme = theme
+        self.setObjectName("themePresetCard")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(78)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 11, 14, 11)
+        layout.setSpacing(12)
+
+        preview = QFrame()
+        preview.setFixedSize(56, 56)
+        preview.setStyleSheet(
+            f"background:{theme['background']};"
+            f"border:1px solid {theme['border']};"
+            f"border-radius:12px;"
+        )
+        preview_layout = QVBoxLayout(preview)
+        preview_layout.setContentsMargins(7, 7, 7, 7)
+        preview_layout.setSpacing(5)
+
+        top = QFrame()
+        top.setStyleSheet(
+            f"background:{theme['accent']};border-radius:4px;"
+        )
+        preview_layout.addWidget(top, 1)
+
+        bottom = QFrame()
+        bottom.setStyleSheet(
+            f"background:{theme['surface']};border-radius:4px;"
+        )
+        preview_layout.addWidget(bottom, 1)
+
+        layout.addWidget(preview)
+
+        text = QVBoxLayout()
+        text.setSpacing(2)
+
+        title = QLabel(name)
+        title.setObjectName("themePresetTitle")
+        description = QLabel(theme["description"])
+        description.setObjectName("themePresetDescription")
+        description.setWordWrap(True)
+
+        text.addWidget(title)
+        text.addWidget(description)
+        text.addStretch(1)
+        layout.addLayout(text, 1)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.name)
+        super().mousePressEvent(event)
 
 
 class SettingsPage(QWidget):
@@ -31,208 +98,402 @@ class SettingsPage(QWidget):
     def _build(self):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setMinimumSize(0, 0)
-        scroll.viewport().setStyleSheet("background: transparent;")
 
         content = QWidget()
-        content.setMinimumSize(0, 0)
-        content.setObjectName("settingsContent")
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(SPACING["xxl"], SPACING["xxl"], SPACING["xxl"], SPACING["xxl"])
-        layout.setSpacing(18)
+        layout.setContentsMargins(
+            SPACING["xxl"],
+            SPACING["xxl"],
+            SPACING["xxl"],
+            SPACING["xxl"],
+        )
+        layout.setSpacing(22)
 
         title = QLabel("Settings")
-        title.setStyleSheet(f"font-size: 30px; font-weight: 800; color: {COLORS['primary']}; background: transparent;")
+        title.setObjectName("settingsTitle")
         layout.addWidget(title)
 
-        subtitle = QLabel("Make NekoTrack look and behave exactly how you want.")
-        subtitle.setStyleSheet(f"color: {COLORS['muted']}; background: transparent;")
+        subtitle = QLabel("Personalize NekoTrack without digging through raw values.")
+        subtitle.setObjectName("settingsSubtitle")
         layout.addWidget(subtitle)
 
-        layout.addWidget(self._section("Appearance", [
-            self._theme_row(),
-            self._color_row("Accent color", "The color used for highlights, selection and the cover outline.", "accent"),
-            self._color_row("Accent hover", "The lighter version used while hovering accent elements.", "accent_hover"),
-            self._color_row("Frame color", "Color used for artwork outlines and UI frames.", "frame_color"),
-            self._color_row("Background", "Main application background.", "background"),
-            self._color_row("Surface", "Panels, controls and secondary surfaces.", "surface"),
-            self._color_row("Surface hover", "Background used when interactive surfaces are hovered.", "surface_hover"),
-            self._color_row("Card", "Library card background.", "card"),
-            self._color_row("Card hover", "Library card background while hovered.", "card_hover"),
-            self._combo_row("Card size", "Poster size in the Library.", "card_size", [("Compact", 180), ("Default", 210), ("Large", 240), ("Huge", 270)]),
-            self._combo_row("UI scale", "Overall text size.", "font_size", [("Small", 12), ("Default", 13), ("Large", 14), ("Very large", 15)]),
-            self._combo_row("Corner radius", "How rounded panels and cards are.", "corner_radius", [("Sharp", 6), ("Soft", 10), ("Rounded", 12), ("Very rounded", 16), ("Pill-like", 20)]),
-        ]))
+        layout.addWidget(self._section(
+            "Appearance",
+            [
+                self._theme_selector(),
+                self._combo_row(
+                    "Card size",
+                    "Choose how large Library posters should appear.",
+                    "card_size",
+                    [
+                        ("Compact", 180),
+                        ("Default", 210),
+                        ("Large", 240),
+                        ("Huge", 270),
+                    ],
+                ),
+                self._combo_row(
+                    "UI scale",
+                    "Adjust the overall interface text size.",
+                    "font_size",
+                    [
+                        ("Small", 12),
+                        ("Default", 13),
+                        ("Large", 14),
+                        ("Very large", 15),
+                    ],
+                ),
+                self._combo_row(
+                    "Corner radius",
+                    "Control how rounded cards and panels are.",
+                    "corner_radius",
+                    [
+                        ("Sharp", 6),
+                        ("Soft", 10),
+                        ("Rounded", 12),
+                        ("Very rounded", 16),
+                        ("Pill-like", 20),
+                    ],
+                ),
+            ],
+        ))
 
-        layout.addWidget(self._section("Behavior", [
-            self._check_row("Hover highlighting", "Highlight library cards when the pointer is over them.", "hover_highlight"),
-            self._check_row("Smooth resize animation", "Animate Library cards when the number of columns changes.", "resize_animation"),
-            self._combo_row("Animation speed", "Duration of Library reflow animations.", "animation_speed", [("Instant", 0), ("Fast", 180), ("Default", 260), ("Smooth", 380), ("Slow", 520)]),
-            self._check_row("Open maximized", "Start NekoTrack maximized every time.", "maximized"),
-        ]))
+        layout.addWidget(self._section(
+            "Behavior",
+            [
+                self._check_row(
+                    "Hover highlighting",
+                    "Highlight Library cards while the pointer is over them.",
+                    "hover_highlight",
+                ),
+                self._check_row(
+                    "Smooth resize animation",
+                    "Animate Library reflow when the number of columns changes.",
+                    "resize_animation",
+                ),
+                self._combo_row(
+                    "Animation speed",
+                    "How quickly Library reflow animations run.",
+                    "animation_speed",
+                    [
+                        ("Instant", 0),
+                        ("Fast", 180),
+                        ("Default", 260),
+                        ("Smooth", 380),
+                        ("Slow", 520),
+                    ],
+                ),
+                self._check_row(
+                    "Open maximized",
+                    "Start NekoTrack maximized.",
+                    "maximized",
+                ),
+                self._bundle_mode_row(),
+            ],
+        ))
 
-        layout.addWidget(self._section("Data", [
+        token_input = QLineEdit()
+        token_input.setEchoMode(QLineEdit.Password)
+        token_input.setPlaceholderText("TMDB API Read Access Token")
+        token_input.setText(str(get("tmdb_api_token") or ""))
+
+        save_token = QPushButton("Save")
+        save_token.setObjectName("settingsAction")
+        save_token.clicked.connect(
+            lambda: self._save_tmdb_token(token_input.text())
+        )
+
+        token_row = QHBoxLayout()
+        token_row.setSpacing(10)
+        token_row.addWidget(token_input, 1)
+        token_row.addWidget(save_token)
+
+        token_wrapper = QWidget()
+        token_wrapper.setLayout(token_row)
+
+        layout.addWidget(self._section(
+            "TMDB",
+            [
+                self._row(
+                    "API Read Access Token",
+                    "Used for episode metadata and episode artwork. Stored locally in NekoTrack settings.",
+                    token_wrapper,
+                )
+            ],
+        ))
+
+        data_rows = [
             self._info_row("Library", f"{len(list(get_all_library()))} saved titles"),
             self._info_row("Storage", "Local SQLite database"),
             self._info_row("Artwork", "Cached locally when downloaded"),
-            self._info_row("Metadata", "AniList powers online search and detail import"),
-        ]))
+            self._info_row("Metadata", "AniList + TMDB"),
+        ]
+        layout.addWidget(self._section("Data", data_rows))
 
-        self._tmdb_token = QLineEdit()
-        self._tmdb_token.setEchoMode(QLineEdit.Password)
-        self._tmdb_token.setPlaceholderText("Paste TMDB API Read Access Token")
-        self._tmdb_token.setText(str(get("tmdb_api_token") or ""))
-        save_tmdb = QPushButton("Save TMDB token")
-        save_tmdb.setCursor(Qt.PointingHandCursor)
-        save_tmdb.clicked.connect(self._save_tmdb_token)
-        token_box = QVBoxLayout()
-        token_box.setSpacing(8)
-        token_box.addWidget(self._tmdb_token)
-        token_box.addWidget(save_tmdb, 0, Qt.AlignRight)
-        token_wrapper = QWidget()
-        token_wrapper.setLayout(token_box)
-        layout.addWidget(self._section("TMDB", [
-            self._row(
-                "API Read Access Token",
-                "Required for TMDB episode data and artwork. The token is stored in this local app's settings and is never committed to the repository.",
-                token_wrapper,
-            )
-        ]))
-
+        actions = QHBoxLayout()
         setup_button = QPushButton("Run setup wizard again")
-        setup_button.setCursor(Qt.PointingHandCursor)
+        setup_button.setObjectName("settingsAction")
         setup_button.clicked.connect(self.setup_requested.emit)
-        layout.addWidget(setup_button, 0, Qt.AlignLeft)
 
-        reset_button = QPushButton("Reset all appearance & behavior settings")
-        reset_button.setCursor(Qt.PointingHandCursor)
+        reset_button = QPushButton("Restore defaults")
+        reset_button.setObjectName("settingsSecondaryAction")
         reset_button.clicked.connect(self._reset)
-        layout.addWidget(reset_button, 0, Qt.AlignLeft)
-        layout.addStretch(1)
 
+        actions.addWidget(setup_button)
+        actions.addWidget(reset_button)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+
+        layout.addStretch(1)
         scroll.setWidget(content)
         outer.addWidget(scroll)
 
+        self._apply_page_style()
+
+    def _apply_page_style(self):
+        self.setStyleSheet(
+            f"""
+            QLabel#settingsTitle {{
+                color:{COLORS['primary']};
+                font-size:30px;
+                font-weight:850;
+                background:transparent;
+            }}
+            QLabel#settingsSubtitle {{
+                color:{COLORS['muted']};
+                font-size:12px;
+                background:transparent;
+            }}
+            QFrame#settingsSection {{
+                background:{COLORS['surface']};
+                border:1px solid {COLORS['border']};
+                border-radius:14px;
+            }}
+            QLabel#settingsSectionTitle {{
+                color:{COLORS['accent']};
+                font-size:10px;
+                font-weight:900;
+                letter-spacing:1.4px;
+                background:transparent;
+            }}
+            QLabel#settingsRowTitle {{
+                color:{COLORS['primary']};
+                font-size:13px;
+                font-weight:750;
+                background:transparent;
+            }}
+            QLabel#settingsRowDescription {{
+                color:{COLORS['muted']};
+                font-size:11px;
+                background:transparent;
+            }}
+            QFrame#themePresetCard {{
+                background:{COLORS['card']};
+                border:1px solid {COLORS['border']};
+                border-radius:12px;
+            }}
+            QFrame#themePresetCard:hover {{
+                background:{COLORS['card_hover']};
+                border-color:{COLORS['border_hover']};
+            }}
+            QFrame#themePresetCard[selected="true"] {{
+                background:{COLORS['accent_soft']};
+                border:2px solid {COLORS['accent']};
+            }}
+            QLabel#themePresetTitle {{
+                color:{COLORS['primary']};
+                font-size:13px;
+                font-weight:800;
+                background:transparent;
+            }}
+            QLabel#themePresetDescription {{
+                color:{COLORS['muted']};
+                font-size:10px;
+                background:transparent;
+            }}
+            QComboBox {{
+                min-width:120px;
+            }}
+            QLineEdit {{
+                min-height:38px;
+            }}
+            QPushButton#settingsAction {{
+                background:{COLORS['accent']};
+                border:1px solid {COLORS['accent']};
+                border-radius:9px;
+                color:#111318;
+                font-weight:800;
+                padding:9px 14px;
+            }}
+            QPushButton#settingsAction:hover {{
+                background:{COLORS['accent_hover']};
+                border-color:{COLORS['accent_hover']};
+            }}
+            QPushButton#settingsSecondaryAction {{
+                background:{COLORS['surface_alt']};
+                border:1px solid {COLORS['border']};
+                border-radius:9px;
+                color:{COLORS['secondary']};
+                font-weight:700;
+                padding:9px 14px;
+            }}
+            QPushButton#settingsSecondaryAction:hover {{
+                background:{COLORS['surface_hover']};
+                color:{COLORS['primary']};
+            }}
+            QCheckBox {{
+                background:transparent;
+            }}
+            QRadioButton {{
+                background:transparent;
+            }}
+            """
+        )
+
     def _section(self, name, widgets):
         panel = QFrame()
-        panel.setMinimumSize(0, 0)
-        panel.setStyleSheet(
-            f"QFrame{{background:{COLORS['surface']};border:1px solid {COLORS['frame']};border-radius:{get('corner_radius')}px;}}"
-        )
+        panel.setObjectName("settingsSection")
+
         box = QVBoxLayout(panel)
-        box.setContentsMargins(22, 18, 22, 12)
+        box.setContentsMargins(20, 17, 20, 10)
         box.setSpacing(0)
-        heading = QLabel(name.upper())
-        heading.setStyleSheet(
-            f"color:{COLORS['accent']};font-size:10px;font-weight:900;letter-spacing:1.4px;padding-bottom:8px;background:transparent;"
-        )
-        box.addWidget(heading)
+
+        title = QLabel(name.upper())
+        title.setObjectName("settingsSectionTitle")
+        box.addWidget(title)
+
         for widget in widgets:
             box.addWidget(widget)
+
         return panel
 
     def _row(self, name, description, control):
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 11, 0, 11)
+        wrapper = QWidget()
+        row = QHBoxLayout(wrapper)
+        row.setContentsMargins(0, 10, 0, 10)
         row.setSpacing(18)
+
         text = QVBoxLayout()
         text.setSpacing(2)
-        label = QLabel(name)
-        label.setStyleSheet(f"font-weight:700;color:{COLORS['primary']};background:transparent;")
+
+        title = QLabel(name)
+        title.setObjectName("settingsRowTitle")
         desc = QLabel(description)
+        desc.setObjectName("settingsRowDescription")
         desc.setWordWrap(True)
-        desc.setStyleSheet(f"color:{COLORS['muted']};font-size:11px;background:transparent;")
-        text.addWidget(label)
+
+        text.addWidget(title)
         text.addWidget(desc)
         row.addLayout(text, 1)
-        row.addWidget(control, 0, Qt.AlignRight | Qt.AlignVCenter)
-        wrapper = QWidget()
-        wrapper.setMinimumSize(0, 0)
-        wrapper.setLayout(row)
+        row.addWidget(control, 0, Qt.AlignVCenter)
         return wrapper
 
-    def _theme_row(self):
-        options = [("Neko", "Neko")] + [
-            (name, name) for name in THEME_PRESETS if name != "NekoTrack"
-        ] + [("Custom", "Custom")]
-        combo = QComboBox()
-        combo.setMinimumWidth(150)
-        for label, value in options:
-            combo.addItem(label, value)
-        current = str(get("theme_preset") or "NekoTrack")
-        for i in range(combo.count()):
-            if combo.itemData(i) == current:
-                combo.setCurrentIndex(i)
-                break
-        combo.currentIndexChanged.connect(
-            lambda i, c=combo: self._theme_preset_changed(c.itemData(i))
-        )
-        return self._row(
-            "Theme preset",
-            "Use a NekoTrack-made color palette, or keep your current custom colors.",
-            combo,
-        )
+    def _theme_selector(self):
+        wrapper = QWidget()
+        grid = QVBoxLayout(wrapper)
+        grid.setContentsMargins(0, 8, 0, 8)
+        grid.setSpacing(8)
 
-    def _theme_preset_changed(self, name):
-        name = str(name or "")
-        if name in THEME_PRESETS:
-            apply_theme_preset(name)
-        else:
-            set_value("theme_preset", "Custom")
+        current = str(get("theme_preset") or "Neko")
+        self.theme_cards = {}
+
+        for name, theme in THEME_PRESETS.items():
+            card = ThemePresetCard(name, theme)
+            card.setProperty("selected", name == current)
+            card.style().unpolish(card)
+            card.style().polish(card)
+            card.clicked.connect(self._select_theme)
+            self.theme_cards[name] = card
+            grid.addWidget(card)
+
+        return wrapper
+
+    def _select_theme(self, name):
+        if name not in THEME_PRESETS:
+            return
+
+        apply_theme_preset(name)
+        for card_name, card in self.theme_cards.items():
+            card.setProperty("selected", card_name == name)
+            card.style().unpolish(card)
+            card.style().polish(card)
+
         self._apply("theme_preset")
 
-    def _color_row(self, name, description, key):
-        button = QPushButton()
-        button.setFixedWidth(110)
-        button.setCursor(Qt.PointingHandCursor)
-        self._paint_color_button(button, get(key))
-        button.clicked.connect(lambda: self._pick_color(key, button))
-        return self._row(name, description, button)
+    def _bundle_mode_row(self):
+        group = QButtonGroup(self)
+        wrapper = QWidget()
+        row = QHBoxLayout(wrapper)
+        row.setContentsMargins(0, 10, 0, 10)
+        row.setSpacing(12)
 
-    def _paint_color_button(self, button, value):
-        button.setText(value.upper())
-        button.setStyleSheet(
-            f"QPushButton{{background:{value};color:#101216;border:1px solid {COLORS['border']};border-radius:9px;padding:8px 12px;font-weight:800;}}"
-            f"QPushButton:hover{{border-color:{COLORS['primary']};}}"
+        main_radio = QRadioButton("Main seasons only")
+        extras_radio = QRadioButton("Include related extras")
+        group.addButton(main_radio)
+        group.addButton(extras_radio)
+
+        mode = str(get("bundle_mode") or "main")
+        if mode == "extras":
+            extras_radio.setChecked(True)
+        else:
+            main_radio.setChecked(True)
+
+        main_radio.toggled.connect(
+            lambda checked: checked and self._changed("bundle_mode", "main")
+        )
+        extras_radio.toggled.connect(
+            lambda checked: checked and self._changed("bundle_mode", "extras")
         )
 
-    def _pick_color(self, key, button):
-        color = QColorDialog.getColor(QColor(get(key)), self, f"Choose {key.replace('_', ' ').title()}")
-        if color.isValid():
-            set_value(key, color.name())
-            set_value("theme_preset", "Custom")
-            self._paint_color_button(button, color.name())
-            self._apply(key)
+        info = QVBoxLayout()
+        title = QLabel("Automatic bundle contents")
+        title.setObjectName("settingsRowTitle")
+        desc = QLabel("Choose whether automatic bundles stay focused on seasons or include related extras.")
+        desc.setObjectName("settingsRowDescription")
+        desc.setWordWrap(True)
+        info.addWidget(title)
+        info.addWidget(desc)
+
+        row.addLayout(info, 1)
+        row.addWidget(main_radio)
+        row.addWidget(extras_radio)
+        return wrapper
 
     def _combo_row(self, name, description, key, options):
         combo = QComboBox()
-        combo.setMinimumWidth(150)
         for label, value in options:
             combo.addItem(label, value)
+
         current = get(key)
-        for i in range(combo.count()):
-            if combo.itemData(i) == current:
-                combo.setCurrentIndex(i)
+        for index in range(combo.count()):
+            if combo.itemData(index) == current:
+                combo.setCurrentIndex(index)
                 break
-        combo.currentIndexChanged.connect(lambda i, k=key, c=combo: self._changed(k, c.itemData(i)))
+
+        combo.currentIndexChanged.connect(
+            lambda index, k=key, c=combo: self._changed(
+                k,
+                c.itemData(index),
+            )
+        )
         return self._row(name, description, combo)
 
     def _check_row(self, name, description, key):
         check = QCheckBox()
         check.setChecked(get(key))
-        check.stateChanged.connect(lambda state, k=key: self._changed(k, bool(state)))
+        check.stateChanged.connect(
+            lambda state, k=key: self._changed(k, bool(state))
+        )
         return self._row(name, description, check)
 
     def _info_row(self, name, value):
         value_label = QLabel(value)
-        value_label.setStyleSheet(f"color:{COLORS['secondary']};background:transparent;")
+        value_label.setObjectName("settingsRowDescription")
         return self._row(name, "", value_label)
 
     def _changed(self, key, value):
@@ -243,8 +504,8 @@ class SettingsPage(QWidget):
         refresh_theme()
         self.settings_changed.emit(key)
 
-    def _save_tmdb_token(self):
-        set_value("tmdb_api_token", self._tmdb_token.text().strip())
+    def _save_tmdb_token(self, value):
+        set_value("tmdb_api_token", str(value).strip())
         self._apply("tmdb_api_token")
 
     def _reset(self):
