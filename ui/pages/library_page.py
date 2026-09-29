@@ -93,7 +93,7 @@ class LibraryPage(QWidget):
         controls.setObjectName("libraryFilters")
         self.filter_controls = controls
         controls.setStyleSheet(
-            f"QFrame#libraryFilters{{background:{COLORS['surface']};border:1px solid {COLORS['frame']};border-radius:14px;}}"
+            f"QFrame#libraryFilters{{background:{COLORS['surface']};border:none;border-radius:14px;}}"
         )
         row = QHBoxLayout(controls); row.setContentsMargins(9, 8, 9, 8); row.setSpacing(6); self.filter_buttons = {}
         for name in ["All", "Watching", "Completed", "Planned"]:
@@ -102,6 +102,8 @@ class LibraryPage(QWidget):
             b.setFocusPolicy(Qt.NoFocus)
             b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(lambda checked=False, value=name:self._set_filter(value))
+            b.setObjectName("libraryFilterButton")
+            b.setStyleSheet(self._filter_style(name == "All"))
             self.filter_buttons[name] = b
             row.addWidget(b)
         row.addStretch(); root.addWidget(controls)
@@ -436,17 +438,17 @@ class LibraryPage(QWidget):
             button.setStyleSheet(self._filter_style(name == self.current_filter))
 
     def _filter_style(self,active):
-        focus = f"QPushButton:focus{{border:0;outline:0;}}"
+        focus = "QPushButton#libraryFilterButton:focus{background:transparent;border:0;outline:0;}"
         if active:
             return (
-                f"QPushButton{{background:{COLORS['accent']};"
+                f"QPushButton#libraryFilterButton{{background:{COLORS['accent']};"
                 f"color:{COLORS['accent_text']};border:0;border-radius:9px;"
                 f"padding:8px 15px;font-weight:800;}}{focus}"
             )
         return (
-            f"QPushButton{{background:transparent;color:{COLORS['secondary']};"
+            f"QPushButton#libraryFilterButton{{background:transparent;color:{COLORS['secondary']};"
             f"border:0;border-radius:9px;padding:8px 15px;font-weight:650;}}"
-            f"QPushButton:hover{{background:{COLORS['surface_hover']};"
+            f"QPushButton#libraryFilterButton:hover{{background:{COLORS['surface_hover']};"
             f"color:{COLORS['primary']};}}{focus}"
         )
     def _apply_filter(self):
