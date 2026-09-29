@@ -880,9 +880,12 @@ def get_episode_data(media_id, mal_id=None, season_number=None):
                 or (kitsu.get("titles") or {}).get("en_us")
                 or f"Episode {number}"
             ),
+            # For the Kitsu integration test, prefer Kitsu's known-good
+            # synopsis whenever Kitsu has one. This lets us verify the source
+            # reaches the UI instead of masking it behind another provider.
             "description": (
-                jikan.get("synopsis")
-                or kitsu.get("synopsis")
+                kitsu.get("synopsis")
+                or jikan.get("synopsis")
             ),
             "airdate": (
                 str(aired.get("from") or "")[:10]
