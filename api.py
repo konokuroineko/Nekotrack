@@ -1307,6 +1307,55 @@ def _pick_best_episode_still(series_id, season_number, episode):
     return _episode_still_url(stills[0].get("file_path")), len(stills)
 
 
+def _movie_title_similarity(candidate, title_variants):
+    names = [
+        _normalize_title(candidate.get("title")),
+        _normalize_title(candidate.get("original_title")),
+    ]
+    names = [name for name in names if name]
+
+    queries = [
+        _normalize_title(value)
+        for value in (title_variants or [])
+        if str(value or "").strip()
+    ]
+    queries = [query for query in queries if query]
+
+    best = 0.0
+    for name in names:
+        for query in queries:
+            if name == query:
+                return 1.0
+            if name in query or query in name:
+                best = max(
+                    best,
+                    min(len(name), len(query)) / max(len(name), len(query)),
+                )
+            else:
+                prefix = 0
+                for left, right in zip(name, query):
+                    if left != right:
+                        break
+                    prefix += 1
+                best = max(
+                    best,
+                    prefix / max(len(name), len(query)),
+                )
+    return best
+
+
+def _candidate_movie_score(candidate, title_variants, target_date):
+    similarity = _movie_title_similarity(candidate, title_variants)
+    score = similarity * 1000
+
+    release_date = _parse_date(candidate.get("release_date"))
+    if release_date and target_date:
+        score -= abs((release_date - target_date).days) / 10
+
+    score += min(float(candidate.get("popularity") or 0), 20)
+    return score, similarity, release_date
+
+
 def _find_tmdb_movie(title_variants, target_date):
     variants = [
         str(value).strip()
