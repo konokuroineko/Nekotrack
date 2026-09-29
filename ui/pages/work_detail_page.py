@@ -2201,9 +2201,6 @@ class WorkDetailPage(QWidget):
         }
         self._episode_provider_diagnostics[work_id] = {
             "mal_id": mal_id,
-            "jikan_count": int(payload.get("jikan_count") or 0),
-            "kitsu_count": int(payload.get("kitsu_count") or 0),
-            "kitsu": payload.get("kitsu_diagnostics") or {},
         }
 
         tmdb_id = payload.get("tmdb_id")
