@@ -409,6 +409,7 @@ def _traversal_edge_allowed(item, edge):
 def _related_placeholder(node):
     return {
         "id": int(node["id"]),
+        "idMal": node.get("idMal"),
         "type": node.get("type"),
         "format": node.get("format"),
         "title": node.get("title") or {},
@@ -428,6 +429,8 @@ def _apply_relation_details(item, details):
     item["format"] = details.get("format") or _get(item, "format")
     item["title"] = details.get("title") or _get(item, "title") or {}
     item["coverImage"] = details.get("coverImage") or _get(item, "coverImage") or {}
+    if details.get("idMal") is not None:
+        item["idMal"] = details["idMal"]
     if details.get("episodes") is not None:
         item["episodes"] = details["episodes"]
     item["startDate"] = details.get("startDate") or _get(item, "startDate") or {}
