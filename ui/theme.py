@@ -1,7 +1,8 @@
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QApplication
-
 import re
+
+from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import QApplication
 
 from ui.preferences import get
 
