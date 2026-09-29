@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 
 DATABASE_NAME = "anime_tracker.db"
 
