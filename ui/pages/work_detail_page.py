@@ -1,5 +1,4 @@
-from api import get_media_details
-from tmdb import get_tmdb_episode_data, get_tmdb_episode_sample
+from api import get_media_details, get_tmdb_episode_data, get_tmdb_episode_sample
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread
@@ -93,6 +92,7 @@ class EpisodeSyncWorker(QObject):
         self.expected_episodes = expected_episodes
         self.tmdb_id = tmdb_id
         self.tmdb_season_number = tmdb_season_number
+        self.media_format = media_format
 
     def run(self):
         try:
@@ -534,6 +534,7 @@ class WorkDetailPage(QWidget):
         self._episode_sync_worker = None
         self._episode_sync_work_id = None
         self._episode_sync_completed = set()
+        self._episode_refresh_queue = []
         self._episode_source_status = {}
         self._episode_provider_diagnostics = {}
         self._episode_debug_thread = None
@@ -551,6 +552,7 @@ class WorkDetailPage(QWidget):
     def set_work(self, work):
         previous_selected_episode_id = self._selected_episode_work_id
         self.work = work
+        self._episode_refresh_queue = []
 
         detail_ids = self._detail_work_ids()
         if previous_selected_episode_id in detail_ids:
@@ -1164,7 +1166,7 @@ class WorkDetailPage(QWidget):
         )
         header.addWidget(debug)
 
-        refresh = QPushButton("Refresh")
+        refresh = QPushButton("Refresh Bundle" if len(members) > 1 else "Refresh")
         refresh.setCursor(Qt.PointingHandCursor)
         refresh.clicked.connect(self._refresh_episode_data)
         refresh.setStyleSheet(
@@ -1383,6 +1385,8 @@ class WorkDetailPage(QWidget):
         worker.error.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        if self._episode_refresh_queue:
+            thread.finished.connect(self._start_next_episode_refresh)
         thread.start()
 
     def _episode_debug_finished(self, payload):
@@ -1481,15 +1485,67 @@ class WorkDetailPage(QWidget):
         dialog.exec()
 
     def _refresh_episode_data(self):
-        selected_id = self._selected_episode_work_id
-        if selected_id is None:
+        members = self._episode_members()
+        if not members:
             return
 
-        # Clear transient image-cache failures so a URL that failed earlier
+        selected_id = self._selected_episode_work_id
+        member_ids = [int(member["id"]) for member in members]
+        if selected_id not in member_ids:
+            selected_id = member_ids[0]
+            self._selected_episode_work_id = selected_id
+
+        # Clear transient image-cache failures so URLs that failed earlier
         # in this process can be tried again after the provider refresh.
         EpisodeArtwork._failures.clear()
-        self._episode_sync_completed.discard(int(selected_id))
+        for work_id in member_ids:
+            self._episode_sync_completed.discard(work_id)
+
+        # Refresh the selected season first, then refresh the remaining
+        # bundled seasons one at a time.
+        self._episode_refresh_queue = [
+            work_id for work_id in member_ids if work_id != selected_id
+        ]
         self._replace_episode_section()
+
+    def _start_next_episode_refresh(self):
+        while self._episode_refresh_queue:
+            work_id = self._episode_refresh_queue.pop(0)
+            if work_id in self._episode_sync_completed:
+                continue
+
+            selected_work = get_work(work_id)
+            if selected_work is None:
+                continue
+
+            members = self._episode_members()
+            try:
+                (
+                    title_variants,
+                    start_date,
+                    end_date,
+                    expected_episodes,
+                    tmdb_id,
+                    tmdb_season_number,
+                    media_format,
+                ) = self._episode_tmdb_context(
+                    work_id,
+                    members,
+                    selected_work,
+                )
+                self._start_episode_sync(
+                    work_id,
+                    title_variants,
+                    start_date,
+                    end_date,
+                    expected_episodes,
+                    tmdb_id,
+                    tmdb_season_number,
+                    media_format,
+                )
+            except Exception:
+                continue
+            return
 
     def _episode_season_changed(self, work_id):
         self._selected_episode_work_id = int(work_id)
@@ -1556,6 +1612,7 @@ class WorkDetailPage(QWidget):
         expected_episodes,
         tmdb_id,
         tmdb_season_number,
+        media_format=None,
     ):
         work_id = int(work_id)
 
@@ -1575,6 +1632,7 @@ class WorkDetailPage(QWidget):
             expected_episodes,
             tmdb_id,
             tmdb_season_number,
+            media_format,
         )
         self._episode_sync_worker.moveToThread(self._episode_sync_thread)
 
