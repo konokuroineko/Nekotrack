@@ -18,6 +18,7 @@ _DEFAULTS = {
     "resize_animation": True,
     "animation_speed": 260,
     "maximized": True,
+    "tmdb_api_token": "",
 }
 
 _ORGANIZATION = "NekoTrack"
