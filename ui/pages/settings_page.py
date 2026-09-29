@@ -326,7 +326,7 @@ class SettingsPage(QWidget):
                 background:{COLORS['accent']};
                 border:1px solid {COLORS['accent']};
                 border-radius:9px;
-                color:#111318;
+                color:{COLORS['accent_text']};
                 font-weight:800;
                 padding:9px 14px;
             }}
