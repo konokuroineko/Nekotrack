@@ -8,6 +8,7 @@ from database import (
     add_to_library,
     characters_are_loaded,
     get_alternate_titles,
+    get_connection,
     get_episodes,
     get_tmdb_mapping,
     get_work,
