@@ -242,6 +242,16 @@ class WorkCard(QFrame):
             QPushButton#add {{ background: {COLORS['accent']}; color: {COLORS['accent_text']}; border: none; border-radius: 8px; padding: 7px; font-weight: 800; }}
             QPushButton#add:hover {{ background: {COLORS['accent_hover']}; }}
         """)
+        if hasattr(self, "title_label"):
+            self.title_label.setStyleSheet(
+                f"color:{COLORS['accent']};background:transparent;"
+                f"font-size:{get('font_size')}px;font-weight:760;"
+            )
+        if hasattr(self, "series_info_label"):
+            self.series_info_label.setStyleSheet(
+                f"color:{COLORS['accent']};background:transparent;"
+                "font-size:10px;font-weight:800;"
+            )
 
     def _value(self, key):
         if hasattr(self.work, "get"):
