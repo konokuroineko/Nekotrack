@@ -34,7 +34,16 @@ class EpisodeProviderDebugWorker(QObject):
     finished = Signal(object)
     error = Signal(str)
 
-    def __init__(self, title_variants, start_date, end_date, expected_episodes, tmdb_id, tmdb_season_number):
+    def __init__(
+        self,
+        title_variants,
+        start_date,
+        end_date,
+        expected_episodes,
+        tmdb_id,
+        tmdb_season_number,
+        media_format,
+    ):
         super().__init__()
         self.title_variants = list(title_variants or [])
         self.start_date = start_date
@@ -42,6 +51,8 @@ class EpisodeProviderDebugWorker(QObject):
         self.expected_episodes = expected_episodes
         self.tmdb_id = tmdb_id
         self.tmdb_season_number = tmdb_season_number
+        self.media_format = media_format
+        self.media_format = media_format
 
     def run(self):
         try:
@@ -53,6 +64,7 @@ class EpisodeProviderDebugWorker(QObject):
                     self.expected_episodes,
                     self.tmdb_id,
                     self.tmdb_season_number,
+                    self.media_format,
                 )
             )
         except Exception as error:
@@ -72,6 +84,7 @@ class EpisodeSyncWorker(QObject):
         expected_episodes=None,
         tmdb_id=None,
         tmdb_season_number=None,
+        media_format=None,
     ):
         super().__init__()
         self.work_id = int(work_id)
@@ -91,6 +104,7 @@ class EpisodeSyncWorker(QObject):
                 self.expected_episodes,
                 self.tmdb_id,
                 self.tmdb_season_number,
+                self.media_format,
             )
             self.finished.emit(self.work_id, payload)
         except Exception as error:
@@ -1239,8 +1253,18 @@ class WorkDetailPage(QWidget):
                 if selected_work is not None and "mal_id" in selected_work.keys()
                 else None
             )
-            title_variants, start_date, end_date, expected_episodes, tmdb_id, tmdb_season_number = (
-                self._episode_tmdb_context(selected_id, members, selected_work)
+            (
+                title_variants,
+                start_date,
+                end_date,
+                expected_episodes,
+                tmdb_id,
+                tmdb_season_number,
+                media_format,
+            ) = self._episode_tmdb_context(
+                selected_id,
+                members,
+                selected_work,
             )
             self._start_episode_sync(
                 selected_id,
@@ -1250,6 +1274,7 @@ class WorkDetailPage(QWidget):
                 expected_episodes,
                 tmdb_id,
                 tmdb_season_number,
+                media_format,
             )
 
         if not episodes:
@@ -1324,6 +1349,7 @@ class WorkDetailPage(QWidget):
             expected_episodes,
             tmdb_id,
             tmdb_season_number,
+            media_format,
         ) = self._episode_tmdb_context(
             work_id,
             members,
@@ -1338,6 +1364,7 @@ class WorkDetailPage(QWidget):
             expected_episodes,
             tmdb_id,
             tmdb_season_number,
+            media_format,
         )
         self._episode_debug_worker.moveToThread(self._episode_debug_thread)
 
@@ -1509,6 +1536,8 @@ class WorkDetailPage(QWidget):
         tmdb_id, tmdb_season_number = get_tmdb_mapping(selected_id)
 
         expected_episodes = selected_work["episodes"]
+        media_format = str(selected_work["format"] or "").upper()
+
         return (
             title_variants,
             start_date,
@@ -1516,6 +1545,7 @@ class WorkDetailPage(QWidget):
             expected_episodes,
             tmdb_id,
             tmdb_season_number,
+            media_format,
         )
 
     def _start_episode_sync(
