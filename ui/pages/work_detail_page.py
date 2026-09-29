@@ -32,13 +32,14 @@ class EpisodeSyncWorker(QObject):
     finished = Signal(int, object)
     error = Signal(int, str)
 
-    def __init__(self, work_id):
+    def __init__(self, work_id, mal_id=None):
         super().__init__()
         self.work_id = int(work_id)
+        self.mal_id = int(mal_id) if mal_id is not None else None
 
     def run(self):
         try:
-            payload = get_episode_data(self.work_id)
+            payload = get_episode_data(self.work_id, self.mal_id)
             self.finished.emit(self.work_id, payload)
         except Exception as error:
             self.error.emit(self.work_id, str(error))
@@ -140,7 +141,7 @@ class EpisodeArtwork(QLabel):
 class EpisodeCard(QFrame):
     watched_changed = Signal(int, bool)
 
-    def __init__(self, episode, fallback_pixmap=None, parent=None):
+    def __init__(self, episode, parent=None):
         super().__init__(parent)
         self.episode = episode
         self.setObjectName("episodeCard")
@@ -737,7 +738,9 @@ class WorkDetailPage(QWidget):
             save_anime(details)
             save_characters(work_id, (details.get("characters") or {}).get("edges"))
             save_staff(work_id, (details.get("staff") or {}).get("edges"))
-            save_episodes(work_id, details.get("streamingEpisodes"))
+            # Episode metadata is synchronized by get_episode_data() for the
+            # exact AniList member. AniList streamingEpisodes is not an
+            # episode-numbered database source.
 
             connection = get_connection()
             in_library = connection.execute(
@@ -1090,15 +1093,10 @@ class WorkDetailPage(QWidget):
             menu = QMenu(season_button)
             for index, member in enumerate(members, start=1):
                 member_id = int(member["id"])
-                if hasattr(member, "get"):
-                    start_date = member.get("startDate") or {}
-                    year = start_date.get("year") or member.get("start_year")
-                else:
-                    year = member["start_year"]
-                year = year or "Unknown date"
                 member_title = self._member_title(member)
+                release_date = self._member_release_date(member)
                 action = menu.addAction(
-                    f"Season {index}  —  {member_title}  ·  {year}"
+                    f"Season {index}  —  {member_title}  ·  {release_date}"
                 )
                 action.setCheckable(True)
                 action.setChecked(member_id == int(selected_id))
@@ -1116,7 +1114,12 @@ class WorkDetailPage(QWidget):
         # Refresh each season once per detail-page session. This also clears
         # stale thumbnail URLs left by earlier episode imports.
         if selected_id is not None and selected_id not in self._episode_sync_completed:
-            self._start_episode_sync(selected_id)
+            local_mal_id = (
+                selected_work["mal_id"]
+                if selected_work is not None and "mal_id" in selected_work.keys()
+                else None
+            )
+            self._start_episode_sync(selected_id, local_mal_id)
 
         if not episodes:
             message = (
@@ -1148,12 +1151,12 @@ class WorkDetailPage(QWidget):
             if hasattr(member, "get"):
                 start_date = member.get("startDate") or {}
                 year = start_date.get("year") or member.get("start_year")
-                month = start_date.get("month") or 0
-                day = start_date.get("day") or 0
+                month = start_date.get("month") or member.get("start_month") or 0
+                day = start_date.get("day") or member.get("start_day") or 0
             else:
                 year = member["start_year"]
-                month = 0
-                day = 0
+                month = member["start_month"] if "start_month" in member.keys() else 0
+                day = member["start_day"] if "start_day" in member.keys() else 0
 
             return (
                 year is None,
@@ -1169,7 +1172,7 @@ class WorkDetailPage(QWidget):
         self._selected_episode_work_id = int(work_id)
         self._replace_episode_section()
 
-    def _start_episode_sync(self, work_id):
+    def _start_episode_sync(self, work_id, mal_id=None):
         work_id = int(work_id)
 
         if work_id in self._episode_sync_completed:
@@ -1182,7 +1185,7 @@ class WorkDetailPage(QWidget):
 
         self._episode_sync_work_id = work_id
         self._episode_sync_thread = QThread(self)
-        self._episode_sync_worker = EpisodeSyncWorker(work_id)
+        self._episode_sync_worker = EpisodeSyncWorker(work_id, mal_id)
         self._episode_sync_worker.moveToThread(self._episode_sync_thread)
 
         self._episode_sync_thread.started.connect(self._episode_sync_worker.run)
@@ -1386,6 +1389,25 @@ class WorkDetailPage(QWidget):
 
     def _relations(self):
         return self._grid_section("Relations", get_relations(self._value("id")), RelationCard, self.relation_selected, 6)
+
+    @staticmethod
+    def _member_release_date(member):
+        """Format a member's stored/AniList start date."""
+        if hasattr(member, "get"):
+            start_date = member.get("startDate") or {}
+            year = start_date.get("year") or member.get("start_year")
+            month = start_date.get("month") or member.get("start_month")
+            day = start_date.get("day") or member.get("start_day")
+        else:
+            year = member["start_year"]
+            month = member["start_month"] if "start_month" in member.keys() else None
+            day = member["start_day"] if "start_day" in member.keys() else None
+
+        if year and month and day:
+            return f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+        if year:
+            return str(year)
+        return "Unknown date"
 
     @staticmethod
     def _member_title(member):
