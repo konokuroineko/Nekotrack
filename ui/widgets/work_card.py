@@ -226,7 +226,7 @@ class WorkCard(QFrame):
             QFrame#posterCard:hover {{ {hover_css} }}
             QLabel {{ background: transparent; border: none; }}
             QLabel#title {{ color: {COLORS['primary']}; font-size: {get('font_size')}px; font-weight: 760; }}
-            QFrame#posterCard:hover QLabel#title {{ color: {COLORS['accent_hover']}; }}
+            QFrame#posterCard:hover QLabel#title {{ color: {COLORS['primary']}; }}
             QLabel#meta {{ color: {COLORS['muted']}; font-size: 11px; }}
             QLabel#seriesInfo {{ color: {COLORS['accent_hover']}; font-size: 10px; font-weight: 800; }}
             QPushButton#add {{ background: {COLORS['accent']}; color: {COLORS['accent_text']}; border: none; border-radius: 8px; padding: 7px; font-weight: 800; }}
