@@ -379,6 +379,12 @@ class SetupWizard(QDialog):
         layout.addStretch(1)
         return page
 
+    def reject(self):
+        if self._tmdb_thread is not None and self._tmdb_thread.isRunning():
+            self.tmdb_status.setText("Finish the TMDB test before closing setup.")
+            return
+        super().reject()
+
     def _bundle_toggled(self, value, checked):
         if checked:
             self.bundle_mode = value
