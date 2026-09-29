@@ -97,7 +97,13 @@ class LibraryPage(QWidget):
         )
         row = QHBoxLayout(controls); row.setContentsMargins(9, 8, 9, 8); row.setSpacing(6); self.filter_buttons = {}
         for name in ["All", "Watching", "Completed", "Planned"]:
-            b = QPushButton(name); b.setCheckable(True); b.setCursor(Qt.PointingHandCursor); b.clicked.connect(lambda checked=False, value=name:self._set_filter(value)); self.filter_buttons[name] = b; row.addWidget(b)
+            b = QPushButton(name)
+            b.setCheckable(True)
+            b.setFocusPolicy(Qt.NoFocus)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda checked=False, value=name:self._set_filter(value))
+            self.filter_buttons[name] = b
+            row.addWidget(b)
         row.addStretch(); root.addWidget(controls)
         self.scroll_area = QScrollArea(); self.scroll_area.setWidgetResizable(True); self.scroll_area.setFrameShape(QFrame.NoFrame); self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff); self.scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.container = QWidget(); self.container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum); self.container.installEventFilter(self); self.flow_layout = FlowLayout(self.container)
