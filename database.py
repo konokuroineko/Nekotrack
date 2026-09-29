@@ -103,6 +103,7 @@ def initialize_database():
         "format": "TEXT", "cover_path": "TEXT", "chapters": "INTEGER", "volumes": "INTEGER",
         "source": "TEXT", "end_year": "INTEGER", "duration": "INTEGER", "mal_id": "INTEGER",
         "start_month": "INTEGER", "start_day": "INTEGER",
+        "tmdb_id": "INTEGER", "tmdb_season_number": "INTEGER",
         "characters_loaded": "INTEGER NOT NULL DEFAULT 0",
     }.items():
         if column not in column_names:
@@ -210,6 +211,38 @@ def characters_are_loaded(work_id):
     ).fetchone()
     connection.close()
     return missing_role is None
+
+
+def get_tmdb_mapping(work_id):
+    """Return the cached TMDB series/season mapping for one exact work."""
+    connection = get_connection()
+    row = connection.execute(
+        "SELECT tmdb_id, tmdb_season_number FROM works WHERE id = ?",
+        (int(work_id),),
+    ).fetchone()
+    connection.close()
+    if row is None:
+        return None, None
+    return row["tmdb_id"], row["tmdb_season_number"]
+
+
+def save_tmdb_mapping(work_id, tmdb_id, tmdb_season_number):
+    """Cache the TMDB mapping resolved for one exact NekoTrack season."""
+    connection = get_connection()
+    connection.execute(
+        """
+        UPDATE works
+        SET tmdb_id = ?, tmdb_season_number = ?
+        WHERE id = ?
+        """,
+        (
+            int(tmdb_id) if tmdb_id is not None else None,
+            int(tmdb_season_number) if tmdb_season_number is not None else None,
+            int(work_id),
+        ),
+    )
+    connection.commit()
+    connection.close()
 
 
 def save_work_mal_id(work_id, mal_id):
