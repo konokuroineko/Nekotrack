@@ -11,9 +11,6 @@ from ui.preferences import get
 # the current preset system. Existing widgets can still carry these values
 # when a theme is changed without rebuilding the widget tree.
 LEGACY_STYLE_COLORS = {
-    "#ad8cff": "accent",
-    "#c4abff": "accent_hover",
-    "#9272df": "frame_color",
     "#30283d": "border",
     "#493d5b": "border_hover",
     "#83758f": "muted",
