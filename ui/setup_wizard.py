@@ -478,7 +478,7 @@ class SetupWizard(QDialog):
             }}
             QLabel#setupMark {{
                 background:{theme['accent']};
-                color:#111318;
+                color:{theme['accent_text']};
                 border-radius:9px;
                 min-width:38px;
                 max-width:38px;
