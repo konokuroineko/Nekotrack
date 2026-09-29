@@ -1,4 +1,5 @@
 import datetime as _dt
+import hashlib
 import re
 import requests
 import time
@@ -1550,6 +1551,40 @@ def _tmdb_search_movies(query, target_date):
                 seen_ids.add(candidate_id)
 
     return candidates
+
+
+def cache_tmdb_episode_image(url, work_id, episode_number):
+    """Download one TMDB episode image into NekoTrack's persistent cache."""
+    if not url:
+        return None
+
+    url = str(url).strip()
+    if not url:
+        return None
+
+    digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+    directory = TMDB_EPISODE_CACHE_DIRECTORY / str(int(work_id))
+    directory.mkdir(parents=True, exist_ok=True)
+
+    parsed_path = Path(urlparse(url).path)
+    suffix = parsed_path.suffix.lower() or ".jpg"
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+        suffix = ".jpg"
+
+    path = directory / f"{int(episode_number)}_{digest}{suffix}"
+    if path.is_file() and path.stat().st_size > 0:
+        return str(path)
+
+    response = requests.get(url, timeout=20)
+    response.raise_for_status()
+    data = response.content
+    if not data:
+        return None
+
+    path.write_bytes(data)
+    if not path.is_file() or path.stat().st_size == 0:
+        return None
+    return str(path)
 
 
 def _pick_best_movie_image(movie_id, movie):
