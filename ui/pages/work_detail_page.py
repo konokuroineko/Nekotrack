@@ -104,6 +104,7 @@ class EpisodeSyncWorker(QObject):
                 self.tmdb_id,
                 self.tmdb_season_number,
                 self.media_format,
+                cache_work_id=self.work_id,
             )
             self.finished.emit(self.work_id, payload)
         except Exception as error:
@@ -131,6 +132,15 @@ class EpisodeArtwork(QLabel):
         if not url:
             self._show_fallback()
             return
+
+        local_path = Path(url)
+        if local_path.is_file():
+            pixmap = QPixmap(str(local_path))
+            if not pixmap.isNull():
+                self._cache[url] = pixmap
+                self.setText("")
+                self.setPixmap(self._cropped(pixmap))
+                return
 
         cached = self._cache.get(url)
         if cached is not None and not cached.isNull():
@@ -1670,7 +1680,7 @@ class WorkDetailPage(QWidget):
 
         tmdb_id = payload.get("tmdb_id")
         tmdb_season_number = payload.get("tmdb_season_number")
-        if tmdb_id is not None and tmdb_season_number is not None:
+        if tmdb_id is not None:
             save_tmdb_mapping(
                 work_id,
                 tmdb_id,
