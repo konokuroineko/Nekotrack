@@ -684,8 +684,8 @@ def get_episode_data(media_id, mal_id=None):
             if not pagination.get("has_next_page"):
                 break
             page += 1
-    except requests.RequestException:
-        return {"mal_id": resolved_mal_id, "episodes": []}
+    except requests.RequestException as error:
+        raise RuntimeError(f"Jikan episode list failed: {error}") from error
 
     # Jikan's episode-video endpoint is still the same provider, but its
     # results are kept separate so an episode-list failure cannot corrupt them.
@@ -809,6 +809,8 @@ def get_episode_data(media_id, mal_id=None):
     return {
         "mal_id": resolved_mal_id,
         "episodes": result,
+        "jikan_count": len(jikan_by_number),
+        "kitsu_count": len(kitsu_by_number),
     }
 
 
