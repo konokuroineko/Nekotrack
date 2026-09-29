@@ -687,6 +687,9 @@ def get_episode_data(media_id, mal_id=None):
         airing = schedule_by_number.get(number) or {}
         aired = jikan.get("aired") or {}
         video = video_by_number.get(number) or {}
+        jikan_images = jikan.get("images") or {}
+        jikan_jpg = jikan_images.get("jpg") or {}
+        jikan_webp = jikan_images.get("webp") or {}
         video_images = video.get("images") or {}
         video_jpg = video_images.get("jpg") or {}
         video_webp = video_images.get("webp") or {}
@@ -695,7 +698,6 @@ def get_episode_data(media_id, mal_id=None):
             "episodeNumber": number,
             "title": (
                 jikan.get("title")
-                or stream.get("title")
                 or video.get("title")
                 or f"Episode {number}"
             ),
@@ -706,7 +708,9 @@ def get_episode_data(media_id, mal_id=None):
                 or None
             ),
             "thumbnail": (
-                video_jpg.get("image_url")
+                jikan_jpg.get("image_url")
+                or jikan_webp.get("image_url")
+                or video_jpg.get("image_url")
                 or video_webp.get("image_url")
                 or None
             ),
