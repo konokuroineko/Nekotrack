@@ -128,13 +128,14 @@ class EpisodeImageCacheWorker(QObject):
         self.episodes = [dict(episode) for episode in (episodes or [])]
 
     def run(self):
-        try:
-            for episode in self.episodes:
-                number = episode.get("episodeNumber")
-                url = episode.get("thumbnail")
-                if number is None or not url:
-                    continue
+        errors = []
+        for episode in self.episodes:
+            number = episode.get("episodeNumber")
+            url = episode.get("thumbnail")
+            if number is None or not url:
+                continue
 
+            try:
                 local_path = cache_tmdb_episode_image(
                     url,
                     self.work_id,
@@ -146,10 +147,13 @@ class EpisodeImageCacheWorker(QObject):
                         number,
                         local_path,
                     )
+            except Exception as error:
+                errors.append(f"Episode {int(number)}: {error}")
 
+        if errors:
+            self.error.emit(self.work_id, "; ".join(errors[:3]))
+        else:
             self.finished.emit(self.work_id)
-        except Exception as error:
-            self.error.emit(self.work_id, str(error))
 
 
 class EpisodeArtwork(QLabel):
