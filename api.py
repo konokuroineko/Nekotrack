@@ -109,10 +109,12 @@ def _media_fields(include_details=False, include_relations=True):
                 relationType
                 node {
                     id
+                    idMal
                     type
                     format
                     title { romaji english native }
                     coverImage { large }
+                    startDate { year month day }
                 }
             }
         }
@@ -175,10 +177,12 @@ def _media_fields(include_details=False, include_relations=True):
                 relationType
                 node {
                     id
+                    idMal
                     type
                     format
                     title { romaji english native }
                     coverImage { large }
+                    startDate { year month day }
                 }
             }
         }
