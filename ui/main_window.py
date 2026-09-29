@@ -24,11 +24,8 @@ from image_cache import download_cover
 from ui.navigation import NavigationController
 from ui.preferences import get
 from ui.theme import COLORS, application_stylesheet, refresh_theme
-from ui.pages.character_page import CharacterPage
 from ui.pages.home_page import HomePage
 from ui.pages.library_page import LibraryPage
-from ui.pages.person_page import PersonPage
-from ui.pages.relationship_page import RelationshipPage
 from ui.pages.search_page import SearchPage
 from ui.pages.settings_page import SettingsPage
 from ui.pages.work_detail_page import WorkDetailPage
@@ -286,7 +283,6 @@ class MainWindow(QMainWindow):
             self.navigation.add_page(name, page)
 
         self._section(side, "LIBRARY", [("⌂", "Home", "home"), ("▦", "Library", "collections"), ("⌕", "Search", "search")])
-        self._section(side, "EXPLORE", [("♙", "People", "person"), ("♧", "Characters", "character"), ("◇", "Relations", "relationships")])
         side.addStretch()
         self._add_nav(side, "⚙", "Settings", "settings")
 
@@ -298,7 +294,6 @@ class MainWindow(QMainWindow):
         self.work_detail_page.bundle_edit_requested.connect(self.library_page._edit_bundle)
         self.work_detail_page.relation_selected.connect(self.show_relation)
         self.work_detail_page.bundle_changed.connect(self._refresh_library_after_bundle_change)
-        self.relationship_page.work_selected.connect(self.show_relation)
         self.settings_page.settings_changed.connect(self.apply_settings)
 
         root_layout.addWidget(sidebar)
@@ -334,8 +329,6 @@ class MainWindow(QMainWindow):
             # Rebuild the library when returning to it so relation-sync failures
             # can be retried through the normal page refresh path.
             self.library_page.refresh()
-        elif page_name == "relationships":
-            self.relationship_page.refresh()
 
     def apply_settings(self, changed_key=""):
         if self._settings_rebuild_pending:
