@@ -207,8 +207,10 @@ class SearchPage(QWidget):
         intro = QVBoxLayout()
         intro.setSpacing(3)
         heading = QLabel("Discover")
+        heading.setObjectName("searchPageHeading")
         heading.setStyleSheet(f"font-size: 34px; font-weight: 850; color: {COLORS['primary']};")
         sub = QLabel("Search the AniList catalog and build your library.")
+        sub.setObjectName("searchPageSubtitle")
         sub.setStyleSheet(f"font-size: 12px; color: {COLORS['muted']};")
         intro.addWidget(heading)
         intro.addWidget(sub)
@@ -303,6 +305,7 @@ class SearchPage(QWidget):
 
         result_head = QHBoxLayout()
         self.results_title = QLabel("Ready to search")
+        self.results_title.setObjectName("searchResultsTitle")
         self.results_title.setStyleSheet(f"font-size: 15px; font-weight: 750; color: {COLORS['primary']};")
         result_head.addWidget(self.results_title)
         result_head.addStretch()
@@ -779,6 +782,29 @@ class SearchPage(QWidget):
         self._append_skeletons(skeleton_count)
         self._reflow_results()
         self._update_results_title()
+
+    def refresh_theme(self):
+        # Search results contain independently styled WorkCards. Refresh those
+        # existing cards so their title/accent colors follow the active theme.
+        from ui.widgets.work_card import WorkCard
+
+        for card in self.findChildren(WorkCard):
+            card.refresh_theme()
+
+        for widget in self.findChildren(QLabel):
+            name = widget.objectName()
+            if name == "searchPageHeading":
+                widget.setStyleSheet(
+                    f"font-size:34px;font-weight:850;color:{COLORS['primary']};"
+                )
+            elif name == "searchPageSubtitle":
+                widget.setStyleSheet(
+                    f"font-size:12px;color:{COLORS['muted']};"
+                )
+            elif name == "searchResultsTitle":
+                widget.setStyleSheet(
+                    f"font-size:15px;font-weight:750;color:{COLORS['primary']};"
+                )
 
     def _update_results_title(self):
         count = len(self.displayed_items)
