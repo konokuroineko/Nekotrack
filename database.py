@@ -467,6 +467,21 @@ def get_episodes(work_id):
     return results
 
 
+def save_episode_thumbnail_path(work_id, episode_number, thumbnail_path):
+    """Persist the local cached image path for one episode."""
+    connection = get_connection()
+    connection.execute(
+        """
+        UPDATE episodes
+        SET thumbnail_url = ?
+        WHERE work_id = ? AND episode_number = ?
+        """,
+        (str(thumbnail_path) if thumbnail_path else None, int(work_id), int(episode_number)),
+    )
+    connection.commit()
+    connection.close()
+
+
 def set_episode_watched(work_id, episode_number, watched):
     connection = get_connection()
     connection.execute("UPDATE episodes SET watched = ? WHERE work_id = ? AND episode_number = ?",
