@@ -1,4 +1,4 @@
-from api import get_episode_data, get_kitsu_episode_diagnostics, get_media_details
+from api import get_episode_data, get_media_details
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread
@@ -33,8 +33,9 @@ class EpisodeProviderDebugWorker(QObject):
     finished = Signal(object)
     error = Signal(str)
 
-    def __init__(self, mal_id, season_number=None):
+    def __init__(self, work_id, mal_id, season_number=None):
         super().__init__()
+        self.work_id = int(work_id)
         self.mal_id = int(mal_id) if mal_id is not None else None
         self.season_number = (
             int(season_number) if season_number is not None else None
@@ -44,8 +45,10 @@ class EpisodeProviderDebugWorker(QObject):
         try:
             if self.mal_id is None:
                 raise ValueError("No MAL ID is available for this season.")
+
             self.finished.emit(
-                get_kitsu_episode_diagnostics(
+                get_episode_data(
+                    self.work_id,
                     self.mal_id,
                     self.season_number,
                 )
@@ -1307,6 +1310,7 @@ class WorkDetailPage(QWidget):
 
         self._episode_debug_thread = QThread(self)
         self._episode_debug_worker = EpisodeProviderDebugWorker(
+            work_id,
             mal_id,
             season_number,
         )
@@ -1330,14 +1334,20 @@ class WorkDetailPage(QWidget):
         thread.finished.connect(thread.deleteLater)
         thread.start()
 
-    def _episode_debug_finished(self, diagnostic):
-        self._episode_provider_diagnostics[
-            int(self._selected_episode_work_id)
-        ] = {
-            "kitsu": diagnostic or {},
+    def _episode_debug_finished(self, payload):
+        work_id = int(self._selected_episode_work_id)
+        stored = get_episodes(work_id)
+        stored_episode_1 = next(
+            (dict(row) for row in stored if int(row["episode_number"]) == 1),
+            None,
+        )
+
+        self._episode_provider_diagnostics[work_id] = {
+            "payload": payload or {},
+            "stored_episode_1": stored_episode_1 or {},
         }
         self._episode_debug_cleanup()
-        self._show_episode_debug_result(diagnostic or {})
+        self._show_episode_debug_result(payload or {}, stored_episode_1 or {})
 
     def _episode_debug_error(self, error):
         self._episode_debug_cleanup()
@@ -1351,11 +1361,15 @@ class WorkDetailPage(QWidget):
         self._episode_debug_thread = None
         self._episode_debug_worker = None
 
-    def _show_episode_debug_result(self, kitsu):
+    def _show_episode_debug_result(self, payload, stored):
+        kitsu = payload.get("kitsu_diagnostics") or {}
         episode_1 = kitsu.get("episode_1") or {}
+        merged = payload.get("merged_episode_1") or {}
         season_counts = kitsu.get("season_counts") or {}
 
         lines = [
+            f"MAL ID: {payload.get('mal_id') or 'none'}",
+            f"Jikan episodes: {payload.get('jikan_count', 0)}",
             f"Kitsu anime ID: {kitsu.get('kitsu_anime_id') or 'none'}",
             f"Kitsu mapping rows: {kitsu.get('mapping_count', 0)}",
             f"Kitsu API pages: {kitsu.get('pages', 0)}",
@@ -1364,27 +1378,41 @@ class WorkDetailPage(QWidget):
             f"Kitsu seasons seen: {season_counts or 'none'}",
             "",
             "Kitsu Episode 1:",
-            f"  ID: {episode_1.get('id') or 'none'}",
-            f"  seasonNumber: {episode_1.get('seasonNumber') if episode_1.get('seasonNumber') is not None else 'none'}",
-            f"  number: {episode_1.get('number') if episode_1.get('number') is not None else 'none'}",
-            f"  relativeNumber: {episode_1.get('relativeNumber') if episode_1.get('relativeNumber') is not None else 'none'}",
-            f"  canonicalTitle: {episode_1.get('canonicalTitle') or 'none'}",
             f"  synopsis: {'YES' if episode_1.get('has_synopsis') else 'NO'}",
             f"  thumbnail: {'YES' if episode_1.get('has_thumbnail') else 'NO'}",
+            "",
+            "Merged Episode 1:",
+            f"  synopsis: {'YES' if merged.get('has_synopsis') else 'NO'}",
+            f"  thumbnail: {'YES' if merged.get('has_thumbnail') else 'NO'}",
+            "",
+            "SQLite Episode 1:",
+            f"  synopsis: {'YES' if str(stored.get('description') or '').strip() else 'NO'}",
+            f"  thumbnail: {'YES' if str(stored.get('thumbnail_url') or '').strip() else 'NO'}",
         ]
 
-        message = "\n".join(lines)
+        synopsis = str(merged.get("synopsis") or "").strip()
+        if synopsis:
+            lines.extend(["", "Merged synopsis:", synopsis[:500]])
 
+        error = kitsu.get("error")
+        if error:
+            lines.extend(["", f"Kitsu error: {error}"])
+
+        self._show_copyable_diagnostic("Episode provider diagnostics", "\n".join(lines))
+
+    def _show_copyable_diagnostic(self, title, message):
         dialog = QDialog(self)
-        dialog.setWindowTitle("Kitsu episode diagnostics")
-        dialog.setMinimumWidth(620)
+        dialog.setWindowTitle(title)
+        dialog.setMinimumSize(700, 480)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
 
         text_box = QLabel(message)
-        text_box.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        text_box.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
         text_box.setWordWrap(True)
         text_box.setStyleSheet(
             f"""
