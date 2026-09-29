@@ -778,9 +778,9 @@ class WorkDetailPage(QWidget):
             QLabel#deleteMessage {{ color:{COLORS['secondary']}; font-size:12px; }}
             QPushButton#deleteCancel {{ background:{COLORS['surface_alt']}; color:{COLORS['secondary']}; border:1px solid {COLORS['border']}; border-radius:9px; padding:9px 16px; font-weight:750; }}
             QPushButton#deleteCancel:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['primary']}; }}
-            QPushButton#deleteConfirm {{ background:#c94343; color:white; border:0; border-radius:9px; padding:9px 18px; font-weight:850; }}
-            QPushButton#deleteBundle {{ background:#c94343; color:white; border:0; border-radius:9px; padding:9px 14px; font-weight:850; }}
-            QPushButton#deleteBundle:hover {{ background:#e05252; }}
+            QPushButton#deleteConfirm {{ background:{COLORS['danger']}; color:{COLORS['primary']}; border:0; border-radius:9px; padding:9px 18px; font-weight:850; }}
+            QPushButton#deleteBundle {{ background:{COLORS['danger']}; color:{COLORS['primary']}; border:0; border-radius:9px; padding:9px 14px; font-weight:850; }}
+            QPushButton#deleteBundle:hover {{ background:{COLORS['danger']}; }}
             QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {COLORS['border_hover']}; background: {COLORS['background_alt']}; }}
             QCheckBox::indicator:checked {{ background: {COLORS['accent']}; border-color: {COLORS['accent']}; }}
         """)
@@ -1129,7 +1129,7 @@ class WorkDetailPage(QWidget):
             }}
             QPushButton#detailDeleteItem {{
                 background: transparent;
-                color: #ef7474;
+                color: {COLORS['danger']};
                 border: 1px solid transparent;
                 border-radius: 9px;
                 padding: 8px 12px;
@@ -1139,7 +1139,7 @@ class WorkDetailPage(QWidget):
             QPushButton#detailDeleteItem:hover {{
                 background: {COLORS['surface_hover']};
                 border-color: {COLORS['accent']};
-                color: #ff8585;
+                color: {COLORS['danger']};
             }}
             """
         )
