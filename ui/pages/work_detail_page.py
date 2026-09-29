@@ -1053,7 +1053,7 @@ class WorkDetailPage(QWidget):
         )
         header.addWidget(title)
 
-        source = QLabel("Jikan")
+        source = QLabel("Jikan + Kitsu fallback")
         source.setStyleSheet(
             f"""
             QLabel {{
