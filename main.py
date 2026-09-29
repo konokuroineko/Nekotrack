@@ -83,6 +83,7 @@ def _check_for_updates(window):
 
 def main():
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
 
     # The first-launch wizard configures preferences only; it does not touch
     # the user's SQLite library or cached artwork. --setup is a developer/user
