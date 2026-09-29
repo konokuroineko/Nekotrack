@@ -301,7 +301,7 @@ class MainWindow(QMainWindow):
             application_stylesheet()
             + f"""
             QFrame#sidebar {{ background:{COLORS['sidebar']}; border-right:1px solid {COLORS['frame']}; }}
-            QLabel#brandMark {{ background:{COLORS['accent']}; color:#111; border-radius:9px; font-size:19px; font-weight:900; min-width:38px; max-width:38px; min-height:38px; max-height:38px; qproperty-alignment:AlignCenter; }}
+            QLabel#brandMark {{ background:{COLORS['accent']}; color:{COLORS['accent_text']}; border-radius:9px; font-size:19px; font-weight:900; min-width:38px; max-width:38px; min-height:38px; max-height:38px; qproperty-alignment:AlignCenter; }}
             QLabel#brandWord {{ color:{COLORS['primary']}; font-size:19px; font-weight:800; letter-spacing:-.4px; padding-left:7px; }}
             QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:10px; padding:11px 13px; text-align:left; font-size:13px; font-weight:600; }}
             QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
