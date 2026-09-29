@@ -378,8 +378,10 @@ def get_staff(work_id):
 
 
 def save_episodes(work_id, episode_data):
+    episodes = list(episode_data or [])
     connection = get_connection()
-    for episode in episode_data or []:
+
+    for episode in episodes:
         number = episode.get("episodeNumber")
         if number is None:
             continue
@@ -401,6 +403,26 @@ def save_episodes(work_id, episode_data):
             episode.get("airdate"),
             episode.get("thumbnail"),
         ))
+
+    # A successful provider sync is authoritative for the returned episode
+    # set. Remove stale local rows that this source no longer reports while
+    # preserving watched state for every episode that still exists.
+    numbers = sorted({
+        int(episode["episodeNumber"])
+        for episode in episodes
+        if episode.get("episodeNumber") is not None
+    })
+    if numbers:
+        placeholders = ",".join("?" for _ in numbers)
+        connection.execute(
+            f"""
+            DELETE FROM episodes
+            WHERE work_id = ?
+              AND episode_number NOT IN ({placeholders})
+            """,
+            (work_id, *numbers),
+        )
+
     connection.commit()
     connection.close()
 
