@@ -603,8 +603,9 @@ def _kitsu_episode_map(mal_id):
 
     while True:
         payload = _kitsu_get(
-            f"/anime/{kitsu_id}/episodes",
+            "/episodes",
             {
+                "filter[anime_id]": kitsu_id,
                 "page[limit]": limit,
                 "page[offset]": offset,
             },
@@ -616,7 +617,9 @@ def _kitsu_episode_map(mal_id):
         if not links.get("next") or not rows:
             break
 
-        offset += limit
+        # Kitsu returns the next collection URL; use its presence as the
+        # authoritative pagination signal and advance by the actual page size.
+        offset += len(rows)
 
     result = {}
     for row in episodes:
