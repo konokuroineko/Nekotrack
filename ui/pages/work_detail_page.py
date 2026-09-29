@@ -1763,8 +1763,15 @@ class WorkDetailPage(QWidget):
         if work_id in self._episode_sync_completed:
             return
 
-        if self._episode_sync_thread is not None and self._episode_sync_thread.isRunning():
-            return
+        if self._episode_sync_thread is not None:
+            try:
+                if self._episode_sync_thread.isRunning():
+                    return
+            except RuntimeError:
+                # Qt has already deleted the underlying QThread object.
+                self._episode_sync_thread = None
+                self._episode_sync_worker = None
+                self._episode_sync_work_id = None
 
         self._episode_sync_work_id = work_id
         self._episode_sync_thread = QThread(self)
@@ -1790,11 +1797,22 @@ class WorkDetailPage(QWidget):
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
+        # Clear Python references before Qt destroys the C++ QThread object.
+        thread.finished.connect(
+            lambda t=thread: self._episode_sync_thread_finished(t)
+        )
         thread.finished.connect(thread.deleteLater)
         # Always listen for completion so a bundle refresh requested while a
         # sync is already running can continue with the queued seasons.
         thread.finished.connect(self._start_next_episode_refresh)
         thread.start()
+
+    def _episode_sync_thread_finished(self, thread):
+        if self._episode_sync_thread is thread:
+            self._episode_sync_thread = None
+            self._episode_sync_worker = None
+            self._episode_sync_work_id = None
+
 
     def _start_episode_image_cache(self, work_id, episodes):
         work_id = int(work_id)
@@ -1877,22 +1895,12 @@ class WorkDetailPage(QWidget):
         self._episode_sync_completed.add(work_id)
         self._start_episode_image_cache(work_id, episodes)
 
-        if self._episode_sync_work_id == work_id:
-            self._episode_sync_thread = None
-            self._episode_sync_worker = None
-            self._episode_sync_work_id = None
-
         if self._selected_episode_work_id == work_id:
             self._replace_episode_section()
 
     def _episode_sync_error(self, work_id, error):
         work_id = int(work_id)
         self._episode_sync_errors[work_id] = str(error)
-
-        if self._episode_sync_work_id == work_id:
-            self._episode_sync_thread = None
-            self._episode_sync_worker = None
-            self._episode_sync_work_id = None
 
         if self._selected_episode_work_id == work_id:
             content = self.scroll_area.widget()
