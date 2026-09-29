@@ -346,10 +346,40 @@ class MainWindow(QMainWindow):
             self.apply_settings("setup")
 
     def apply_settings(self, changed_key=""):
+        if changed_key == "theme_preset":
+            self._apply_theme_live()
+            return
         if self._settings_rebuild_pending:
             return
         self._settings_rebuild_pending = True
         QTimer.singleShot(0, lambda key=changed_key: self._rebuild_for_settings(key))
+
+    def _apply_theme_live(self):
+        refresh_theme()
+
+        self.setStyleSheet(
+            application_stylesheet()
+            + f"""
+            QFrame#sidebar {{ background:{COLORS['sidebar']}; border-right:1px solid {COLORS['frame']}; }}
+            QLabel#brandMark {{ background:{COLORS['accent']}; color:{COLORS['accent_text']}; border-radius:9px; font-size:19px; font-weight:900; min-width:38px; max-width:38px; min-height:38px; max-height:38px; qproperty-alignment:AlignCenter; }}
+            QLabel#brandWord {{ color:{COLORS['primary']}; font-size:19px; font-weight:800; letter-spacing:-.4px; padding-left:7px; }}
+            QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:10px; padding:11px 13px; text-align:left; font-size:13px; font-weight:600; }}
+            QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
+            QPushButton[navButton="true"]:checked {{ background:{COLORS['accent_soft']}; border-color:{COLORS['accent']}; color:{COLORS['accent_hover']}; }}
+            """
+        )
+
+        if hasattr(self, "library_page"):
+            self.library_page.refresh_theme()
+
+        if hasattr(self, "search_page") and hasattr(self.search_page, "refresh_theme"):
+            self.search_page.refresh_theme()
+
+        if hasattr(self, "work_detail_page") and hasattr(self.work_detail_page, "refresh_theme"):
+            self.work_detail_page.refresh_theme()
+
+        if hasattr(self, "settings_page") and hasattr(self.settings_page, "refresh_theme"):
+            self.settings_page.refresh_theme()
 
     def _rebuild_for_settings(self, changed_key):
         self._settings_rebuild_pending = False
