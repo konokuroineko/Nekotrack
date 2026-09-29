@@ -352,7 +352,17 @@ class MainWindow(QMainWindow):
         was_maximized = self.isMaximized()
         was_fullscreen = self.isFullScreen()
         normal_geometry = self.normalGeometry()
-        self.setUpdatesEnabled(False)
+
+        # Keep the old frame visible while the replacement widget tree is
+        # being constructed. Recreating the central widget otherwise exposes
+        # an unpainted/black window for a frame during theme changes.
+        snapshot = self.grab()
+        cover = QLabel(self)
+        cover.setPixmap(snapshot)
+        cover.setGeometry(self.rect())
+        cover.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        cover.raise_()
+
         try:
             if hasattr(self, "search_page"):
                 self.search_page.shutdown_workers()
@@ -360,8 +370,11 @@ class MainWindow(QMainWindow):
             # Build the replacement UI directly on the page the user was
             # already viewing instead of briefly showing Home during the swap.
             self.setup_ui(current_page)
+            self.repaint()
         finally:
-            self.setUpdatesEnabled(True)
+            cover.hide()
+            cover.deleteLater()
+
         if changed_key == "maximized":
             if get("maximized"):
                 self.showMaximized()
