@@ -75,7 +75,7 @@ class SettingsPage(QWidget):
             self._check_row("Hover highlighting", "Highlight library cards when the pointer is over them.", "hover_highlight"),
             self._check_row("Smooth resize animation", "Animate Library cards when the number of columns changes.", "resize_animation"),
             self._combo_row("Animation speed", "Duration of Library reflow animations.", "animation_speed", [("Instant", 0), ("Fast", 180), ("Default", 260), ("Smooth", 380), ("Slow", 520)]),
-            self._check_row("Open maximized", "Start AniTrack maximized every time.", "maximized"),
+            self._check_row("Open maximized", "Start NekoTrack maximized every time.", "maximized"),
         ]))
 
         layout.addWidget(self._section("Data", [
