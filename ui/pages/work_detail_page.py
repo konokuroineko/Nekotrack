@@ -1258,6 +1258,11 @@ class WorkDetailPage(QWidget):
 
         selected_id = self._selected_episode_work_id
         episodes = get_episodes(selected_id) if selected_id is not None else []
+        if selected_id is not None and episodes:
+            self._start_episode_image_cache(
+                selected_id,
+                [dict(episode) for episode in episodes],
+            )
 
         frame = QFrame()
         frame.setObjectName("section")
