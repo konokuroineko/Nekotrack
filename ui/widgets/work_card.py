@@ -244,12 +244,12 @@ class WorkCard(QFrame):
         """)
         if hasattr(self, "title_label"):
             self.title_label.setStyleSheet(
-                f"color:{COLORS['accent']};background:transparent;"
+                f"color:{COLORS['primary']};background:transparent;"
                 f"font-size:{get('font_size')}px;font-weight:760;"
             )
         if hasattr(self, "series_info_label"):
             self.series_info_label.setStyleSheet(
-                f"color:{COLORS['accent']};background:transparent;"
+                f"color:{COLORS['primary']};background:transparent;"
                 "font-size:10px;font-weight:800;"
             )
 
