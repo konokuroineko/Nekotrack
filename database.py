@@ -102,6 +102,7 @@ def initialize_database():
     for column, definition in {
         "format": "TEXT", "cover_path": "TEXT", "chapters": "INTEGER", "volumes": "INTEGER",
         "source": "TEXT", "end_year": "INTEGER", "duration": "INTEGER", "mal_id": "INTEGER",
+        "start_month": "INTEGER", "start_day": "INTEGER",
         "characters_loaded": "INTEGER NOT NULL DEFAULT 0",
     }.items():
         if column not in column_names:
@@ -452,23 +453,33 @@ def set_episode_progress(work_id, progress):
 def save_anime(anime):
     title_data = anime["title"]
     title = title_data.get("english") or title_data.get("romaji") or title_data.get("native")
-    start_year = (anime.get("startDate") or {}).get("year")
+    start_date = anime.get("startDate") or {}
+    start_year = start_date.get("year")
+    start_month = start_date.get("month")
+    start_day = start_date.get("day")
     cover_image = anime.get("coverImage") or {}
     connection = get_connection()
     connection.execute("""
-        INSERT INTO works (id, title, type, description, episodes, score, start_year, cover_url,
-                           format, chapters, volumes, source, end_year, duration, mal_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO works (
+            id, title, type, description, episodes, score, start_year, start_month, start_day,
+            cover_url, format, chapters, volumes, source, end_year, duration, mal_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             title=excluded.title, type=excluded.type, description=excluded.description,
             episodes=excluded.episodes, score=excluded.score, start_year=excluded.start_year,
+            start_month=excluded.start_month, start_day=excluded.start_day,
             cover_url=excluded.cover_url, format=excluded.format, chapters=excluded.chapters,
             volumes=excluded.volumes, source=excluded.source, end_year=excluded.end_year,
             duration=excluded.duration, mal_id=COALESCE(excluded.mal_id, works.mal_id)
-    """, (anime["id"], title, anime.get("type") or "ANIME", anime.get("description"), anime.get("episodes"),
-          anime.get("averageScore"), start_year, cover_image.get("large"), anime.get("format"),
-          anime.get("chapters"), anime.get("volumes"), anime.get("source"), (anime.get("endDate") or {}).get("year"),
-          anime.get("duration"), anime.get("idMal")))
+    """, (
+        anime["id"], title, anime.get("type") or "ANIME", anime.get("description"),
+        anime.get("episodes"), anime.get("averageScore"),
+        start_year, start_month, start_day, cover_image.get("large"),
+        anime.get("format"), anime.get("chapters"), anime.get("volumes"),
+        anime.get("source"), (anime.get("endDate") or {}).get("year"),
+        anime.get("duration"), anime.get("idMal")
+    ))
     for synonym in anime.get("synonyms") or []:
         connection.execute("INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
                            (anime["id"], synonym, None))
@@ -488,16 +499,33 @@ def save_anime(anime):
         target_title_data = node.get("title") or {}
         target_title = target_title_data.get("english") or target_title_data.get("romaji") or target_title_data.get("native")
         if target_title:
+            target_start_date = node.get("startDate") or {}
             connection.execute("""
-                INSERT INTO works (id, title, type, format, cover_url)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO works (
+                    id, title, type, format, start_year, start_month, start_day,
+                    cover_url, mal_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
                     type = excluded.type,
                     format = COALESCE(excluded.format, works.format),
-                    cover_url = COALESCE(excluded.cover_url, works.cover_url)
-            """, (target_id, target_title, node.get("type") or "ANIME", node.get("format"),
-                  (node.get("coverImage") or {}).get("large")))
+                    start_year = COALESCE(excluded.start_year, works.start_year),
+                    start_month = COALESCE(excluded.start_month, works.start_month),
+                    start_day = COALESCE(excluded.start_day, works.start_day),
+                    cover_url = COALESCE(excluded.cover_url, works.cover_url),
+                    mal_id = COALESCE(excluded.mal_id, works.mal_id)
+            """, (
+                target_id,
+                target_title,
+                node.get("type") or "ANIME",
+                node.get("format"),
+                target_start_date.get("year"),
+                target_start_date.get("month"),
+                target_start_date.get("day"),
+                (node.get("coverImage") or {}).get("large"),
+                node.get("idMal"),
+            ))
         connection.execute("INSERT OR REPLACE INTO work_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)",
                            (anime["id"], target_id, relation_type))
     connection.commit()
