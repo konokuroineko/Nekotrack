@@ -543,19 +543,12 @@ def get_episode_data(media_id, mal_id=None):
                     hasNextPage
                 }
             }
-            streamingEpisodes {
-                title
-                thumbnail
-                url
-                site
-            }
         }
     }
     """
 
     page = 1
     schedule = []
-    stream_rows = []
     media = {}
 
     # AniList supplies the schedule and any legal streaming thumbnails.
@@ -567,9 +560,6 @@ def get_episode_data(media_id, mal_id=None):
         media = data.get("Media") or {}
         connection = media.get("airingSchedule") or {}
         schedule.extend(connection.get("nodes") or [])
-
-        if page == 1:
-            stream_rows = list(media.get("streamingEpisodes") or [])
 
         page_info = connection.get("pageInfo") or {}
         if not page_info.get("hasNextPage"):
@@ -662,20 +652,22 @@ def get_episode_data(media_id, mal_id=None):
         if node.get("episode") is not None
     }
 
-    # AniList streamingEpisodes has no dedicated episode-number field.
-    # Parse one only when the title or URL explicitly identifies it.
     all_numbers = set(schedule_by_number)
     all_numbers.update(jikan_by_number)
 
     # Jikan's list endpoint does not include synopsis text. Fetch the full
     # record for each episode so the card gets the actual episode synopsis.
     if resolved_mal_id and jikan_by_number:
-        missing_synopsis = [
+        missing_detail = [
             number
             for number, row in jikan_by_number.items()
-            if not row.get("synopsis")
+            if not str(row.get("synopsis") or "").strip()
+            or not (
+                ((row.get("images") or {}).get("jpg") or {}).get("image_url")
+                or ((row.get("images") or {}).get("webp") or {}).get("image_url")
+            )
         ]
-        for number in missing_synopsis:
+        for number in missing_detail:
             try:
                 detail = _jikan_get(
                     f"/anime/{int(resolved_mal_id)}/episodes/{number}"
@@ -724,6 +716,8 @@ def get_episode_data(media_id, mal_id=None):
         "mal_id": resolved_mal_id,
         "episodes": result,
     }
+
+
 def get_media_details(media_id):
     """Fetch the complete media record needed by detail/import workflows."""
     query = """
