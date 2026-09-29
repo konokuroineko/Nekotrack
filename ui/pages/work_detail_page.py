@@ -663,7 +663,6 @@ class WorkDetailPage(QWidget):
         current_work = self.work
         current_selected = self._selected_episode_work_id
         current_errors = self._episode_sync_errors
-        current_queue = self._episode_refresh_queue
         current_token = self._detail_build_token
 
         try:
@@ -697,7 +696,6 @@ class WorkDetailPage(QWidget):
             self.work = current_work
             self._selected_episode_work_id = current_selected
             self._episode_sync_errors = current_errors
-            self._episode_refresh_queue = current_queue
             self._detail_build_token = current_token
 
     def preload_works(self, works):
@@ -728,7 +726,6 @@ class WorkDetailPage(QWidget):
     def set_work(self, work):
         previous_selected_episode_id = self._selected_episode_work_id
         self._episode_sync_errors = {}
-        self._episode_refresh_queue = []
         self._detail_build_token += 1
 
         detail_ids = self._prepare_detail_state(work)
