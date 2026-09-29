@@ -15,12 +15,13 @@ from PySide6.QtWidgets import (
 )
 
 from database import get_all_library
-from ui.preferences import defaults, get, reset, set_value
+from ui.preferences import THEME_PRESETS, apply_theme_preset, defaults, get, reset, set_value
 from ui.theme import COLORS, SPACING, refresh_theme
 
 
 class SettingsPage(QWidget):
     settings_changed = Signal(str)
+    setup_requested = Signal()
 
     def __init__(self):
         super().__init__()
@@ -51,11 +52,12 @@ class SettingsPage(QWidget):
         title.setStyleSheet(f"font-size: 30px; font-weight: 800; color: {COLORS['primary']}; background: transparent;")
         layout.addWidget(title)
 
-        subtitle = QLabel("Make AniTrack look and behave exactly how you want.")
+        subtitle = QLabel("Make NekoTrack look and behave exactly how you want.")
         subtitle.setStyleSheet(f"color: {COLORS['muted']}; background: transparent;")
         layout.addWidget(subtitle)
 
         layout.addWidget(self._section("Appearance", [
+            self._theme_row(),
             self._color_row("Accent color", "The color used for highlights, selection and the cover outline.", "accent"),
             self._color_row("Accent hover", "The lighter version used while hovering accent elements.", "accent_hover"),
             self._color_row("Frame color", "Color used for artwork outlines and UI frames.", "frame_color"),
@@ -104,6 +106,11 @@ class SettingsPage(QWidget):
             )
         ]))
 
+        setup_button = QPushButton("Run setup wizard again")
+        setup_button.setCursor(Qt.PointingHandCursor)
+        setup_button.clicked.connect(self.setup_requested.emit)
+        layout.addWidget(setup_button, 0, Qt.AlignLeft)
+
         reset_button = QPushButton("Reset all appearance & behavior settings")
         reset_button.setCursor(Qt.PointingHandCursor)
         reset_button.clicked.connect(self._reset)
@@ -151,6 +158,36 @@ class SettingsPage(QWidget):
         wrapper.setLayout(row)
         return wrapper
 
+    def _theme_row(self):
+        options = [("NekoTrack", "NekoTrack")] + [
+            (name, name) for name in THEME_PRESETS if name != "NekoTrack"
+        ] + [("Custom", "Custom")]
+        combo = QComboBox()
+        combo.setMinimumWidth(150)
+        for label, value in options:
+            combo.addItem(label, value)
+        current = str(get("theme_preset") or "NekoTrack")
+        for i in range(combo.count()):
+            if combo.itemData(i) == current:
+                combo.setCurrentIndex(i)
+                break
+        combo.currentIndexChanged.connect(
+            lambda i, c=combo: self._theme_preset_changed(c.itemData(i))
+        )
+        return self._row(
+            "Theme preset",
+            "Use a NekoTrack-made color palette, or keep your current custom colors.",
+            combo,
+        )
+
+    def _theme_preset_changed(self, name):
+        name = str(name or "")
+        if name in THEME_PRESETS:
+            apply_theme_preset(name)
+        else:
+            set_value("theme_preset", "Custom")
+        self._apply("theme_preset")
+
     def _color_row(self, name, description, key):
         button = QPushButton()
         button.setFixedWidth(110)
@@ -170,6 +207,7 @@ class SettingsPage(QWidget):
         color = QColorDialog.getColor(QColor(get(key)), self, f"Choose {key.replace('_', ' ').title()}")
         if color.isValid():
             set_value(key, color.name())
+            set_value("theme_preset", "Custom")
             self._paint_color_button(button, color.name())
             self._apply(key)
 
