@@ -734,19 +734,6 @@ class WorkDetailPage(QWidget):
             )
         )
 
-
-
-        QTimer.singleShot(
-            0,
-            lambda token=build_token, page=content, host=episode_host:
-                self._populate_episode_section(token, page, host),
-        )
-        QTimer.singleShot(
-            0,
-            lambda token=build_token, page=content, host=detail_host, ids=detail_ids:
-                self._populate_detail_sections(token, page, host, ids),
-        )
-
     def _hero(self):
         hero = QFrame(); hero.setObjectName("hero")
         box = QHBoxLayout(hero); box.setContentsMargins(24, 24, 28, 24); box.setSpacing(30)
