@@ -2,6 +2,7 @@ from api import get_episode_data, get_kitsu_episode_diagnostics, get_media_detai
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
@@ -1372,11 +1373,44 @@ class WorkDetailPage(QWidget):
             f"  thumbnail: {'YES' if episode_1.get('has_thumbnail') else 'NO'}",
         ]
 
-        QMessageBox.information(
-            self,
-            "Kitsu episode diagnostics",
-            "\n".join(lines),
+        message = "\n".join(lines)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Kitsu episode diagnostics")
+        dialog.setMinimumWidth(620)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        text_box = QLabel(message)
+        text_box.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        text_box.setWordWrap(True)
+        text_box.setStyleSheet(
+            f"""
+            QLabel {{
+                color:{COLORS['primary']};
+                background:{COLORS['surface_alt']};
+                border:1px solid {COLORS['border']};
+                border-radius:10px;
+                padding:12px;
+            }}
+            """
         )
+        layout.addWidget(text_box)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        copy_button = buttons.addButton("Copy details", QDialogButtonBox.ActionRole)
+
+        def copy_details():
+            QGuiApplication.clipboard().setText(message)
+            copy_button.setText("Copied!")
+
+        copy_button.clicked.connect(copy_details)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        dialog.exec()
 
     def _refresh_episode_data(self):
         selected_id = self._selected_episode_work_id
