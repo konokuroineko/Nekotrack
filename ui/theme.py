@@ -69,12 +69,29 @@ def refresh_theme():
             QPalette.ColorRole.Button: COLORS["surface"],
             QPalette.ColorRole.ButtonText: COLORS["secondary"],
             QPalette.ColorRole.Link: COLORS["accent"],
+            QPalette.ColorRole.LinkVisited: COLORS["accent"],
             QPalette.ColorRole.Highlight: COLORS["accent"],
             QPalette.ColorRole.HighlightedText: COLORS["accent_text"],
             QPalette.ColorRole.PlaceholderText: COLORS["muted"],
+            QPalette.ColorRole.BrightText: COLORS["primary"],
+            QPalette.ColorRole.Light: COLORS["surface_hover"],
+            QPalette.ColorRole.Midlight: COLORS["border_hover"],
+            QPalette.ColorRole.Mid: COLORS["border"],
+            QPalette.ColorRole.Dark: COLORS["background"],
+            QPalette.ColorRole.Shadow: COLORS["background"],
         }
+        accent_role = getattr(QPalette.ColorRole, "Accent", None)
+        if accent_role is not None:
+            role_colors[accent_role] = COLORS["accent"]
+
         for role, value in role_colors.items():
-            palette.setColor(role, QColor(value))
+            color = QColor(value)
+            for group in (
+                QPalette.ColorGroup.Active,
+                QPalette.ColorGroup.Inactive,
+                QPalette.ColorGroup.Disabled,
+            ):
+                palette.setColor(group, role, color)
         app.setPalette(palette)
 
 
@@ -91,6 +108,7 @@ def application_stylesheet():
         QPushButton {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: {max(6, radius - 3)}px; color: {COLORS['secondary']}; padding: 9px 13px; font-weight: 600; }}
         QPushButton:hover {{ background: {COLORS['surface_hover']}; border-color: {COLORS['border_hover']}; color: {COLORS['primary']}; }}
         QPushButton:pressed {{ background: {COLORS['surface_alt']}; }}
+        QPushButton:focus {{ border-color: {COLORS['accent']}; outline: none; }}
         QPushButton:disabled {{ color: {COLORS['muted']}; background: {COLORS['background_alt']}; }}
         QScrollArea {{ border: none; background: transparent; }}
         QScrollArea > QWidget > QWidget {{ background: transparent; }}
