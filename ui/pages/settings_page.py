@@ -159,7 +159,7 @@ class SettingsPage(QWidget):
         return wrapper
 
     def _theme_row(self):
-        options = [("NekoTrack", "NekoTrack")] + [
+        options = [("Neko", "Neko")] + [
             (name, name) for name in THEME_PRESETS if name != "NekoTrack"
         ] + [("Custom", "Custom")]
         combo = QComboBox()
