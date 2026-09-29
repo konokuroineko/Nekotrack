@@ -2,29 +2,29 @@ from PySide6.QtCore import QSettings
 
 
 THEME_PRESETS = {
-    "NekoTrack": {
-        "description": "Warm amber on a dark graphite base.",
-        "accent": "#e4a45e",
-        "accent_hover": "#efb978",
-        "frame_color": "#e4a45e",
-        "background": "#0d0f10",
-        "background_alt": "#0f1116",
-        "sidebar": "#0b0d11",
-        "surface": "#171a1d",
-        "surface_alt": "#191d25",
-        "surface_hover": "#1b1f22",
-        "border": "#252b35",
-        "border_hover": "#394250",
-        "primary": "#f5f7fa",
-        "secondary": "#aeb7c4",
-        "muted": "#687384",
-        "accent_soft": "#302116",
-        "success": "#67d391",
+    "Neko": {
+        "description": "Midnight graphite with deep violet and soft lavender.",
+        "accent": "#a678ff",
+        "accent_hover": "#c09cff",
+        "frame_color": "#8c62dc",
+        "background": "#0b0911",
+        "background_alt": "#0f0c16",
+        "sidebar": "#07060c",
+        "surface": "#14111b",
+        "surface_alt": "#191521",
+        "surface_hover": "#1e1928",
+        "border": "#2b2438",
+        "border_hover": "#44375a",
+        "primary": "#f5f0fb",
+        "secondary": "#c4b9d2",
+        "muted": "#82758f",
+        "accent_soft": "#281a3e",
+        "success": "#72d39a",
         "danger": "#ef7474",
-        "panel": "#11141a",
-        "panel_soft": "#171b22",
-        "card": "#181c1f",
-        "card_hover": "#22272b",
+        "panel": "#100d16",
+        "panel_soft": "#18131f",
+        "card": "#16121d",
+        "card_hover": "#20182a",
     },
     "Sakura": {
         "description": "Soft pink accents with a plum-black base.",
@@ -150,8 +150,8 @@ THEME_PRESETS = {
 
 
 _DEFAULTS = {
-    **{key: value for key, value in THEME_PRESETS["NekoTrack"].items() if key != "description"},
-    "theme_preset": "NekoTrack",
+    **{key: value for key, value in THEME_PRESETS["Neko"].items() if key != "description"},
+    "theme_preset": "Neko",
     "font_size": 13,
     "card_size": 210,
     "card_gap": 24,
@@ -182,6 +182,16 @@ def settings():
         for key in legacy.allKeys():
             current.setValue(key, legacy.value(key))
         current.setValue(_MIGRATION_KEY, True)
+        current.sync()
+
+    # NekoTrack was the original name of the built-in default theme. Promote
+    # it to the new canonical Neko theme on existing installs.
+    if current.value("theme_preset", "") == "NekoTrack":
+        theme = THEME_PRESETS["Neko"]
+        for key, value in theme.items():
+            if key != "description":
+                current.setValue(key, value)
+        current.setValue("theme_preset", "Neko")
         current.sync()
 
     return current
