@@ -2,12 +2,10 @@ from api import (
     cache_tmdb_episode_image,
     get_media_details,
     get_tmdb_episode_data,
-    get_tmdb_episode_sample,
 )
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread, QTimer
-from PySide6.QtGui import QGuiApplication
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
@@ -34,46 +32,6 @@ from ui.widgets.relation_card import RelationCard
 
 
 IMAGE_DIRECTORY = Path("data") / "images" / "works"
-
-
-class EpisodeProviderDebugWorker(QObject):
-    finished = Signal(object)
-    error = Signal(str)
-
-    def __init__(
-        self,
-        title_variants,
-        start_date,
-        end_date,
-        expected_episodes,
-        tmdb_id,
-        tmdb_season_number,
-        media_format,
-    ):
-        super().__init__()
-        self.title_variants = list(title_variants or [])
-        self.start_date = start_date
-        self.end_date = end_date
-        self.expected_episodes = expected_episodes
-        self.tmdb_id = tmdb_id
-        self.tmdb_season_number = tmdb_season_number
-        self.media_format = media_format
-
-    def run(self):
-        try:
-            self.finished.emit(
-                get_tmdb_episode_sample(
-                    self.title_variants,
-                    self.start_date,
-                    self.end_date,
-                    self.expected_episodes,
-                    self.tmdb_id,
-                    self.tmdb_season_number,
-                    self.media_format,
-                )
-            )
-        except Exception as error:
-            self.error.emit(str(error))
 
 
 class EpisodeSyncWorker(QObject):
@@ -568,11 +526,7 @@ class WorkDetailPage(QWidget):
         self._detail_content_cache = {}
         self._episode_sync_completed = set()
         self._episode_sync_errors = {}
-        self._episode_refresh_queue = []
         self._episode_source_status = {}
-        self._episode_provider_diagnostics = {}
-        self._episode_debug_thread = None
-        self._episode_debug_worker = None
         self._cover_manager = QNetworkAccessManager(self)
         self._cover_reply = None
         self._delete_overlay = None
@@ -1595,49 +1549,6 @@ class WorkDetailPage(QWidget):
         )
         header.addWidget(source)
 
-        debug = QPushButton("Debug")
-        debug.setCursor(Qt.PointingHandCursor)
-        debug.clicked.connect(self._show_episode_debug)
-        debug.setStyleSheet(
-            f"""
-            QPushButton {{
-                background:{COLORS['surface_alt']};
-                color:{COLORS['primary']};
-                border:1px solid {COLORS['border']};
-                border-radius:8px;
-                padding:5px 9px;
-                font-size:10px;
-                font-weight:800;
-            }}
-            QPushButton:hover {{
-                background:{COLORS['surface_hover']};
-                border-color:{COLORS['accent']};
-            }}
-            """
-        )
-        header.addWidget(debug)
-
-        refresh = QPushButton("Refresh Bundle" if len(members) > 1 else "Refresh")
-        refresh.setCursor(Qt.PointingHandCursor)
-        refresh.clicked.connect(self._refresh_episode_data)
-        refresh.setStyleSheet(
-            f"""
-            QPushButton {{
-                background:{COLORS['surface_alt']};
-                color:{COLORS['primary']};
-                border:1px solid {COLORS['border']};
-                border-radius:8px;
-                padding:5px 9px;
-                font-size:10px;
-                font-weight:800;
-            }}
-            QPushButton:hover {{
-                background:{COLORS['surface_hover']};
-                border-color:{COLORS['accent']};
-            }}
-            """
-        )
-        header.addWidget(refresh)
         header.addStretch()
 
         watched = sum(1 for ep in episodes if ep["watched"])
@@ -1788,230 +1699,6 @@ class WorkDetailPage(QWidget):
             )
 
         return sorted(members, key=sort_key)
-
-    def _show_episode_debug(self):
-        work_id = self._selected_episode_work_id
-        if work_id is None:
-            return
-
-        if (
-            self._episode_debug_thread is not None
-            and self._episode_debug_thread.isRunning()
-        ):
-            QMessageBox.information(
-                self,
-                "TMDB test",
-                "A TMDB test request is already running.",
-            )
-            return
-
-        selected_work = get_work(work_id)
-        members = self._episode_members()
-        (
-            title_variants,
-            start_date,
-            end_date,
-            expected_episodes,
-            tmdb_id,
-            tmdb_season_number,
-            media_format,
-        ) = self._episode_tmdb_context(
-            work_id,
-            members,
-            selected_work,
-        )
-
-        self._episode_debug_thread = QThread(self)
-        self._episode_debug_worker = EpisodeProviderDebugWorker(
-            title_variants,
-            start_date,
-            end_date,
-            expected_episodes,
-            tmdb_id,
-            tmdb_season_number,
-            media_format,
-        )
-        self._episode_debug_worker.moveToThread(self._episode_debug_thread)
-
-        self._episode_debug_thread.started.connect(
-            self._episode_debug_worker.run
-        )
-        self._episode_debug_worker.finished.connect(
-            self._episode_debug_finished
-        )
-        self._episode_debug_worker.error.connect(
-            self._episode_debug_error
-        )
-
-        worker = self._episode_debug_worker
-        thread = self._episode_debug_thread
-        worker.finished.connect(thread.quit)
-        worker.error.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        # Always listen for completion so a bundle refresh requested while a
-        # sync is already running can continue with the queued seasons.
-        thread.finished.connect(self._start_next_episode_refresh)
-        thread.start()
-
-    def _episode_debug_finished(self, payload):
-        work_id = int(self._selected_episode_work_id)
-        stored = get_episodes(work_id)
-        stored_episode_1 = next(
-            (dict(row) for row in stored if int(row["episode_number"]) == 1),
-            None,
-        )
-
-        self._episode_provider_diagnostics[work_id] = {
-            "payload": payload or {},
-            "stored_episode_1": stored_episode_1 or {},
-        }
-        self._episode_debug_cleanup()
-        self._show_episode_debug_result(payload or {}, stored_episode_1 or {})
-
-    def _episode_debug_error(self, error):
-        self._episode_debug_cleanup()
-        QMessageBox.warning(
-            self,
-            "TMDB test failed",
-            str(error),
-        )
-
-    def _episode_debug_cleanup(self):
-        self._episode_debug_thread = None
-        self._episode_debug_worker = None
-
-    def _show_episode_debug_result(self, payload, stored):
-        episode = payload.get("sample_episode_1") or {}
-        lines = [
-            f"TMDB series ID: {payload.get('tmdb_id') or 'none'}",
-            f"TMDB season: {payload.get('tmdb_season_number') if payload.get('tmdb_season_number') is not None else 'none'}",
-            f"TMDB episodes selected: {payload.get('tmdb_count', 0)}",
-            "",
-            "TMDB Episode 1:",
-            f"  title: {episode.get('title') or 'none'}",
-            f"  synopsis: {'YES' if str(episode.get('description') or '').strip() else 'NO'}",
-            f"  air date: {episode.get('airdate') or 'none'}",
-            f"  thumbnail: {'YES' if episode.get('thumbnail') else 'NO'}",
-            f"  image variants: {episode.get('tmdb_image_count', 0)}",
-            "",
-            "SQLite Episode 1:",
-            f"  synopsis: {'YES' if str(stored.get('description') or '').strip() else 'NO'}",
-            f"  thumbnail: {'YES' if str(stored.get('thumbnail_url') or '').strip() else 'NO'}",
-        ]
-
-        synopsis = str(episode.get("description") or "").strip()
-        if synopsis:
-            lines.extend(["", "TMDB synopsis:", synopsis[:700]])
-
-        self._show_copyable_diagnostic(
-            "TMDB episode diagnostics",
-            "\n".join(lines),
-        )
-
-    def _show_copyable_diagnostic(self, title, message):
-        dialog = QDialog(self)
-        dialog.setWindowTitle(title)
-        dialog.setMinimumSize(700, 480)
-
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(12)
-
-        text_box = QLabel(message)
-        text_box.setTextInteractionFlags(
-            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
-        )
-        text_box.setWordWrap(True)
-        text_box.setStyleSheet(
-            f"""
-            QLabel {{
-                color:{COLORS['primary']};
-                background:{COLORS['surface_alt']};
-                border:1px solid {COLORS['border']};
-                border-radius:10px;
-                padding:12px;
-            }}
-            """
-        )
-        layout.addWidget(text_box)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        copy_button = buttons.addButton("Copy details", QDialogButtonBox.ActionRole)
-
-        def copy_details():
-            QGuiApplication.clipboard().setText(message)
-            copy_button.setText("Copied!")
-
-        copy_button.clicked.connect(copy_details)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-
-        dialog.exec()
-
-    def _refresh_episode_data(self):
-        members = self._episode_members()
-        if not members:
-            return
-
-        selected_id = self._selected_episode_work_id
-        member_ids = [int(member["id"]) for member in members]
-        if selected_id not in member_ids:
-            selected_id = member_ids[0]
-            self._selected_episode_work_id = selected_id
-
-        # Clear transient image-cache failures so URLs that failed earlier
-        # in this process can be tried again after the provider refresh.
-        EpisodeArtwork._failures.clear()
-        for work_id in member_ids:
-            self._episode_sync_completed.discard(work_id)
-            self._episode_sync_errors.pop(work_id, None)
-
-        # Refresh the selected season first, then refresh the remaining
-        # bundled seasons one at a time.
-        self._episode_refresh_queue = [
-            work_id for work_id in member_ids if work_id != selected_id
-        ]
-        self._replace_episode_section()
-
-    def _start_next_episode_refresh(self):
-        while self._episode_refresh_queue:
-            work_id = self._episode_refresh_queue.pop(0)
-            if work_id in self._episode_sync_completed:
-                continue
-
-            selected_work = get_work(work_id)
-            if selected_work is None:
-                continue
-
-            members = self._episode_members()
-            try:
-                (
-                    title_variants,
-                    start_date,
-                    end_date,
-                    expected_episodes,
-                    tmdb_id,
-                    tmdb_season_number,
-                    media_format,
-                ) = self._episode_tmdb_context(
-                    work_id,
-                    members,
-                    selected_work,
-                )
-                self._start_episode_sync(
-                    work_id,
-                    title_variants,
-                    start_date,
-                    end_date,
-                    expected_episodes,
-                    tmdb_id,
-                    tmdb_season_number,
-                    media_format,
-                )
-            except Exception:
-                continue
-            return
 
     def _episode_season_changed(self, work_id):
         self._selected_episode_work_id = int(work_id)
@@ -2194,13 +1881,9 @@ class WorkDetailPage(QWidget):
         work_id = int(work_id)
         payload = payload or {}
         episodes = payload.get("episodes") or []
-        mal_id = payload.get("mal_id")
         self._episode_sync_errors.pop(work_id, None)
         self._episode_source_status[work_id] = {
             "tmdb": int(payload.get("tmdb_count") or 0),
-        }
-        self._episode_provider_diagnostics[work_id] = {
-            "mal_id": mal_id,
         }
 
         tmdb_id = payload.get("tmdb_id")
