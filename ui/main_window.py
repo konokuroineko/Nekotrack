@@ -261,8 +261,10 @@ class MainWindow(QMainWindow):
         brand = QHBoxLayout()
         mark = QLabel("N")
         mark.setObjectName("brandMark")
+        self.brand_mark = mark
         word = QLabel("NekoTrack")
         word.setObjectName("brandWord")
+        self.brand_word = word
         brand.addWidget(mark)
         brand.addWidget(word)
         brand.addStretch()
@@ -368,6 +370,18 @@ class MainWindow(QMainWindow):
             QPushButton[navButton="true"]:checked {{ background:{COLORS['accent_soft']}; border-color:{COLORS['accent']}; color:{COLORS['accent_hover']}; }}
             """
         )
+
+        if hasattr(self, "brand_mark"):
+            self.brand_mark.setStyleSheet(
+                f"background:{COLORS['accent']};color:{COLORS['accent_text']};"
+                "border-radius:9px;font-size:19px;font-weight:900;"
+                "min-width:38px;max-width:38px;min-height:38px;max-height:38px;"
+            )
+        if hasattr(self, "brand_word"):
+            self.brand_word.setStyleSheet(
+                f"color:{COLORS['primary']};font-size:19px;font-weight:800;"
+                "letter-spacing:-.4px;padding-left:7px;"
+            )
 
         if hasattr(self, "library_page"):
             self.library_page.refresh_theme()
