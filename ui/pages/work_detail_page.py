@@ -469,6 +469,7 @@ class WorkDetailPage(QWidget):
         self._episode_sync_worker = None
         self._episode_sync_work_id = None
         self._episode_sync_completed = set()
+        self._episode_source_status = {}
         self._cover_manager = QNetworkAccessManager(self)
         self._cover_reply = None
         self._delete_overlay = None
@@ -1053,7 +1054,14 @@ class WorkDetailPage(QWidget):
         )
         header.addWidget(title)
 
-        source = QLabel("Jikan + Kitsu fallback")
+        source_status = self._episode_source_status.get(int(selected_id), {}) if selected_id is not None else {}
+        source_text = "Jikan + Kitsu fallback"
+        if source_status:
+            source_text = (
+                f"Jikan {source_status.get('jikan', 0)} · "
+                f"Kitsu {source_status.get('kitsu', 0)}"
+            )
+        source = QLabel(source_text)
         source.setStyleSheet(
             f"""
             QLabel {{
@@ -1068,6 +1076,28 @@ class WorkDetailPage(QWidget):
             """
         )
         header.addWidget(source)
+
+        refresh = QPushButton("Refresh")
+        refresh.setCursor(Qt.PointingHandCursor)
+        refresh.clicked.connect(self._refresh_episode_data)
+        refresh.setStyleSheet(
+            f"""
+            QPushButton {{
+                background:{COLORS['surface_alt']};
+                color:{COLORS['primary']};
+                border:1px solid {COLORS['border']};
+                border-radius:8px;
+                padding:5px 9px;
+                font-size:10px;
+                font-weight:800;
+            }}
+            QPushButton:hover {{
+                background:{COLORS['surface_hover']};
+                border-color:{COLORS['accent']};
+            }}
+            """
+        )
+        header.addWidget(refresh)
         header.addStretch()
 
         watched = sum(1 for ep in episodes if ep["watched"])
@@ -1184,6 +1214,17 @@ class WorkDetailPage(QWidget):
 
         return sorted(members, key=sort_key)
 
+    def _refresh_episode_data(self):
+        selected_id = self._selected_episode_work_id
+        if selected_id is None:
+            return
+
+        # Clear transient image-cache failures so a URL that failed earlier
+        # in this process can be tried again after the provider refresh.
+        EpisodeArtwork._failures.clear()
+        self._episode_sync_completed.discard(int(selected_id))
+        self._replace_episode_section()
+
     def _episode_season_changed(self, work_id):
         self._selected_episode_work_id = int(work_id)
         self._replace_episode_section()
@@ -1220,6 +1261,10 @@ class WorkDetailPage(QWidget):
         payload = payload or {}
         episodes = payload.get("episodes") or []
         mal_id = payload.get("mal_id")
+        self._episode_source_status[work_id] = {
+            "jikan": int(payload.get("jikan_count") or 0),
+            "kitsu": int(payload.get("kitsu_count") or 0),
+        }
 
         if mal_id is not None:
             save_work_mal_id(work_id, mal_id)
