@@ -1809,9 +1809,6 @@ class WorkDetailPage(QWidget):
             lambda t=thread: self._episode_sync_thread_finished(t)
         )
         thread.finished.connect(thread.deleteLater)
-        # Always listen for completion so a bundle refresh requested while a
-        # sync is already running can continue with the queued seasons.
-        thread.finished.connect(self._start_next_episode_refresh)
         thread.start()
 
     def _episode_sync_thread_finished(self, thread):
