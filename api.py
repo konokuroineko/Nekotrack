@@ -616,9 +616,8 @@ def _kitsu_episode_map(mal_id, season_number=None):
 
     while True:
         payload = _kitsu_get(
-            "/episodes",
+            f"/anime/{kitsu_id}/episodes",
             {
-                "filter[animeId]": kitsu_id,
                 "page[limit]": limit,
                 "page[offset]": offset,
             },
