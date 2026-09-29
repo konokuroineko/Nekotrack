@@ -1,4 +1,9 @@
-from api import get_media_details, get_tmdb_episode_data, get_tmdb_episode_sample
+from api import (
+    cache_tmdb_episode_image,
+    get_media_details,
+    get_tmdb_episode_data,
+    get_tmdb_episode_sample,
+)
 from pathlib import Path
 import hashlib
 
@@ -109,6 +114,40 @@ class EpisodeSyncWorker(QObject):
                 self.media_format,
             )
             self.finished.emit(self.work_id, payload)
+        except Exception as error:
+            self.error.emit(self.work_id, str(error))
+
+
+class EpisodeImageCacheWorker(QObject):
+    finished = Signal(int)
+    error = Signal(int, str)
+
+    def __init__(self, work_id, episodes):
+        super().__init__()
+        self.work_id = int(work_id)
+        self.episodes = [dict(episode) for episode in (episodes or [])]
+
+    def run(self):
+        try:
+            for episode in self.episodes:
+                number = episode.get("episodeNumber")
+                url = episode.get("thumbnail")
+                if number is None or not url:
+                    continue
+
+                local_path = cache_tmdb_episode_image(
+                    url,
+                    self.work_id,
+                    number,
+                )
+                if local_path:
+                    save_episode_thumbnail_path(
+                        self.work_id,
+                        number,
+                        local_path,
+                    )
+
+            self.finished.emit(self.work_id)
         except Exception as error:
             self.error.emit(self.work_id, str(error))
 
@@ -580,6 +619,8 @@ class WorkDetailPage(QWidget):
         self._episode_sync_thread = None
         self._episode_sync_worker = None
         self._episode_sync_work_id = None
+        self._episode_image_cache_threads = {}
+        self._episode_image_cache_workers = {}
         self._episode_sync_completed = set()
         self._episode_sync_errors = {}
         self._episode_refresh_queue = []
@@ -1713,6 +1754,54 @@ class WorkDetailPage(QWidget):
         thread.finished.connect(self._start_next_episode_refresh)
         thread.start()
 
+    def _start_episode_image_cache(self, work_id, episodes):
+        work_id = int(work_id)
+        if work_id in self._episode_image_cache_threads:
+            return
+
+        cacheable = [
+            dict(episode)
+            for episode in (episodes or [])
+            if episode.get("episodeNumber") is not None
+            and str(episode.get("thumbnail") or "").strip()
+            and not Path(str(episode.get("thumbnail"))).is_file()
+        ]
+        if not cacheable:
+            return
+
+        thread = QThread(self)
+        worker = EpisodeImageCacheWorker(work_id, cacheable)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._episode_image_cache_finished)
+        worker.error.connect(self._episode_image_cache_error)
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        self._episode_image_cache_threads[work_id] = thread
+        self._episode_image_cache_workers[work_id] = worker
+        thread.start()
+
+    def _episode_image_cache_finished(self, work_id):
+        work_id = int(work_id)
+        self._episode_image_cache_cleanup(work_id)
+
+        if self._selected_episode_work_id == work_id:
+            self._replace_episode_section()
+
+    def _episode_image_cache_error(self, work_id, error):
+        work_id = int(work_id)
+        self._episode_image_cache_cleanup(work_id)
+        print(f"TMDB episode image cache failed for work {work_id}: {error}")
+
+    def _episode_image_cache_cleanup(self, work_id):
+        self._episode_image_cache_threads.pop(int(work_id), None)
+        self._episode_image_cache_workers.pop(int(work_id), None)
+
+
     def _episode_sync_finished(self, work_id, payload):
         work_id = int(work_id)
         payload = payload or {}
@@ -1739,6 +1828,7 @@ class WorkDetailPage(QWidget):
             )
         save_episodes(work_id, episodes)
         self._episode_sync_completed.add(work_id)
+        self._start_episode_image_cache(work_id, episodes)
 
         if self._episode_sync_work_id == work_id:
             self._episode_sync_thread = None
