@@ -713,6 +713,83 @@ def get_kitsu_episode_diagnostics(mal_id, season_number=None):
     return diagnostics
 
 
+def get_episode_provider_sample(media_id, mal_id=None, season_number=None):
+    """Fetch a lightweight Episode 1 comparison without running a full sync."""
+    identity_query = """
+    query ($id: Int) {
+        Media(id: $id) {
+            idMal
+        }
+    }
+    """
+    identity = anilist_request(identity_query, {"id": int(media_id)})
+    resolved_mal_id = (
+        ((identity.get("Media") or {}).get("idMal"))
+        or mal_id
+    )
+    if resolved_mal_id is None:
+        raise ValueError("No MAL ID is available for this season.")
+    resolved_mal_id = int(resolved_mal_id)
+
+    jikan = {}
+    try:
+        jikan = _jikan_get(
+            f"/anime/{resolved_mal_id}/episodes/1"
+        ).get("data") or {}
+    except Exception as error:
+        jikan = {"_error": str(error)}
+
+    kitsu_map, kitsu_diagnostics = _kitsu_episode_map(
+        resolved_mal_id,
+        season_number,
+    )
+    kitsu = kitsu_map.get(1) or {}
+
+    jikan_images = jikan.get("images") or {}
+    jikan_jpg = jikan_images.get("jpg") or {}
+    jikan_webp = jikan_images.get("webp") or {}
+    jikan_thumbnail = (
+        jikan_jpg.get("image_url")
+        or jikan_webp.get("image_url")
+    )
+
+    kitsu_thumbnail = kitsu.get("thumbnail") or {}
+    if isinstance(kitsu_thumbnail, dict):
+        kitsu_thumbnail = (
+            kitsu_thumbnail.get("original")
+            or kitsu_thumbnail.get("large")
+            or kitsu_thumbnail.get("medium")
+            or kitsu_thumbnail.get("small")
+        )
+
+    merged_description = (
+        kitsu.get("synopsis")
+        or jikan.get("synopsis")
+    )
+    merged_thumbnail = jikan_thumbnail or kitsu_thumbnail
+
+    return {
+        "mal_id": resolved_mal_id,
+        "jikan": {
+            "title": jikan.get("title"),
+            "synopsis": jikan.get("synopsis"),
+            "airdate": str((jikan.get("aired") or {}).get("from") or "")[:10] or None,
+            "thumbnail": jikan_thumbnail,
+            "error": jikan.get("_error"),
+        },
+        "kitsu": kitsu_diagnostics,
+        "merged": {
+            "title": (
+                jikan.get("title")
+                or kitsu.get("canonicalTitle")
+                or "Episode 1"
+            ),
+            "synopsis": merged_description,
+            "thumbnail": merged_thumbnail,
+        },
+    }
+
+
 def get_episode_data(media_id, mal_id=None, season_number=None):
 
     """Fetch episode data from Jikan with a season-aware Kitsu fallback."""
