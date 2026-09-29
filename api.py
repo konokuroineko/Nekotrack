@@ -591,8 +591,8 @@ def _kitsu_anime_id_for_mal(mal_id):
     return None
 
 
-def _kitsu_episode_map(mal_id):
-    """Return Kitsu episodes keyed by the per-season episode number."""
+def _kitsu_episode_map(mal_id, season_number=None):
+    """Return Kitsu episodes keyed by episode number for one Kitsu season."""
     kitsu_id = _kitsu_anime_id_for_mal(mal_id)
     if kitsu_id is None:
         return {}
@@ -624,21 +624,38 @@ def _kitsu_episode_map(mal_id):
     result = {}
     for row in episodes:
         attributes = row.get("attributes") or {}
+
+        if season_number is not None:
+            kitsu_season = attributes.get("seasonNumber")
+            try:
+                if kitsu_season is not None and int(kitsu_season) != int(season_number):
+                    continue
+            except (TypeError, ValueError):
+                continue
+
+        # relativeNumber is the within-season number. Only use absolute
+        # number when Kitsu has no usable relative number.
         number = attributes.get("relativeNumber")
         if number is None:
             number = attributes.get("number")
         if number is None:
             continue
+
         try:
-            result[int(number)] = attributes
+            number = int(number)
         except (TypeError, ValueError):
             continue
+
+        result[number] = {
+            **attributes,
+            "_kitsu_id": row.get("id"),
+        }
 
     return result
 
 
-def get_episode_data(media_id, mal_id=None):
-    """Fetch episode data from Jikan for one exact anime."""
+def get_episode_data(media_id, mal_id=None, season_number=None):
+    """Fetch episode data from Jikan with a season-aware Kitsu fallback."""
     identity_query = """
     query ($id: Int) {
         Media(id: $id) {
@@ -750,7 +767,7 @@ def get_episode_data(media_id, mal_id=None):
     # Kitsu is deliberately queried only as a field-level fallback. Jikan's
     # episode numbers/titles/dates remain primary whenever they exist.
     try:
-        kitsu_by_number = _kitsu_episode_map(resolved_mal_id)
+        kitsu_by_number = _kitsu_episode_map(resolved_mal_id, season_number)
     except requests.RequestException:
         kitsu_by_number = {}
 
@@ -787,7 +804,8 @@ def get_episode_data(media_id, mal_id=None):
                 jikan.get("title")
                 or video.get("title")
                 or kitsu.get("canonicalTitle")
-                or kitsu.get("title_en_us")
+                or (kitsu.get("titles") or {}).get("en")
+                or (kitsu.get("titles") or {}).get("en_us")
                 or f"Episode {number}"
             ),
             "description": (
