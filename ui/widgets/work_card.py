@@ -69,18 +69,7 @@ class WorkCard(QFrame):
         card_width = get("card_size") + 8
         self.setFixedWidth(card_width)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        hover_css = f"background: {COLORS['surface_hover']}; border-color: {COLORS['frame']};" if get("hover_highlight") else ""
-        self.setStyleSheet(f"""
-            QFrame#posterCard {{ background: transparent; border: 2px solid {COLORS['frame']}; border-radius: {get('corner_radius') + 2}px; }}
-            QFrame#posterCard:hover {{ {hover_css} }}
-            QLabel {{ background: transparent; border: none; }}
-            QLabel#title {{ color: {COLORS['primary']}; font-size: {get('font_size')}px; font-weight: 760; }}
-            QFrame#posterCard:hover QLabel#title {{ color: {COLORS['accent_hover']}; }}
-            QLabel#meta {{ color: {COLORS['muted']}; font-size: 11px; }}
-            QLabel#seriesInfo {{ color: {COLORS['accent_hover']}; font-size: 10px; font-weight: 800; }}
-            QPushButton#add {{ background: {COLORS['accent']}; color: {COLORS['accent_text']}; border: none; border-radius: 8px; padding: 7px; font-weight: 800; }}
-            QPushButton#add:hover {{ background: {COLORS['accent_hover']}; }}
-        """)
+        self.refresh_theme()
         root = QVBoxLayout(self)
         root.setContentsMargins(2, 2, 2, 2)
         root.setSpacing(8)
@@ -225,6 +214,24 @@ class WorkCard(QFrame):
             )
 
         return f"{first}\n{second}" if second else f"{first}\n{metrics.elidedText(' '.join(words[first_end:]), Qt.TextElideMode.ElideRight, width)}"
+
+    def refresh_theme(self):
+        hover_css = (
+            f"background: {COLORS['surface_hover']}; border-color: {COLORS['frame']};"
+            if get("hover_highlight")
+            else ""
+        )
+        self.setStyleSheet(f"""
+            QFrame#posterCard {{ background: transparent; border: 2px solid {COLORS['frame']}; border-radius: {get('corner_radius') + 2}px; }}
+            QFrame#posterCard:hover {{ {hover_css} }}
+            QLabel {{ background: transparent; border: none; }}
+            QLabel#title {{ color: {COLORS['primary']}; font-size: {get('font_size')}px; font-weight: 760; }}
+            QFrame#posterCard:hover QLabel#title {{ color: {COLORS['accent_hover']}; }}
+            QLabel#meta {{ color: {COLORS['muted']}; font-size: 11px; }}
+            QLabel#seriesInfo {{ color: {COLORS['accent_hover']}; font-size: 10px; font-weight: 800; }}
+            QPushButton#add {{ background: {COLORS['accent']}; color: {COLORS['accent_text']}; border: none; border-radius: 8px; padding: 7px; font-weight: 800; }}
+            QPushButton#add:hover {{ background: {COLORS['accent_hover']}; }}
+        """)
 
     def _value(self, key):
         if hasattr(self.work, "get"):
