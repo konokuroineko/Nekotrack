@@ -1512,6 +1512,7 @@ class WorkDetailPage(QWidget):
         # stale thumbnail URLs left by earlier episode imports.
         if (
             selected_id is not None
+            and not episodes
             and selected_id not in self._episode_sync_completed
             and selected_id not in self._episode_sync_errors
         ):
