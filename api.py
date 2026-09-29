@@ -1552,6 +1552,36 @@ def _tmdb_search_movies(query, target_date):
     return candidates
 
 
+def _pick_best_movie_image(movie_id, movie):
+    primary = _episode_still_url(movie.get("backdrop_path"))
+    if primary:
+        return primary, 1
+
+    try:
+        payload = _tmdb_get(
+            f"/movie/{int(movie_id)}/images",
+            {
+                "include_image_language": "en,null",
+            },
+        )
+    except requests.RequestException:
+        return None, 0
+
+    backdrops = payload.get("backdrops") or []
+    if not backdrops:
+        return None, 0
+
+    backdrops.sort(
+        key=lambda item: (
+            float(item.get("vote_average") or 0),
+            int(item.get("vote_count") or 0),
+            int(item.get("width") or 0),
+        ),
+        reverse=True,
+    )
+    return _episode_still_url(backdrops[0].get("file_path")), len(backdrops)
+
+
 def _get_tmdb_movie_episode(
     title_variants,
     start_date,
