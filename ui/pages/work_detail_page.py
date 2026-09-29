@@ -1,4 +1,5 @@
-from api import get_episode_data, get_episode_provider_sample, get_media_details
+from api import get_media_details
+from tmdb import get_tmdb_episode_data, get_tmdb_episode_sample
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread
@@ -13,9 +14,9 @@ from PySide6.QtWidgets import (
 
 from database import (
     add_manual_bundle_link, add_to_library, delete_work_data, get_bundle_characters,
-    get_bundle_relations, get_bundle_staff, get_connection, get_episodes, get_work,
-    save_anime, save_characters, save_cover_path, save_episodes, save_staff,
-    save_work_mal_id, set_episode_progress, set_episode_watched,
+    get_bundle_relations, get_bundle_staff, get_connection, get_episodes, get_tmdb_mapping,
+    get_work, save_anime, save_characters, save_cover_path, save_episodes, save_staff,
+    save_tmdb_mapping, save_work_mal_id, set_episode_progress, set_episode_watched,
 )
 from series import get_library_series
 from ui.preferences import get
@@ -33,24 +34,25 @@ class EpisodeProviderDebugWorker(QObject):
     finished = Signal(object)
     error = Signal(str)
 
-    def __init__(self, work_id, mal_id, season_number=None):
+    def __init__(self, title_variants, start_date, end_date, expected_episodes, tmdb_id, tmdb_season_number):
         super().__init__()
-        self.work_id = int(work_id)
-        self.mal_id = int(mal_id) if mal_id is not None else None
-        self.season_number = (
-            int(season_number) if season_number is not None else None
-        )
+        self.title_variants = list(title_variants or [])
+        self.start_date = start_date
+        self.end_date = end_date
+        self.expected_episodes = expected_episodes
+        self.tmdb_id = tmdb_id
+        self.tmdb_season_number = tmdb_season_number
 
     def run(self):
         try:
-            if self.mal_id is None:
-                raise ValueError("No MAL ID is available for this season.")
-
             self.finished.emit(
-                get_episode_provider_sample(
-                    self.work_id,
-                    self.mal_id,
-                    self.season_number,
+                get_tmdb_episode_sample(
+                    self.title_variants,
+                    self.start_date,
+                    self.end_date,
+                    self.expected_episodes,
+                    self.tmdb_id,
+                    self.tmdb_season_number,
                 )
             )
         except Exception as error:
@@ -61,20 +63,34 @@ class EpisodeSyncWorker(QObject):
     finished = Signal(int, object)
     error = Signal(int, str)
 
-    def __init__(self, work_id, mal_id=None, season_number=None):
+    def __init__(
+        self,
+        work_id,
+        title_variants,
+        start_date,
+        end_date=None,
+        expected_episodes=None,
+        tmdb_id=None,
+        tmdb_season_number=None,
+    ):
         super().__init__()
         self.work_id = int(work_id)
-        self.mal_id = int(mal_id) if mal_id is not None else None
-        self.season_number = (
-            int(season_number) if season_number is not None else None
-        )
+        self.title_variants = list(title_variants or [])
+        self.start_date = start_date
+        self.end_date = end_date
+        self.expected_episodes = expected_episodes
+        self.tmdb_id = tmdb_id
+        self.tmdb_season_number = tmdb_season_number
 
     def run(self):
         try:
-            payload = get_episode_data(
-                self.work_id,
-                self.mal_id,
-                self.season_number,
+            payload = get_tmdb_episode_data(
+                self.title_variants,
+                self.start_date,
+                self.end_date,
+                self.expected_episodes,
+                self.tmdb_id,
+                self.tmdb_season_number,
             )
             self.finished.emit(self.work_id, payload)
         except Exception as error:
@@ -1094,12 +1110,9 @@ class WorkDetailPage(QWidget):
         header.addWidget(title)
 
         source_status = self._episode_source_status.get(int(selected_id), {}) if selected_id is not None else {}
-        source_text = "Jikan + Kitsu fallback"
+        source_text = "TMDB"
         if source_status:
-            source_text = (
-                f"Jikan {source_status.get('jikan', 0)} · "
-                f"Kitsu {source_status.get('kitsu', 0)}"
-            )
+            source_text = f"TMDB {source_status.get('tmdb', 0)}"
         source = QLabel(source_text)
         source.setStyleSheet(
             f"""
@@ -1226,7 +1239,18 @@ class WorkDetailPage(QWidget):
                 if selected_work is not None and "mal_id" in selected_work.keys()
                 else None
             )
-            self._start_episode_sync(selected_id, local_mal_id)
+            title_variants, start_date, end_date, expected_episodes, tmdb_id, tmdb_season_number = (
+                self._episode_tmdb_context(selected_id, members, selected_work)
+            )
+            self._start_episode_sync(
+                selected_id,
+                title_variants,
+                start_date,
+                end_date,
+                expected_episodes,
+                tmdb_id,
+                tmdb_season_number,
+            )
 
         if not episodes:
             message = (
@@ -1286,33 +1310,34 @@ class WorkDetailPage(QWidget):
         ):
             QMessageBox.information(
                 self,
-                "Episode provider diagnostics",
-                "A Kitsu diagnostic request is already running.",
+                "TMDB test",
+                "A TMDB test request is already running.",
             )
             return
 
         selected_work = get_work(work_id)
-        mal_id = (
-            selected_work["mal_id"]
-            if selected_work is not None and "mal_id" in selected_work.keys()
-            else None
-        )
-
         members = self._episode_members()
-        season_number = next(
-            (
-                index
-                for index, member in enumerate(members, start=1)
-                if int(member["id"]) == int(work_id)
-            ),
-            1,
+        (
+            title_variants,
+            start_date,
+            end_date,
+            expected_episodes,
+            tmdb_id,
+            tmdb_season_number,
+        ) = self._episode_tmdb_context(
+            work_id,
+            members,
+            selected_work,
         )
 
         self._episode_debug_thread = QThread(self)
         self._episode_debug_worker = EpisodeProviderDebugWorker(
-            work_id,
-            mal_id,
-            season_number,
+            title_variants,
+            start_date,
+            end_date,
+            expected_episodes,
+            tmdb_id,
+            tmdb_season_number,
         )
         self._episode_debug_worker.moveToThread(self._episode_debug_thread)
 
@@ -1341,6 +1366,7 @@ class WorkDetailPage(QWidget):
             (dict(row) for row in stored if int(row["episode_number"]) == 1),
             None,
         )
+
         self._episode_provider_diagnostics[work_id] = {
             "payload": payload or {},
             "stored_episode_1": stored_episode_1 or {},
@@ -1352,7 +1378,7 @@ class WorkDetailPage(QWidget):
         self._episode_debug_cleanup()
         QMessageBox.warning(
             self,
-            "Episode provider diagnostic failed",
+            "TMDB test failed",
             str(error),
         )
 
@@ -1361,46 +1387,30 @@ class WorkDetailPage(QWidget):
         self._episode_debug_worker = None
 
     def _show_episode_debug_result(self, payload, stored):
-        jikan = payload.get("jikan") or {}
-        kitsu = payload.get("kitsu") or {}
-        merged = payload.get("merged") or {}
-        episode_1 = kitsu.get("episode_1") or {}
-        season_counts = kitsu.get("season_counts") or {}
-
+        episode = payload.get("sample_episode_1") or {}
         lines = [
-            f"MAL ID: {payload.get('mal_id') or 'none'}",
+            f"TMDB series ID: {payload.get('tmdb_id') or 'none'}",
+            f"TMDB season: {payload.get('tmdb_season_number') if payload.get('tmdb_season_number') is not None else 'none'}",
+            f"TMDB episodes selected: {payload.get('tmdb_count', 0)}",
             "",
-            "Jikan Episode 1:",
-            f"  title: {jikan.get('title') or 'none'}",
-            f"  synopsis: {'YES' if str(jikan.get('synopsis') or '').strip() else 'NO'}",
-            f"  thumbnail: {'YES' if jikan.get('thumbnail') else 'NO'}",
-            f"  error: {jikan.get('error') or 'none'}",
-            "",
-            "Kitsu:",
-            f"  anime ID: {kitsu.get('kitsu_anime_id') or 'none'}",
-            f"  mapping rows: {kitsu.get('mapping_count', 0)}",
-            f"  API pages: {kitsu.get('pages', 0)}",
-            f"  episode rows: {kitsu.get('rows', 0)}",
-            f"  requested season: {kitsu.get('requested_season') or 'none'}",
-            f"  seasons seen: {season_counts or 'none'}",
-            f"  Episode 1 synopsis: {'YES' if episode_1.get('has_synopsis') else 'NO'}",
-            f"  Episode 1 thumbnail: {'YES' if episode_1.get('has_thumbnail') else 'NO'}",
-            "",
-            "Merged Episode 1:",
-            f"  synopsis: {'YES' if str(merged.get('synopsis') or '').strip() else 'NO'}",
-            f"  thumbnail: {'YES' if merged.get('thumbnail') else 'NO'}",
+            "TMDB Episode 1:",
+            f"  title: {episode.get('title') or 'none'}",
+            f"  synopsis: {'YES' if str(episode.get('description') or '').strip() else 'NO'}",
+            f"  air date: {episode.get('airdate') or 'none'}",
+            f"  thumbnail: {'YES' if episode.get('thumbnail') else 'NO'}",
+            f"  image variants: {episode.get('tmdb_image_count', 0)}",
             "",
             "SQLite Episode 1:",
             f"  synopsis: {'YES' if str(stored.get('description') or '').strip() else 'NO'}",
             f"  thumbnail: {'YES' if str(stored.get('thumbnail_url') or '').strip() else 'NO'}",
         ]
 
-        synopsis = str(merged.get("synopsis") or "").strip()
+        synopsis = str(episode.get("description") or "").strip()
         if synopsis:
-            lines.extend(["", "Merged synopsis:", synopsis[:700]])
+            lines.extend(["", "TMDB synopsis:", synopsis[:700]])
 
         self._show_copyable_diagnostic(
-            "Episode provider diagnostics",
+            "TMDB episode diagnostics",
             "\n".join(lines),
         )
 
@@ -1459,36 +1469,89 @@ class WorkDetailPage(QWidget):
         self._selected_episode_work_id = int(work_id)
         self._replace_episode_section()
 
-    def _start_episode_sync(self, work_id, mal_id=None):
+    def _episode_tmdb_context(self, selected_id, members, selected_work=None):
+        selected_id = int(selected_id)
+        selected_work = selected_work or get_work(selected_id)
+        if selected_work is None:
+            raise RuntimeError("Selected season is no longer available.")
+
+        index = next(
+            (
+                index
+                for index, member in enumerate(members, start=1)
+                if int(member["id"]) == selected_id
+            ),
+            1,
+        )
+
+        def member_date(member):
+            if hasattr(member, "get"):
+                year = member.get("start_year")
+                month = member.get("start_month") or 0
+                day = member.get("start_day") or 0
+            else:
+                year = member["start_year"]
+                month = member["start_month"] if "start_month" in member.keys() else 0
+                day = member["start_day"] if "start_day" in member.keys() else 0
+            if year is None:
+                return None
+            return f"{int(year):04d}-{int(month or 1):02d}-{int(day or 1):02d}"
+
+        start_date = member_date(members[index - 1])
+        end_date = member_date(members[index]) if index < len(members) else None
+
+        title_variants = [
+            str(selected_work["title"] or "").strip(),
+            str(self._member_title(selected_work) or "").strip(),
+        ]
+        title_variants = list(dict.fromkeys(value for value in title_variants if value))
+
+        tmdb_id, tmdb_season_number = get_tmdb_mapping(selected_id)
+
+        expected_episodes = selected_work["episodes"]
+        return (
+            title_variants,
+            start_date,
+            end_date,
+            expected_episodes,
+            tmdb_id,
+            tmdb_season_number,
+        )
+
+    def _start_episode_sync(
+        self,
+        work_id,
+        title_variants,
+        start_date,
+        end_date,
+        expected_episodes,
+        tmdb_id,
+        tmdb_season_number,
+    ):
         work_id = int(work_id)
 
         if work_id in self._episode_sync_completed:
             return
 
         if self._episode_sync_thread is not None and self._episode_sync_thread.isRunning():
-            if self._episode_sync_work_id == work_id:
-                return
             return
 
         self._episode_sync_work_id = work_id
         self._episode_sync_thread = QThread(self)
-        members = self._episode_members()
-        season_number = next(
-            (
-                index
-                for index, member in enumerate(members, start=1)
-                if int(member["id"]) == work_id
-            ),
-            1,
-        )
         self._episode_sync_worker = EpisodeSyncWorker(
             work_id,
-            mal_id,
-            season_number,
+            title_variants,
+            start_date,
+            end_date,
+            expected_episodes,
+            tmdb_id,
+            tmdb_season_number,
         )
         self._episode_sync_worker.moveToThread(self._episode_sync_thread)
 
-        self._episode_sync_thread.started.connect(self._episode_sync_worker.run)
+        self._episode_sync_thread.started.connect(
+            self._episode_sync_worker.run
+        )
         self._episode_sync_worker.finished.connect(self._episode_sync_finished)
         self._episode_sync_worker.error.connect(self._episode_sync_error)
         worker = self._episode_sync_worker
@@ -1505,8 +1568,7 @@ class WorkDetailPage(QWidget):
         episodes = payload.get("episodes") or []
         mal_id = payload.get("mal_id")
         self._episode_source_status[work_id] = {
-            "jikan": int(payload.get("jikan_count") or 0),
-            "kitsu": int(payload.get("kitsu_count") or 0),
+            "tmdb": int(payload.get("tmdb_count") or 0),
         }
         self._episode_provider_diagnostics[work_id] = {
             "mal_id": mal_id,
@@ -1515,8 +1577,14 @@ class WorkDetailPage(QWidget):
             "kitsu": payload.get("kitsu_diagnostics") or {},
         }
 
-        if mal_id is not None:
-            save_work_mal_id(work_id, mal_id)
+        tmdb_id = payload.get("tmdb_id")
+        tmdb_season_number = payload.get("tmdb_season_number")
+        if tmdb_id is not None and tmdb_season_number is not None:
+            save_tmdb_mapping(
+                work_id,
+                tmdb_id,
+                tmdb_season_number,
+            )
         save_episodes(work_id, episodes)
         self._episode_sync_completed.add(work_id)
 
