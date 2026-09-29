@@ -5,7 +5,6 @@ from api import (
     get_tmdb_episode_sample,
 )
 from pathlib import Path
-import hashlib
 
 from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread, QTimer
 from PySide6.QtGui import QGuiApplication
@@ -158,7 +157,6 @@ class EpisodeImageCacheWorker(QObject):
 
 class EpisodeArtwork(QLabel):
     _cache = {}
-    _failures = set()
 
     def __init__(self, work_id=None, episode_number=None, parent=None):
         super().__init__(parent)
@@ -170,34 +168,11 @@ class EpisodeArtwork(QLabel):
             f"background:{COLORS['background_alt']};border-radius:10px;"
             f"color:{COLORS['muted']};font-size:11px;font-weight:800;"
         )
-        self._manager = QNetworkAccessManager(self)
-        self._reply = None
-        self._fallback_pixmap = QPixmap()
-
-    def _save_local_image(self, url, data):
-        if self.work_id is None or self.episode_number is None:
-            return None
-
-        try:
-            digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
-            directory = Path("data") / "images" / "episodes" / str(self.work_id)
-            directory.mkdir(parents=True, exist_ok=True)
-            suffix = Path(QUrl(url).path()).suffix.lower() or ".jpg"
-            if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
-                suffix = ".jpg"
-            path = directory / f"{self.episode_number}_{digest}{suffix}"
-            if not path.is_file():
-                path.write_bytes(data)
-            if not path.is_file() or path.stat().st_size == 0:
-                return None
-            return str(path)
-        except (OSError, ValueError):
-            return None
 
     def load(self, url):
         url = str(url or "").strip()
         if not url:
-            self._show_fallback()
+            self._show_fallback("NO IMAGE")
             return
 
         local_path = Path(url)
@@ -215,50 +190,13 @@ class EpisodeArtwork(QLabel):
             self.setPixmap(self._cropped(cached))
             return
 
-        if url in self._failures:
-            self._show_fallback()
-            return
+        # Remote episode URLs are intentionally never fetched by the widget.
+        # The background episode-image cache worker owns all TMDB downloads.
+        self._show_fallback("CACHING…")
 
-        self._reply = self._manager.get(QNetworkRequest(QUrl(url)))
-        self._reply.finished.connect(lambda: self._finished(url))
-
-    def _finished(self, url):
-        reply = self._reply
-        self._reply = None
-
-        if reply is not None and reply.error() == reply.NetworkError.NoError:
-            data = bytes(reply.readAll())
-            pixmap = QPixmap()
-            if pixmap.loadFromData(data):
-                self._cache[url] = pixmap
-                local_path = self._save_local_image(url, data)
-                if local_path is not None:
-                    self._cache[local_path] = pixmap
-                    if self.work_id is not None and self.episode_number is not None:
-                        save_episode_thumbnail_path(
-                            self.work_id,
-                            self.episode_number,
-                            local_path,
-                        )
-                self.setText("")
-                self.setPixmap(self._cropped(pixmap))
-            else:
-                self._failures.add(url)
-                self._show_fallback()
-        else:
-            self._failures.add(url)
-            self._show_fallback()
-
-        if reply is not None:
-            reply.deleteLater()
-
-    def _show_fallback(self):
-        if not self._fallback_pixmap.isNull():
-            self.setText("")
-            self.setPixmap(self._cropped(self._fallback_pixmap))
-        else:
-            self.setPixmap(QPixmap())
-            self.setText("NO IMAGE")
+    def _show_fallback(self, text):
+        self.setPixmap(QPixmap())
+        self.setText(text)
 
     def _cropped(self, pixmap):
         size = self.size()
@@ -288,6 +226,7 @@ class EpisodeArtwork(QLabel):
         painter.restore()
         painter.end()
         return result
+
 
 
 class EpisodeCard(QFrame):
@@ -672,19 +611,21 @@ class WorkDetailPage(QWidget):
         back.setObjectName("back")
         back.clicked.connect(self.back_requested)
         root.addWidget(back, alignment=Qt.AlignLeft)
-
         root.addWidget(self._hero())
 
-        episodes_frame = self._episodes_section()
-        episodes_frame.setProperty("_episodes_section", True)
-        root.addWidget(episodes_frame)
+        episode_host = QFrame()
+        episode_host.setObjectName("section")
+        episode_host.setProperty("_episodes_section", True)
+        episode_layout = QVBoxLayout(episode_host)
+        episode_layout.setContentsMargins(20, 18, 20, 20)
+        episode_layout.addWidget(QLabel("Loading episode data…"))
+        root.addWidget(episode_host)
 
         detail_host = QWidget()
         detail_host.setObjectName("detailSectionsHost")
         detail_layout = QVBoxLayout(detail_host)
         detail_layout.setContentsMargins(0, 0, 0, 0)
         detail_layout.setSpacing(22)
-
         loading_details = QLabel("Loading details…")
         loading_details.setStyleSheet(muted_label_stylesheet())
         detail_layout.addWidget(loading_details)
@@ -727,6 +668,27 @@ class WorkDetailPage(QWidget):
             lambda token=build_token, page=content, host=detail_host, ids=detail_ids:
                 self._populate_detail_sections(token, page, host, ids),
         )
+
+    def _populate_episode_section(self, token, content, host):
+        if token != self._detail_build_token:
+            return
+        if self.scroll_area.widget() is not content:
+            return
+
+        new_frame = self._episodes_section()
+        new_frame.setProperty("_episodes_section", True)
+
+        root = content.layout()
+        if root is None:
+            return
+
+        index = root.indexOf(host)
+        if index < 0:
+            return
+
+        root.replaceWidget(host, new_frame)
+        host.deleteLater()
+
 
     def _populate_detail_sections(self, token, content, host, detail_ids):
         if token != self._detail_build_token:
@@ -772,6 +734,18 @@ class WorkDetailPage(QWidget):
             )
         )
 
+
+
+        QTimer.singleShot(
+            0,
+            lambda token=build_token, page=content, host=episode_host:
+                self._populate_episode_section(token, page, host),
+        )
+        QTimer.singleShot(
+            0,
+            lambda token=build_token, page=content, host=detail_host, ids=detail_ids:
+                self._populate_detail_sections(token, page, host, ids),
+        )
 
     def _hero(self):
         hero = QFrame(); hero.setObjectName("hero")
