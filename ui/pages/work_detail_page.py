@@ -1052,6 +1052,22 @@ class WorkDetailPage(QWidget):
             f"font-size:17px;font-weight:800;color:{COLORS['primary']};"
         )
         header.addWidget(title)
+
+        source = QLabel("Jikan")
+        source.setStyleSheet(
+            f"""
+            QLabel {{
+                color:{COLORS['secondary']};
+                background:{COLORS['surface_alt']};
+                border:1px solid {COLORS['border']};
+                border-radius:8px;
+                padding:4px 8px;
+                font-size:10px;
+                font-weight:800;
+            }}
+            """
+        )
+        header.addWidget(source)
         header.addStretch()
 
         watched = sum(1 for ep in episodes if ep["watched"])
