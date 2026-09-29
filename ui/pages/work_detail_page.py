@@ -1648,6 +1648,9 @@ class WorkDetailPage(QWidget):
         worker.error.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        # Always listen for completion so a bundle refresh requested while a
+        # sync is already running can continue with the queued seasons.
+        thread.finished.connect(self._start_next_episode_refresh)
         thread.start()
 
     def _episode_sync_finished(self, work_id, payload):
