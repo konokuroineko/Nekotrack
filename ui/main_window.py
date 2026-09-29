@@ -273,8 +273,6 @@ class MainWindow(QMainWindow):
             "collections": self.library_page,
             "search": self.search_page,
             "work_detail": self.work_detail_page,
-            "person": PersonPage(),
-            "character": CharacterPage(),
             "relationships": self.relationship_page,
             "settings": self.settings_page,
         }
