@@ -658,7 +658,16 @@ def _kitsu_episode_map(mal_id, season_number=None):
         except (TypeError, ValueError):
             number_int = None
 
-        if number_int == 1 and not diagnostics["episode_1"]:
+        matches_requested = (
+            season_number is None
+            or season is None
+            or int(season) == int(season_number)
+        )
+        if (
+            number_int == 1
+            and matches_requested
+            and not diagnostics["episode_1"]
+        ):
             thumbnail = attributes.get("thumbnail")
             if isinstance(thumbnail, dict):
                 thumbnail = (
@@ -694,6 +703,15 @@ def _kitsu_episode_map(mal_id, season_number=None):
         }
 
     return result, diagnostics
+
+
+def get_kitsu_episode_diagnostics(mal_id, season_number=None):
+    """Fetch Kitsu episode diagnostics independently of Jikan."""
+    _, diagnostics = _kitsu_episode_map(
+        int(mal_id),
+        season_number,
+    )
+    return diagnostics
 
 
 def get_episode_data(media_id, mal_id=None, season_number=None):
