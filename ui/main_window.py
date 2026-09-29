@@ -2,7 +2,7 @@ import threading
 
 from api import get_media_details, get_tmdb_episode_data
 from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
 from database import (
     add_to_library,
@@ -23,6 +23,7 @@ from database import (
 from image_cache import download_cover
 from ui.navigation import NavigationController
 from ui.preferences import get
+from ui.setup_wizard import SetupWizard
 from ui.theme import COLORS, application_stylesheet, refresh_theme
 from ui.pages.home_page import HomePage
 from ui.pages.library_page import LibraryPage
@@ -291,6 +292,7 @@ class MainWindow(QMainWindow):
         self.work_detail_page.relation_selected.connect(self.show_relation)
         self.work_detail_page.bundle_changed.connect(self._refresh_library_after_bundle_change)
         self.settings_page.settings_changed.connect(self.apply_settings)
+        self.settings_page.setup_requested.connect(self.open_setup_wizard)
 
         root_layout.addWidget(sidebar)
         root_layout.addWidget(self.stack, 1)
@@ -325,6 +327,12 @@ class MainWindow(QMainWindow):
             # Rebuild the library when returning to it so relation-sync failures
             # can be retried through the normal page refresh path.
             self.library_page.refresh()
+
+    def open_setup_wizard(self):
+        wizard = SetupWizard(self)
+        result = wizard.exec()
+        if result == QDialog.Accepted:
+            self.apply_settings("setup")
 
     def apply_settings(self, changed_key=""):
         if self._settings_rebuild_pending:
