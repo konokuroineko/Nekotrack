@@ -902,12 +902,27 @@ def get_episode_data(media_id, mal_id=None, season_number=None):
             ),
         })
 
+    merged_episode_1 = next(
+        (episode for episode in result if int(episode["episodeNumber"]) == 1),
+        None,
+    )
+
     return {
         "mal_id": resolved_mal_id,
         "episodes": result,
         "jikan_count": len(jikan_by_number),
         "kitsu_count": len(kitsu_by_number),
         "kitsu_diagnostics": kitsu_diagnostics,
+        "merged_episode_1": {
+            "has_synopsis": bool(
+                str((merged_episode_1 or {}).get("description") or "").strip()
+            ),
+            "synopsis": (merged_episode_1 or {}).get("description"),
+            "has_thumbnail": bool(
+                str((merged_episode_1 or {}).get("thumbnail") or "").strip()
+            ),
+            "thumbnail": (merged_episode_1 or {}).get("thumbnail"),
+        } if merged_episode_1 else {},
     }
 
 
