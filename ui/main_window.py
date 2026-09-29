@@ -1,10 +1,24 @@
 import threading
 
-from api import get_media_details
+from api import get_media_details, get_tmdb_episode_data
 from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
-from database import add_to_library, characters_are_loaded, get_work, initialize_database, save_anime, save_characters, save_cover_path, save_staff
+from database import (
+    add_to_library,
+    characters_are_loaded,
+    get_alternate_titles,
+    get_episodes,
+    get_tmdb_mapping,
+    get_work,
+    initialize_database,
+    save_anime,
+    save_characters,
+    save_cover_path,
+    save_episodes,
+    save_staff,
+    save_tmdb_mapping,
+)
 from image_cache import download_cover
 from ui.navigation import NavigationController
 from ui.preferences import get
@@ -58,6 +72,72 @@ class LibraryImportWorker(QObject):
                 self.work_id,
                 (details.get("staff") or {}).get("edges"),
             )
+
+            # Library entries should be fully prepared before the user opens
+            # their detail page. Episode metadata is fetched here, in the
+            # existing background worker, rather than on the click path.
+            title_data = details.get("title") or {}
+            title_variants = [
+                str(title_data.get("english") or "").strip(),
+                str(title_data.get("romaji") or "").strip(),
+                str(title_data.get("native") or "").strip(),
+                *get_alternate_titles(self.work_id),
+                *[
+                    str(value).strip()
+                    for value in (details.get("synonyms") or [])
+                ],
+            ]
+            title_variants = list(
+                dict.fromkeys(value for value in title_variants if value)
+            )
+
+            start_date_data = details.get("startDate") or {}
+            end_date_data = details.get("endDate") or {}
+
+            def format_date(date_data):
+                year = date_data.get("year")
+                if year is None:
+                    return None
+                month = date_data.get("month") or 1
+                day = date_data.get("day") or 1
+                return f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+
+            start_date = format_date(start_date_data)
+            end_date = format_date(end_date_data)
+            expected_episodes = details.get("episodes")
+            media_format = str(details.get("format") or "").upper()
+            tmdb_id, tmdb_season_number = get_tmdb_mapping(self.work_id)
+
+            # Episode preloading is best-effort. A missing TMDB token or a
+            # temporary provider failure must not prevent Library import.
+            try:
+                episode_payload = get_tmdb_episode_data(
+                    title_variants,
+                    start_date,
+                    end_date,
+                    expected_episodes,
+                    tmdb_id,
+                    tmdb_season_number,
+                    media_format,
+                )
+                resolved_tmdb_id = episode_payload.get("tmdb_id")
+                resolved_season = episode_payload.get("tmdb_season_number")
+                if resolved_tmdb_id is not None:
+                    save_tmdb_mapping(
+                        self.work_id,
+                        resolved_tmdb_id,
+                        resolved_season,
+                    )
+                save_episodes(
+                    self.work_id,
+                    episode_payload.get("episodes") or [],
+                )
+            except Exception as episode_error:
+                print(
+                    f"Episode preload failed for work {self.work_id}: "
+                    f"{episode_error}"
+                )
+
             self.finished.emit(self.work_id, details)
         except Exception as error:
             self.error.emit(self.work_id, str(error))
@@ -386,6 +466,20 @@ class MainWindow(QMainWindow):
     def _library_import_finished(self, work_id, details):
         work_id = int(work_id)
         self._detail_enrichment_ids.discard(work_id)
+
+        # Continue the preload by caching the already-saved TMDB episode
+        # artwork. This is entirely background work and also benefits works
+        # that are already open.
+        try:
+            episodes = get_episodes(work_id)
+            self.work_detail_page._start_episode_image_cache(
+                work_id,
+                [dict(episode) for episode in episodes],
+            )
+        except Exception as error:
+            print(
+                f"Episode image preload failed for work {work_id}: {error}"
+            )
 
         # Refresh an already-open detail page after background enrichment so
         # newly imported characters/staff appear without another click.
