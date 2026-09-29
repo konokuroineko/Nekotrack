@@ -99,9 +99,9 @@ class SetupWizard(QDialog):
         self.setMinimumSize(900, 620)
         self.resize(980, 650)
 
-        self.selected_theme = str(get("theme_preset") or "NekoTrack")
+        self.selected_theme = str(get("theme_preset") or "Neko")
         if self.selected_theme not in THEME_PRESETS:
-            self.selected_theme = "NekoTrack"
+            self.selected_theme = "Neko"
         self.bundle_mode = str(get("bundle_mode") or "main")
         if self.bundle_mode not in {"main", "extras"}:
             self.bundle_mode = "main"
