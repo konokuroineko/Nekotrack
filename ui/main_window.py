@@ -639,6 +639,23 @@ class MainWindow(QMainWindow):
                 f"Episode image preload failed for work {work_id}: {error}"
             )
 
+        # Warm the imported Library entry so its detail widgets are ready
+        # before the user opens it.
+        def _preload_imported_group():
+            try:
+                for group in self.library_page.all_anime or []:
+                    members = group.get("_series_members") or []
+                    if any(int(member["id"]) == work_id for member in members):
+                        self.work_detail_page.preload_work(group)
+                        return
+                saved = get_work(work_id)
+                if saved is not None:
+                    self.work_detail_page.preload_work(saved)
+            except Exception as error:
+                print(f"Library detail preload failed for work {work_id}: {error}")
+
+        QTimer.singleShot(0, _preload_imported_group)
+
         # Refresh an already-open detail page after background enrichment so
         # newly imported characters/staff appear without another click.
         current_work = getattr(self.work_detail_page, "work", None)
