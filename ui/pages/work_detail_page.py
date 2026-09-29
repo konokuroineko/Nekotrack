@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from database import (
-    add_manual_bundle_link, add_to_library, delete_work_data, get_bundle_characters,
+    add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
     get_tmdb_mapping,
     get_work, save_anime, save_characters, save_cover_path, save_episode_thumbnail_path,
@@ -613,22 +613,58 @@ class WorkDetailPage(QWidget):
         root.addWidget(back, alignment=Qt.AlignLeft)
         root.addWidget(self._hero())
 
+        detail_data_ready = all(
+            characters_are_loaded(work_id)
+            for work_id in detail_ids
+        ) if detail_ids else False
+
+        episode_data_ready = True
+        for work_id in detail_ids:
+            try:
+                work_row = get_work(work_id)
+                expected = int(work_row["episodes"] or 0) if work_row is not None else 0
+                saved = get_episodes(work_id)
+                if expected > 0 and not saved:
+                    episode_data_ready = False
+                    break
+            except Exception:
+                episode_data_ready = False
+                break
+
         episode_host = QFrame()
         episode_host.setObjectName("section")
         episode_host.setProperty("_episodes_section", True)
         episode_layout = QVBoxLayout(episode_host)
         episode_layout.setContentsMargins(20, 18, 20, 20)
-        episode_layout.addWidget(QLabel("Loading episode data…"))
+
+        if episode_data_ready:
+            ready_episode_frame = self._episodes_section()
+            ready_episode_frame.setProperty("_episodes_section", True)
+            episode_host.deleteLater()
+            episode_host = ready_episode_frame
+        else:
+            episode_layout.addWidget(QLabel("Loading episode data…"))
         root.addWidget(episode_host)
 
-        detail_host = QWidget()
-        detail_host.setObjectName("detailSectionsHost")
-        detail_layout = QVBoxLayout(detail_host)
-        detail_layout.setContentsMargins(0, 0, 0, 0)
-        detail_layout.setSpacing(22)
-        loading_details = QLabel("Loading details…")
-        loading_details.setStyleSheet(muted_label_stylesheet())
-        detail_layout.addWidget(loading_details)
+        if detail_data_ready:
+            detail_host = QWidget()
+            detail_host.setObjectName("detailSectionsHost")
+            detail_layout = QVBoxLayout(detail_host)
+            detail_layout.setContentsMargins(0, 0, 0, 0)
+            detail_layout.setSpacing(22)
+            self._build_detail_sections_local(
+                detail_layout,
+                detail_ids,
+            )
+        else:
+            detail_host = QWidget()
+            detail_host.setObjectName("detailSectionsHost")
+            detail_layout = QVBoxLayout(detail_host)
+            detail_layout.setContentsMargins(0, 0, 0, 0)
+            detail_layout.setSpacing(22)
+            loading_details = QLabel("Loading details…")
+            loading_details.setStyleSheet(muted_label_stylesheet())
+            detail_layout.addWidget(loading_details)
         root.addWidget(detail_host)
         root.addStretch()
 
@@ -663,18 +699,21 @@ class WorkDetailPage(QWidget):
         """)
 
 
-        # Paint the lightweight shell first, then incrementally build the
-        # heavier episode/detail sections without monopolizing the UI thread.
-        QTimer.singleShot(
-            40,
-            lambda token=build_token, page=content, host=episode_host:
-                self._populate_episode_section(token, page, host),
-        )
-        QTimer.singleShot(
-            40,
-            lambda token=build_token, page=content, host=detail_host, ids=detail_ids:
-                self._populate_detail_sections(token, page, host, ids),
-        )
+        if not episode_data_ready or not detail_data_ready:
+            # Missing local data still uses the asynchronous path, but prepared
+            # Library entries above are rendered from local storage immediately.
+            if not episode_data_ready:
+                QTimer.singleShot(
+                    40,
+                    lambda token=build_token, page=content, host=episode_host:
+                        self._populate_episode_section(token, page, host),
+                )
+            if not detail_data_ready:
+                QTimer.singleShot(
+                    40,
+                    lambda token=build_token, page=content, host=detail_host, ids=detail_ids:
+                        self._populate_detail_sections(token, page, host, ids),
+                )
 
     def _populate_episode_section(self, token, content, host):
         if token != self._detail_build_token:
@@ -738,6 +777,37 @@ class WorkDetailPage(QWidget):
                         next_offset,
                     ),
             )
+
+
+    def _build_detail_sections_local(self, layout, detail_ids):
+        """Build all detail sections directly from already-prepared local data."""
+        layout.addWidget(
+            self._grid_section(
+                "Characters",
+                get_bundle_characters(detail_ids),
+                CharacterCard,
+                self.character_selected,
+                4,
+            )
+        )
+        layout.addWidget(
+            self._grid_section(
+                "Staff",
+                get_bundle_staff(detail_ids),
+                PersonCard,
+                self.person_selected,
+                6,
+            )
+        )
+        layout.addWidget(
+            self._grid_section(
+                "Relations",
+                get_bundle_relations(detail_ids),
+                RelationCard,
+                self.relation_selected,
+                6,
+            )
+        )
 
 
     def _populate_detail_sections(self, token, content, host, detail_ids):
