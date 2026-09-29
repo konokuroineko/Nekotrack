@@ -106,7 +106,6 @@ class EpisodeSyncWorker(QObject):
                 self.tmdb_id,
                 self.tmdb_season_number,
                 self.media_format,
-                cache_work_id=self.work_id,
             )
             self.finished.emit(self.work_id, payload)
         except Exception as error:
