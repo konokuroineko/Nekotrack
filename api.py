@@ -1,5 +1,4 @@
 import datetime as _dt
-import hashlib
 import re
 import requests
 import time
@@ -1425,34 +1424,6 @@ def _find_tmdb_movie(title_variants, target_date):
         )
 
     return best
-
-
-def _cache_episode_image(url, work_id, episode_number):
-    if not url:
-        return None
-
-    url = str(url).strip()
-    if not url:
-        return None
-
-    digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
-    work_directory = TMDB_EPISODE_CACHE_DIRECTORY / str(int(work_id))
-    work_directory.mkdir(parents=True, exist_ok=True)
-    path = work_directory / f"{int(episode_number)}_{digest}.jpg"
-
-    if path.is_file() and path.stat().st_size > 0:
-        return str(path)
-
-    try:
-        response = requests.get(url, timeout=20)
-        response.raise_for_status()
-        data = response.content
-        if not data:
-            return url
-        path.write_bytes(data)
-        return str(path)
-    except (requests.RequestException, OSError):
-        return url
 
 
 def _pick_best_movie_image(movie_id, movie):
