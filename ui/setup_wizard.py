@@ -1,9 +1,6 @@
-from pathlib import Path
-
 import requests
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
@@ -99,7 +96,7 @@ class SetupWizard(QDialog):
         super().__init__(parent)
         self.setWindowTitle("NekoTrack Setup")
         self.setModal(True)
-        self.setMinimumSize(980, 650)
+        self.setMinimumSize(900, 620)
         self.resize(980, 650)
 
         self.selected_theme = str(get("theme_preset") or "NekoTrack")
