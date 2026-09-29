@@ -14,7 +14,8 @@ from PySide6.QtWidgets import (
 
 from database import (
     add_manual_bundle_link, add_to_library, delete_work_data, get_bundle_characters,
-    get_bundle_relations, get_bundle_staff, get_connection, get_episodes, get_tmdb_mapping,
+    get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
+    get_tmdb_mapping,
     get_work, save_anime, save_characters, save_cover_path, save_episode_thumbnail_path,
     save_episodes, save_staff,
     save_tmdb_mapping, save_work_mal_id, set_episode_progress, set_episode_watched,
@@ -1632,6 +1633,7 @@ class WorkDetailPage(QWidget):
         title_variants = [
             str(selected_work["title"] or "").strip(),
             str(self._member_title(selected_work) or "").strip(),
+            *get_alternate_titles(selected_id),
         ]
         title_variants = list(dict.fromkeys(value for value in title_variants if value))
 
