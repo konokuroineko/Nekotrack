@@ -477,6 +477,7 @@ class WorkDetailPage(QWidget):
         self._episode_sync_work_id = None
         self._episode_sync_completed = set()
         self._episode_source_status = {}
+        self._episode_provider_diagnostics = {}
         self._cover_manager = QNetworkAccessManager(self)
         self._cover_reply = None
         self._delete_overlay = None
@@ -1084,6 +1085,28 @@ class WorkDetailPage(QWidget):
         )
         header.addWidget(source)
 
+        debug = QPushButton("Debug")
+        debug.setCursor(Qt.PointingHandCursor)
+        debug.clicked.connect(self._show_episode_debug)
+        debug.setStyleSheet(
+            f"""
+            QPushButton {{
+                background:{COLORS['surface_alt']};
+                color:{COLORS['primary']};
+                border:1px solid {COLORS['border']};
+                border-radius:8px;
+                padding:5px 9px;
+                font-size:10px;
+                font-weight:800;
+            }}
+            QPushButton:hover {{
+                background:{COLORS['surface_hover']};
+                border-color:{COLORS['accent']};
+            }}
+            """
+        )
+        header.addWidget(debug)
+
         refresh = QPushButton("Refresh")
         refresh.setCursor(Qt.PointingHandCursor)
         refresh.clicked.connect(self._refresh_episode_data)
@@ -1221,6 +1244,54 @@ class WorkDetailPage(QWidget):
 
         return sorted(members, key=sort_key)
 
+    def _show_episode_debug(self):
+        work_id = self._selected_episode_work_id
+        if work_id is None:
+            return
+
+        diagnostic = self._episode_provider_diagnostics.get(int(work_id))
+        if not diagnostic:
+            QMessageBox.information(
+                self,
+                "Episode provider diagnostics",
+                "No provider diagnostic is available yet. Press Refresh and wait for the sync to finish.",
+            )
+            return
+
+        kitsu = diagnostic.get("kitsu") or {}
+        episode_1 = kitsu.get("episode_1") or {}
+        season_counts = kitsu.get("season_counts") or {}
+
+        lines = [
+            f"MAL ID: {diagnostic.get('mal_id') or 'none'}",
+            f"Jikan episodes: {diagnostic.get('jikan_count', 0)}",
+            f"Kitsu anime ID: {kitsu.get('kitsu_anime_id') or 'none'}",
+            f"Kitsu mapping rows: {kitsu.get('mapping_count', 0)}",
+            f"Kitsu API pages: {kitsu.get('pages', 0)}",
+            f"Kitsu episode rows: {kitsu.get('rows', 0)}",
+            f"Requested NekoTrack season: {kitsu.get('requested_season') or 'none'}",
+            f"Kitsu seasons seen: {season_counts or 'none'}",
+            "",
+            "Kitsu Episode 1:",
+            f"  ID: {episode_1.get('id') or 'none'}",
+            f"  seasonNumber: {episode_1.get('seasonNumber') if episode_1.get('seasonNumber') is not None else 'none'}",
+            f"  number: {episode_1.get('number') if episode_1.get('number') is not None else 'none'}",
+            f"  relativeNumber: {episode_1.get('relativeNumber') if episode_1.get('relativeNumber') is not None else 'none'}",
+            f"  canonicalTitle: {episode_1.get('canonicalTitle') or 'none'}",
+            f"  synopsis: {'YES' if episode_1.get('has_synopsis') else 'NO'}",
+            f"  thumbnail: {'YES' if episode_1.get('has_thumbnail') else 'NO'}",
+        ]
+
+        error = kitsu.get("error")
+        if error:
+            lines.extend(["", f"Kitsu error: {error}"])
+
+        QMessageBox.information(
+            self,
+            "Episode provider diagnostics",
+            "\n".join(lines),
+        )
+
     def _refresh_episode_data(self):
         selected_id = self._selected_episode_work_id
         if selected_id is None:
@@ -1284,6 +1355,12 @@ class WorkDetailPage(QWidget):
         self._episode_source_status[work_id] = {
             "jikan": int(payload.get("jikan_count") or 0),
             "kitsu": int(payload.get("kitsu_count") or 0),
+        }
+        self._episode_provider_diagnostics[work_id] = {
+            "mal_id": mal_id,
+            "jikan_count": int(payload.get("jikan_count") or 0),
+            "kitsu_count": int(payload.get("kitsu_count") or 0),
+            "kitsu": payload.get("kitsu_diagnostics") or {},
         }
 
         if mal_id is not None:
