@@ -616,6 +616,22 @@ def get_saved_anime():
     return results
 
 
+def get_alternate_titles(work_id):
+    """Return locally stored alternate titles for one work."""
+    connection = get_connection()
+    rows = connection.execute(
+        """
+        SELECT title
+        FROM alternate_titles
+        WHERE work_id = ?
+        ORDER BY rowid
+        """,
+        (int(work_id),),
+    ).fetchall()
+    connection.close()
+    return [str(row["title"]) for row in rows if str(row["title"] or "").strip()]
+
+
 def get_work(work_id):
     connection = get_connection()
     result = connection.execute("""
