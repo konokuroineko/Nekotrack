@@ -185,6 +185,152 @@ def _pick_best_episode_still(series_id, season_number, episode):
     return _episode_still_url(stills[0].get("file_path")), len(stills)
 
 
+def _candidate_movie_score(candidate, title_variants, target_date):
+    names = {
+        _normalize_title(candidate.get("title")),
+        _normalize_title(candidate.get("original_title")),
+    }
+    queries = {
+        _normalize_title(value)
+        for value in (title_variants or [])
+        if str(value or "").strip()
+    }
+    score = 1000 if names & queries else 0
+
+    release_date = _parse_date(candidate.get("release_date"))
+    if release_date and target_date:
+        score -= abs((release_date - target_date).days) / 10
+
+    score += min(float(candidate.get("popularity") or 0), 20)
+    return score
+
+
+def _find_tmdb_movie(title_variants, target_date):
+    variants = [
+        str(value).strip()
+        for value in (title_variants or [])
+        if str(value or "").strip()
+    ]
+    if not variants:
+        raise RuntimeError("No title is available for TMDB movie search.")
+
+    candidates = {}
+    year = target_date.year if target_date else None
+
+    for query in variants[:6]:
+        params = {
+            "query": query,
+            "include_adult": "false",
+            "include_video": "false",
+        }
+        if year:
+            params["primary_release_year"] = year
+
+        payload = _tmdb_get("/search/movie", params)
+        for candidate in payload.get("results") or []:
+            if candidate.get("id") is not None:
+                candidates[int(candidate["id"])] = candidate
+
+    if not candidates:
+        for query in variants[:3]:
+            payload = _tmdb_get(
+                "/search/movie",
+                {
+                    "query": query,
+                    "include_adult": "false",
+                    "include_video": "false",
+                },
+            )
+            for candidate in payload.get("results") or []:
+                if candidate.get("id") is not None:
+                    candidates[int(candidate["id"])] = candidate
+
+    if not candidates:
+        raise RuntimeError("TMDB could not find a matching movie.")
+
+    return max(
+        candidates.values(),
+        key=lambda candidate: _candidate_movie_score(
+            candidate,
+            variants,
+            target_date,
+        ),
+    )
+
+
+def _movie_backdrop(series_id):
+    return None
+
+
+def _pick_best_movie_image(movie_id, movie):
+    primary = _episode_still_url(movie.get("backdrop_path"))
+    if primary:
+        return primary, 1
+
+    try:
+        payload = _tmdb_get(
+            f"/movie/{int(movie_id)}/images",
+            {
+                "include_image_language": "en,null",
+            },
+        )
+    except requests.RequestException:
+        return None, 0
+
+    backdrops = payload.get("backdrops") or []
+    if not backdrops:
+        return None, 0
+
+    backdrops.sort(
+        key=lambda item: (
+            float(item.get("vote_average") or 0),
+            int(item.get("vote_count") or 0),
+            int(item.get("width") or 0),
+        ),
+        reverse=True,
+    )
+    return _episode_still_url(backdrops[0].get("file_path")), len(backdrops)
+
+
+def _get_tmdb_movie_episode(
+    title_variants,
+    start_date,
+    expected_episodes=None,
+    tmdb_id=None,
+):
+    target_date = _parse_date(start_date)
+    if target_date is None:
+        raise RuntimeError("NekoTrack needs a valid start date to match the OVA.")
+
+    if tmdb_id is None:
+        candidate = _find_tmdb_movie(title_variants, target_date)
+        tmdb_id = int(candidate["id"])
+    else:
+        candidate = _tmdb_get(f"/movie/{int(tmdb_id)}")
+
+    release_date = _parse_date(candidate.get("release_date"))
+    if release_date is None:
+        release_date = target_date
+
+    image_url, image_count = _pick_best_movie_image(tmdb_id, candidate)
+
+    return {
+        "tmdb_id": int(tmdb_id),
+        "tmdb_season_number": None,
+        "episodes": [{
+            "episodeNumber": 1,
+            "title": candidate.get("title") or candidate.get("original_title") or "Episode 1",
+            "description": candidate.get("overview") or None,
+            "airdate": release_date.isoformat(),
+            "thumbnail": image_url,
+            "episode_type": "ova",
+            "tmdb_episode_id": int(tmdb_id),
+            "tmdb_image_count": image_count,
+        }],
+        "tmdb_count": 1,
+    }
+
+
 def get_tmdb_episode_data(
     title_variants,
     start_date,
@@ -192,8 +338,17 @@ def get_tmdb_episode_data(
     expected_episodes=None,
     tmdb_id=None,
     tmdb_season_number=None,
+    media_format=None,
 ):
     """Resolve one NekoTrack season and fetch its TMDB episode data."""
+    if str(media_format or "").upper() == "OVA":
+        return _get_tmdb_movie_episode(
+            title_variants,
+            start_date,
+            expected_episodes,
+            tmdb_id,
+        )
+
     target_start = _parse_date(start_date)
     target_end = _parse_date(end_date)
 
@@ -264,6 +419,7 @@ def get_tmdb_episode_sample(
     expected_episodes=None,
     tmdb_id=None,
     tmdb_season_number=None,
+    media_format=None,
 ):
     """Fetch one lightweight TMDB season sample for in-app testing."""
     data = get_tmdb_episode_data(
@@ -273,6 +429,7 @@ def get_tmdb_episode_sample(
         expected_episodes,
         tmdb_id,
         tmdb_season_number,
+        media_format,
     )
 
     episode = next(
