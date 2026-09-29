@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QLineEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -80,6 +81,27 @@ class SettingsPage(QWidget):
             self._info_row("Storage", "Local SQLite database"),
             self._info_row("Artwork", "Cached locally when downloaded"),
             self._info_row("Metadata", "AniList powers online search and detail import"),
+        ]))
+
+        self._tmdb_token = QLineEdit()
+        self._tmdb_token.setEchoMode(QLineEdit.Password)
+        self._tmdb_token.setPlaceholderText("Paste TMDB API Read Access Token")
+        self._tmdb_token.setText(str(get("tmdb_api_token") or ""))
+        save_tmdb = QPushButton("Save TMDB token")
+        save_tmdb.setCursor(Qt.PointingHandCursor)
+        save_tmdb.clicked.connect(self._save_tmdb_token)
+        token_box = QVBoxLayout()
+        token_box.setSpacing(8)
+        token_box.addWidget(self._tmdb_token)
+        token_box.addWidget(save_tmdb, 0, Qt.AlignRight)
+        token_wrapper = QWidget()
+        token_wrapper.setLayout(token_box)
+        layout.addWidget(self._section("TMDB", [
+            self._row(
+                "API Read Access Token",
+                "Required for TMDB episode data and artwork. The token is stored in this local app's settings and is never committed to the repository.",
+                token_wrapper,
+            )
         ]))
 
         reset_button = QPushButton("Reset all appearance & behavior settings")
@@ -182,6 +204,10 @@ class SettingsPage(QWidget):
     def _apply(self, key=""):
         refresh_theme()
         self.settings_changed.emit(key)
+
+    def _save_tmdb_token(self):
+        set_value("tmdb_api_token", self._tmdb_token.text().strip())
+        self._apply("tmdb_api_token")
 
     def _reset(self):
         reset()
