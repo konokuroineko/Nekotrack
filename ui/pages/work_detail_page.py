@@ -1,4 +1,4 @@
-from api import get_episode_data, get_media_details
+from api import get_episode_data, get_kitsu_episode_diagnostics, get_media_details
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread
@@ -26,6 +26,31 @@ from ui.widgets.relation_card import RelationCard
 
 
 IMAGE_DIRECTORY = Path("data") / "images" / "works"
+
+
+class EpisodeProviderDebugWorker(QObject):
+    finished = Signal(object)
+    error = Signal(str)
+
+    def __init__(self, mal_id, season_number=None):
+        super().__init__()
+        self.mal_id = int(mal_id) if mal_id is not None else None
+        self.season_number = (
+            int(season_number) if season_number is not None else None
+        )
+
+    def run(self):
+        try:
+            if self.mal_id is None:
+                raise ValueError("No MAL ID is available for this season.")
+            self.finished.emit(
+                get_kitsu_episode_diagnostics(
+                    self.mal_id,
+                    self.season_number,
+                )
+            )
+        except Exception as error:
+            self.error.emit(str(error))
 
 
 class EpisodeSyncWorker(QObject):
@@ -478,6 +503,8 @@ class WorkDetailPage(QWidget):
         self._episode_sync_completed = set()
         self._episode_source_status = {}
         self._episode_provider_diagnostics = {}
+        self._episode_debug_thread = None
+        self._episode_debug_worker = None
         self._cover_manager = QNetworkAccessManager(self)
         self._cover_reply = None
         self._delete_overlay = None
@@ -1249,22 +1276,85 @@ class WorkDetailPage(QWidget):
         if work_id is None:
             return
 
-        diagnostic = self._episode_provider_diagnostics.get(int(work_id))
-        if not diagnostic:
+        if (
+            self._episode_debug_thread is not None
+            and self._episode_debug_thread.isRunning()
+        ):
             QMessageBox.information(
                 self,
                 "Episode provider diagnostics",
-                "No provider diagnostic is available yet. Press Refresh and wait for the sync to finish.",
+                "A Kitsu diagnostic request is already running.",
             )
             return
 
-        kitsu = diagnostic.get("kitsu") or {}
+        selected_work = get_work(work_id)
+        mal_id = (
+            selected_work["mal_id"]
+            if selected_work is not None and "mal_id" in selected_work.keys()
+            else None
+        )
+
+        members = self._episode_members()
+        season_number = next(
+            (
+                index
+                for index, member in enumerate(members, start=1)
+                if int(member["id"]) == int(work_id)
+            ),
+            1,
+        )
+
+        self._episode_debug_thread = QThread(self)
+        self._episode_debug_worker = EpisodeProviderDebugWorker(
+            mal_id,
+            season_number,
+        )
+        self._episode_debug_worker.moveToThread(self._episode_debug_thread)
+
+        self._episode_debug_thread.started.connect(
+            self._episode_debug_worker.run
+        )
+        self._episode_debug_worker.finished.connect(
+            self._episode_debug_finished
+        )
+        self._episode_debug_worker.error.connect(
+            self._episode_debug_error
+        )
+
+        worker = self._episode_debug_worker
+        thread = self._episode_debug_thread
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+    def _episode_debug_finished(self, diagnostic):
+        self._episode_provider_diagnostics[
+            int(self._selected_episode_work_id)
+        ] = {
+            "kitsu": diagnostic or {},
+        }
+        self._episode_debug_cleanup()
+        self._show_episode_debug_result(diagnostic or {})
+
+    def _episode_debug_error(self, error):
+        self._episode_debug_cleanup()
+        QMessageBox.warning(
+            self,
+            "Kitsu diagnostic failed",
+            str(error),
+        )
+
+    def _episode_debug_cleanup(self):
+        self._episode_debug_thread = None
+        self._episode_debug_worker = None
+
+    def _show_episode_debug_result(self, kitsu):
         episode_1 = kitsu.get("episode_1") or {}
         season_counts = kitsu.get("season_counts") or {}
 
         lines = [
-            f"MAL ID: {diagnostic.get('mal_id') or 'none'}",
-            f"Jikan episodes: {diagnostic.get('jikan_count', 0)}",
             f"Kitsu anime ID: {kitsu.get('kitsu_anime_id') or 'none'}",
             f"Kitsu mapping rows: {kitsu.get('mapping_count', 0)}",
             f"Kitsu API pages: {kitsu.get('pages', 0)}",
@@ -1282,13 +1372,9 @@ class WorkDetailPage(QWidget):
             f"  thumbnail: {'YES' if episode_1.get('has_thumbnail') else 'NO'}",
         ]
 
-        error = kitsu.get("error")
-        if error:
-            lines.extend(["", f"Kitsu error: {error}"])
-
         QMessageBox.information(
             self,
-            "Episode provider diagnostics",
+            "Kitsu episode diagnostics",
             "\n".join(lines),
         )
 
