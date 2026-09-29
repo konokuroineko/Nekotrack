@@ -665,6 +665,11 @@ class WorkDetailPage(QWidget):
 
         QTimer.singleShot(
             0,
+            lambda token=build_token, page=content, host=episode_host:
+                self._populate_episode_section(token, page, host),
+        )
+        QTimer.singleShot(
+            0,
             lambda token=build_token, page=content, host=detail_host, ids=detail_ids:
                 self._populate_detail_sections(token, page, host, ids),
         )
