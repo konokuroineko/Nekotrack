@@ -526,24 +526,129 @@ def _jikan_get(path, params=None):
     raise RuntimeError(f"Jikan request failed: {url}")
 
 
+def _kitsu_get(path, params=None):
+    """Request Kitsu JSON:API data for episode fallback fields."""
+    url = f"https://kitsu.io/api/edge/{str(path).lstrip('/')}"
+    last_error = None
+
+    for attempt in range(3):
+        try:
+            response = requests.get(
+                url,
+                params=params or {},
+                headers={
+                    "Accept": "application/vnd.api+json",
+                    "Content-Type": "application/vnd.api+json",
+                },
+                timeout=20,
+            )
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                try:
+                    wait_time = max(1.0, float(retry_after)) if retry_after else 1.0 + attempt
+                except (TypeError, ValueError):
+                    wait_time = 1.0 + attempt
+                time.sleep(wait_time)
+                continue
+            response.raise_for_status()
+            payload = response.json() or {}
+            time.sleep(0.25)
+            return payload
+        except (requests.RequestException, ValueError) as error:
+            last_error = error
+            if attempt < 2:
+                time.sleep(1.0 + attempt)
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"Kitsu request failed: {url}")
+
+
+def _kitsu_anime_id_for_mal(mal_id):
+    """Resolve a Kitsu anime ID from an exact MAL anime ID mapping."""
+    payload = _kitsu_get(
+        "/mappings",
+        {
+            "filter[externalSite]": "myanimelist/anime",
+            "filter[externalId]": str(int(mal_id)),
+            "include": "item",
+            "page[limit]": 20,
+        },
+    )
+
+    for row in payload.get("data") or []:
+        relationships = row.get("relationships") or {}
+        item = relationships.get("item") or {}
+        item_data = item.get("data") or {}
+        if item_data.get("type") == "anime" and item_data.get("id") is not None:
+            return str(item_data["id"])
+
+    included = payload.get("included") or []
+    for row in included:
+        if row.get("type") == "anime" and row.get("id") is not None:
+            return str(row["id"])
+
+    return None
+
+
+def _kitsu_episode_map(mal_id):
+    """Return Kitsu episodes keyed by the per-season episode number."""
+    kitsu_id = _kitsu_anime_id_for_mal(mal_id)
+    if kitsu_id is None:
+        return {}
+
+    episodes = []
+    offset = 0
+    limit = 20
+
+    while True:
+        payload = _kitsu_get(
+            f"/anime/{kitsu_id}/episodes",
+            {
+                "page[limit]": limit,
+                "page[offset]": offset,
+            },
+        )
+        rows = payload.get("data") or []
+        episodes.extend(rows)
+
+        links = payload.get("links") or {}
+        if not links.get("next") or not rows:
+            break
+
+        offset += limit
+
+    result = {}
+    for row in episodes:
+        attributes = row.get("attributes") or {}
+        number = attributes.get("relativeNumber")
+        if number is None:
+            number = attributes.get("number")
+        if number is None:
+            continue
+        try:
+            result[int(number)] = attributes
+        except (TypeError, ValueError):
+            continue
+
+    return result
+
+
 def get_episode_data(media_id, mal_id=None):
     """Fetch episode data from Jikan for one exact anime."""
-    resolved_mal_id = mal_id
-
-    # MAL identity is the only non-Jikan input needed by the episode provider.
-    # Resolve it through AniList only when the local work has no MAL ID yet;
-    # episode numbers, dates, titles, synopses and artwork still come from Jikan.
-    if resolved_mal_id is None:
-        identity_query = """
-        query ($id: Int) {
-            Media(id: $id) {
-                idMal
-            }
+    identity_query = """
+    query ($id: Int) {
+        Media(id: $id) {
+            idMal
         }
-        """
-        identity = anilist_request(identity_query, {"id": int(media_id)})
-        resolved_mal_id = ((identity.get("Media") or {}).get("idMal"))
+    }
+    """
+    identity = anilist_request(identity_query, {"id": int(media_id)})
+    fresh_mal_id = ((identity.get("Media") or {}).get("idMal"))
 
+    # Prefer the fresh AniList cross-reference on every sync. Local MAL IDs
+    # can be stale after older bundle/relationship imports.
+    resolved_mal_id = fresh_mal_id or mal_id
     if resolved_mal_id is None:
         return {"mal_id": None, "episodes": []}
 
@@ -638,13 +743,23 @@ def get_episode_data(media_id, mal_id=None):
         except requests.RequestException:
             continue
 
+    kitsu_by_number = {}
+    # Kitsu is deliberately queried only as a field-level fallback. Jikan's
+    # episode numbers/titles/dates remain primary whenever they exist.
+    try:
+        kitsu_by_number = _kitsu_episode_map(resolved_mal_id)
+    except requests.RequestException:
+        kitsu_by_number = {}
+
     result = []
     all_numbers = set(jikan_by_number)
     all_numbers.update(video_by_number)
+    all_numbers.update(kitsu_by_number)
 
     for number in sorted(all_numbers):
         jikan = jikan_by_number.get(number) or {}
         video = video_by_number.get(number) or {}
+        kitsu = kitsu_by_number.get(number) or {}
         aired = jikan.get("aired") or {}
 
         jikan_images = jikan.get("images") or {}
@@ -654,20 +769,39 @@ def get_episode_data(media_id, mal_id=None):
         video_jpg = video_images.get("jpg") or {}
         video_webp = video_images.get("webp") or {}
 
+        kitsu_thumbnail = kitsu.get("thumbnail") or {}
+        if isinstance(kitsu_thumbnail, dict):
+            kitsu_thumbnail = (
+                kitsu_thumbnail.get("original")
+                or kitsu_thumbnail.get("large")
+                or kitsu_thumbnail.get("medium")
+                or kitsu_thumbnail.get("small")
+            )
+
         result.append({
             "episodeNumber": number,
             "title": (
                 jikan.get("title")
                 or video.get("title")
+                or kitsu.get("canonicalTitle")
+                or kitsu.get("title_en_us")
                 or f"Episode {number}"
             ),
-            "description": jikan.get("synopsis"),
-            "airdate": str(aired.get("from") or "")[:10] or None,
+            "description": (
+                jikan.get("synopsis")
+                or kitsu.get("synopsis")
+            ),
+            "airdate": (
+                str(aired.get("from") or "")[:10]
+                or str(kitsu.get("airdate") or "")
+                or None
+            ),
             "thumbnail": (
                 jikan_jpg.get("image_url")
                 or jikan_webp.get("image_url")
                 or video_jpg.get("image_url")
                 or video_webp.get("image_url")
+                or kitsu_thumbnail
                 or None
             ),
         })
