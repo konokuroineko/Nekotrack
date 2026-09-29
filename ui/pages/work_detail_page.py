@@ -565,6 +565,7 @@ class WorkDetailPage(QWidget):
         self._episode_image_cache_threads = {}
         self._episode_image_cache_workers = {}
         self._detail_build_token = 0
+        self._detail_content_cache = {}
         self._episode_sync_completed = set()
         self._episode_sync_errors = {}
         self._episode_refresh_queue = []
@@ -582,41 +583,34 @@ class WorkDetailPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self.scroll_area)
 
-    def set_work(self, work):
-        previous_selected_episode_id = self._selected_episode_work_id
-        self.work = work
-        self._episode_sync_errors = {}
-        self._episode_refresh_queue = []
-        self._detail_build_token += 1
-        build_token = self._detail_build_token
+    def _detail_cache_key(self, work_ids):
+        return tuple(int(work_id) for work_id in work_ids)
 
+    def _prepare_detail_state(self, work):
+        self.work = work
         detail_ids = self._detail_work_ids()
-        if previous_selected_episode_id in detail_ids:
-            self._selected_episode_work_id = previous_selected_episode_id
+
+        previous_selected = self._selected_episode_work_id
+        if previous_selected in detail_ids:
+            self._selected_episode_work_id = previous_selected
         elif detail_ids:
             self._selected_episode_work_id = detail_ids[0]
         else:
             self._selected_episode_work_id = self._value("id")
 
-        if self._delete_overlay is not None:
-            self._delete_overlay.deleteLater()
-            self._delete_overlay = None
+        return detail_ids
 
-        content = QWidget()
-        root = QVBoxLayout(content)
-        root.setContentsMargins(42, 34, 42, 50)
-        root.setSpacing(22)
+    def _local_detail_ready(self, detail_ids):
+        if not detail_ids:
+            return False, False
 
-        back = QPushButton("‹  Back to Library")
-        back.setObjectName("back")
-        back.clicked.connect(self.back_requested)
-        root.addWidget(back, alignment=Qt.AlignLeft)
-        root.addWidget(self._hero())
-
-        detail_data_ready = all(
-            characters_are_loaded(work_id)
-            for work_id in detail_ids
-        ) if detail_ids else False
+        try:
+            detail_data_ready = all(
+                characters_are_loaded(work_id)
+                for work_id in detail_ids
+            )
+        except Exception:
+            detail_data_ready = False
 
         episode_data_ready = True
         for work_id in detail_ids:
@@ -630,6 +624,27 @@ class WorkDetailPage(QWidget):
             except Exception:
                 episode_data_ready = False
                 break
+
+        return detail_data_ready, episode_data_ready
+
+    def _build_detail_content(self, detail_ids, defer_missing=True):
+        detail_data_ready, episode_data_ready = self._local_detail_ready(detail_ids)
+
+        content = QWidget()
+        content.setProperty("_detail_cache_key", self._detail_cache_key(detail_ids))
+        content.setProperty(
+            "_detail_cacheable",
+            bool(detail_data_ready and episode_data_ready),
+        )
+        root = QVBoxLayout(content)
+        root.setContentsMargins(42, 34, 42, 50)
+        root.setSpacing(22)
+
+        back = QPushButton("‹  Back to Library")
+        back.setObjectName("back")
+        back.clicked.connect(self.back_requested)
+        root.addWidget(back, alignment=Qt.AlignLeft)
+        root.addWidget(self._hero())
 
         episode_host = QFrame()
         episode_host.setObjectName("section")
@@ -668,7 +683,129 @@ class WorkDetailPage(QWidget):
         root.addWidget(detail_host)
         root.addStretch()
 
+        if defer_missing and (not episode_data_ready or not detail_data_ready):
+            token = self._detail_build_token
+            if not episode_data_ready:
+                QTimer.singleShot(
+                    40,
+                    lambda token=token, page=content, host=episode_host:
+                        self._populate_episode_section(token, page, host),
+                )
+            if not detail_data_ready:
+                QTimer.singleShot(
+                    40,
+                    lambda token=token, page=content, host=detail_host, ids=list(detail_ids):
+                        self._populate_detail_sections(token, page, host, ids),
+                )
+
+        return content, detail_data_ready and episode_data_ready
+
+    def preload_work(self, work):
+        """Build a fully prepared Library detail view ahead of the next click."""
+        if work is None:
+            return False
+
+        # Never replace the currently displayed work while warming the cache.
+        current_work = self.work
+        current_selected = self._selected_episode_work_id
+        current_errors = self._episode_sync_errors
+        current_queue = self._episode_refresh_queue
+        current_token = self._detail_build_token
+
+        try:
+            detail_ids = [
+                int(member["id"])
+                for member in (work.get("_series_members") or [])
+            ] if hasattr(work, "get") else []
+
+            if not detail_ids:
+                detail_ids = [int(work["id"])]
+
+            key = self._detail_cache_key(detail_ids)
+            if key in self._detail_content_cache:
+                return True
+
+            self._prepare_detail_state(work)
+            content, ready = self._build_detail_content(
+                detail_ids,
+                defer_missing=False,
+            )
+            if not ready:
+                content.deleteLater()
+                return False
+
+            self._detail_content_cache[key] = content
+            return True
+        except Exception as error:
+            print(f"Detail preload failed: {error}")
+            return False
+        finally:
+            self.work = current_work
+            self._selected_episode_work_id = current_selected
+            self._episode_sync_errors = current_errors
+            self._episode_refresh_queue = current_queue
+            self._detail_build_token = current_token
+
+    def preload_works(self, works):
+        """Warm prepared Library detail views one at a time between event-loop turns."""
+        queue = list(works or [])
+
+        def preload_next():
+            if not queue:
+                return
+            self.preload_work(queue.pop(0))
+            if queue:
+                QTimer.singleShot(0, preload_next)
+
+        QTimer.singleShot(0, preload_next)
+
+    def invalidate_detail_cache(self, work_ids=None):
+        ids = {
+            int(work_id)
+            for work_id in (work_ids or [])
+            if work_id is not None
+        }
+
+        for key in list(self._detail_content_cache):
+            if not ids or ids.intersection(key):
+                content = self._detail_content_cache.pop(key)
+                content.deleteLater()
+
+    def set_work(self, work):
+        previous_selected_episode_id = self._selected_episode_work_id
+        self._episode_sync_errors = {}
+        self._episode_refresh_queue = []
+        self._detail_build_token += 1
+
+        detail_ids = self._prepare_detail_state(work)
+        if previous_selected_episode_id in detail_ids:
+            self._selected_episode_work_id = previous_selected_episode_id
+
+        old_content = self.scroll_area.takeWidget()
+        if old_content is not None:
+            old_key = old_content.property("_detail_cache_key")
+            old_cacheable = bool(old_content.property("_detail_cacheable"))
+            if old_cacheable and old_key:
+                self._detail_content_cache[tuple(old_key)] = old_content
+            else:
+                old_content.deleteLater()
+
+        key = self._detail_cache_key(detail_ids)
+        cached = self._detail_content_cache.pop(key, None)
+
+        if cached is not None:
+            self.scroll_area.setWidget(cached)
+            self._apply_detail_styles()
+            return
+
+        content, _ready = self._build_detail_content(
+            detail_ids,
+            defer_missing=True,
+        )
         self.scroll_area.setWidget(content)
+        self._apply_detail_styles()
+
+    def _apply_detail_styles(self):
         self.setStyleSheet(f"""
             QPushButton#back {{ background: transparent; border: 0; color: {COLORS['secondary']}; padding: 5px 0; font-weight: 750; }}
             QPushButton#back:hover {{ color: {COLORS['primary']}; }}
@@ -691,29 +828,11 @@ class WorkDetailPage(QWidget):
             QPushButton#deleteCancel {{ background:{COLORS['surface_alt']}; color:{COLORS['secondary']}; border:1px solid {COLORS['border']}; border-radius:9px; padding:9px 16px; font-weight:750; }}
             QPushButton#deleteCancel:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['primary']}; }}
             QPushButton#deleteConfirm {{ background:#c94343; color:white; border:0; border-radius:9px; padding:9px 18px; font-weight:850; }}
-            QPushButton#deleteConfirm:hover {{ background:#e05252; }}
             QPushButton#deleteBundle {{ background:#c94343; color:white; border:0; border-radius:9px; padding:9px 14px; font-weight:850; }}
             QPushButton#deleteBundle:hover {{ background:#e05252; }}
             QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {COLORS['border_hover']}; background: {COLORS['background_alt']}; }}
             QCheckBox::indicator:checked {{ background: {COLORS['accent']}; border-color: {COLORS['accent']}; }}
         """)
-
-
-        if not episode_data_ready or not detail_data_ready:
-            # Missing local data still uses the asynchronous path, but prepared
-            # Library entries above are rendered from local storage immediately.
-            if not episode_data_ready:
-                QTimer.singleShot(
-                    40,
-                    lambda token=build_token, page=content, host=episode_host:
-                        self._populate_episode_section(token, page, host),
-                )
-            if not detail_data_ready:
-                QTimer.singleShot(
-                    40,
-                    lambda token=build_token, page=content, host=detail_host, ids=detail_ids:
-                        self._populate_detail_sections(token, page, host, ids),
-                )
 
     def _populate_episode_section(self, token, content, host):
         if token != self._detail_build_token:
