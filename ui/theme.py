@@ -15,6 +15,7 @@ COLOR_KEYS = (
     "muted",
     "accent",
     "accent_hover",
+    "accent_text",
     "frame_color",
     "accent_soft",
     "success",
