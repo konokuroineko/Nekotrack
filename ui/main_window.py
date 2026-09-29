@@ -466,9 +466,18 @@ class MainWindow(QMainWindow):
                 int(work_id),
                 [dict(episode) for episode in (episodes or [])],
             )
+
+            # Episode data is now complete, so the corresponding detail view
+            # can finally be built and placed in the same global cache used by
+            # newly imported Library entries.
+            for group in self.library_page.all_anime or []:
+                members = group.get("_series_members") or []
+                if any(int(member["id"]) == int(work_id) for member in members):
+                    self.work_detail_page.preload_work(group)
+                    break
         except Exception as error:
             print(
-                f"Existing library image preload failed for work {work_id}: "
+                f"Existing library preload failed for work {work_id}: "
                 f"{error}"
             )
 
