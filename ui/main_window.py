@@ -235,11 +235,17 @@ class MainWindow(QMainWindow):
         self._detail_enrichment_ids = set()
         self._library_episode_preload_thread = None
         self._library_episode_preload_worker = None
+        self._ui_root_stack = None
         self.setup_ui()
         QTimer.singleShot(250, self._start_existing_library_episode_preload)
 
-    def setup_ui(self, initial_page="home", install=True):
+    def setup_ui(self, initial_page="home"):
         refresh_theme()
+
+        if self._ui_root_stack is None:
+            self._ui_root_stack = QStackedWidget()
+            self._ui_root_stack.setObjectName("uiRootStack")
+            self.setCentralWidget(self._ui_root_stack)
         root = QWidget()
         root_layout = QHBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -296,8 +302,6 @@ class MainWindow(QMainWindow):
 
         root_layout.addWidget(sidebar)
         root_layout.addWidget(self.stack, 1)
-        if install:
-            self.setCentralWidget(root)
         self.setStyleSheet(
             application_stylesheet()
             + f"""
@@ -310,6 +314,12 @@ class MainWindow(QMainWindow):
         """
         )
         self.navigation.show(initial_page)
+
+        # Keep the currently visible UI root on screen while this complete
+        # replacement is being built. Only switch once the new tree exists.
+        self._ui_root_stack.addWidget(root)
+        self._ui_root_stack.setCurrentWidget(root)
+
         QTimer.singleShot(500, self._preload_library_details)
 
     def _preload_library_details(self):
@@ -350,25 +360,28 @@ class MainWindow(QMainWindow):
                 if page is current_widget:
                     current_page = name
                     break
+
+        old_root = self._ui_root_stack.currentWidget() if self._ui_root_stack else None
         was_maximized = self.isMaximized()
         was_fullscreen = self.isFullScreen()
         normal_geometry = self.normalGeometry()
 
-        # Build the replacement widget tree before installing it as the
-        # central widget. The existing UI stays visible for the entire build,
-        # so Qt never exposes an empty/black central area.
+        # Stop workers attached to the old page tree before replacing it.
         if hasattr(self, "search_page"):
             self.search_page.shutdown_workers()
         self.navigation_buttons = {}
-        self.setup_ui(current_page, install=False)
-        new_root = self.centralWidget()
-        # setup_ui(install=False) creates the new root but leaves the current
-        # central widget untouched until the new tree is completely ready.
-        # Retrieve it from the newest navigation stack's parent chain.
-        new_root = self.stack.parentWidget()
-        if new_root is not None:
-            self.setCentralWidget(new_root)
 
+        # setup_ui() builds an entire new root and leaves the old root visible
+        # until the final addWidget/setCurrentWidget swap.
+        self.setup_ui(current_page)
+        new_root = self._ui_root_stack.currentWidget()
+
+        if old_root is not None and old_root is not new_root:
+            old_root.deleteLater()
+
+        # Only touch the native window state when that setting actually changed.
+        # Calling showMaximized()/showNormal() for every theme change causes the
+        # compositor to briefly blank the window.
         if changed_key == "maximized":
             if get("maximized"):
                 self.showMaximized()
@@ -379,11 +392,11 @@ class MainWindow(QMainWindow):
         elif was_fullscreen:
             self.showFullScreen()
         elif was_maximized:
-            self.showMaximized()
+            # Preserve the existing maximized state without re-triggering it.
+            pass
         else:
-            self.showNormal()
-            if normal_geometry.isValid():
-                self.setGeometry(normal_geometry)
+            # Preserve normal-window geometry without forcing another show cycle.
+            pass
 
     def _section(self, layout, title, items):
         label = QLabel(title)
