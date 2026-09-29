@@ -527,162 +527,126 @@ def _jikan_get(path, params=None):
 
 
 def get_episode_data(media_id, mal_id=None):
-    """Fetch episode dates, titles, thumbnails and synopses for one anime."""
-    anilist_query = """
-    query ($id: Int, $page: Int) {
-        Media(id: $id) {
-            idMal
-            airingSchedule(page: $page, perPage: 50) {
-                nodes {
-                    airingAt
-                    episode
-                }
-                pageInfo {
-                    currentPage
-                    lastPage
-                    hasNextPage
-                }
+    """Fetch episode data from Jikan for one exact anime."""
+    resolved_mal_id = mal_id
+
+    # MAL identity is the only non-Jikan input needed by the episode provider.
+    # Resolve it through AniList only when the local work has no MAL ID yet;
+    # episode numbers, dates, titles, synopses and artwork still come from Jikan.
+    if resolved_mal_id is None:
+        identity_query = """
+        query ($id: Int) {
+            Media(id: $id) {
+                idMal
             }
         }
-    }
-    """
+        """
+        identity = anilist_request(identity_query, {"id": int(media_id)})
+        resolved_mal_id = ((identity.get("Media") or {}).get("idMal"))
 
-    page = 1
-    schedule = []
-    media = {}
+    if resolved_mal_id is None:
+        return {"mal_id": None, "episodes": []}
 
-    # AniList supplies the schedule and any legal streaming thumbnails.
-    while True:
-        data = anilist_request(
-            anilist_query,
-            {"id": int(media_id), "page": page},
-        )
-        media = data.get("Media") or {}
-        connection = media.get("airingSchedule") or {}
-        schedule.extend(connection.get("nodes") or [])
-
-        page_info = connection.get("pageInfo") or {}
-        if not page_info.get("hasNextPage"):
-            break
-        page += 1
-
-    resolved_mal_id = media.get("idMal") or mal_id
-
+    resolved_mal_id = int(resolved_mal_id)
     jikan_by_number = {}
     video_by_number = {}
 
-    # Keep episode-list data and video thumbnails independent. A videos
-    # endpoint failure must never erase the episode/synopsis data.
-    if resolved_mal_id:
-        try:
-            page = 1
-            while True:
-                payload = _jikan_get(
-                    f"/anime/{int(resolved_mal_id)}/episodes",
-                    {"page": page},
-                )
+    # Fetch Jikan's complete paginated episode list.
+    try:
+        page = 1
+        while True:
+            payload = _jikan_get(
+                f"/anime/{resolved_mal_id}/episodes",
+                {"page": page},
+            )
 
-                for row in payload.get("data") or []:
-                    number = row.get("mal_id")
+            for row in payload.get("data") or []:
+                number = row.get("mal_id")
+                match = re.search(
+                    r"/episode/(\d+)(?:/|$)",
+                    str(row.get("url") or ""),
+                    re.IGNORECASE,
+                )
+                if match:
+                    number = int(match.group(1))
+                if number is not None:
+                    try:
+                        jikan_by_number[int(number)] = row
+                    except (TypeError, ValueError):
+                        continue
+
+            pagination = payload.get("pagination") or {}
+            if not pagination.get("has_next_page"):
+                break
+            page += 1
+    except requests.RequestException:
+        return {"mal_id": resolved_mal_id, "episodes": []}
+
+    # Jikan's episode-video endpoint is still the same provider, but its
+    # results are kept separate so an episode-list failure cannot corrupt them.
+    try:
+        page = 1
+        while True:
+            payload = _jikan_get(
+                f"/anime/{resolved_mal_id}/videos/episodes",
+                {"page": page},
+            )
+
+            for row in payload.get("data") or []:
+                number_text = str(row.get("episode") or "")
+                url_text = str(row.get("url") or "")
+                match = re.search(
+                    r"\b(?:episode|ep)\s*#?\s*(\d+)\b",
+                    number_text,
+                    re.IGNORECASE,
+                )
+                if not match:
                     match = re.search(
                         r"/episode/(\d+)(?:/|$)",
-                        str(row.get("url") or ""),
+                        url_text,
                         re.IGNORECASE,
                     )
-                    if match:
-                        number = int(match.group(1))
-                    if number is not None:
-                        try:
-                            jikan_by_number[int(number)] = row
-                        except (TypeError, ValueError):
-                            continue
+                if match:
+                    video_by_number[int(match.group(1))] = row
 
-                pagination = payload.get("pagination") or {}
-                if not pagination.get("has_next_page"):
-                    break
-                page += 1
-        except requests.RequestException:
-            jikan_by_number = {}
+            pagination = payload.get("pagination") or {}
+            if not pagination.get("has_next_page"):
+                break
+            page += 1
+    except requests.RequestException:
+        video_by_number = {}
 
+    # The collection endpoint does not reliably include synopsis/artwork for
+    # every episode, so fetch only the exact episode records missing either.
+    missing_detail = [
+        number
+        for number, row in jikan_by_number.items()
+        if not str(row.get("synopsis") or "").strip()
+        or not (
+            ((row.get("images") or {}).get("jpg") or {}).get("image_url")
+            or ((row.get("images") or {}).get("webp") or {}).get("image_url")
+        )
+    ]
+
+    for number in missing_detail:
         try:
-            page = 1
-            while True:
-                payload = _jikan_get(
-                    f"/anime/{int(resolved_mal_id)}/videos/episodes",
-                    {"page": page},
-                )
-
-                for row in payload.get("data") or []:
-                    number_text = str(row.get("episode") or "")
-                    url_text = str(row.get("url") or "")
-                    match = re.search(
-                        r"\b(?:episode|ep)\s*#?\s*(\d+)\b",
-                        number_text,
-                        re.IGNORECASE,
-                    )
-                    if not match:
-                        match = re.search(
-                            r"/episode/(\d+)(?:/|$)",
-                            url_text,
-                            re.IGNORECASE,
-                        )
-                    if match:
-                        video_by_number[int(match.group(1))] = row
-
-                pagination = payload.get("pagination") or {}
-                if not pagination.get("has_next_page"):
-                    break
-                page += 1
+            detail = _jikan_get(
+                f"/anime/{resolved_mal_id}/episodes/{number}"
+            ).get("data") or {}
+            if detail:
+                jikan_by_number[number].update(detail)
         except requests.RequestException:
-            video_by_number = {}
-
-    def _date_from_timestamp(value):
-        if value is None:
-            return None
-        try:
-            return __import__("datetime").datetime.fromtimestamp(
-                int(value)
-            ).strftime("%Y-%m-%d")
-        except (TypeError, ValueError, OverflowError, OSError):
-            return None
-
-    schedule_by_number = {
-        int(node["episode"]): node
-        for node in schedule
-        if node.get("episode") is not None
-    }
-
-    all_numbers = set(schedule_by_number)
-    all_numbers.update(jikan_by_number)
-
-    # Jikan's list endpoint does not include synopsis text. Fetch the full
-    # record for each episode so the card gets the actual episode synopsis.
-    if resolved_mal_id and jikan_by_number:
-        missing_detail = [
-            number
-            for number, row in jikan_by_number.items()
-            if not str(row.get("synopsis") or "").strip()
-            or not (
-                ((row.get("images") or {}).get("jpg") or {}).get("image_url")
-                or ((row.get("images") or {}).get("webp") or {}).get("image_url")
-            )
-        ]
-        for number in missing_detail:
-            try:
-                detail = _jikan_get(
-                    f"/anime/{int(resolved_mal_id)}/episodes/{number}"
-                ).get("data") or {}
-                if detail:
-                    jikan_by_number[number].update(detail)
-            except requests.RequestException:
-                continue
+            continue
 
     result = []
+    all_numbers = set(jikan_by_number)
+    all_numbers.update(video_by_number)
+
     for number in sorted(all_numbers):
         jikan = jikan_by_number.get(number) or {}
-        airing = schedule_by_number.get(number) or {}
-        aired = jikan.get("aired") or {}
         video = video_by_number.get(number) or {}
+        aired = jikan.get("aired") or {}
+
         jikan_images = jikan.get("images") or {}
         jikan_jpg = jikan_images.get("jpg") or {}
         jikan_webp = jikan_images.get("webp") or {}
@@ -698,11 +662,7 @@ def get_episode_data(media_id, mal_id=None):
                 or f"Episode {number}"
             ),
             "description": jikan.get("synopsis"),
-            "airdate": (
-                _date_from_timestamp(airing.get("airingAt"))
-                or str(aired.get("from") or "")[:10]
-                or None
-            ),
+            "airdate": str(aired.get("from") or "")[:10] or None,
             "thumbnail": (
                 jikan_jpg.get("image_url")
                 or jikan_webp.get("image_url")
