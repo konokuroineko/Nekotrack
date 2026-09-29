@@ -216,6 +216,7 @@ class NavigationButton(QPushButton):
         self.label = label
         self.setText(f"{icon_text}  {label}")
         self.setCheckable(True)
+        self.setFocusPolicy(Qt.NoFocus)
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(44)
         self.setProperty("navButton", True)
@@ -312,7 +313,7 @@ class MainWindow(QMainWindow):
             QLabel#brandWord {{ color:{COLORS['primary']}; font-size:19px; font-weight:800; letter-spacing:-.4px; padding-left:7px; }}
             QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:10px; padding:11px 13px; text-align:left; font-size:13px; font-weight:600; }}
             QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
-            QPushButton[navButton="true"]:checked {{ background:{COLORS['accent_soft']}; border-color:{COLORS['accent']}; color:{COLORS['accent_hover']}; }}
+            QPushButton[navButton="true"]:checked {{ background:{COLORS['accent_soft']}; border-color:transparent; color:{COLORS['primary']}; }}
         """
         )
         self.navigation.show(initial_page)
@@ -367,7 +368,7 @@ class MainWindow(QMainWindow):
             QLabel#brandWord {{ color:{COLORS['primary']}; font-size:19px; font-weight:800; letter-spacing:-.4px; padding-left:7px; }}
             QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:10px; padding:11px 13px; text-align:left; font-size:13px; font-weight:600; }}
             QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
-            QPushButton[navButton="true"]:checked {{ background:{COLORS['accent_soft']}; border-color:{COLORS['accent']}; color:{COLORS['accent_hover']}; }}
+            QPushButton[navButton="true"]:checked {{ background:{COLORS['accent_soft']}; border-color:transparent; color:{COLORS['primary']}; }}
             """
         )
 
