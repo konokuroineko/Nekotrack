@@ -238,7 +238,7 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         QTimer.singleShot(250, self._start_existing_library_episode_preload)
 
-    def setup_ui(self):
+    def setup_ui(self, initial_page="home"):
         refresh_theme()
         root = QWidget()
         root_layout = QHBoxLayout(root)
@@ -308,7 +308,7 @@ class MainWindow(QMainWindow):
             QPushButton[navButton="true"]:checked {{ background:{COLORS['accent_soft']}; border-color:{COLORS['accent']}; color:{COLORS['accent_hover']}; }}
         """
         )
-        self.navigation.show("home")
+        self.navigation.show(initial_page)
         QTimer.singleShot(500, self._preload_library_details)
 
     def _preload_library_details(self):
@@ -357,8 +357,9 @@ class MainWindow(QMainWindow):
             if hasattr(self, "search_page"):
                 self.search_page.shutdown_workers()
             self.navigation_buttons = {}
-            self.setup_ui()
-            self.navigation.show(current_page)
+            # Build the replacement UI directly on the page the user was
+            # already viewing instead of briefly showing Home during the swap.
+            self.setup_ui(current_page)
         finally:
             self.setUpdatesEnabled(True)
         if changed_key == "maximized":
