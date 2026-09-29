@@ -1847,6 +1847,11 @@ class WorkDetailPage(QWidget):
         self._episode_image_cache_cleanup(work_id)
         print(f"TMDB episode image cache failed for work {work_id}: {error}")
 
+        # Some images may have succeeded before one failed. Rebuild the
+        # selected season so any newly cached local files appear immediately.
+        if self._selected_episode_work_id == work_id:
+            self._replace_episode_section()
+
     def _episode_image_cache_cleanup(self, work_id):
         self._episode_image_cache_threads.pop(int(work_id), None)
         self._episode_image_cache_workers.pop(int(work_id), None)
