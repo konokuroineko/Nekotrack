@@ -32,14 +32,21 @@ class EpisodeSyncWorker(QObject):
     finished = Signal(int, object)
     error = Signal(int, str)
 
-    def __init__(self, work_id, mal_id=None):
+    def __init__(self, work_id, mal_id=None, season_number=None):
         super().__init__()
         self.work_id = int(work_id)
         self.mal_id = int(mal_id) if mal_id is not None else None
+        self.season_number = (
+            int(season_number) if season_number is not None else None
+        )
 
     def run(self):
         try:
-            payload = get_episode_data(self.work_id, self.mal_id)
+            payload = get_episode_data(
+                self.work_id,
+                self.mal_id,
+                self.season_number,
+            )
             self.finished.emit(self.work_id, payload)
         except Exception as error:
             self.error.emit(self.work_id, str(error))
@@ -1242,7 +1249,20 @@ class WorkDetailPage(QWidget):
 
         self._episode_sync_work_id = work_id
         self._episode_sync_thread = QThread(self)
-        self._episode_sync_worker = EpisodeSyncWorker(work_id, mal_id)
+        members = self._episode_members()
+        season_number = next(
+            (
+                index
+                for index, member in enumerate(members, start=1)
+                if int(member["id"]) == work_id
+            ),
+            1,
+        )
+        self._episode_sync_worker = EpisodeSyncWorker(
+            work_id,
+            mal_id,
+            season_number,
+        )
         self._episode_sync_worker.moveToThread(self._episode_sync_thread)
 
         self._episode_sync_thread.started.connect(self._episode_sync_worker.run)
