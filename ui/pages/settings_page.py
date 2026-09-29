@@ -23,7 +23,7 @@ from ui.preferences import (
     reset,
     set_value,
 )
-from ui.theme import COLORS, SPACING, refresh_theme
+from ui.theme import COLORS, SPACING, refresh_theme, retint_widget_styles
 
 
 class ThemePresetCard(QFrame):
@@ -426,7 +426,10 @@ class SettingsPage(QWidget):
         if name not in THEME_PRESETS:
             return
 
+        old_name = str(get("theme_preset") or "Neko")
         apply_theme_preset(name)
+        retint_widget_styles(old_name, name)
+
         for card_name, card in self.theme_cards.items():
             card.setProperty("selected", card_name == name)
             card.style().unpolish(card)
