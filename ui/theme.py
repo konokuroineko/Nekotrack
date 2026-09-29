@@ -1,3 +1,6 @@
+from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import QApplication
+
 from ui.preferences import get
 
 
@@ -49,6 +52,30 @@ def refresh_theme():
         COLORS[key] = get(key)
     COLORS["frame"] = get("frame_color")
     FONT_SIZES["body"] = get("font_size")
+
+    # Qt's native palette can otherwise introduce its own blue selection,
+    # focus, and link colors that sit on top of the themed stylesheet.
+    app = QApplication.instance()
+    if app is not None:
+        palette = app.palette()
+        role_colors = {
+            QPalette.ColorRole.Window: COLORS["background"],
+            QPalette.ColorRole.WindowText: COLORS["primary"],
+            QPalette.ColorRole.Base: COLORS["surface"],
+            QPalette.ColorRole.AlternateBase: COLORS["surface_alt"],
+            QPalette.ColorRole.ToolTipBase: COLORS["surface_alt"],
+            QPalette.ColorRole.ToolTipText: COLORS["primary"],
+            QPalette.ColorRole.Text: COLORS["primary"],
+            QPalette.ColorRole.Button: COLORS["surface"],
+            QPalette.ColorRole.ButtonText: COLORS["secondary"],
+            QPalette.ColorRole.Link: COLORS["accent"],
+            QPalette.ColorRole.Highlight: COLORS["accent"],
+            QPalette.ColorRole.HighlightedText: COLORS["accent_text"],
+            QPalette.ColorRole.PlaceholderText: COLORS["muted"],
+        }
+        for role, value in role_colors.items():
+            palette.setColor(role, QColor(value))
+        app.setPalette(palette)
 
 
 def application_stylesheet():
