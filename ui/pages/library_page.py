@@ -84,7 +84,9 @@ class LibraryPage(QWidget):
     def _build_shell(self):
         root = QVBoxLayout(self); root.setContentsMargins(38, 32, 38, 30); root.setSpacing(18)
         header = QHBoxLayout(); title_box = QVBoxLayout(); title_box.setSpacing(2)
-        title = QLabel("Library"); title.setStyleSheet(f"font-size:32px;font-weight:850;color:{COLORS['primary']};")
+        title = QLabel("Library")
+        self.title_label = title
+        title.setStyleSheet(f"font-size:32px;font-weight:850;color:{COLORS['primary']};")
         self.count_label = QLabel("0 titles"); self.count_label.setStyleSheet(f"font-size:12px;color:{COLORS['muted']};")
         title_box.addWidget(title); title_box.addWidget(self.count_label); header.addLayout(title_box); header.addStretch(); root.addLayout(header)
         controls = QFrame()
@@ -408,6 +410,10 @@ class LibraryPage(QWidget):
             self.filter_controls.setStyleSheet(
                 f"QFrame#libraryFilters{{background:{COLORS['surface']};border:1px solid {COLORS['frame']};border-radius:14px;}}"
             )
+        if hasattr(self, "title_label"):
+            self.title_label.setStyleSheet(
+                f"font-size:32px;font-weight:850;color:{COLORS['primary']};"
+            )
         if hasattr(self, "count_label"):
             self.count_label.setStyleSheet(
                 f"font-size:12px;color:{COLORS['muted']};"
@@ -424,8 +430,19 @@ class LibraryPage(QWidget):
             button.setStyleSheet(self._filter_style(name == self.current_filter))
 
     def _filter_style(self,active):
-        if active: return f"QPushButton{{background:{COLORS['accent']};color:{COLORS['accent_text']};border:0;border-radius:9px;padding:8px 15px;font-weight:800;}}"
-        return f"QPushButton{{background:transparent;color:{COLORS['secondary']};border:0;border-radius:9px;padding:8px 15px;font-weight:650;}}QPushButton:hover{{background:{COLORS['surface_hover']};color:{COLORS['primary']};}}"
+        focus = f"QPushButton:focus{{border:0;outline:0;}}"
+        if active:
+            return (
+                f"QPushButton{{background:{COLORS['accent']};"
+                f"color:{COLORS['accent_text']};border:0;border-radius:9px;"
+                f"padding:8px 15px;font-weight:800;}}{focus}"
+            )
+        return (
+            f"QPushButton{{background:transparent;color:{COLORS['secondary']};"
+            f"border:0;border-radius:9px;padding:8px 15px;font-weight:650;}}"
+            f"QPushButton:hover{{background:{COLORS['surface_hover']};"
+            f"color:{COLORS['primary']};}}{focus}"
+        )
     def _apply_filter(self):
         wanted={"All":None,"Watching":"Watching","Completed":"Completed","Planned":"Planning"}[self.current_filter]; self.anime_list=[x for x in self.all_anime if wanted is None or x["status"]==wanted]
     def _clear_cards(self):
