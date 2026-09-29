@@ -78,7 +78,7 @@ class WorkCard(QFrame):
             QFrame#posterCard:hover QLabel#title {{ color: {COLORS['accent_hover']}; }}
             QLabel#meta {{ color: {COLORS['muted']}; font-size: 11px; }}
             QLabel#seriesInfo {{ color: {COLORS['accent_hover']}; font-size: 10px; font-weight: 800; }}
-            QPushButton#add {{ background: {COLORS['accent']}; color: #111318; border: none; border-radius: 8px; padding: 7px; font-weight: 800; }}
+            QPushButton#add {{ background: {COLORS['accent']}; color: {COLORS['accent_text']}; border: none; border-radius: 8px; padding: 7px; font-weight: 800; }}
             QPushButton#add:hover {{ background: {COLORS['accent_hover']}; }}
         """)
         root = QVBoxLayout(self)
