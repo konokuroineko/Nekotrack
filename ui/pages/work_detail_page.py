@@ -7,7 +7,7 @@ from api import (
 from pathlib import Path
 import hashlib
 
-from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread
+from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
@@ -625,6 +625,7 @@ class WorkDetailPage(QWidget):
         self._episode_sync_work_id = None
         self._episode_image_cache_threads = {}
         self._episode_image_cache_workers = {}
+        self._detail_build_token = 0
         self._episode_sync_completed = set()
         self._episode_sync_errors = {}
         self._episode_refresh_queue = []
@@ -647,6 +648,8 @@ class WorkDetailPage(QWidget):
         self.work = work
         self._episode_sync_errors = {}
         self._episode_refresh_queue = []
+        self._detail_build_token += 1
+        build_token = self._detail_build_token
 
         detail_ids = self._detail_work_ids()
         if previous_selected_episode_id in detail_ids:
@@ -659,23 +662,35 @@ class WorkDetailPage(QWidget):
         if self._delete_overlay is not None:
             self._delete_overlay.deleteLater()
             self._delete_overlay = None
+
         content = QWidget()
         root = QVBoxLayout(content)
         root.setContentsMargins(42, 34, 42, 50)
         root.setSpacing(22)
+
         back = QPushButton("‹  Back to Library")
         back.setObjectName("back")
         back.clicked.connect(self.back_requested)
         root.addWidget(back, alignment=Qt.AlignLeft)
+
         root.addWidget(self._hero())
+
         episodes_frame = self._episodes_section()
         episodes_frame.setProperty("_episodes_section", True)
         root.addWidget(episodes_frame)
-        detail_ids = self._detail_work_ids()
-        root.addWidget(self._grid_section("Characters", get_bundle_characters(detail_ids), CharacterCard, self.character_selected, 4))
-        root.addWidget(self._grid_section("Staff", get_bundle_staff(detail_ids), PersonCard, self.person_selected, 6))
-        root.addWidget(self._grid_section("Relations", get_bundle_relations(detail_ids), RelationCard, self.relation_selected, 6))
+
+        detail_host = QWidget()
+        detail_host.setObjectName("detailSectionsHost")
+        detail_layout = QVBoxLayout(detail_host)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.setSpacing(22)
+
+        loading_details = QLabel("Loading details…")
+        loading_details.setStyleSheet(muted_label_stylesheet())
+        detail_layout.addWidget(loading_details)
+        root.addWidget(detail_host)
         root.addStretch()
+
         self.scroll_area.setWidget(content)
         self.setStyleSheet(f"""
             QPushButton#back {{ background: transparent; border: 0; color: {COLORS['secondary']}; padding: 5px 0; font-weight: 750; }}
@@ -705,6 +720,58 @@ class WorkDetailPage(QWidget):
             QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {COLORS['border_hover']}; background: {COLORS['background_alt']}; }}
             QCheckBox::indicator:checked {{ background: {COLORS['accent']}; border-color: {COLORS['accent']}; }}
         """)
+
+
+        QTimer.singleShot(
+            0,
+            lambda token=build_token, page=content, host=detail_host, ids=detail_ids:
+                self._populate_detail_sections(token, page, host, ids),
+        )
+
+    def _populate_detail_sections(self, token, content, host, detail_ids):
+        if token != self._detail_build_token:
+            return
+        if self.scroll_area.widget() is not content:
+            return
+
+        layout = host.layout()
+        if layout is None:
+            return
+
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        layout.addWidget(
+            self._grid_section(
+                "Characters",
+                get_bundle_characters(detail_ids),
+                CharacterCard,
+                self.character_selected,
+                4,
+            )
+        )
+        layout.addWidget(
+            self._grid_section(
+                "Staff",
+                get_bundle_staff(detail_ids),
+                PersonCard,
+                self.person_selected,
+                6,
+            )
+        )
+        layout.addWidget(
+            self._grid_section(
+                "Relations",
+                get_bundle_relations(detail_ids),
+                RelationCard,
+                self.relation_selected,
+                6,
+            )
+        )
+
 
     def _hero(self):
         hero = QFrame(); hero.setObjectName("hero")
