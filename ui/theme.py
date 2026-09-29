@@ -1,6 +1,8 @@
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
+import re
+
 from ui.preferences import get
 
 
@@ -94,6 +96,75 @@ def refresh_theme():
                 palette.setColor(group, role, color)
         app.setPalette(palette)
 
+
+
+def retint_widget_styles(old_theme_name, new_theme_name):
+    """Replace resolved old-theme colors in existing widget-local stylesheets."""
+    from ui.preferences import THEME_PRESETS
+
+    old_theme = THEME_PRESETS.get(str(old_theme_name))
+    new_theme = THEME_PRESETS.get(str(new_theme_name))
+    app = QApplication.instance()
+    if old_theme is None or new_theme is None or app is None:
+        return
+
+    color_keys = [key for key in COLOR_KEYS if key in old_theme and key in new_theme]
+    replacements = {
+        str(old_theme[key]).lower(): str(new_theme[key])
+        for key in color_keys
+        if old_theme[key] and new_theme[key]
+    }
+
+    # Colors can coincide in one preset (for example accent/frame in Classic).
+    # In those cases, resolve the replacement from the CSS property using the
+    # most likely semantic role.
+    ambiguous = {
+        source: [
+            key for key in color_keys
+            if str(old_theme[key]).lower() == source
+            and str(new_theme[key]) != source
+        ]
+        for source in replacements
+    }
+
+    def replace_stylesheet(style):
+        if not style:
+            return style
+
+        pattern = re.compile(r"#[0-9A-Fa-f]{6}(?=[^0-9A-Fa-f]|$)")
+
+        def replace(match):
+            source = match.group(0).lower()
+            keys = ambiguous.get(source)
+            if not keys:
+                return replacements.get(source, match.group(0))
+
+            # Inspect the CSS property immediately preceding this color.
+            before = style[max(0, match.start() - 80):match.start()].lower()
+            if "border-color:" in before or "border:" in before:
+                for key in ("frame_color", "border_hover", "border"):
+                    if key in keys:
+                        return str(new_theme[key])
+            if "selection-background-color:" in before or "background:" in before or "background-color:" in before:
+                for key in ("accent", "accent_hover", "surface_hover", "surface_alt", "surface", "background"):
+                    if key in keys:
+                        return str(new_theme[key])
+            if "color:" in before:
+                for key in ("accent_text", "accent", "primary", "secondary", "muted"):
+                    if key in keys:
+                        return str(new_theme[key])
+            return replacements.get(source, match.group(0))
+
+        return pattern.sub(replace, style)
+
+    for widget in app.allWidgets():
+        style = widget.styleSheet()
+        if not style:
+            continue
+        new_style = replace_stylesheet(style)
+        if new_style != style:
+            widget.setStyleSheet(new_style)
+        widget.update()
 
 def application_stylesheet():
     radius = get("corner_radius")
