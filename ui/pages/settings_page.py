@@ -255,6 +255,15 @@ class SettingsPage(QWidget):
 
         self._apply_page_style()
 
+    def refresh_theme(self):
+        self._apply_page_style()
+        current = str(get("theme_preset") or "Neko")
+        for name, card in getattr(self, "theme_cards", {}).items():
+            card.setProperty("selected", name == current)
+            card.style().unpolish(card)
+            card.style().polish(card)
+            card.update()
+
     def _apply_page_style(self):
         self.setStyleSheet(
             f"""
