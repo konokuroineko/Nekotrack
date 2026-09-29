@@ -38,12 +38,20 @@ def prepare_user_data():
 
 prepare_user_data()
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QProxyStyle, QStyle
 
 from ui.main_window import MainWindow
 from ui.preferences import get
 from ui.setup_wizard import SetupWizard
 from updater import InstallerDownloader, UpdateChecker
+
+
+class NekoProxyStyle(QProxyStyle):
+    """Use Qt styling without the platform focus rectangle."""
+    def drawPrimitive(self, element, option, painter, widget=None):
+        if element == QStyle.PrimitiveElement.PE_FrameFocusRect:
+            return
+        super().drawPrimitive(element, option, painter, widget)
 
 
 def _offer_update(window, update_info):
@@ -83,7 +91,7 @@ def _check_for_updates(window):
 
 def main():
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
+    app.setStyle(NekoProxyStyle("Fusion"))
 
     # The first-launch wizard configures preferences only; it does not touch
     # the user's SQLite library or cached artwork. --setup is a developer/user
