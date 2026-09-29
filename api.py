@@ -493,6 +493,35 @@ def get_media_episodes(media_id):
     ]
 
 
+def _jikan_get(path, params=None):
+    """Request Jikan data without bursting its public rate limit."""
+    url = f"https://api.jikan.moe/v4/{str(path).lstrip('/')}"
+    last_error = None
+
+    for attempt in range(3):
+        try:
+            response = requests.get(
+                url,
+                params=params or {},
+                timeout=20,
+            )
+            if response.status_code == 429:
+                time.sleep(1.0 + attempt)
+                continue
+            response.raise_for_status()
+            payload = response.json() or {}
+            time.sleep(0.35)
+            return payload
+        except (requests.RequestException, ValueError) as error:
+            last_error = error
+            if attempt < 2:
+                time.sleep(1.0 + attempt)
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"Jikan request failed: {url}")
+
+
 def get_episode_data(media_id, mal_id=None):
     """Fetch episode dates, titles, thumbnails and synopses for one anime."""
     anilist_query = """
@@ -554,18 +583,25 @@ def get_episode_data(media_id, mal_id=None):
         try:
             page = 1
             while True:
-                response = requests.get(
-                    f"https://api.jikan.moe/v4/anime/{int(resolved_mal_id)}/episodes",
-                    params={"page": page},
-                    timeout=20,
+                payload = _jikan_get(
+                    f"/anime/{int(resolved_mal_id)}/episodes",
+                    {"page": page},
                 )
-                response.raise_for_status()
-                payload = response.json() or {}
 
                 for row in payload.get("data") or []:
                     number = row.get("mal_id")
+                    match = re.search(
+                        r"/episode/(\d+)(?:/|$)",
+                        str(row.get("url") or ""),
+                        re.IGNORECASE,
+                    )
+                    if match:
+                        number = int(match.group(1))
                     if number is not None:
-                        jikan_by_number[int(number)] = row
+                        try:
+                            jikan_by_number[int(number)] = row
+                        except (TypeError, ValueError):
+                            continue
 
                 pagination = payload.get("pagination") or {}
                 if not pagination.get("has_next_page"):
@@ -577,13 +613,10 @@ def get_episode_data(media_id, mal_id=None):
         try:
             page = 1
             while True:
-                response = requests.get(
-                    f"https://api.jikan.moe/v4/anime/{int(resolved_mal_id)}/videos/episodes",
-                    params={"page": page},
-                    timeout=20,
+                payload = _jikan_get(
+                    f"/anime/{int(resolved_mal_id)}/videos/episodes",
+                    {"page": page},
                 )
-                response.raise_for_status()
-                payload = response.json() or {}
 
                 for row in payload.get("data") or []:
                     number_text = str(row.get("episode") or "")
@@ -640,12 +673,9 @@ def get_episode_data(media_id, mal_id=None):
         ]
         for number in missing_synopsis:
             try:
-                response = requests.get(
-                    f"https://api.jikan.moe/v4/anime/{int(resolved_mal_id)}/episodes/{number}",
-                    timeout=20,
-                )
-                response.raise_for_status()
-                detail = response.json().get("data") or {}
+                detail = _jikan_get(
+                    f"/anime/{int(resolved_mal_id)}/episodes/{number}"
+                ).get("data") or {}
                 if detail:
                     jikan_by_number[number].update(detail)
             except requests.RequestException:
