@@ -819,13 +819,21 @@ class WorkDetailPage(QWidget):
         if reply is not None: reply.deleteLater()
 
     def _library_group(self):
+        # Library cards already carry their complete series grouping. Reuse it
+        # instead of rebuilding every Library series when opening a detail page.
+        members = self._value("_series_members")
+        if members:
+            return self.work
+
+        # Search/relation entries may not have a cached Library group, so keep
+        # the old lookup as a fallback for those paths.
         work_id = self._value("id")
         if work_id is None:
             return None
         current_id = int(work_id)
         for group in get_library_series():
-            members = group.get("_series_members") or []
-            if any(int(member["id"]) == current_id for member in members):
+            group_members = group.get("_series_members") or []
+            if any(int(member["id"]) == current_id for member in group_members):
                 return group
         return None
 
