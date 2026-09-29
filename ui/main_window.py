@@ -144,6 +144,73 @@ class LibraryImportWorker(QObject):
 
 
 
+class LibraryEpisodePreloadWorker(QObject):
+    finished = Signal(int, object)
+    error = Signal(int, str)
+
+    def __init__(self, work_ids):
+        super().__init__()
+        self.work_ids = [int(work_id) for work_id in work_ids]
+
+    def run(self):
+        for work_id in self.work_ids:
+            try:
+                connection_work = get_work(work_id)
+                if connection_work is None:
+                    continue
+
+                existing_episodes = get_episodes(work_id)
+                if existing_episodes:
+                    continue
+
+                title_variants = [
+                    str(connection_work["title"] or "").strip(),
+                    *get_alternate_titles(work_id),
+                ]
+                title_variants = list(
+                    dict.fromkeys(value for value in title_variants if value)
+                )
+                if not title_variants:
+                    continue
+
+                year = connection_work["start_year"]
+                if year is None:
+                    continue
+
+                month = connection_work["start_month"] or 1
+                day = connection_work["start_day"] or 1
+                start_date = (
+                    f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+                )
+
+                tmdb_id, tmdb_season_number = get_tmdb_mapping(work_id)
+                payload = get_tmdb_episode_data(
+                    title_variants,
+                    start_date,
+                    None,
+                    connection_work["episodes"],
+                    tmdb_id,
+                    tmdb_season_number,
+                    str(connection_work["format"] or "").upper(),
+                )
+
+                resolved_tmdb_id = payload.get("tmdb_id")
+                if resolved_tmdb_id is not None:
+                    save_tmdb_mapping(
+                        work_id,
+                        resolved_tmdb_id,
+                        payload.get("tmdb_season_number"),
+                    )
+
+                episodes = payload.get("episodes") or []
+                if episodes:
+                    save_episodes(work_id, episodes)
+
+                self.finished.emit(work_id, episodes)
+            except Exception as error:
+                self.error.emit(work_id, str(error))
+
+
 class NavigationButton(QPushButton):
     def __init__(self, icon_text, label):
         super().__init__()
@@ -167,7 +234,10 @@ class MainWindow(QMainWindow):
         self.navigation_buttons = {}
         self._settings_rebuild_pending = False
         self._detail_enrichment_ids = set()
+        self._library_episode_preload_thread = None
+        self._library_episode_preload_worker = None
         self.setup_ui()
+        QTimer.singleShot(250, self._start_existing_library_episode_preload)
 
     def setup_ui(self):
         refresh_theme()
@@ -319,6 +389,86 @@ class MainWindow(QMainWindow):
     def update_navigation_state(self, page_name):
         for name, button in self.navigation_buttons.items():
             button.setChecked(name == page_name)
+
+    def _start_existing_library_episode_preload(self):
+        if (
+            self._library_episode_preload_thread is not None
+            and self._library_episode_preload_thread.isRunning()
+        ):
+            return
+
+        connection = get_connection()
+        try:
+            library_ids = [
+                int(row["id"])
+                for row in connection.execute(
+                    """
+                    SELECT works.id
+                    FROM works
+                    JOIN user_library ON user_library.work_id = works.id
+                    WHERE COALESCE(works.episodes, 0) > 0
+                    ORDER BY user_library.added_date
+                    """
+                ).fetchall()
+            ]
+        except Exception:
+            return
+        finally:
+            connection.close()
+
+        missing_ids = []
+        for work_id in library_ids:
+            try:
+                if not get_episodes(work_id):
+                    missing_ids.append(work_id)
+            except Exception:
+                continue
+
+        if not missing_ids:
+            return
+
+        worker = LibraryEpisodePreloadWorker(missing_ids)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._library_episode_preloaded)
+        worker.error.connect(
+            lambda work_id, message:
+                print(
+                    f"Existing library episode preload failed for "
+                    f"{work_id}: {message}"
+                )
+        )
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(
+            lambda t=thread: self._library_episode_preload_thread_finished(t)
+        )
+
+        self._library_episode_preload_thread = thread
+        self._library_episode_preload_worker = worker
+        thread.start()
+
+    def _library_episode_preloaded(self, work_id, episodes):
+        try:
+            self.work_detail_page._start_episode_image_cache(
+                int(work_id),
+                [dict(episode) for episode in (episodes or [])],
+            )
+        except Exception as error:
+            print(
+                f"Existing library image preload failed for work {work_id}: "
+                f"{error}"
+            )
+
+    def _library_episode_preload_thread_finished(self, thread):
+        if self._library_episode_preload_thread is thread:
+            self._library_episode_preload_thread = None
+            self._library_episode_preload_worker = None
+
 
     def show_work_details(self, work):
         # Open the detail page immediately. Older library entries may still
