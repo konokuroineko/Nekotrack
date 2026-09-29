@@ -194,6 +194,14 @@ def settings():
         current.setValue("theme_preset", "Neko")
         current.sync()
 
+    if current.value("theme_preset", "") == "Amethyst":
+        theme = THEME_PRESETS["Neko"]
+        current.setValue("theme_preset", "Neko")
+        for key, value in theme.items():
+            if key != "description":
+                current.setValue(key, value)
+        current.sync()
+
     return current
 
 
