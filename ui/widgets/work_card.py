@@ -99,7 +99,7 @@ class WorkCard(QFrame):
         title.setToolTip(full_title)
         self.title_label = title
         title.setStyleSheet(
-            f"color:{COLORS['accent_hover']};background:transparent;"
+            f"color:{COLORS['primary']};background:transparent;"
             f"font-size:{get('font_size')}px;font-weight:760;"
         )
 
@@ -133,7 +133,7 @@ class WorkCard(QFrame):
             series_info.setToolTip(str(summary or ""))
             self.series_info_label = series_info
             series_info.setStyleSheet(
-                f"color:{COLORS['accent_hover']};background:transparent;"
+                f"color:{COLORS['primary']};background:transparent;"
                 "font-size:10px;font-weight:800;"
             )
             content.addWidget(series_info)
@@ -235,10 +235,10 @@ class WorkCard(QFrame):
             QFrame#posterCard {{ background: transparent; border: 2px solid {COLORS['frame']}; border-radius: {get('corner_radius') + 2}px; }}
             QFrame#posterCard:hover {{ {hover_css} }}
             QLabel {{ background: transparent; border: none; }}
-            QLabel#title {{ color: {COLORS['accent_hover']}; font-size: {get('font_size')}px; font-weight: 760; }}
-            QFrame#posterCard:hover QLabel#title {{ color: {COLORS['accent_hover']}; }}
+            QLabel#title {{ color: {COLORS['primary']}; font-size: {get('font_size')}px; font-weight: 760; }}
+            QFrame#posterCard:hover QLabel#title {{ color: {COLORS['primary']}; }}
             QLabel#meta {{ color: {COLORS['muted']}; font-size: 11px; }}
-            QLabel#seriesInfo {{ color: {COLORS['accent_hover']}; font-size: 10px; font-weight: 800; }}
+            QLabel#seriesInfo {{ color: {COLORS['primary']}; font-size: 10px; font-weight: 800; }}
             QPushButton#add {{ background: {COLORS['accent']}; color: {COLORS['accent_text']}; border: none; border-radius: 8px; padding: 7px; font-weight: 800; }}
             QPushButton#add:hover {{ background: {COLORS['accent_hover']}; }}
         """)
