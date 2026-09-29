@@ -399,7 +399,7 @@ class LibraryPage(QWidget):
         for name,button in self.filter_buttons.items(): button.setChecked(name==value); button.setStyleSheet(self._filter_style(name==value))
         self._cancel_resize_animation(); self._apply_filter(); self._populate()
     def _filter_style(self,active):
-        if active: return f"QPushButton{{background:{COLORS['accent']};color:#101216;border:0;border-radius:9px;padding:8px 15px;font-weight:800;}}"
+        if active: return f"QPushButton{{background:{COLORS['accent']};color:{COLORS['accent_text']};border:0;border-radius:9px;padding:8px 15px;font-weight:800;}}"
         return f"QPushButton{{background:transparent;color:{COLORS['secondary']};border:0;border-radius:9px;padding:8px 15px;font-weight:650;}}QPushButton:hover{{background:{COLORS['surface_hover']};color:{COLORS['primary']};}}"
     def _apply_filter(self):
         wanted={"All":None,"Watching":"Watching","Completed":"Completed","Planned":"Planning"}[self.current_filter]; self.anime_list=[x for x in self.all_anime if wanted is None or x["status"]==wanted]
