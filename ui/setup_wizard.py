@@ -593,7 +593,7 @@ class SetupWizard(QDialog):
             QPushButton#setupPrimary {{
                 background:{theme['accent']};
                 border-color:{theme['accent']};
-                color:#121417;
+                color:{theme['accent_text']};
                 min-width:130px;
             }}
             QPushButton#setupPrimary:hover {{
