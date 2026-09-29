@@ -14,6 +14,12 @@ SERIES_RELATIONS = {
 # intentionally restricted to them so a TV-catalog search cannot spend its
 # global discovery budget walking huge spin-off/alternative graphs first.
 SEASON_CHAIN_RELATIONS = {"PREQUEL", "SEQUEL", "PARENT", "SUMMARY", "SIDE_STORY"}
+# These relation types can contain legitimate franchise entries that are not
+# part of the main season chain. Traverse them only when the titles identify
+# the same series family, preventing unrelated spin-offs from being absorbed.
+RELATED_TRAVERSAL_RELATIONS = {
+    "SPIN_OFF", "ALTERNATIVE", "COMPILATION", "FULL_STORY", "CONTAINS",
+}
 ANIME_BUNDLE_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL"}
 RELATION_BATCH_SIZE = 10
 MAX_NODE_FETCH_RETRIES = 3
@@ -98,6 +104,35 @@ def _series_key(title):
 
 def _series_group_key(item):
     return _media_family(item), _series_key(_title_text(item))
+
+
+def _title_family_compatible(left, right):
+    """Return whether two anime titles identify the same named series family."""
+    left_key = _series_key(_title_text(left))
+    right_key = _series_key(_title_text(right))
+    if not left_key or not right_key:
+        return False
+
+    if left_key == right_key:
+        return True
+
+    left_tokens = left_key.split()
+    right_tokens = right_key.split()
+
+    if left_tokens and right_tokens and (
+        left_tokens <= right_tokens or right_tokens <= left_tokens
+    ):
+        return True
+
+    shorter, longer = (
+        (left_tokens, right_tokens)
+        if len(left_tokens) <= len(right_tokens)
+        else (right_tokens, left_tokens)
+    )
+    if len(shorter) >= 2 and longer[:len(shorter)] == shorter:
+        return True
+
+    return False
 
 
 # Season counting belongs to the series bundling system. Keeping it here
@@ -356,6 +391,11 @@ def _relation_group_compatible(item, edge, target):
 
     source_format = str(_get(item, "format") or "").upper()
     target_format = str(_get(target, "format") or "").upper()
+    relation_type = edge.get("relationType")
+
+    if relation_type in RELATED_TRAVERSAL_RELATIONS:
+        return _title_family_compatible(item, target)
+
     if source_format == target_format:
         return True
 
@@ -365,7 +405,6 @@ def _relation_group_compatible(item, edge, target):
     # This is needed for entries whose proper subtitle does not repeat the
     # main title. PREQUEL/SEQUEL still use title compatibility to avoid
     # unrelated franchise-level links such as ONE PIECE -> MONSTERS.
-    relation_type = edge.get("relationType")
     if relation_type in {"SIDE_STORY", "SUMMARY", "PARENT"}:
         return True
 
@@ -399,11 +438,24 @@ def _relation_group_compatible(item, edge, target):
 
 
 def _traversal_edge_allowed(item, edge):
-    """Walk the season/continuation chain and discover recap/summary entries during recursive discovery."""
-    if edge.get("relationType") not in SEASON_CHAIN_RELATIONS:
-        return False
+    """Walk season chains and carefully include named series extras."""
+    relation_type = edge.get("relationType")
     node = edge.get("node") or {}
-    return bool(_get(node, "id")) and _same_media_family(item, node)
+
+    if not bool(_get(node, "id")) or not _same_media_family(item, node):
+        return False
+
+    if relation_type in SEASON_CHAIN_RELATIONS:
+        return True
+
+    if relation_type not in RELATED_TRAVERSAL_RELATIONS:
+        return False
+
+    # Extra relations such as Spin Off and Alternative can point outside the
+    # actual series. Only traverse them when the names still identify the same
+    # series family. This catches entries such as Re:Zero -> Break Time while
+    # avoiding unrelated franchise spin-offs.
+    return _title_family_compatible(item, node)
 
 
 def _related_placeholder(node):
