@@ -316,6 +316,13 @@ class MainWindow(QMainWindow):
         """
         )
         self.navigation.show("home")
+        QTimer.singleShot(500, self._preload_library_details)
+
+    def _preload_library_details(self):
+        try:
+            self.work_detail_page.preload_works(list(self.library_page.all_anime or []))
+        except Exception as error:
+            print(f"Library detail preload failed: {error}")
 
     def _refresh_library_after_bundle_change(self):
         # Wait until the detail-page deletion/link change has fully returned to
