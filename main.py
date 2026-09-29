@@ -42,6 +42,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from ui.main_window import MainWindow
 from ui.preferences import get
+from ui.setup_wizard import SetupWizard
 from updater import InstallerDownloader, UpdateChecker
 
 
@@ -82,6 +83,15 @@ def _check_for_updates(window):
 
 def main():
     app = QApplication(sys.argv)
+
+    # The first-launch wizard configures preferences only; it does not touch
+    # the user's SQLite library or cached artwork. --setup is a developer/user
+    # testing switch that reopens the wizard without resetting any data.
+    force_setup = "--setup" in sys.argv
+    if force_setup or not get("setup_complete"):
+        wizard = SetupWizard()
+        wizard.exec()
+
     window = MainWindow()
     if get("maximized"):
         window.showMaximized()
