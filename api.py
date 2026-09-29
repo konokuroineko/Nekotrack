@@ -1,7 +1,9 @@
 import datetime as _dt
+import hashlib
+import re
 import requests
 import time
-import re
+from pathlib import Path
 from urllib.parse import urlparse
 from ui.preferences import get
 
@@ -1129,6 +1131,7 @@ def get_media_details(media_id):
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w780"
+TMDB_EPISODE_CACHE_DIRECTORY = Path("data") / "images" / "episodes"
 
 
 def _tmdb_token():
@@ -1305,24 +1308,47 @@ def _pick_best_episode_still(series_id, season_number, episode):
     return _episode_still_url(stills[0].get("file_path")), len(stills)
 
 
-def _candidate_movie_score(candidate, title_variants, target_date):
-    names = {
+def _movie_title_similarity(candidate, title_variants):
+    names = [
         _normalize_title(candidate.get("title")),
         _normalize_title(candidate.get("original_title")),
-    }
-    queries = {
+    ]
+    names = [name for name in names if name]
+
+    queries = [
         _normalize_title(value)
         for value in (title_variants or [])
         if str(value or "").strip()
-    }
-    score = 1000 if names & queries else 0
+    ]
+    queries = [query for query in queries if query]
+
+    best = 0.0
+    for name in names:
+        for query in queries:
+            if name == query:
+                return 1.0
+            if name in query or query in name:
+                best = max(best, min(len(name), len(query)) / max(len(name), len(query)))
+            else:
+                prefix = 0
+                for left, right in zip(name, query):
+                    if left != right:
+                        break
+                    prefix += 1
+                best = max(best, prefix / max(len(name), len(query)))
+    return best
+
+
+def _candidate_movie_score(candidate, title_variants, target_date):
+    similarity = _movie_title_similarity(candidate, title_variants)
+    score = similarity * 1000
 
     release_date = _parse_date(candidate.get("release_date"))
     if release_date and target_date:
         score -= abs((release_date - target_date).days) / 10
 
     score += min(float(candidate.get("popularity") or 0), 20)
-    return score
+    return score, similarity, release_date
 
 
 def _find_tmdb_movie(title_variants, target_date):
@@ -1366,20 +1392,67 @@ def _find_tmdb_movie(title_variants, target_date):
                     candidates[int(candidate["id"])] = candidate
 
     if not candidates:
-        raise RuntimeError("TMDB could not find a matching movie.")
+        raise RuntimeError("TMDB could not find a matching OVA movie.")
 
-    return max(
+    ranked = sorted(
         candidates.values(),
         key=lambda candidate: _candidate_movie_score(
             candidate,
             variants,
             target_date,
         ),
+        reverse=True,
+    )
+    best = ranked[0]
+    _, similarity, release_date = _candidate_movie_score(
+        best,
+        variants,
+        target_date,
     )
 
+    if similarity < 0.70:
+        raise RuntimeError(
+            "TMDB could not confidently match this OVA by title."
+        )
+    if (
+        release_date is not None
+        and target_date is not None
+        and abs((release_date - target_date).days) > 365
+        and similarity < 0.95
+    ):
+        raise RuntimeError(
+            "TMDB found a title match for this OVA, but its release date is too far away."
+        )
 
-def _movie_backdrop(series_id):
-    return None
+    return best
+
+
+def _cache_episode_image(url, work_id, episode_number):
+    if not url:
+        return None
+
+    url = str(url).strip()
+    if not url:
+        return None
+
+    digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+    work_directory = TMDB_EPISODE_CACHE_DIRECTORY / str(int(work_id))
+    work_directory.mkdir(parents=True, exist_ok=True)
+    path = work_directory / f"{int(episode_number)}_{digest}.jpg"
+
+    if path.is_file() and path.stat().st_size > 0:
+        return str(path)
+
+    try:
+        response = requests.get(url, timeout=20)
+        response.raise_for_status()
+        data = response.content
+        if not data:
+            return url
+        path.write_bytes(data)
+        return str(path)
+    except (requests.RequestException, OSError):
+        return url
 
 
 def _pick_best_movie_image(movie_id, movie):
@@ -1459,15 +1532,25 @@ def get_tmdb_episode_data(
     tmdb_id=None,
     tmdb_season_number=None,
     media_format=None,
+    cache_work_id=None,
 ):
     """Resolve one NekoTrack season and fetch its TMDB episode data."""
     if str(media_format or "").upper() == "OVA":
-        return _get_tmdb_movie_episode(
+        payload = _get_tmdb_movie_episode(
             title_variants,
             start_date,
             expected_episodes,
             tmdb_id,
         )
+        if cache_work_id is not None:
+            for episode in payload.get("episodes") or []:
+                if episode.get("thumbnail"):
+                    episode["thumbnail"] = _cache_episode_image(
+                        episode["thumbnail"],
+                        cache_work_id,
+                        episode["episodeNumber"],
+                    )
+        return payload
 
     target_start = _parse_date(start_date)
     target_end = _parse_date(end_date)
@@ -1502,6 +1585,12 @@ def get_tmdb_episode_data(
             tmdb_season_number,
             episode,
         )
+        if cache_work_id is not None and thumbnail:
+            thumbnail = _cache_episode_image(
+                thumbnail,
+                cache_work_id,
+                episode["episode_number"],
+            )
 
         selected.append({
             "episodeNumber": int(episode["episode_number"]),
