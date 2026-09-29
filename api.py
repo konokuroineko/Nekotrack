@@ -824,12 +824,24 @@ def get_episode_data(media_id, mal_id=None, season_number=None):
             continue
 
     kitsu_by_number = {}
+    kitsu_diagnostics = {
+        "kitsu_anime_id": None,
+        "mapping_count": 0,
+        "requested_season": season_number,
+        "pages": 0,
+        "rows": 0,
+        "season_counts": {},
+        "episode_1": {},
+    }
     # Kitsu is deliberately queried only as a field-level fallback. Jikan's
     # episode numbers/titles/dates remain primary whenever they exist.
     try:
-        kitsu_by_number = _kitsu_episode_map(resolved_mal_id, season_number)
-    except requests.RequestException:
-        kitsu_by_number = {}
+        kitsu_by_number, kitsu_diagnostics = _kitsu_episode_map(
+            resolved_mal_id,
+            season_number,
+        )
+    except Exception as error:
+        kitsu_diagnostics["error"] = str(error)
 
     result = []
     all_numbers = set(jikan_by_number)
@@ -892,6 +904,7 @@ def get_episode_data(media_id, mal_id=None, season_number=None):
         "episodes": result,
         "jikan_count": len(jikan_by_number),
         "kitsu_count": len(kitsu_by_number),
+        "kitsu_diagnostics": kitsu_diagnostics,
     }
 
 
