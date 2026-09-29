@@ -576,26 +576,39 @@ def _kitsu_anime_id_for_mal(mal_id):
         },
     )
 
-    for row in payload.get("data") or []:
+    mappings = payload.get("data") or []
+    mapping_count = len(mappings)
+
+    for row in mappings:
         relationships = row.get("relationships") or {}
         item = relationships.get("item") or {}
         item_data = item.get("data") or {}
         if item_data.get("type") == "anime" and item_data.get("id") is not None:
-            return str(item_data["id"])
+            return str(item_data["id"]), mapping_count
 
     included = payload.get("included") or []
     for row in included:
         if row.get("type") == "anime" and row.get("id") is not None:
-            return str(row["id"])
+            return str(row["id"]), mapping_count
 
-    return None
+    return None, mapping_count
 
 
 def _kitsu_episode_map(mal_id, season_number=None):
-    """Return Kitsu episodes keyed by episode number for one Kitsu season."""
-    kitsu_id = _kitsu_anime_id_for_mal(mal_id)
+    """Return Kitsu episodes keyed by episode number plus diagnostics."""
+    kitsu_id, mapping_count = _kitsu_anime_id_for_mal(mal_id)
+    diagnostics = {
+        "kitsu_anime_id": kitsu_id,
+        "mapping_count": mapping_count,
+        "requested_season": season_number,
+        "pages": 0,
+        "rows": 0,
+        "season_counts": {},
+        "episode_1": {},
+    }
+
     if kitsu_id is None:
-        return {}
+        return {}, diagnostics
 
     episodes = []
     offset = 0
@@ -611,50 +624,80 @@ def _kitsu_episode_map(mal_id, season_number=None):
             },
         )
         rows = payload.get("data") or []
+        diagnostics["pages"] += 1
+        diagnostics["rows"] += len(rows)
         episodes.extend(rows)
 
         links = payload.get("links") or {}
         if not links.get("next") or not rows:
             break
 
-        # Kitsu returns the next collection URL; use its presence as the
-        # authoritative pagination signal and advance by the actual page size.
         offset += len(rows)
 
     result = {}
+
     for row in episodes:
         attributes = row.get("attributes") or {}
 
-        if season_number is not None:
-            kitsu_season = attributes.get("seasonNumber")
+        season = attributes.get("seasonNumber")
+        if season is not None:
             try:
-                if kitsu_season is not None and int(kitsu_season) != int(season_number):
+                season_key = str(int(season))
+            except (TypeError, ValueError):
+                season_key = str(season)
+            diagnostics["season_counts"][season_key] = (
+                diagnostics["season_counts"].get(season_key, 0) + 1
+            )
+
+        number = attributes.get("relativeNumber")
+        if number is None:
+            number = attributes.get("number")
+
+        try:
+            number_int = int(number) if number is not None else None
+        except (TypeError, ValueError):
+            number_int = None
+
+        if number_int == 1 and not diagnostics["episode_1"]:
+            thumbnail = attributes.get("thumbnail")
+            if isinstance(thumbnail, dict):
+                thumbnail = (
+                    thumbnail.get("original")
+                    or thumbnail.get("large")
+                    or thumbnail.get("medium")
+                    or thumbnail.get("small")
+                )
+            diagnostics["episode_1"] = {
+                "id": row.get("id"),
+                "seasonNumber": season,
+                "number": attributes.get("number"),
+                "relativeNumber": attributes.get("relativeNumber"),
+                "canonicalTitle": attributes.get("canonicalTitle"),
+                "has_synopsis": bool(str(attributes.get("synopsis") or "").strip()),
+                "has_thumbnail": bool(thumbnail),
+                "thumbnail_url": thumbnail,
+            }
+
+        if season_number is not None:
+            try:
+                if season is None or int(season) != int(season_number):
                     continue
             except (TypeError, ValueError):
                 continue
 
-        # relativeNumber is the within-season number. Only use absolute
-        # number when Kitsu has no usable relative number.
-        number = attributes.get("relativeNumber")
-        if number is None:
-            number = attributes.get("number")
-        if number is None:
+        if number_int is None:
             continue
 
-        try:
-            number = int(number)
-        except (TypeError, ValueError):
-            continue
-
-        result[number] = {
+        result[number_int] = {
             **attributes,
             "_kitsu_id": row.get("id"),
         }
 
-    return result
+    return result, diagnostics
 
 
 def get_episode_data(media_id, mal_id=None, season_number=None):
+
     """Fetch episode data from Jikan with a season-aware Kitsu fallback."""
     identity_query = """
     query ($id: Int) {
