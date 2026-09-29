@@ -1451,68 +1451,56 @@ def _find_tmdb_ova_movies(title_variants, target_date, expected_episodes):
 
 
 def _tmdb_search_movies(query, target_date):
-    params = {
-        "query": str(query).strip(),
+    query = str(query or "").strip()
+    if not query:
+        return []
+
+    def fetch(params):
+        payload = _tmdb_get("/search/movie", params)
+        return [
+            candidate
+            for candidate in (payload.get("results") or [])
+            if candidate.get("id") is not None
+        ]
+
+    base_params = {
+        "query": query,
         "include_adult": "false",
         "include_video": "false",
     }
-    if target_date is not None:
-        params["primary_release_year"] = target_date.year
 
     candidates = []
-    payload = _tmdb_get("/search/movie", params)
-    candidates.extend(
-        candidate
-        for candidate in payload.get("results") or []
-        if candidate.get("id") is not None
-    )
+    seen_ids = set()
 
-    if not candidates:
-        payload = _tmdb_get(
-            "/search/movie",
-            {
-                "query": str(query).strip(),
-                "include_adult": "false",
-                "include_video": "false",
-            },
-        )
-        candidates.extend(
-            candidate
-            for candidate in payload.get("results") or []
-            if candidate.get("id") is not None
-        )
+    if target_date is not None:
+        year_candidates = fetch({
+            **base_params,
+            "primary_release_year": target_date.year,
+        })
+        for candidate in year_candidates:
+            candidate_id = int(candidate["id"])
+            if candidate_id not in seen_ids:
+                candidates.append(candidate)
+                seen_ids.add(candidate_id)
+
+    # A title may have a different TMDB release year from the AniList start
+    # year. Only make the broader request when the year-constrained results do
+    # not contain a convincing title match.
+    best_similarity = max(
+        (
+            _movie_title_similarity(candidate, [query])
+            for candidate in candidates
+        ),
+        default=0.0,
+    )
+    if best_similarity < 0.70:
+        for candidate in fetch(base_params):
+            candidate_id = int(candidate["id"])
+            if candidate_id not in seen_ids:
+                candidates.append(candidate)
+                seen_ids.add(candidate_id)
 
     return candidates
-
-
-def _pick_best_movie_image(movie_id, movie):
-    primary = _episode_still_url(movie.get("backdrop_path"))
-    if primary:
-        return primary, 1
-
-    try:
-        payload = _tmdb_get(
-            f"/movie/{int(movie_id)}/images",
-            {
-                "include_image_language": "en,null",
-            },
-        )
-    except requests.RequestException:
-        return None, 0
-
-    backdrops = payload.get("backdrops") or []
-    if not backdrops:
-        return None, 0
-
-    backdrops.sort(
-        key=lambda item: (
-            float(item.get("vote_average") or 0),
-            int(item.get("vote_count") or 0),
-            int(item.get("width") or 0),
-        ),
-        reverse=True,
-    )
-    return _episode_still_url(backdrops[0].get("file_path")), len(backdrops)
 
 
 def _get_tmdb_movie_episode(
