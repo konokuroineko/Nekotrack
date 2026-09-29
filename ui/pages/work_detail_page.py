@@ -663,16 +663,15 @@ class WorkDetailPage(QWidget):
         """)
 
 
-        # Give Qt a chance to paint the lightweight detail page before
-        # constructing the expensive episode/card sections. A zero-delay timer
-        # can still run before the first visible frame.
+        # Paint the lightweight shell first, then incrementally build the
+        # heavier episode/detail sections without monopolizing the UI thread.
         QTimer.singleShot(
-            50,
+            40,
             lambda token=build_token, page=content, host=episode_host:
                 self._populate_episode_section(token, page, host),
         )
         QTimer.singleShot(
-            150,
+            40,
             lambda token=build_token, page=content, host=detail_host, ids=detail_ids:
                 self._populate_detail_sections(token, page, host, ids),
         )
@@ -683,7 +682,7 @@ class WorkDetailPage(QWidget):
         if self.scroll_area.widget() is not content:
             return
 
-        new_frame = self._episodes_section()
+        new_frame = self._episodes_section(defer_cards=True)
         new_frame.setProperty("_episodes_section", True)
 
         root = content.layout()
@@ -696,6 +695,49 @@ class WorkDetailPage(QWidget):
 
         root.replaceWidget(host, new_frame)
         host.deleteLater()
+
+        episodes = getattr(new_frame, "_pending_episode_cards", None)
+        if episodes:
+            QTimer.singleShot(
+                0,
+                lambda token=token, page=content, frame=new_frame, data=episodes:
+                    self._populate_episode_cards(token, page, frame, data, 0),
+            )
+
+
+    def _populate_episode_cards(self, token, content, frame, episodes, offset):
+        if token != self._detail_build_token:
+            return
+        if self.scroll_area.widget() is not content:
+            return
+
+        root = content.layout()
+        if root is None or root.indexOf(frame) < 0:
+            return
+
+        layout = frame.layout()
+        if layout is None:
+            return
+
+        batch_size = 6
+        end = min(offset + batch_size, len(episodes))
+        for ep in episodes[offset:end]:
+            card = EpisodeCard(ep)
+            card.watched_changed.connect(self._episode_toggled)
+            layout.addWidget(card)
+
+        if end < len(episodes):
+            QTimer.singleShot(
+                0,
+                lambda token=token, page=content, current=frame, data=episodes, next_offset=end:
+                    self._populate_episode_cards(
+                        token,
+                        page,
+                        current,
+                        data,
+                        next_offset,
+                    ),
+            )
 
 
     def _populate_detail_sections(self, token, content, host, detail_ids):
@@ -714,32 +756,109 @@ class WorkDetailPage(QWidget):
             if widget is not None:
                 widget.deleteLater()
 
+        loading = QLabel("Loading characters…")
+        loading.setStyleSheet(muted_label_stylesheet())
+        layout.addWidget(loading)
+
+        QTimer.singleShot(
+            0,
+            lambda token=token, page=content, target_layout=layout, label=loading, ids=list(detail_ids):
+                self._populate_detail_section(
+                    token,
+                    page,
+                    target_layout,
+                    label,
+                    ids,
+                    "Characters",
+                    get_bundle_characters,
+                    CharacterCard,
+                    self.character_selected,
+                    4,
+                ),
+        )
+
+
+    def _populate_detail_section(
+        self,
+        token,
+        content,
+        layout,
+        loading,
+        detail_ids,
+        title,
+        data_getter,
+        card_class,
+        signal,
+        columns,
+    ):
+        if token != self._detail_build_token:
+            return
+        if self.scroll_area.widget() is not content:
+            return
+
+        loading_index = layout.indexOf(loading)
+        if loading_index < 0:
+            return
+
+        try:
+            items = data_getter(detail_ids)
+        except Exception as error:
+            print(f"{title} section failed to load: {error}")
+            items = []
+
+        loading.deleteLater()
         layout.addWidget(
             self._grid_section(
-                "Characters",
-                get_bundle_characters(detail_ids),
-                CharacterCard,
-                self.character_selected,
-                4,
+                title,
+                items,
+                card_class,
+                signal,
+                columns,
             )
         )
-        layout.addWidget(
-            self._grid_section(
+
+        next_specs = {
+            "Characters": (
                 "Staff",
-                get_bundle_staff(detail_ids),
+                get_bundle_staff,
                 PersonCard,
                 self.person_selected,
                 6,
-            )
-        )
-        layout.addWidget(
-            self._grid_section(
+            ),
+            "Staff": (
                 "Relations",
-                get_bundle_relations(detail_ids),
+                get_bundle_relations,
                 RelationCard,
                 self.relation_selected,
                 6,
-            )
+            ),
+        }
+        spec = next_specs.get(title)
+        if spec is None:
+            return
+
+        next_title, next_getter, next_class, next_signal, next_columns = spec
+        next_loading = QLabel(f"Loading {next_title.lower()}…")
+        next_loading.setStyleSheet(muted_label_stylesheet())
+        layout.addWidget(next_loading)
+
+        QTimer.singleShot(
+            0,
+            lambda token=token, page=content, target_layout=layout, label=next_loading,
+                   ids=list(detail_ids), next_title=next_title, getter=next_getter,
+                   cls=next_class, slot=next_signal, cols=next_columns:
+                self._populate_detail_section(
+                    token,
+                    page,
+                    target_layout,
+                    label,
+                    ids,
+                    next_title,
+                    getter,
+                    cls,
+                    slot,
+                    cols,
+                ),
         )
 
     def _hero(self):
@@ -1223,7 +1342,7 @@ class WorkDetailPage(QWidget):
         painter.end()
         return result
 
-    def _episodes_section(self):
+    def _episodes_section(self, defer_cards=False):
         members = self._episode_members()
         member_ids = {int(member["id"]) for member in members}
         if self._selected_episode_work_id not in member_ids:
@@ -1443,10 +1562,13 @@ class WorkDetailPage(QWidget):
             lay.addWidget(x)
             return frame
 
-        for ep in episodes:
-            card = EpisodeCard(ep)
-            card.watched_changed.connect(self._episode_toggled)
-            lay.addWidget(card)
+        if defer_cards:
+            frame._pending_episode_cards = [dict(ep) for ep in episodes]
+        else:
+            for ep in episodes:
+                card = EpisodeCard(ep)
+                card.watched_changed.connect(self._episode_toggled)
+                lay.addWidget(card)
 
         return frame
 
@@ -1946,10 +2068,19 @@ class WorkDetailPage(QWidget):
                 continue
 
             old_frame = widget
-            new_frame = self._episodes_section()
+            new_frame = self._episodes_section(defer_cards=True)
             new_frame.setProperty("_episodes_section", True)
             root.replaceWidget(old_frame, new_frame)
             old_frame.deleteLater()
+
+            episodes = getattr(new_frame, "_pending_episode_cards", None)
+            if episodes:
+                token = self._detail_build_token
+                QTimer.singleShot(
+                    0,
+                    lambda token=token, page=content, frame=new_frame, data=episodes:
+                        self._populate_episode_cards(token, page, frame, data, 0),
+                )
             return
 
     def _episode_toggled(self, number, checked):
