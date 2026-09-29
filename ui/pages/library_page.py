@@ -416,7 +416,7 @@ class LibraryPage(QWidget):
     def refresh_theme(self):
         if hasattr(self, "filter_controls"):
             self.filter_controls.setStyleSheet(
-                f"QFrame#libraryFilters{{background:{COLORS['surface']};border:1px solid {COLORS['frame']};border-radius:14px;}}"
+                f"QFrame#libraryFilters{{background:{COLORS['surface']};border:none;border-radius:14px;}}"
             )
         if hasattr(self, "title_label"):
             self.title_label.setStyleSheet(
