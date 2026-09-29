@@ -52,7 +52,6 @@ class EpisodeProviderDebugWorker(QObject):
         self.tmdb_id = tmdb_id
         self.tmdb_season_number = tmdb_season_number
         self.media_format = media_format
-        self.media_format = media_format
 
     def run(self):
         try:
