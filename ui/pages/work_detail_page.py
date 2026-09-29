@@ -1,4 +1,4 @@
-from api import get_episode_data, get_media_details
+from api import get_episode_data, get_episode_provider_sample, get_media_details
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread
@@ -47,7 +47,7 @@ class EpisodeProviderDebugWorker(QObject):
                 raise ValueError("No MAL ID is available for this season.")
 
             self.finished.emit(
-                get_episode_data(
+                get_episode_provider_sample(
                     self.work_id,
                     self.mal_id,
                     self.season_number,
@@ -1341,7 +1341,6 @@ class WorkDetailPage(QWidget):
             (dict(row) for row in stored if int(row["episode_number"]) == 1),
             None,
         )
-
         self._episode_provider_diagnostics[work_id] = {
             "payload": payload or {},
             "stored_episode_1": stored_episode_1 or {},
@@ -1353,7 +1352,7 @@ class WorkDetailPage(QWidget):
         self._episode_debug_cleanup()
         QMessageBox.warning(
             self,
-            "Kitsu diagnostic failed",
+            "Episode provider diagnostic failed",
             str(error),
         )
 
@@ -1362,28 +1361,34 @@ class WorkDetailPage(QWidget):
         self._episode_debug_worker = None
 
     def _show_episode_debug_result(self, payload, stored):
-        kitsu = payload.get("kitsu_diagnostics") or {}
+        jikan = payload.get("jikan") or {}
+        kitsu = payload.get("kitsu") or {}
+        merged = payload.get("merged") or {}
         episode_1 = kitsu.get("episode_1") or {}
-        merged = payload.get("merged_episode_1") or {}
         season_counts = kitsu.get("season_counts") or {}
 
         lines = [
             f"MAL ID: {payload.get('mal_id') or 'none'}",
-            f"Jikan episodes: {payload.get('jikan_count', 0)}",
-            f"Kitsu anime ID: {kitsu.get('kitsu_anime_id') or 'none'}",
-            f"Kitsu mapping rows: {kitsu.get('mapping_count', 0)}",
-            f"Kitsu API pages: {kitsu.get('pages', 0)}",
-            f"Kitsu episode rows: {kitsu.get('rows', 0)}",
-            f"Requested NekoTrack season: {kitsu.get('requested_season') or 'none'}",
-            f"Kitsu seasons seen: {season_counts or 'none'}",
             "",
-            "Kitsu Episode 1:",
-            f"  synopsis: {'YES' if episode_1.get('has_synopsis') else 'NO'}",
-            f"  thumbnail: {'YES' if episode_1.get('has_thumbnail') else 'NO'}",
+            "Jikan Episode 1:",
+            f"  title: {jikan.get('title') or 'none'}",
+            f"  synopsis: {'YES' if str(jikan.get('synopsis') or '').strip() else 'NO'}",
+            f"  thumbnail: {'YES' if jikan.get('thumbnail') else 'NO'}",
+            f"  error: {jikan.get('error') or 'none'}",
+            "",
+            "Kitsu:",
+            f"  anime ID: {kitsu.get('kitsu_anime_id') or 'none'}",
+            f"  mapping rows: {kitsu.get('mapping_count', 0)}",
+            f"  API pages: {kitsu.get('pages', 0)}",
+            f"  episode rows: {kitsu.get('rows', 0)}",
+            f"  requested season: {kitsu.get('requested_season') or 'none'}",
+            f"  seasons seen: {season_counts or 'none'}",
+            f"  Episode 1 synopsis: {'YES' if episode_1.get('has_synopsis') else 'NO'}",
+            f"  Episode 1 thumbnail: {'YES' if episode_1.get('has_thumbnail') else 'NO'}",
             "",
             "Merged Episode 1:",
-            f"  synopsis: {'YES' if merged.get('has_synopsis') else 'NO'}",
-            f"  thumbnail: {'YES' if merged.get('has_thumbnail') else 'NO'}",
+            f"  synopsis: {'YES' if str(merged.get('synopsis') or '').strip() else 'NO'}",
+            f"  thumbnail: {'YES' if merged.get('thumbnail') else 'NO'}",
             "",
             "SQLite Episode 1:",
             f"  synopsis: {'YES' if str(stored.get('description') or '').strip() else 'NO'}",
@@ -1392,13 +1397,12 @@ class WorkDetailPage(QWidget):
 
         synopsis = str(merged.get("synopsis") or "").strip()
         if synopsis:
-            lines.extend(["", "Merged synopsis:", synopsis[:500]])
+            lines.extend(["", "Merged synopsis:", synopsis[:700]])
 
-        error = kitsu.get("error")
-        if error:
-            lines.extend(["", f"Kitsu error: {error}"])
-
-        self._show_copyable_diagnostic("Episode provider diagnostics", "\n".join(lines))
+        self._show_copyable_diagnostic(
+            "Episode provider diagnostics",
+            "\n".join(lines),
+        )
 
     def _show_copyable_diagnostic(self, title, message):
         dialog = QDialog(self)
