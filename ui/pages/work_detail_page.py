@@ -581,6 +581,7 @@ class WorkDetailPage(QWidget):
         self._episode_sync_worker = None
         self._episode_sync_work_id = None
         self._episode_sync_completed = set()
+        self._episode_sync_errors = {}
         self._episode_refresh_queue = []
         self._episode_source_status = {}
         self._episode_provider_diagnostics = {}
@@ -599,6 +600,7 @@ class WorkDetailPage(QWidget):
     def set_work(self, work):
         previous_selected_episode_id = self._selected_episode_work_id
         self.work = work
+        self._episode_sync_errors = {}
         self._episode_refresh_queue = []
 
         detail_ids = self._detail_work_ids()
@@ -1295,7 +1297,11 @@ class WorkDetailPage(QWidget):
 
         # Refresh each season once per detail-page session. This also clears
         # stale thumbnail URLs left by earlier episode imports.
-        if selected_id is not None and selected_id not in self._episode_sync_completed:
+        if (
+            selected_id is not None
+            and selected_id not in self._episode_sync_completed
+            and selected_id not in self._episode_sync_errors
+        ):
             local_mal_id = (
                 selected_work["mal_id"]
                 if selected_work is not None and "mal_id" in selected_work.keys()
@@ -1326,11 +1332,16 @@ class WorkDetailPage(QWidget):
             )
 
         if not episodes:
+            sync_error = self._episode_sync_errors.get(int(selected_id)) if selected_id is not None else None
             message = (
-                "Loading episode data…"
-                if selected_work is not None
-                and int(selected_work["episodes"] or 0) > 0
-                else "No episode data is available for this season."
+                f"Could not load episode data: {sync_error}"
+                if sync_error
+                else (
+                    "Loading episode data…"
+                    if selected_work is not None
+                    and int(selected_work["episodes"] or 0) > 0
+                    else "No episode data is available for this season."
+                )
             )
             x = QLabel(message)
             x.setStyleSheet(muted_label_stylesheet())
@@ -1548,6 +1559,7 @@ class WorkDetailPage(QWidget):
         EpisodeArtwork._failures.clear()
         for work_id in member_ids:
             self._episode_sync_completed.discard(work_id)
+            self._episode_sync_errors.pop(work_id, None)
 
         # Refresh the selected season first, then refresh the remaining
         # bundled seasons one at a time.
@@ -1706,6 +1718,7 @@ class WorkDetailPage(QWidget):
         payload = payload or {}
         episodes = payload.get("episodes") or []
         mal_id = payload.get("mal_id")
+        self._episode_sync_errors.pop(work_id, None)
         self._episode_source_status[work_id] = {
             "tmdb": int(payload.get("tmdb_count") or 0),
         }
@@ -1737,7 +1750,7 @@ class WorkDetailPage(QWidget):
 
     def _episode_sync_error(self, work_id, error):
         work_id = int(work_id)
-        self._episode_sync_completed.add(work_id)
+        self._episode_sync_errors[work_id] = str(error)
 
         if self._episode_sync_work_id == work_id:
             self._episode_sync_thread = None
