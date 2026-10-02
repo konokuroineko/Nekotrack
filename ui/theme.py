@@ -97,6 +97,16 @@ def refresh_theme():
     app.setPalette(palette)
 
 
+def retint_widget_styles(old_theme_name, new_theme_name):
+    """Compatibility hook for the settings page.
+
+    Theme changes are applied through the semantic theme roles and live refresh
+    methods. Existing widgets are refreshed directly, so no historical color
+    rewriting is needed here.
+    """
+    return
+
+
 def application_stylesheet():
     radius = get("corner_radius")
     return f"""
