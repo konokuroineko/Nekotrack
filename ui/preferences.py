@@ -32,6 +32,7 @@ THEME_PRESETS = {
         "panel_soft": "#18131f",
         "card": "#16121d",
         "card_hover": "#20182a",
+    },
 
     "Sakura": {
         "description": "Soft blossom pink over a deep plum-brown base.",
