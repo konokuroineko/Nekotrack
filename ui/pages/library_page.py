@@ -438,18 +438,28 @@ class LibraryPage(QWidget):
             button.setStyleSheet(self._filter_style(name == self.current_filter))
 
     def _filter_style(self,active):
-        focus = "QPushButton#libraryFilterButton:focus{background:transparent;border:0;outline:0;}"
+        focus = (
+            f"QPushButton#libraryFilterButton:focus{{"
+            f"background:{COLORS['surface_hover']};"
+            f"border:1px solid {COLORS['nav_selected_frame']};"
+            "outline:none;}"
+        )
         if active:
             return (
-                f"QPushButton#libraryFilterButton{{background:{COLORS['accent']};"
-                f"color:{COLORS['accent_text']};border:0;border-radius:9px;"
-                f"padding:8px 15px;font-weight:800;}}{focus}"
+                f"QPushButton#libraryFilterButton{{background:{COLORS['accent_soft']};"
+                f"color:{COLORS['nav_selected_text']};"
+                f"border:1px solid {COLORS['nav_selected_frame']};"
+                f"border-radius:9px;padding:8px 15px;font-weight:800;}}"
+                f"QPushButton#libraryFilterButton:hover{{background:{COLORS['surface']};}}"
+                f"{focus}"
             )
         return (
             f"QPushButton#libraryFilterButton{{background:transparent;color:{COLORS['secondary']};"
-            f"border:0;border-radius:9px;padding:8px 15px;font-weight:650;}}"
+            f"border:1px solid transparent;border-radius:9px;padding:8px 15px;font-weight:650;}}"
             f"QPushButton#libraryFilterButton:hover{{background:{COLORS['surface_hover']};"
-            f"color:{COLORS['primary']};}}{focus}"
+            f"color:{COLORS['nav_selected_text']};"
+            f"border-color:{COLORS['nav_selected_frame']};}}"
+            f"{focus}"
         )
     def _apply_filter(self):
         wanted={"All":None,"Watching":"Watching","Completed":"Completed","Planned":"Planning"}[self.current_filter]; self.anime_list=[x for x in self.all_anime if wanted is None or x["status"]==wanted]
