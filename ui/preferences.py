@@ -4,8 +4,8 @@ from PySide6.QtCore import QSettings
 THEME_PRESETS = {
     "Neko": {
         "description": "Warm cat-inspired amber on a quiet charcoal base.",
-                "nav_selected_text": "#e6d6a8",
-                "nav_selected_frame": "#8f815d",
+        "nav_selected_text": "#e6d6a8",
+        "nav_selected_frame": "#8f815d",
         "accent_text": "#21160b",
         "font_size": 13,
         "card_size": 210,
@@ -35,8 +35,8 @@ THEME_PRESETS = {
     },
     "Sakura": {
         "description": "Soft blossom pink over a deep plum-brown base.",
-                "nav_selected_text": "#ffabc0",
-                "nav_selected_frame": "#d96d8f",
+        "nav_selected_text": "#ffabc0",
+        "nav_selected_frame": "#d96d8f",
         "accent_text": "#210f16",
         "font_size": 13,
         "card_size": 210,
@@ -66,8 +66,8 @@ THEME_PRESETS = {
     },
     "Ocean": {
         "description": "Clean teal highlights with a deep slate base.",
-                "nav_selected_text": "#8acbff",
-                "nav_selected_frame": "#4e98d3",
+        "nav_selected_text": "#8acbff",
+        "nav_selected_frame": "#4e98d3",
         "accent_text": "#071917",
         "font_size": 13,
         "card_size": 210,
@@ -97,8 +97,8 @@ THEME_PRESETS = {
     },
     "Forest": {
         "description": "Leaf green accents with a rich evergreen base.",
-                "nav_selected_text": "#9ae3aa",
-                "nav_selected_frame": "#5eae70",
+        "nav_selected_text": "#9ae3aa",
+        "nav_selected_frame": "#5eae70",
         "accent_text": "#0d1b10",
         "font_size": 13,
         "card_size": 210,
@@ -128,8 +128,8 @@ THEME_PRESETS = {
     },
     "Classic": {
         "description": "Muted brass accents on a straightforward graphite base.",
-                "nav_selected_text": "#efb978",
-                "nav_selected_frame": "#b98045",
+        "nav_selected_text": "#efb978",
+        "nav_selected_frame": "#b98045",
         "accent_text": "#19140b",
         "font_size": 13,
         "card_size": 210,
@@ -159,8 +159,8 @@ THEME_PRESETS = {
     },
     "Crimson": {
         "description": "Crisp red accents with a dark charcoal base.",
-                "nav_selected_text": "#ff929c",
-                "nav_selected_frame": "#cf5662",
+        "nav_selected_text": "#ff929c",
+        "nav_selected_frame": "#cf5662",
         "accent_text": "#210b0e",
         "font_size": 13,
         "card_size": 210,
@@ -212,7 +212,7 @@ _LEGACY_APPLICATION = "AniTrack"
 
 _MIGRATION_KEY = "_legacy_anitrack_preferences_migrated"
 
-_THEME_PALETTE_VERSION = 2
+_THEME_PALETTE_VERSION = 3
 
 
 def settings():
