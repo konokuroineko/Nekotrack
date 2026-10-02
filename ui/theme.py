@@ -73,7 +73,7 @@ def refresh_theme():
         QPalette.ColorRole.ButtonText: COLORS["secondary"],
         QPalette.ColorRole.Link: COLORS["accent"],
         QPalette.ColorRole.LinkVisited: COLORS["accent"],
-        QPalette.ColorRole.Highlight: COLORS["accent"],
+        QPalette.ColorRole.Highlight: COLORS["nav_selected_frame"],
         QPalette.ColorRole.HighlightedText: COLORS["accent_text"],
         QPalette.ColorRole.PlaceholderText: COLORS["muted"],
         QPalette.ColorRole.BrightText: COLORS["primary"],
@@ -85,7 +85,7 @@ def refresh_theme():
     }
     accent_role = getattr(QPalette.ColorRole, "Accent", None)
     if accent_role is not None:
-        role_colors[accent_role] = COLORS["accent"]
+        role_colors[accent_role] = COLORS["nav_selected_frame"]
 
     for role, value in role_colors.items():
         color = QColor(value)
