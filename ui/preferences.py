@@ -3,17 +3,17 @@ from PySide6.QtCore import QSettings
 
 THEME_PRESETS = {
     "Neko": {
-        "description": "Warm cat-inspired amber on a quiet charcoal base.",
-        "nav_selected_text": "#e6d6a8",
-        "nav_selected_frame": "#8f815d",
+        "description": "Midnight graphite with deep violet and soft lavender.",
+        "nav_selected_text": "#c5a3ff",
+        "nav_selected_frame": "#7650b8",
         "accent_text": "#21160b",
         "font_size": 13,
         "card_size": 210,
         "card_gap": 24,
         "corner_radius": 14,
-        "accent": "#e3a65f",
-        "accent_hover": "#f2c27f",
-        "frame_color": "#c98b45",
+        "accent": "#a678ff",
+        "accent_hover": "#c09cff",
+        "frame_color": "#8c62dc",
         "background": "#101011",
         "background_alt": "#151516",
         "sidebar": "#0c0c0d",
@@ -66,8 +66,8 @@ THEME_PRESETS = {
     },
     "Ocean": {
         "description": "Clean teal highlights with a deep slate base.",
-        "nav_selected_text": "#8acbff",
-        "nav_selected_frame": "#4e98d3",
+        "nav_selected_text": "#7ad8cd",
+        "nav_selected_frame": "#3e9f96",
         "accent_text": "#071917",
         "font_size": 13,
         "card_size": 210,
@@ -212,7 +212,7 @@ _LEGACY_APPLICATION = "AniTrack"
 
 _MIGRATION_KEY = "_legacy_anitrack_preferences_migrated"
 
-_THEME_PALETTE_VERSION = 3
+_THEME_PALETTE_VERSION = 4
 
 
 def settings():
