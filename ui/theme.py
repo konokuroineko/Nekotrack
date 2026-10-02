@@ -27,6 +27,8 @@ COLOR_KEYS = (
     "panel_soft",
     "card",
     "card_hover",
+    "nav_selected_text",
+    "nav_selected_frame",
 )
 
 
