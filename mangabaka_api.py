@@ -516,8 +516,15 @@ def enrich_anilist_results(media_items, query):
     return items
 
 
-def enrich_anilist_media(media):
-    """Best-effort enrichment of one AniList manga or novel with MangaBaka metadata."""
+def _response_record(payload):
+    data = _unwrap(payload)
+    if isinstance(data, list):
+        return data[0] if data and isinstance(data[0], dict) else None
+    return data if isinstance(data, dict) else None
+
+
+def enrich_anilist_media(media, fetch_full=False):
+    """Enrich an AniList manga/novel; optionally retrieve MangaBaka's full schema."""
     if not isinstance(media, dict) or str(media.get("type") or "").upper() != "MANGA":
         return media
     title_data = media.get("title") or {}
@@ -528,7 +535,15 @@ def enrich_anilist_media(media):
         candidates = _records(search_series(query, page=1, limit=10))
         matched = match_series_for_anilist(media, candidates)
         if matched:
-            _attach_mangabaka_record(media, matched)
+            chosen = matched
+            if fetch_full and matched.get("id") is not None:
+                try:
+                    full_record = _response_record(get_series(matched["id"], full=True))
+                    if full_record and int(full_record.get("id") or 0) == int(matched["id"]):
+                        chosen = full_record
+                except Exception as error:
+                    print(f"MangaBaka full-detail lookup skipped: {error}")
+            _attach_mangabaka_record(media, chosen)
     except Exception as error:
         print(f"MangaBaka enrichment skipped: {error}")
     return media
