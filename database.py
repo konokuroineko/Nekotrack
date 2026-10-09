@@ -1468,17 +1468,41 @@ def delete_work_data(work_id):
         connection.close()
         raise
 
-    paths = []
-    if row["cover_path"]:
-        paths.append(Path(str(row["cover_path"])))
-    paths.extend(Path(str(path)) for path in override_paths)
-
-    for path in paths:
+    # A custom/cache image path can be shared by multiple works or bundle
+    # overrides. Delete the file only after the database commit and only when
+    # no remaining row references that exact stored path.
+    candidate_paths = {
+        str(path)
+        for path in ([row["cover_path"]] if row["cover_path"] else []) + override_paths
+        if path
+    }
+    if candidate_paths:
+        connection = get_connection()
         try:
-            if path.is_file():
-                path.unlink()
-        except OSError:
-            pass
+            for stored_path in candidate_paths:
+                still_referenced = connection.execute(
+                    """
+                    SELECT 1
+                    FROM works
+                    WHERE cover_path = ?
+                    UNION ALL
+                    SELECT 1
+                    FROM bundle_overrides
+                    WHERE custom_cover_path = ?
+                    LIMIT 1
+                    """,
+                    (stored_path, stored_path),
+                ).fetchone()
+                if still_referenced is not None:
+                    continue
+                path = Path(stored_path)
+                try:
+                    if path.is_file():
+                        path.unlink()
+                except OSError:
+                    pass
+        finally:
+            connection.close()
 
     return True
 
