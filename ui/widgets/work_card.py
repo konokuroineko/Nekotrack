@@ -350,6 +350,9 @@ class WorkCard(QFrame):
             self.add_callback(self.work, self.sender())
 
     def _title(self):
+        display_override = self._value("_display_title_override")
+        if display_override:
+            return str(display_override)
         title = self._value("title")
         if isinstance(title, dict):
             title = title.get("english") or title.get("romaji") or title.get("native")
