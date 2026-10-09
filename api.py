@@ -1195,8 +1195,8 @@ def _valid_image_data(data):
         # If Qt's image reader is unavailable, accept only recognizable file
         # signatures rather than caching an HTML/error response as a picture.
         return (
-            raw.startswith(b"\\xFF\\xD8\\xFF")
-            or raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n")
+            raw.startswith(b"\xFF\xD8\xFF")
+            or raw.startswith(b"\x89PNG\r\n\x1a\n")
             or (len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP")
         )
 
