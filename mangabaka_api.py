@@ -214,13 +214,15 @@ def get_series_news(series_id, page=1, limit=20):
 
 
 def get_series_mix(page=1, limit=20, **filters):
-    params = {"page": max(1, int(page)), "limit": min(50, max(1, int(limit)))}
+    params = {"page": max(1, int(page)), "limit": min(50, max(1, int(limit))),
+              "content_rating": ["safe", "suggestive"]}
     params.update({key: value for key, value in filters.items() if value not in (None, "")})
     return _request("series/mix", params=params)
 
 
 def get_hidden_gems(page=1, limit=20, **filters):
-    params = {"page": max(1, int(page)), "limit": min(50, max(1, int(limit)))}
+    params = {"page": max(1, int(page)), "limit": min(50, max(1, int(limit))),
+              "content_rating": ["safe", "suggestive"]}
     params.update({key: value for key, value in filters.items() if value not in (None, "")})
     return _request("series/discover/hidden-gems", params=params)
 
