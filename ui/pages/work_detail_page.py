@@ -11,7 +11,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout,
     QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
-    QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
+    QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 )
 
 from database import (
@@ -20,7 +20,7 @@ from database import (
     get_tmdb_mapping,
     get_work, save_anime, save_characters, save_cover_path, save_episode_thumbnail_path,
     save_episodes, save_staff,
-    save_tmdb_mapping, save_work_mal_id, set_episode_progress, set_episode_watched,
+    save_tmdb_mapping, set_episode_watched,
 )
 from series import get_library_series
 from ui.preferences import get
