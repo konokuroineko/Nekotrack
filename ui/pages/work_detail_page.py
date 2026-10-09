@@ -1096,6 +1096,115 @@ class WorkDetailPage(QWidget):
                 6,
             )
         )
+        provider_section = self._catalog_metadata_section()
+        if provider_section is not None:
+            layout.addWidget(provider_section)
+
+
+    def _catalog_metadata_section(self):
+        """Show MangaBaka fields that have no first-class AniList equivalent."""
+        raw_data = self._value("catalog_data")
+        if not raw_data:
+            return None
+        try:
+            data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+
+        frame = QFrame()
+        frame.setObjectName("section")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(20, 18, 20, 20)
+        layout.setSpacing(10)
+
+        heading = QLabel("MangaBaka metadata")
+        heading.setStyleSheet(f"font-size:19px;font-weight:800;color:{COLORS['primary']};")
+        layout.addWidget(heading)
+        attribution = QLabel(
+            '<a href="https://mangabaka.org/data/api">MangaBaka catalog</a> · '
+            "Aggregated information from linked metadata providers."
+        )
+        attribution.setOpenExternalLinks(True)
+        attribution.setStyleSheet(f"color:{COLORS['muted']};font-size:11px;")
+        layout.addWidget(attribution)
+
+        fields = []
+        for key, label in (("authors", "Authors"), ("artists", "Artists")):
+            values = data.get(key) or []
+            if values:
+                fields.append((label, ", ".join(str(value) for value in values if value)))
+
+        publishers = data.get("publishers") or []
+        if publishers:
+            names = [
+                f"{entry.get('name')}" + (f" ({entry.get('type')})" if entry.get("type") else "")
+                for entry in publishers if isinstance(entry, dict) and entry.get("name")
+            ]
+            if names:
+                fields.append(("Publishers", ", ".join(names)))
+
+        published = data.get("published") or {}
+        date_bits = [published.get("start_date"), published.get("end_date")]
+        if any(date_bits):
+            fields.append(("Publication", " – ".join(str(value) for value in date_bits if value)))
+
+        if data.get("content_rating"):
+            fields.append(("Content rating", str(data["content_rating"]).title()))
+
+        titles = data.get("titles") or []
+        alternate_titles = []
+        for entry in titles:
+            if not isinstance(entry, dict):
+                continue
+            title_value = str(entry.get("title") or "").strip()
+            language = str(entry.get("language") or "").strip()
+            if title_value:
+                alternate_titles.append(f"{title_value} [{language}]" if language else title_value)
+        if alternate_titles:
+            fields.append(("Other titles", " · ".join(dict.fromkeys(alternate_titles))))
+
+        tags = data.get("tags") or []
+        tag_names = [
+            f"{entry.get('name')}" + (" · genre" if entry.get("is_genre") else "")
+            for entry in tags if isinstance(entry, dict) and entry.get("name")
+        ]
+        if tag_names:
+            fields.append(("Tags", ", ".join(tag_names)))
+
+        links = [
+            entry for entry in (data.get("links") or [])
+            if isinstance(entry, dict)
+            and str(entry.get("url") or "").startswith(("https://", "http://"))
+        ]
+        if links:
+            link_text = ", ".join(
+                f'<a href="{html.escape(str(entry["url"]), quote=True)}">'
+                f'{html.escape(str(entry.get("name") or entry.get("type") or entry["url"]))}</a>'
+                for entry in links
+            )
+            link_label = QLabel(link_text)
+            link_label.setWordWrap(True)
+            link_label.setOpenExternalLinks(True)
+            link_label.setTextFormat(Qt.RichText)
+            link_label.setStyleSheet(f"color:{COLORS['secondary']};font-size:12px;")
+            layout.addWidget(link_label)
+
+        for label_text, value in fields:
+            row = QHBoxLayout()
+            key_label = QLabel(label_text)
+            key_label.setMinimumWidth(112)
+            key_label.setStyleSheet(f"color:{COLORS['muted']};font-size:12px;font-weight:700;")
+            value_label = QLabel(str(value))
+            value_label.setWordWrap(True)
+            value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            value_label.setStyleSheet(f"color:{COLORS['secondary']};font-size:12px;")
+            row.addWidget(key_label, 0, Qt.AlignTop)
+            row.addWidget(value_label, 1)
+            layout.addLayout(row)
+
+        return frame
 
 
     def _populate_detail_sections(self, token, content, host, detail_ids):
@@ -2538,6 +2647,9 @@ class WorkDetailPage(QWidget):
         except (KeyError, IndexError, TypeError): return None
 
     def _title(self):
+        display_override = self._value("_display_title_override")
+        if display_override:
+            return str(display_override)
         title = self._value("title")
         if isinstance(title, dict): return title.get("english") or title.get("romaji") or title.get("native") or "Untitled"
         return title or "Untitled"
