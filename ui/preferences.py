@@ -213,7 +213,7 @@ _LEGACY_APPLICATION = "AniTrack"
 
 _MIGRATION_KEY = "_legacy_anitrack_preferences_migrated"
 
-_THEME_PALETTE_VERSION = 6
+_THEME_PALETTE_VERSION = 7
 
 
 def settings():
@@ -221,7 +221,18 @@ def settings():
     current = QSettings(_ORGANIZATION, _APPLICATION)
     legacy = QSettings(_LEGACY_ORGANIZATION, _LEGACY_APPLICATION)
 
-    if current.value(_MIGRATION_KEY, False) != True:
+    migration_done = current.value(_MIGRATION_KEY, False)
+    if isinstance(migration_done, str):
+        migration_done = migration_done.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        migration_done = bool(migration_done)
+
+    # QSettings can return a stored boolean as a string on some backends.
+    # Normalize it before comparing; otherwise the legacy AniTrack settings
+    # (including an old custom color) can be copied over NekoTrack settings on
+    # every call to get(), restoring the old colors immediately after a theme
+    # is selected.
+    if not migration_done:
         for key in legacy.allKeys():
             current.setValue(key, legacy.value(key))
         current.setValue(_MIGRATION_KEY, True)
