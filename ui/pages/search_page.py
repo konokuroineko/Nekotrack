@@ -4,6 +4,7 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QThread, Qt, Signal, QTimer,
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from api import get_media_by_anilist_url, parse_anilist_url, search_anime
+from mangabaka_api import enrich_anilist_media, enrich_anilist_results, search_media as search_mangabaka_media
 from series import group_media_results
 from ui.preferences import get
 from ui.theme import COLORS
@@ -89,7 +90,8 @@ class SearchWorker(QObject):
     finished = Signal(object)
     error = Signal(str)
 
-    def __init__(self, search_text, page, media_type, media_format, filters, include_relations=True):
+    def __init__(self, search_text, page, media_type, media_format, filters,
+                 include_relations=True, catalog="AniList"):
         super().__init__()
         self.search_text = search_text
         self.page = page
@@ -97,14 +99,28 @@ class SearchWorker(QObject):
         self.media_format = media_format
         self.filters = filters
         self.include_relations = include_relations
+        self.catalog = catalog
 
     def run(self):
         try:
+            if self.catalog == "MangaBaka":
+                data = search_mangabaka_media(
+                    self.search_text,
+                    self.page,
+                    self.media_type,
+                    self.media_format,
+                    self.filters,
+                )
+                self.finished.emit(data)
+                return
+
             if self.page == 1 and parse_anilist_url(self.search_text) is not None:
                 media = get_media_by_anilist_url(
                     self.search_text,
                     include_relations=self.include_relations,
                 )
+                if media:
+                    enrich_anilist_media(media)
                 self.finished.emit(
                     {
                         "pageInfo": {
@@ -125,6 +141,7 @@ class SearchWorker(QObject):
                 include_relations=self.include_relations,
                 **self.filters,
             )
+            data["media"] = enrich_anilist_results(data.get("media") or [], self.search_text)
             self.finished.emit(data)
         except Exception as error:
             self.error.emit(str(error))
