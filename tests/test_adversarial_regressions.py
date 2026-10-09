@@ -233,10 +233,8 @@ class BundleGraphAdversarialTests(unittest.TestCase):
         for round_number in range(60):
             count = rng.randint(1, 24)
             items = []
-            types = []
             for index in range(count):
                 media_type = rng.choice(["ANIME", "MANGA"])
-                types.append(media_type)
                 if media_type == "ANIME":
                     fmt = rng.choice(formats[:6] + [None])
                 else:
