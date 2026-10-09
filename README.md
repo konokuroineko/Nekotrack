@@ -6,53 +6,54 @@ Track what you watch and read, manage your library, and keep your collection org
 
 ## Features
 
-- Search AniList
-- Anime, manga, and novel search modes
-- Local SQLite library
-- Add works to your personal library
-- Episode progress and watched-state tracking
+- Search AniList or MangaBaka catalogs
+- Anime, manga, manhwa, manhua, one-shot, and light-novel search modes where the selected catalog supports them
+- AniList anime catalog, relationships, characters, staff, voice actors, and franchise grouping
+- MangaBaka-backed manga and novel titles, including English, native Japanese, and romanized titles
+- MangaBaka publisher, tag, author, artist, status, licensing, and publication metadata when present
+- Published volume records (including titles, ISBNs, and dates) when MangaBaka has matching collection data
+- Local SQLite library and offline watch/read progress
+- Chapter and volume checklists; missing upstream item details remain trackable using local placeholders
+- Episode progress and watched-state tracking for anime only
 - Local cover caching
 - Work relationships and franchise connections shown in work details
 - Character, voice-actor, and staff information shown in work details
-- Character, staff, studio, alternate-title, episode, and song data models
-- Studio data model
-- Alternate titles
-- Episode data model
-- Song/music data model
-- Work detail page with related works, characters, voice actors, and staff
 - Configurable dark desktop interface built with PySide6
 - Library card sizing, spacing, hover, and resize animation preferences
-- Maximized startup preference
-- Scrollable settings page
+- Maximized startup preference and scrollable settings page
+
+## Catalogs and fallbacks
+
+AniList remains NekoTrack's primary catalog, especially for anime and relationship data. Discover includes a catalog selector for MangaBaka search and browsing. MangaBaka can also enrich AniList manga/novel entries with alternate title variants and other provider metadata when a cautious ID/title match is available.
+
+MangaBaka-only results use separate local identifiers so they are not accidentally sent to AniList as if their IDs were AniList IDs. MangaBaka lookup failures are non-fatal: AniList results and locally saved reading progress should continue to work when MangaBaka is unavailable. Its API is not yet declared stable and its schema may change without notice, so NekoTrack preserves provider payloads and treats optional enrichment as best-effort.
+
+No external provider can guarantee complete chapter or volume records for every title. NekoTrack keeps local progress as the source of truth and falls back to placeholders when actual item records are unavailable.
 
 ## Known limitations
 
-- AniList access is required for online search and metadata retrieval.
-- Online features may be unavailable when the AniList service or API is unavailable.
-- Voice-actor metadata depends on the fields currently provided by AniList.
+- Online search and metadata enrichment require network access to the selected catalog.
+- MangaBaka coverage and its volume collections vary by title; not every light novel has separately listed published volumes.
+- MangaBaka relationships can be incomplete, so bundling may not be possible for every entry until provider relationships are available.
+- Voice-actor and character metadata depend on the fields available from AniList.
 - Some planned media, tracking, metadata, and filtering features are still being developed.
-
-## Planned
-
-- More complete anime / manga / novel support
-- Better franchise and relationship browsing
-- More complete character, staff, and voice-actor pages
-- Episode and chapter tracking improvements
-- Ratings, notes, and dates
-- Improved search and filtering
-- Better offline behavior
 
 ## Data and privacy
 
 NekoTrack stores its local SQLite database as `anime_tracker.db`. Cover images are cached under `data/images/`. These generated/local files are intentionally ignored by Git.
 
-NekoTrack does not currently require an AniList API token for its public GraphQL requests.
+NekoTrack does not currently require an AniList API token for its public GraphQL requests, nor an account token for the public MangaBaka catalogue endpoints used by the app. NekoTrack does not call MangaBaka private-account or moderation routes.
 
-## AniList
+## Data attribution and terms
 
-NekoTrack uses the AniList GraphQL API for media metadata. AniList data, artwork, and trademarks remain subject to their respective terms and rights. This repository's MIT license applies to NekoTrack's own source code; it does not grant ownership of third-party AniList content.
+NekoTrack's source code is MIT-licensed. That license does not grant ownership of catalog data, artwork, or other third-party content.
 
-See the AniList API documentation for current API and usage terms: https://anilist.gitbook.io/anilist-apiv2-docs/
+MangaBaka asks API users to attribute both MangaBaka and the upstream metadata providers. MangaBaka says its original data is licensed under CC BY-NC-SA 4.0 (personal/non-commercial use with attribution); data from AniList, Kitsu, MyAnimeList, MangaUpdates, Anime-Planet, Shikimori, and other providers remains subject to each provider's own terms. Review these conditions before distributing data or using it commercially.
+
+- [MangaBaka API documentation and rate limits](https://mangabaka.org/data/api)
+- [MangaBaka database, providers, data licensing, and attribution](https://mangabaka.org/data/database)
+- [MangaBaka title variants (English, native, romanized, and alternative titles)](https://mangabaka.org/pages/announcements/15-titles-v2)
+- [AniList API documentation](https://docs.anilist.co/)
 
 ## License
 

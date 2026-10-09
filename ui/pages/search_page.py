@@ -4,6 +4,7 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QThread, Qt, Signal, QTimer,
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from api import get_media_by_anilist_url, parse_anilist_url, search_anime
+from mangabaka_api import enrich_anilist_media, enrich_anilist_results, search_media as search_mangabaka_media
 from series import group_media_results
 from ui.preferences import get
 from ui.theme import COLORS
@@ -89,7 +90,8 @@ class SearchWorker(QObject):
     finished = Signal(object)
     error = Signal(str)
 
-    def __init__(self, search_text, page, media_type, media_format, filters, include_relations=True):
+    def __init__(self, search_text, page, media_type, media_format, filters,
+                 include_relations=True, catalog="AniList"):
         super().__init__()
         self.search_text = search_text
         self.page = page
@@ -97,14 +99,32 @@ class SearchWorker(QObject):
         self.media_format = media_format
         self.filters = filters
         self.include_relations = include_relations
+        self.catalog = catalog
 
     def run(self):
         try:
+            if self.catalog.startswith("MangaBaka"):
+                browse_mode = "hidden_gems" if self.catalog.endswith("Hidden Gems") else (
+                    "popular" if self.catalog.endswith("Popular") else "search"
+                )
+                data = search_mangabaka_media(
+                    self.search_text,
+                    self.page,
+                    self.media_type,
+                    self.media_format,
+                    self.filters,
+                    browse_mode=browse_mode,
+                )
+                self.finished.emit(data)
+                return
+
             if self.page == 1 and parse_anilist_url(self.search_text) is not None:
                 media = get_media_by_anilist_url(
                     self.search_text,
                     include_relations=self.include_relations,
                 )
+                if media:
+                    enrich_anilist_media(media)
                 self.finished.emit(
                     {
                         "pageInfo": {
@@ -125,6 +145,7 @@ class SearchWorker(QObject):
                 include_relations=self.include_relations,
                 **self.filters,
             )
+            data["media"] = enrich_anilist_results(data.get("media") or [], self.search_text)
             self.finished.emit(data)
         except Exception as error:
             self.error.emit(str(error))
@@ -172,6 +193,7 @@ class SearchPage(QWidget):
         self.current_media_type = None
         self.current_media_format = None
         self.current_filters = {}
+        self.current_catalog = "AniList"
         self.current_page = 1
         self.has_next_page = False
         self.is_loading = False
@@ -209,7 +231,7 @@ class SearchPage(QWidget):
         heading = QLabel("Discover")
         heading.setObjectName("searchPageHeading")
         heading.setStyleSheet(f"font-size: 34px; font-weight: 850; color: {COLORS['primary']};")
-        sub = QLabel("Search the AniList catalog and build your library.")
+        sub = QLabel("Search AniList or MangaBaka and build your library.")
         sub.setObjectName("searchPageSubtitle")
         sub.setStyleSheet(f"font-size: 12px; color: {COLORS['muted']};")
         intro.addWidget(heading)
@@ -226,6 +248,12 @@ class SearchPage(QWidget):
 
         bar = QHBoxLayout()
         bar.setSpacing(8)
+        self.catalog_filter = QComboBox()
+        self.catalog_filter.addItems(["AniList", "MangaBaka", "MangaBaka Popular", "MangaBaka Hidden Gems"])
+        self.catalog_filter.setFixedHeight(46)
+        self.catalog_filter.setMinimumWidth(168)
+        self.catalog_filter.setToolTip("Choose the catalog used for search and metadata.")
+        bar.addWidget(self.catalog_filter)
         # Keep the input border on a themed QFrame rather than the native
         # QLineEdit frame, which can draw its own platform-colored focus border.
         self.search_frame = QFrame()
@@ -284,9 +312,13 @@ class SearchPage(QWidget):
         self.tag_filter = QLineEdit()
         self.tag_filter.setPlaceholderText("e.g. Isekai, Reincarnation")
         self.tag_filter.setFixedHeight(38)
+        self.publisher_filter = QLineEdit()
+        self.publisher_filter.setPlaceholderText("MangaBaka publisher ID")
+        self.publisher_filter.setFixedHeight(38)
+        self.licensing_filter = self._make_combo(["Any licensing", "Licensed only", "Unlicensed only"])
 
         self.fast_search = QCheckBox("Fast Search")
-        self.fast_search.setToolTip("Skip series and bundle enrichment. Results are shown directly from AniList.")
+        self.fast_search.setToolTip("Skip series and bundle enrichment. AniList results are refined; MangaBaka results are shown directly.")
         self.fast_search.setCursor(Qt.PointingHandCursor)
         self.fast_search.stateChanged.connect(self.fast_search_changed)
         if self.selection_mode:
@@ -303,6 +335,8 @@ class SearchPage(QWidget):
             ("Sort", self.sort_filter, 1, 2),
             ("Genre", self.genre_filter, 1, 3),
             ("Tag", self.tag_filter, 2, 0),
+            ("Publisher ID", self.publisher_filter, 2, 1),
+            ("Licensing", self.licensing_filter, 2, 2),
         ]
         for label_text, widget, row, col in fields:
             label = QLabel(label_text)
@@ -341,6 +375,7 @@ class SearchPage(QWidget):
         root.addWidget(self.results_scroll, 1)
 
         self.search_button.clicked.connect(self.search_clicked)
+        self.catalog_filter.currentTextChanged.connect(self.catalog_changed)
         self.search.returnPressed.connect(self.search_clicked)
         self.media_filter.currentIndexChanged.connect(self.media_filter_changed)
         self.filters_button.clicked.connect(self.toggle_filters)
@@ -408,6 +443,20 @@ class SearchPage(QWidget):
         self.format_filter.setEnabled(True)
         self.format_filter.blockSignals(False)
 
+    def catalog_changed(self, _value=None):
+        self.current_catalog = self.catalog_filter.currentText()
+        if self.current_catalog.startswith("MangaBaka"):
+            if self.current_catalog.endswith("Hidden Gems"):
+                self.search.setPlaceholderText("Browse hidden gems or search by title...")
+            elif self.current_catalog.endswith("Popular"):
+                self.search.setPlaceholderText("Search manga, manhwa, manhua, or light novels by popularity...")
+            else:
+                self.search.setPlaceholderText("Search manga, manhwa, manhua, or light novels...")
+        else:
+            self.search.setPlaceholderText("Title, character, franchise, or AniList link...")
+        if self.has_searched and not self.is_loading:
+            self.search_clicked()
+
     def media_filter_changed(self):
         self.current_media_type, self.current_media_format = self.selected_media_filter()
         self._refresh_format_filter()
@@ -451,6 +500,8 @@ class SearchPage(QWidget):
             "min_score": min_score,
             "genre": self.genre_filter.text().strip() or None,
             "tag": self.tag_filter.text().strip() or None,
+            "publisher_id": self.publisher_filter.text().strip() if self.publisher_filter.text().strip().isdigit() else None,
+            "is_licensed": True if self.licensing_filter.currentIndex() == 1 else False if self.licensing_filter.currentIndex() == 2 else None,
         }
 
     def fast_search_changed(self, _state):
@@ -495,7 +546,14 @@ class SearchPage(QWidget):
 
         self._clear_results()
         self._append_skeletons(20)
-        self.results_title.setText("Browsing AniList" if not text else f"Searching for \"{text}\"")
+        catalog = self.catalog_filter.currentText()
+        self.current_catalog = catalog
+        if catalog.endswith("Hidden Gems") and not text:
+            self.results_title.setText("Discovering MangaBaka hidden gems")
+        else:
+            self.results_title.setText(
+                f"Browsing {catalog}" if not text else f"Searching {catalog} for \"{text}\""
+            )
         self._start_search(1)
 
     def load_more_results(self):
@@ -520,6 +578,7 @@ class SearchPage(QWidget):
             self.current_media_format,
             self.current_filters,
             include_relations=not self.fast_search.isChecked(),
+            catalog=self.catalog_filter.currentText(),
         )
         thread = QThread(self)
         worker.moveToThread(thread)
@@ -572,9 +631,9 @@ class SearchPage(QWidget):
         # what determines the real series/season bundle, so rendering this
         # search payload first can briefly show incorrect counts such as
         # "2 seasons" for Demon Slayer before enrichment catches up.
-        if self.fast_search.isChecked():
-            # Fast Search deliberately bypasses the entire series/bundle
-            # enrichment pipeline and renders AniList's raw results directly.
+        if self.fast_search.isChecked() or self.current_catalog == "MangaBaka":
+            # MangaBaka records have provider-native local IDs and no AniList
+            # relation graph; render them directly rather than cross-querying IDs.
             if self.current_page == 1:
                 self._clear_results()
                 self.displayed_items = []
@@ -681,7 +740,7 @@ class SearchPage(QWidget):
         self._reflow_results()
 
     def _start_enrichment(self):
-        if self.fast_search.isChecked():
+        if self.fast_search.isChecked() or self.current_catalog == "MangaBaka":
             return
         if not self.raw_results:
             return
@@ -874,6 +933,8 @@ class SearchPage(QWidget):
             self.results_title.setText("Loading…")
         elif self.enrichment_pending:
             self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · refining")
+        elif self.current_catalog.startswith("MangaBaka"):
+            self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · {self.current_catalog}")
         elif self.fast_search.isChecked():
             self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · fast")
         else:

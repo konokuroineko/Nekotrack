@@ -18,10 +18,13 @@ from database import (
     save_characters,
     save_cover_path,
     save_episodes,
+    save_provider_metadata,
+    save_reading_item_metadata,
     save_staff,
     save_tmdb_mapping,
 )
 from image_cache import download_cover
+from mangabaka_api import get_series_news, get_volume_records
 from ui.branding import application_icon, logo_pixmap, navigation_icon, wordmark_pixmap
 from ui.navigation import NavigationController
 from ui.preferences import get
@@ -65,6 +68,62 @@ class LibraryImportWorker(QObject):
                 raise RuntimeError("AniList returned no details for this work.")
 
             save_anime(details)
+
+            # Pull published volume/work records when MangaBaka has them. The
+            # local progress rows stay authoritative; this only fills real
+            # titles into the existing volume placeholders.
+            if str(details.get("type") or "").upper() == "MANGA":
+                mb_id = details.get("_mangabaka_id")
+                if mb_id is None and self.work_id < 0:
+                    mb_id = abs(self.work_id)
+                if mb_id:
+                    try:
+                        volume_records = get_volume_records(int(mb_id), max_pages=2)
+                        if volume_records:
+                            save_provider_metadata(
+                                self.work_id,
+                                "mangabaka_volumes",
+                                volume_records,
+                                provider_id=mb_id,
+                            )
+                            save_reading_item_metadata(
+                                self.work_id,
+                                "volume",
+                                volume_records,
+                            )
+                    except Exception as volume_error:
+                        print(
+                            f"MangaBaka volume lookup failed for work {self.work_id}: "
+                            f"{volume_error}"
+                        )
+
+                    # Series news is optional metadata: preserve the endpoint's
+                    # available records, but never block library preparation if
+                    # the feed is empty, unavailable, or has changed schema.
+                    try:
+                        news_payload = get_series_news(int(mb_id), page=1, limit=10)
+                        news_data = (
+                            news_payload.get("data", news_payload)
+                            if isinstance(news_payload, dict) else news_payload
+                        )
+                        if isinstance(news_data, dict):
+                            news_data = (
+                                news_data.get("items") or news_data.get("news")
+                                or news_data.get("results") or []
+                            )
+                        if isinstance(news_data, list) and news_data:
+                            save_provider_metadata(
+                                self.work_id,
+                                "mangabaka_news",
+                                news_data,
+                                provider_id=mb_id,
+                            )
+                    except Exception as news_error:
+                        print(
+                            f"MangaBaka news lookup failed for work {self.work_id}: "
+                            f"{news_error}"
+                        )
+
             save_characters(
                 self.work_id,
                 (details.get("characters") or {}).get("edges"),

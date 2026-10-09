@@ -3,6 +3,7 @@ from api import (
     get_media_details,
     get_tmdb_episode_data,
 )
+from html import escape as html_escape
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread, QTimer
@@ -18,7 +19,7 @@ from database import (
     add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
     get_reading_progress, ensure_reading_placeholders,
-    get_tmdb_mapping, get_work, save_anime, save_characters, save_cover_path,
+    get_tmdb_mapping, get_work, get_provider_metadata, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_path, save_episodes, save_staff, save_tmdb_mapping,
     set_episode_watched, set_reading_item_read,
 )
@@ -601,6 +602,9 @@ class WorkDetailPage(QWidget):
     def __init__(self):
         super().__init__()
         self.work = None
+        self.mangabaka_metadata = None
+        self.mangabaka_volume_records = []
+        self.mangabaka_news = []
         self._selected_episode_work_id = None
         self._episode_sync_thread = None
         self._episode_sync_worker = None
@@ -650,6 +654,34 @@ class WorkDetailPage(QWidget):
     def _prepare_detail_state(self, work):
         self.work = work
         detail_ids = self._detail_work_ids()
+
+        self.mangabaka_metadata = self._value("_mangabaka")
+        self.mangabaka_volume_records = []
+        self.mangabaka_news = []
+        primary_id = self._value("id")
+        if not isinstance(self.mangabaka_metadata, dict):
+            for provider_work_id in detail_ids or ([primary_id] if primary_id is not None else []):
+                try:
+                    saved_metadata = get_provider_metadata(int(provider_work_id), "mangabaka")
+                except Exception:
+                    saved_metadata = None
+                if isinstance(saved_metadata, dict):
+                    self.mangabaka_metadata = saved_metadata
+                    primary_id = provider_work_id
+                    break
+        if primary_id is not None:
+            try:
+                saved_volumes = get_provider_metadata(int(primary_id), "mangabaka_volumes")
+                if isinstance(saved_volumes, list):
+                    self.mangabaka_volume_records = saved_volumes
+            except Exception:
+                self.mangabaka_volume_records = []
+            try:
+                saved_news = get_provider_metadata(int(primary_id), "mangabaka_news")
+                if isinstance(saved_news, list):
+                    self.mangabaka_news = saved_news
+            except Exception:
+                self.mangabaka_news = []
 
         previous_selected = self._selected_episode_work_id
         if previous_selected in detail_ids:
@@ -729,6 +761,10 @@ class WorkDetailPage(QWidget):
         else:
             episode_layout.addWidget(QLabel("Loading episode data…"))
         root.addWidget(episode_host)
+
+        mangabaka_section = self._mangabaka_section()
+        if mangabaka_section is not None:
+            root.addWidget(mangabaka_section)
 
         if detail_data_ready:
             detail_host = QWidget()
@@ -1218,6 +1254,198 @@ class WorkDetailPage(QWidget):
                     cols,
                 ),
         )
+
+    def _mangabaka_section(self):
+        """Show the preserved MangaBaka record without discarding provider-only fields."""
+        data = self.mangabaka_metadata
+        if not isinstance(data, dict):
+            return None
+
+        frame = QFrame()
+        frame.setObjectName("section")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(20, 18, 20, 20)
+        layout.setSpacing(10)
+
+        heading = QLabel("MangaBaka metadata")
+        heading.setStyleSheet(
+            f"font-size:17px;font-weight:850;color:{COLORS['primary']};"
+        )
+        layout.addWidget(heading)
+
+        def text_values(value, name_keys=("name", "title", "name_path")):
+            if not isinstance(value, list):
+                value = [value] if value not in (None, "") else []
+            values = []
+            for entry in value:
+                if isinstance(entry, dict):
+                    found = next((entry.get(key) for key in name_keys if entry.get(key)), None)
+                    if found:
+                        values.append(str(found))
+                elif isinstance(entry, str) and entry.strip():
+                    values.append(entry.strip())
+            return list(dict.fromkeys(values))
+
+        def add_line(label, value):
+            if value in (None, "", [], {}):
+                return
+            row = QLabel(
+                f"<b>{html_escape(str(label))}</b> "
+                f"{html_escape(str(value))}"
+            )
+            row.setWordWrap(True)
+            row.setTextFormat(Qt.RichText)
+            row.setStyleSheet(f"font-size:12px;color:{COLORS['secondary']};")
+            layout.addWidget(row)
+
+        published = data.get("published") or {}
+        if isinstance(published, dict):
+            published_text = " – ".join(
+                str(value) for value in (
+                    published.get("start_date") or published.get("start"),
+                    published.get("end_date") or published.get("end"),
+                )
+                if value
+            )
+        else:
+            published_text = str(published or "")
+
+        type_text = str(data.get("type") or "").replace("_", " ").title()
+        status_text = str(data.get("status") or "").replace("_", " ").title()
+        record_state = str(data.get("state") or "").replace("_", " ").title()
+        facts = []
+        if type_text:
+            facts.append(type_text)
+        if status_text:
+            facts.append(status_text)
+        if record_state:
+            facts.append(f"Catalog record: {record_state}")
+        if data.get("rating") is not None:
+            facts.append(f"Rating {data.get('rating')}/100")
+        if data.get("content_rating"):
+            facts.append(f"Content: {data.get('content_rating')}")
+        if data.get("is_licensed") is not None:
+            facts.append("Licensed" if data.get("is_licensed") else "Unlicensed")
+        if published_text:
+            facts.append(f"Published {published_text}")
+        if data.get("last_updated_at"):
+            facts.append(f"Metadata updated {data.get('last_updated_at')}")
+        anime_data = data.get("anime")
+        if isinstance(anime_data, dict) and anime_data.get("exists") is not None:
+            anime_text = "Yes" if anime_data.get("exists") else "No"
+            anime_dates = " – ".join(
+                str(value) for value in (anime_data.get("start"), anime_data.get("end")) if value
+            )
+            facts.append(f"Anime adaptation: {anime_text}" + (f" ({anime_dates})" if anime_dates else ""))
+        add_line("Series", " · ".join(facts))
+
+        if data.get("total_chapters") is not None:
+            add_line("Chapters", data.get("total_chapters"))
+        if data.get("final_volume") is not None:
+            add_line("Final volume", data.get("final_volume"))
+
+        authors = text_values(data.get("authors"))
+        artists = text_values(data.get("artists"))
+        publishers = text_values(data.get("publishers"))
+        if authors:
+            add_line("Authors", ", ".join(authors))
+        if artists:
+            add_line("Artists", ", ".join(artists))
+        if publishers:
+            add_line("Publishers", ", ".join(publishers))
+
+        tags = data.get("tags") or []
+        genres = []
+        other_tags = []
+        if isinstance(tags, list):
+            for tag in tags:
+                if not isinstance(tag, dict):
+                    continue
+                tag_name = str(tag.get("name_path") or tag.get("name") or "").strip()
+                if not tag_name or tag.get("is_explicit"):
+                    continue
+                if tag.get("is_genre"):
+                    genres.append(tag_name)
+                else:
+                    other_tags.append(tag_name)
+        genres.extend(text_values(data.get("genres")))
+        if genres:
+            add_line("Genres", ", ".join(dict.fromkeys(genres)))
+        if other_tags:
+            add_line("Tags", ", ".join(dict.fromkeys(other_tags)))
+
+        title_records = data.get("titles") or []
+        title_lines = []
+        if isinstance(title_records, list):
+            title_records = sorted(
+                [item for item in title_records if isinstance(item, dict) and item.get("title")],
+                key=lambda item: (not bool(item.get("is_primary")), str(item.get("language") or "")),
+            )
+            for record in title_records[:14]:
+                language = str(record.get("language") or "other")
+                traits = ", ".join(str(item) for item in (record.get("traits") or []))
+                title_lines.append(
+                    f"{language}: {record.get('title')}"
+                    + (f" ({traits})" if traits else "")
+                )
+        if title_lines:
+            add_line("Known titles", " | ".join(title_lines))
+
+        link_lines = []
+        raw_links = data.get("links") or []
+        if isinstance(raw_links, list):
+            for item in raw_links[:12]:
+                if not isinstance(item, dict):
+                    continue
+                label = str(item.get("name_display") or item.get("name") or item.get("type") or "Source")
+                url = str(item.get("url") or "").strip()
+                if url.startswith("https://"):
+                    link_lines.append(f"{label}: {url}")
+                elif label:
+                    link_lines.append(label)
+        if link_lines:
+            add_line("External links", " | ".join(link_lines))
+
+        if self.mangabaka_volume_records:
+            volume_lines = []
+            for volume in self.mangabaka_volume_records[:16]:
+                if not isinstance(volume, dict):
+                    continue
+                label = str(volume.get("title") or f"Volume {volume.get('number', '?')}")
+                extras = []
+                if volume.get("isbn"):
+                    extras.append(f"ISBN {volume['isbn']}")
+                if volume.get("published"):
+                    extras.append(str(volume["published"]))
+                volume_lines.append(label + (f" ({'; '.join(extras)})" if extras else ""))
+            if volume_lines:
+                add_line("Published volume records", " | ".join(volume_lines))
+
+        if self.mangabaka_news:
+            news_lines = []
+            for news in self.mangabaka_news[:8]:
+                if not isinstance(news, dict):
+                    continue
+                title = str(news.get("title") or news.get("headline") or news.get("name") or "").strip()
+                summary = str(news.get("summary") or news.get("description") or news.get("excerpt") or "").strip()
+                published_at = str(
+                    news.get("published_at") or news.get("published")
+                    or news.get("created_at") or news.get("date") or ""
+                ).strip()
+                url = str(news.get("url") or news.get("link") or "").strip()
+                parts = [part for part in (title, published_at, summary) if part]
+                if url.startswith("https://"):
+                    parts.append(url)
+                if parts:
+                    news_lines.append(" — ".join(parts))
+            if news_lines:
+                add_line("MangaBaka news", " | ".join(news_lines))
+
+        attribution = QLabel("Metadata aggregated by MangaBaka; source-site data remains subject to its own terms.")
+        attribution.setWordWrap(True)
+        attribution.setStyleSheet(f"font-size:10px;color:{COLORS['muted']};")
+        layout.addWidget(attribution)
+        return frame
 
     def _hero(self):
         hero = QFrame(); hero.setObjectName("hero")
