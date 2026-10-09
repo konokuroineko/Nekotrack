@@ -769,10 +769,14 @@ def save_reading_item_metadata(work_id, item_type, items):
             item.get("number") or item.get("item_number") or item.get("volume_number")
             or item.get("chapter_number") or index
         )
+        raw_number_text = str(raw_number).strip()
+        # Negative provider numbering must not silently become a positive item number.
+        if re.search(r"-\s*\d", raw_number_text):
+            continue
         try:
-            match = re.search(r"\d+", str(raw_number))
+            match = re.search(r"\d+", raw_number_text)
             number = int(match.group(0)) if match else index
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             number = index
         if number < 1:
             continue
