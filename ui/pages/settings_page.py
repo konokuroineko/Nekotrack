@@ -1,20 +1,20 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
-    QRadioButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 from database import get_all_library
+from ui.bundle_options import BUNDLE_OPTION_GROUPS, BUNDLE_OPTION_KEYS
 from ui.preferences import (
     THEME_PRESETS,
     apply_theme_preset,
@@ -235,7 +235,7 @@ class SettingsPage(QWidget):
                     "Start NekoTrack maximized.",
                     "maximized",
                 ),
-                self._bundle_mode_row(),
+                self._bundle_options_row(),
             ],
         ))
 
@@ -423,6 +423,52 @@ class SettingsPage(QWidget):
                 font-size:10px;
                 background:transparent;
             }}
+            QFrame#bundleSettingOption {{
+                background:{COLORS['card']};
+                border:1px solid {COLORS['border']};
+                border-radius:10px;
+            }}
+            QFrame#bundleSettingOption:hover {{
+                background:{COLORS['card_hover']};
+                border-color:{COLORS['accent']};
+            }}
+            QFrame#bundleAlwaysOn {{
+                background:{COLORS['accent_soft']};
+                border:1px solid {COLORS['border_hover']};
+                border-radius:9px;
+            }}
+            QLabel#bundleAlwaysTitle {{
+                color:{COLORS['primary']};
+                font-size:12px;
+                font-weight:800;
+                background:transparent;
+            }}
+            QLabel#bundleAlwaysDetail {{
+                color:{COLORS['accent']};
+                font-size:12px;
+                font-weight:800;
+                background:transparent;
+            }}
+            QLabel#bundleGroupLabel {{
+                color:{COLORS['accent']};
+                font-size:10px;
+                font-weight:900;
+                letter-spacing:1.3px;
+                padding-top:4px;
+                background:transparent;
+            }}
+            QCheckBox#bundleOptionCheck {{
+                color:{COLORS['primary']};
+                font-size:12px;
+                font-weight:800;
+                spacing:8px;
+                background:transparent;
+            }}
+            QLabel#bundleOptionDescription {{
+                color:{COLORS['muted']};
+                font-size:10px;
+                background:transparent;
+            }}
             QComboBox {{
                 min-width:120px;
             }}
@@ -535,43 +581,74 @@ class SettingsPage(QWidget):
 
         self._apply("theme_preset")
 
-    def _bundle_mode_row(self):
-        group = QButtonGroup(self)
+    def _bundle_options_row(self):
         wrapper = QWidget()
-        row = QHBoxLayout(wrapper)
-        row.setContentsMargins(0, 10, 0, 10)
-        row.setSpacing(12)
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 14, 0, 14)
+        layout.setSpacing(9)
 
-        main_radio = QRadioButton("Main seasons only")
-        extras_radio = QRadioButton("Include related extras")
-        group.addButton(main_radio)
-        group.addButton(extras_radio)
-
-        mode = str(get("bundle_mode") or "main")
-        if mode == "extras":
-            extras_radio.setChecked(True)
-        else:
-            main_radio.setChecked(True)
-
-        main_radio.toggled.connect(
-            lambda checked: checked and self._changed("bundle_mode", "main")
-        )
-        extras_radio.toggled.connect(
-            lambda checked: checked and self._changed("bundle_mode", "extras")
-        )
-
-        info = QVBoxLayout()
         title = QLabel("Automatic bundle contents")
         title.setObjectName("settingsRowTitle")
-        desc = QLabel("Choose whether automatic bundles stay focused on seasons or include related extras.")
-        desc.setObjectName("settingsRowDescription")
-        desc.setWordWrap(True)
-        info.addWidget(title)
-        info.addWidget(desc)
+        description = QLabel(
+            "TV seasons and TV Shorts are always grouped. Choose exactly which related formats may join them."
+        )
+        description.setObjectName("settingsRowDescription")
+        description.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(description)
 
-        row.addLayout(info, 1)
-        row.addWidget(main_radio)
-        row.addWidget(extras_radio)
+        always = QFrame()
+        always.setObjectName("bundleAlwaysOn")
+        always_layout = QHBoxLayout(always)
+        always_layout.setContentsMargins(12, 9, 12, 9)
+        always_title = QLabel("Always included")
+        always_title.setObjectName("bundleAlwaysTitle")
+        always_detail = QLabel("TV seasons + TV Shorts")
+        always_detail.setObjectName("bundleAlwaysDetail")
+        always_layout.addWidget(always_title)
+        always_layout.addStretch(1)
+        always_layout.addWidget(always_detail)
+        layout.addWidget(always)
+
+        self.bundle_checkboxes = {}
+        for group_title, options in BUNDLE_OPTION_GROUPS:
+            group_label = QLabel(group_title)
+            group_label.setObjectName("bundleGroupLabel")
+            layout.addWidget(group_label)
+
+            grid = QGridLayout()
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setHorizontalSpacing(10)
+            grid.setVerticalSpacing(10)
+
+            for index, (key, label, detail) in enumerate(options):
+                card = QFrame()
+                card.setObjectName("bundleSettingOption")
+                card_layout = QVBoxLayout(card)
+                card_layout.setContentsMargins(12, 10, 12, 10)
+                card_layout.setSpacing(5)
+
+                checkbox = QCheckBox(label)
+                checkbox.setObjectName("bundleOptionCheck")
+                checkbox.setChecked(get(key))
+                checkbox.toggled.connect(
+                    lambda enabled, option_key=key: self._changed(
+                        option_key, bool(enabled)
+                    )
+                )
+                self.bundle_checkboxes[key] = checkbox
+
+                detail_label = QLabel(detail)
+                detail_label.setObjectName("bundleOptionDescription")
+                detail_label.setWordWrap(True)
+                card_layout.addWidget(checkbox)
+                card_layout.addWidget(detail_label)
+                grid.addWidget(card, index // 2, index % 2)
+
+            grid.setColumnStretch(0, 1)
+            grid.setColumnStretch(1, 1)
+            layout.addLayout(grid)
+
         return wrapper
 
     def _combo_row(self, name, description, key, options):
@@ -608,6 +685,11 @@ class SettingsPage(QWidget):
 
     def _changed(self, key, value):
         set_value(key, value)
+        if key in BUNDLE_OPTION_KEYS:
+            set_value(
+                "bundle_mode",
+                "extras" if all(get(option_key) for option_key in BUNDLE_OPTION_KEYS) else "main",
+            )
         self._apply(key)
 
     def _apply(self, key=""):
