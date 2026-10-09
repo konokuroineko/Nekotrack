@@ -45,8 +45,9 @@ def build_ico():
     if not SVG_PATH.is_file():
         raise FileNotFoundError(f"Logo SVG not found: {SVG_PATH}")
 
-    app = QGuiApplication.instance() or QGuiApplication([sys.argv[0]])
-    del app
+    app = QGuiApplication.instance()
+    if app is None:
+        app = QGuiApplication([sys.argv[0]])
     renderer = QSvgRenderer(str(SVG_PATH))
     if not renderer.isValid():
         raise ValueError(f"Logo SVG is invalid: {SVG_PATH}")
