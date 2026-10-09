@@ -1,6 +1,11 @@
 import threading
 
 from api import get_media_details, get_tmdb_episode_data
+from mangabaka import (
+    enrich_anilist_media_from_mangabaka,
+    get_series as get_mangabaka_series,
+    normalize_series,
+)
 from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer, QSize
 
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
@@ -60,9 +65,52 @@ class LibraryImportWorker(QObject):
 
     def run(self):
         try:
+            existing_work = get_work(self.work_id)
+            catalog_provider = (
+                str(existing_work["catalog_provider"] or "ANILIST").upper()
+                if existing_work is not None else "ANILIST"
+            )
+            catalog_provider_id = (
+                existing_work["catalog_provider_id"] if existing_work is not None else None
+            )
+
+            # MangaBaka-only entries use stable negative local IDs and never
+            # go through AniList GraphQL or TMDB episode discovery.
+            if catalog_provider == "MANGABAKA" and self.work_id < 0 and catalog_provider_id:
+                mb_record = get_mangabaka_series(catalog_provider_id, schema="full")
+                details = normalize_series(mb_record)
+                details["id"] = self.work_id
+                details["_provider"] = "MANGABAKA"
+                details["_provider_id"] = str(catalog_provider_id)
+                details["_provider_data"] = mb_record
+                save_anime(details)
+                save_characters(self.work_id, [])
+                save_staff(self.work_id, [])
+                self.finished.emit(self.work_id, details)
+                return
+
             details = get_media_details(self.work_id)
             if not details:
                 raise RuntimeError("AniList returned no details for this work.")
+
+            # For cross-linked AniList entries, retain AniList relationships
+            # while filling multilingual titles and metadata from MangaBaka.
+            if catalog_provider == "MANGABAKA" and catalog_provider_id:
+                try:
+                    mb_record = get_mangabaka_series(catalog_provider_id, schema="full")
+                    details = enrich_anilist_media_from_mangabaka(details, mb_record)
+                    if existing_work is not None:
+                        stored_title = str(existing_work["title"] or "")
+                        canonical = (
+                            (details.get("title") or {}).get("english")
+                            or (details.get("title") or {}).get("romaji")
+                            or (details.get("title") or {}).get("native")
+                            or ""
+                        )
+                        if stored_title and stored_title != canonical:
+                            details["_display_title_override"] = stored_title
+                except Exception as provider_error:
+                    print(f"MangaBaka metadata refresh failed for {self.work_id}: {provider_error}")
 
             save_anime(details)
             save_characters(
@@ -665,6 +713,15 @@ class MainWindow(QMainWindow):
 
 
     def show_search_work(self, work):
+        if str(work.get("_provider") or "").upper() == "MANGABAKA":
+            try:
+                save_anime(work)
+                self.show_work_details(get_work(work["id"]) or work)
+            except Exception as error:
+                print(f"MangaBaka work open failed: {error}")
+                self.show_work_details(work)
+            return
+
         try:
             from api import get_media_details
             details = get_media_details(work["id"])
