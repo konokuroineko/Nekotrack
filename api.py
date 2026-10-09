@@ -25,6 +25,17 @@ def anilist_request(query, variables=None):
     """Make a request to AniList GraphQL API with retry logic."""
     last_error = None
 
+    def error_message(payload, fallback):
+        errors = payload.get("errors") if isinstance(payload, dict) else None
+        if isinstance(errors, list):
+            for error in errors:
+                if not isinstance(error, dict):
+                    continue
+                message = error.get("message")
+                if isinstance(message, str) and message.strip():
+                    return message.strip()
+        return str(fallback or "AniList returned an unreadable error response.")
+
     for attempt in range(MAX_RETRIES):
         try:
             response = requests.post(
@@ -34,15 +45,21 @@ def anilist_request(query, variables=None):
             )
             try:
                 data = response.json()
-            except ValueError:
+            except (ValueError, TypeError):
+                data = None
+            if not isinstance(data, dict):
                 data = {}
 
             if response.status_code == 429:
                 if attempt < MAX_RETRIES - 1:
                     retry_after = response.headers.get("Retry-After")
                     try:
-                        wait_time = max(1.0, float(retry_after)) if retry_after is not None else RETRY_DELAY * (2 ** attempt)
-                    except (TypeError, ValueError):
+                        wait_time = (
+                            max(1.0, float(retry_after))
+                            if retry_after is not None
+                            else RETRY_DELAY * (2 ** attempt)
+                        )
+                    except (TypeError, ValueError, OverflowError):
                         wait_time = RETRY_DELAY * (2 ** attempt)
                     print(
                         f"AniList rate limited the request (attempt {attempt + 1}/{MAX_RETRIES}). "
@@ -51,12 +68,14 @@ def anilist_request(query, variables=None):
                     time.sleep(wait_time)
                     continue
 
-                errors = data.get("errors") or []
-                message = errors[0].get("message") if errors else response.reason
-                raise Exception(f"AniList request failed (429): {message}")
+                message = error_message(data, getattr(response, "reason", None))
+                raise RuntimeError(f"AniList request failed (429): {message}")
 
             if response.status_code >= 500:
-                last_error = Exception(f"AniList server error ({response.status_code}): {response.reason}")
+                last_error = RuntimeError(
+                    f"AniList server error ({response.status_code}): "
+                    f"{getattr(response, 'reason', '')}"
+                )
                 if attempt < MAX_RETRIES - 1:
                     wait_time = RETRY_DELAY * (2 ** attempt)
                     print(
@@ -68,14 +87,24 @@ def anilist_request(query, variables=None):
                 raise last_error
 
             if response.status_code >= 400:
-                errors = data.get("errors") or []
-                message = errors[0].get("message") if errors else response.reason
-                raise Exception(f"AniList request failed ({response.status_code}): {message}")
+                message = error_message(data, getattr(response, "reason", None))
+                raise RuntimeError(
+                    f"AniList request failed ({response.status_code}): {message}"
+                )
 
-            if "errors" in data:
-                raise Exception(data["errors"][0]["message"])
+            errors = data.get("errors")
+            if errors:
+                message = error_message(data, None)
+                raise RuntimeError(f"AniList GraphQL request failed: {message}")
+            if "errors" in data and errors not in (None, []):
+                raise RuntimeError("AniList returned a malformed GraphQL error payload.")
 
-            return data["data"]
+            result = data.get("data")
+            if not isinstance(result, dict):
+                raise RuntimeError(
+                    "AniList returned an unexpected GraphQL response: missing data object."
+                )
+            return result
 
         except (
             requests.exceptions.ConnectionError,
@@ -85,18 +114,20 @@ def anilist_request(query, variables=None):
             last_error = error
             if attempt < MAX_RETRIES - 1:
                 wait_time = RETRY_DELAY * (2 ** attempt)
-                print(f"Network error (attempt {attempt + 1}/{MAX_RETRIES}): {error}. Retrying in {wait_time}s...")
+                print(
+                    f"Network error (attempt {attempt + 1}/{MAX_RETRIES}): "
+                    f"{error}. Retrying in {wait_time:g}s..."
+                )
                 time.sleep(wait_time)
             else:
                 print(f"Failed after {MAX_RETRIES} attempts: {error}")
-        except requests.exceptions.RequestException as error:
-            raise error
+        except requests.exceptions.RequestException:
+            raise
 
-    raise Exception(
+    raise RuntimeError(
         f"Network error after {MAX_RETRIES} attempts. Please check your internet connection and try again. "
         f"(Last error: {str(last_error)[:100]})"
     )
-
 
 def _media_fields(include_details=False, include_relations=True):
     """Return GraphQL fields shared by search and detail queries."""
