@@ -57,27 +57,47 @@ class UpdateChecker(QThread):
             )
             response.raise_for_status()
             releases = response.json()
+            if not isinstance(releases, list):
+                raise ValueError("GitHub returned an unexpected release-list response.")
 
             for release in releases:
-                if release.get("draft"):
+                # A single malformed release or asset should not hide later
+                # valid releases from the update feed.
+                if not isinstance(release, dict):
                     continue
-                tag = release.get("tag_name") or ""
-                version = tag.lstrip("v")
+                if release.get("draft") is True:
+                    continue
+
+                tag = release.get("tag_name")
+                if not isinstance(tag, str):
+                    continue
+                version = tag.strip().lstrip("v")
                 if not version or not is_newer(version, self.current_version):
                     continue
 
-                assets = release.get("assets") or []
-                installer = next(
-                    (
-                        asset for asset in assets
-                        if str(asset.get("name", "")).lower().endswith(".exe")
-                        and "setup" in str(asset.get("name", "")).lower()
-                    ),
-                    None,
-                )
+                assets = release.get("assets")
+                if not isinstance(assets, list):
+                    continue
+                installer = None
+                for asset in assets:
+                    if not isinstance(asset, dict):
+                        continue
+                    name = asset.get("name")
+                    url = asset.get("browser_download_url")
+                    if not isinstance(name, str) or not isinstance(url, str) or not url.strip():
+                        continue
+                    lowered_name = name.casefold()
+                    if lowered_name.endswith(".exe") and "setup" in lowered_name:
+                        installer = asset
+                        break
+
                 if installer:
                     self.update_available.emit(
-                        UpdateInfo(version, installer.get("browser_download_url"), installer.get("name"))
+                        UpdateInfo(
+                            version,
+                            installer["browser_download_url"],
+                            installer["name"],
+                        )
                     )
                     return
 

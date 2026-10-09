@@ -13,13 +13,17 @@ def anime_item(media_id, title, media_type="MANGA", media_format="MANGA", score=
     }
 
 
-def mb_item(series_id, title, local_id=None, score=80):
+def mb_item(series_id, title, local_id=None, score=80, publisher_id=None, is_licensed=None):
     local_id = -series_id if local_id is None else local_id
     raw = {
         "id": series_id, "type": "manga",
         "titles": [{"language": "en", "title": title}],
         "external_ids": [], "content_rating": "safe", "rating": score,
     }
+    if publisher_id is not None:
+        raw["publisher_id"] = publisher_id
+    if is_licensed is not None:
+        raw["is_licensed"] = is_licensed
     return {
         "id": local_id, "type": "MANGA", "format": "MANGA",
         "title": {"english": title, "romaji": title},
@@ -60,7 +64,7 @@ class CombinedCatalogSearchTests(unittest.TestCase):
         }
         search_mb.return_value = {
             "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
-            "media": [mb_item(9, "Published Work", local_id=100)],
+            "media": [mb_item(9, "Published Work", local_id=100, publisher_id=5)],
         }
         result = catalog_search.search_combined_media(
             "", 1, None, None, {"publisher_id": "5", "sort": "POPULARITY_DESC"}
@@ -81,3 +85,58 @@ class CombinedCatalogSearchTests(unittest.TestCase):
         )
         self.assertEqual([row["id"] for row in result["media"]], [100])
         search_mb.assert_not_called()
+
+    @patch("catalog_search.enrich_anilist_results")
+    @patch("catalog_search.search_mangabaka_media")
+    @patch("catalog_search.search_anime")
+    def test_malformed_attached_provider_payload_does_not_crash_provider_filter(
+        self, search_anilist, search_mb, enrich
+    ):
+        malformed = anime_item(100, "Malformed linked work")
+        malformed["_mangabaka"] = ["unexpected", "provider", "payload"]
+        search_anilist.return_value = {
+            "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+            "media": [malformed],
+        }
+        search_mb.return_value = {
+            "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+            "media": [mb_item(9, "Matching provider row")],
+        }
+
+        result = catalog_search.search_combined_media(
+            "", 1, None, None, {"publisher_id": "5"}
+        )
+        self.assertEqual(result["media"], [])
+
+    @patch("catalog_search.search_anime")
+    def test_invalid_page_and_malformed_pagination_fall_back_safely(self, search_anilist):
+        search_anilist.return_value = {
+            "pageInfo": {
+                "currentPage": "bad",
+                "lastPage": float("inf"),
+                "hasNextPage": "false",
+            },
+            "media": [anime_item(100, "Valid work")],
+        }
+        result = catalog_search.search_combined_media(
+            "", float("inf"), "ANIME", None, {}
+        )
+        self.assertEqual(result["pageInfo"]["currentPage"], 1)
+        self.assertEqual(result["pageInfo"]["lastPage"], 1)
+        self.assertFalse(result["pageInfo"]["hasNextPage"])
+
+    @patch("catalog_search.search_mangabaka_media")
+    @patch("catalog_search.search_anime")
+    def test_invalid_start_date_does_not_break_date_sort(self, search_anilist, search_mb):
+        valid = anime_item(100, "Dated work")
+        invalid = anime_item(101, "Undated work")
+        invalid["startDate"] = {"year": float("inf"), "month": 13, "day": 99}
+        search_anilist.return_value = {
+            "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+            "media": [invalid, valid],
+        }
+        result = catalog_search.search_combined_media(
+            "", 1, "ANIME", None, {"sort": "START_DATE_DESC"}
+        )
+        self.assertEqual([item["id"] for item in result["media"]], [100, 101])
+

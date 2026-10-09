@@ -1,6 +1,9 @@
 """Search AniList and MangaBaka together and normalize their results."""
 from __future__ import annotations
 
+from datetime import date as _date
+import re
+
 from api import search_anime
 from mangabaka_api import enrich_anilist_results, search_media as search_mangabaka_media
 
@@ -9,20 +12,109 @@ PROVIDER_ONLY_FILTERS = ("publisher_id", "is_licensed")
 PAGE_SIZE = 20
 
 
+def _filter_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"true", "yes", "1", "licensed", "on"}:
+            return True
+        if normalized in {"false", "no", "0", "unlicensed", "off"}:
+            return False
+    return None
+
+
+def _collect_publisher_ids(value):
+    if value is None or isinstance(value, bool):
+        return set()
+    if isinstance(value, int):
+        return {value} if value > 0 else set()
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not re.fullmatch(r"[0-9]+", stripped):
+            return set()
+        number = int(stripped)
+        return {number} if number > 0 else set()
+    if isinstance(value, (list, tuple, set)):
+        result = set()
+        for item in value:
+            result.update(_collect_publisher_ids(item))
+        return result
+    if isinstance(value, dict):
+        result = set()
+        for key in ("id", "publisher_id", "publisherId"):
+            if key in value:
+                result.update(_collect_publisher_ids(value[key]))
+        return result
+    return set()
+
+
+def _matches_provider_only_filters(item, filters):
+    """Fail closed if provider-only filters cannot be verified from row metadata."""
+    if not isinstance(item, dict):
+        return False
+    raw = item.get("_mangabaka")
+    if not isinstance(raw, dict):
+        return False
+
+    wanted_publisher = filters.get("publisher_id")
+    if wanted_publisher not in (None, ""):
+        if isinstance(wanted_publisher, bool) or not str(wanted_publisher).strip().isdigit():
+            return False
+        wanted_id = int(wanted_publisher)
+        known_ids = set()
+        for key in ("publisher_id", "publisherId", "publisher_ids", "publisher", "publishers"):
+            known_ids.update(_collect_publisher_ids(raw.get(key)))
+        if wanted_id <= 0 or wanted_id not in known_ids:
+            return False
+
+    wanted_license = filters.get("is_licensed")
+    if wanted_license is not None:
+        wanted_bool = _filter_bool(wanted_license)
+        if wanted_bool is None:
+            return False
+        actual = None
+        for key in ("is_licensed", "isLicensed", "licensed"):
+            if raw.get(key) is not None:
+                actual = _filter_bool(raw.get(key))
+                break
+        if actual is None or actual is not wanted_bool:
+            return False
+
+    return True
+
+
 def _provider_id(item):
+    if not isinstance(item, dict):
+        return None
     value = item.get("_mangabaka_id")
     if value is None:
-        value = (item.get("_mangabaka") or {}).get("id")
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
+        raw = item.get("_mangabaka")
+        value = raw.get("id") if isinstance(raw, dict) else None
+    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
         return None
+    if isinstance(value, str) and not re.fullmatch(r"\s*[0-9]+\s*", value):
+        return None
+    try:
+        provider_id = int(value) if value is not None else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return provider_id if provider_id is not None and provider_id > 0 else None
 
 
 def _media_id(item):
+    if not isinstance(item, dict):
+        return None
+    value = item.get("id")
+    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+        return None
+    if isinstance(value, str) and not re.fullmatch(r"\s*-?[0-9]+\s*", value):
+        return None
     try:
-        return int(item.get("id"))
-    except (AttributeError, TypeError, ValueError):
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -38,8 +130,14 @@ def _date_parts(item):
     if not isinstance(value, dict):
         return None
     try:
-        return int(value.get("year")), int(value.get("month") or 1), int(value.get("day") or 1)
-    except (TypeError, ValueError):
+        if any(isinstance(value.get(key), bool) for key in ("year", "month", "day")):
+            return None
+        year = int(value.get("year"))
+        month = int(value.get("month") or 1)
+        day = int(value.get("day") or 1)
+        _date(year, month, day)
+        return year, month, day
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -47,7 +145,7 @@ def _score(item):
     try:
         value = float(item.get("averageScore"))
         return value if 0 <= value <= 100 else -1.0
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return -1.0
 
 
@@ -81,13 +179,33 @@ def _page_info(data, page):
     info = data.get("pageInfo") if isinstance(data, dict) else {}
     info = info if isinstance(info, dict) else {}
     try:
+        current_page = max(1, int(page or 1))
+    except (TypeError, ValueError, OverflowError):
+        current_page = 1
+
+    try:
         last_page = max(1, int(info.get("lastPage") or 1))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         last_page = 1
+    # Guard against corrupt pagination values making infinite scrolling believe
+    # the catalogue has millions of pages.
+    last_page = min(last_page, 10000)
+
+    raw_next = info.get("hasNextPage", False)
+    if isinstance(raw_next, str):
+        normalized = raw_next.strip().casefold()
+        has_next = normalized in {"1", "true", "yes", "on"}
+    elif isinstance(raw_next, bool):
+        has_next = raw_next
+    elif isinstance(raw_next, (int, float)) and raw_next in (0, 1):
+        has_next = bool(raw_next)
+    else:
+        has_next = False
+
     return {
-        "currentPage": int(page),
-        "lastPage": last_page,
-        "hasNextPage": bool(info.get("hasNextPage")),
+        "currentPage": current_page,
+        "lastPage": max(current_page, last_page),
+        "hasNextPage": has_next,
     }
 
 
@@ -95,8 +213,14 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
                           include_relations=True):
     """Return a single de-duplicated page shaped for the existing result UI."""
     query = str(search_text or "").strip()
-    page = max(1, int(page or 1))
-    filters = dict(filters or {})
+    try:
+        page = max(1, int(page or 1))
+    except (TypeError, ValueError, OverflowError):
+        page = 1
+    try:
+        filters = dict(filters or {})
+    except (TypeError, ValueError):
+        filters = {}
     requested_format = filters.get("format_filter") or media_format
     season = filters.get("season")
 
@@ -162,6 +286,27 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
     if mangabaka_error:
         mangabaka_items = []
 
+    # Drop duplicate AniList rows before performing cross-catalog enrichment.
+    seen_anilist_ids = set()
+    unique_anilist_items = []
+    for item in anilist_items:
+        media_id = _media_id(item)
+        if media_id is not None:
+            if media_id in seen_anilist_ids:
+                continue
+            seen_anilist_ids.add(media_id)
+        unique_anilist_items.append(item)
+    anilist_items = unique_anilist_items
+
+    provider_filter_active = any(filters.get(key) is not None for key in PROVIDER_ONLY_FILTERS)
+    if provider_filter_active:
+        # The provider may silently ignore/fallback from query filters. Recheck
+        # its raw metadata at this boundary and fail closed when unprovable.
+        mangabaka_items = [
+            item for item in mangabaka_items
+            if _matches_provider_only_filters(item, filters)
+        ]
+
     candidates = [
         item["_mangabaka"] for item in mangabaka_items
         if isinstance(item.get("_mangabaka"), dict)
@@ -169,7 +314,6 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
     if anilist_items and candidates:
         enrich_anilist_results(anilist_items, query, candidates=candidates)
 
-    provider_filter_active = any(filters.get(key) is not None for key in PROVIDER_ONLY_FILTERS)
     if provider_filter_active:
         matching_provider_ids = {
             _provider_id(item) for item in mangabaka_items if _provider_id(item) is not None
@@ -185,6 +329,7 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
     anilist_ids = {_media_id(item) for item in anilist_items if _media_id(item) is not None}
     unique_mb = []
     seen_mb = set()
+    seen_mb_media_ids = set()
     for item in mangabaka_items:
         provider_id = _provider_id(item)
         media_id = _media_id(item)
@@ -192,10 +337,14 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
             continue
         if media_id is not None and media_id > 0 and media_id in anilist_ids:
             continue
+        if provider_id is not None and provider_id in seen_mb:
+            continue
+        if media_id is not None and media_id in seen_mb_media_ids:
+            continue
         if provider_id is not None:
-            if provider_id in seen_mb:
-                continue
             seen_mb.add(provider_id)
+        if media_id is not None:
+            seen_mb_media_ids.add(media_id)
         # MangaBaka-only entries have no AniList relation graph to fetch.
         if media_id is not None and media_id < 0:
             item["_relations_loaded"] = True

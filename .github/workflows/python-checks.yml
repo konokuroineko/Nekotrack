@@ -14,18 +14,24 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
       - name: Install Qt runtime libraries
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --yes libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements.txt
       - name: Install dependencies
@@ -35,9 +41,12 @@ jobs:
           python -m pip install ruff
       - name: Check unused and undefined names
         run: ruff check --select F .
-      - name: Generate Windows application icon
+      - name: Generate application icon
+        if: runner.os == 'Linux'
         run: python installer/generate_icon.py
       - name: Compile Python modules
-        run: python -m compileall -q main.py api.py mangabaka_api.py database.py debug_bundle.py debug_tv_bundle.py image_cache.py series.py updater.py ui tests
-      - name: Run regression tests
+        run: python -m compileall -q main.py api.py catalog_search.py debug_tools.py mangabaka_api.py database.py debug_bundle.py debug_tv_bundle.py image_cache.py series.py updater.py stress_test.py installer ui tests
+      - name: Run regression and deterministic stress tests
         run: python -m unittest discover -s tests -v
+      - name: Smoke-test the timed adversarial soak harness
+        run: python stress_test.py --seconds 1 --seed 17 --report "${{ runner.temp }}/nekotrack-stress-smoke.json"

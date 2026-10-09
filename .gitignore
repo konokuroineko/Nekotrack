@@ -192,3 +192,6 @@ data/
 
 # Generated from assets/nekotrack-logo.svg during the Windows build
 assets/NekoTrack.ico
+
+# Generated local fuzz/soak report
+nekotrack_stress_report.json
