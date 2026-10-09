@@ -119,8 +119,11 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
                           include_relations=True):
     """Return a single de-duplicated page shaped for the existing result UI."""
     query = str(search_text or "").strip()
-    page = max(1, int(page or 1))
-    filters = dict(filters or {})
+    try:
+        page = max(1, int(page or 1))
+    except (TypeError, ValueError, OverflowError):
+        page = 1
+    filters = dict(filters) if isinstance(filters, dict) else {}
     requested_format = filters.get("format_filter") or media_format
     season = filters.get("season")
 
