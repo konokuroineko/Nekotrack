@@ -21,6 +21,7 @@ def _provider_id(item):
     try:
         return int(value) if value is not None and not isinstance(value, bool) else None
     except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _media_id(item):
