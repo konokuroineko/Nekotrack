@@ -16,6 +16,7 @@ import series
 import updater
 import api as nt_api
 from datetime import date
+from pathlib import Path
 
 
 class ProviderPayloadChaosTests(unittest.TestCase):
@@ -577,6 +578,64 @@ class TMDBPayloadChaosTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "AniList request failed"):
                 nt_api.anilist_request("query { invalid }")
 
+
+    def test_movie_image_ranking_survives_malformed_metadata(self):
+        with patch.object(nt_api, "_tmdb_get", return_value={
+            "backdrops": [
+                None,
+                "not an image",
+                {"file_path": "/bad.jpg", "vote_average": "nan", "vote_count": "many"},
+                {"file_path": "/good.jpg", "vote_average": 8.5, "vote_count": 10, "width": 1280},
+            ]
+        }):
+            url, count = nt_api._pick_best_movie_image(50, {})
+        self.assertEqual(url, f"{nt_api.TMDB_IMAGE_BASE_URL}/good.jpg")
+        self.assertEqual(count, 2)
+
+    def test_tmdb_rejects_non_object_json_responses(self):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = ["not", "an", "object"]
+        with patch.object(nt_api, "_tmdb_token", return_value="test-token"), \
+             patch.object(nt_api.requests, "get", return_value=response), \
+             patch.object(nt_api.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "unexpected response"):
+                nt_api._tmdb_get("/tv/12")
+
+    def test_invalid_artwork_response_is_not_persistently_cached(self):
+        url = "https://image.tmdb.org/t/p/w500/test.jpg"
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.content = b"<html><body>temporary upstream error</body></html>"
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
+             patch.object(nt_api.requests, "get", return_value=response) as request:
+            first = nt_api.cache_tmdb_episode_image(url, 42, 3)
+            second = nt_api.cache_tmdb_episode_image(url, 42, 3)
+            files = list(Path(temp_dir).rglob("*"))
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(request.call_count, 2)
+        self.assertFalse(any(path.is_file() for path in files))
+
+    def test_corrupt_existing_artwork_is_not_treated_as_a_cache_hit(self):
+        url = "https://image.tmdb.org/t/p/w500/corrupt.webp"
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.content = b"not a webp image"
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
+             patch.object(nt_api.requests, "get", return_value=response) as request:
+            digest = nt_api.hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+            work_dir = Path(temp_dir) / "42"
+            work_dir.mkdir(parents=True)
+            corrupt = work_dir / f"3_{digest}.webp"
+            corrupt.write_bytes(b"old corrupt cache")
+            result = nt_api.cache_tmdb_episode_image(url, 42, 3)
+            exists_after = corrupt.exists()
+        self.assertIsNone(result)
+        self.assertEqual(request.call_count, 1)
+        self.assertFalse(exists_after)
 
 class UpdateFeedChaosTests(unittest.TestCase):
     def test_malformed_release_entries_do_not_hide_a_valid_update(self):
