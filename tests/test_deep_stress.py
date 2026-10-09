@@ -374,6 +374,28 @@ class DatabaseProgressStressTests(unittest.TestCase):
         self.assertEqual([int(row["item_number"]) for row in second], list(range(11, 111)))
         self.assertEqual(len(database.get_reading_items(1, "chapter", limit=100)), 100)
 
+    def test_nonfinite_numeric_paging_arguments_fail_safely(self):
+        self.assertEqual(
+            database.ensure_reading_placeholders(1, "chapter", math.inf),
+            [],
+        )
+        self.assertEqual(
+            database.ensure_reading_placeholders(1, "chapter", 50, offset=math.inf),
+            [],
+        )
+        self.assertEqual(
+            database.get_reading_items(1, "chapter", limit=math.inf, offset=math.inf),
+            [],
+        )
+        self.assertEqual(
+            database.get_reading_progress(1, "chapter", total_hint=math.inf),
+            (0, 0),
+        )
+        with self.assertRaises(ValueError):
+            database.set_reading_item_read(1, "chapter", math.inf, True)
+        with self.assertRaises(ValueError):
+            database.set_reading_item_read(1, "chapter", 1.5, True)
+
     def test_nonpositive_reading_item_numbers_are_rejected(self):
         for number in (0, -1, -500):
             with self.subTest(number=number):

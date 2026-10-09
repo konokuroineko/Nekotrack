@@ -547,7 +547,7 @@ def ensure_reading_placeholders(work_id, item_type, total_count, offset=0, limit
         total = max(0, int(total_count or 0))
         start_offset = max(0, int(offset))
         page_size = min(100, max(1, int(limit)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return []
 
     if total <= start_offset:
@@ -584,6 +584,11 @@ def ensure_reading_placeholders(work_id, item_type, total_count, offset=0, limit
 def get_reading_items(work_id, item_type, limit=24, offset=0):
     """Return the already-created placeholder entries for one chapter/volume page."""
     item_type = _reading_item_type(item_type)
+    try:
+        safe_limit = max(1, min(100, int(limit)))
+        safe_offset = max(0, int(offset))
+    except (TypeError, ValueError, OverflowError):
+        safe_limit, safe_offset = 24, 0
     connection = get_connection()
     rows = connection.execute(
         """
@@ -593,7 +598,7 @@ def get_reading_items(work_id, item_type, limit=24, offset=0):
         ORDER BY item_number
         LIMIT ? OFFSET ?
         """,
-        (int(work_id), item_type, max(1, min(100, int(limit))), max(0, int(offset))),
+        (int(work_id), item_type, safe_limit, safe_offset),
     ).fetchall()
     connection.close()
     return rows
@@ -615,7 +620,7 @@ def get_reading_progress(work_id, item_type, total_hint=None):
     connection.close()
     try:
         hinted_total = int(total_hint or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         hinted_total = 0
     total = hinted_total if hinted_total > 0 else int(row["highest_item"] or 0)
     return int(row["read_count"] or 0), total
@@ -624,8 +629,17 @@ def get_reading_progress(work_id, item_type, total_hint=None):
 def set_reading_item_read(work_id, item_type, item_number, is_read):
     """Save read state and keep the Library's aggregate chapter/volume counters in sync."""
     item_type = _reading_item_type(item_type)
-    work_id = int(work_id)
-    item_number = int(item_number)
+    try:
+        if isinstance(work_id, bool) or isinstance(item_number, bool):
+            raise ValueError
+        if isinstance(work_id, float) and not work_id.is_integer():
+            raise ValueError
+        if isinstance(item_number, float) and not item_number.is_integer():
+            raise ValueError
+        work_id = int(work_id)
+        item_number = int(item_number)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("Work ID and reading item number must be integers.") from None
     if item_number < 1:
         raise ValueError("Reading item number must be positive.")
 
