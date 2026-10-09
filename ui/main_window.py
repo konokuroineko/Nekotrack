@@ -74,6 +74,13 @@ class LibraryImportWorker(QObject):
                 (details.get("staff") or {}).get("edges"),
             )
 
+            # TMDB episode feeds apply only to anime. Manga and light novels
+            # use chapter/volume placeholders until reading-item metadata is
+            # available, so never try to match them to a television season.
+            if str(details.get("type") or "").upper() != "ANIME":
+                self.finished.emit(self.work_id, details)
+                return
+
             # Library entries should be fully prepared before the user opens
             # their detail page. Episode metadata is fetched here, in the
             # existing background worker, rather than on the click path.
@@ -158,6 +165,8 @@ class LibraryEpisodePreloadWorker(QObject):
             try:
                 connection_work = get_work(work_id)
                 if connection_work is None:
+                    continue
+                if str(connection_work["type"] or "").upper() != "ANIME":
                     continue
 
                 existing_episodes = get_episodes(work_id)
@@ -529,6 +538,7 @@ class MainWindow(QMainWindow):
                     FROM works
                     JOIN user_library ON user_library.work_id = works.id
                     WHERE COALESCE(works.episodes, 0) > 0
+                      AND UPPER(COALESCE(works.type, '')) = 'ANIME'
                     ORDER BY user_library.added_date
                     """
                 ).fetchall()
