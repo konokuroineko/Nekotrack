@@ -62,10 +62,12 @@ def _date_parts(item):
 
 
 def _score(item):
+    if not isinstance(item, dict):
+        return -1.0
     try:
         value = float(item.get("averageScore"))
         return value if 0 <= value <= 100 else -1.0
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return -1.0
 
 
