@@ -42,6 +42,25 @@ class PreferenceMigrationTests(unittest.TestCase):
             },
         }
 
+    def test_old_extras_mode_migrates_to_all_individual_options(self):
+        MemorySettings.stores[("NekoTrack", "NekoTrack")]["bundle_mode"] = "extras"
+
+        with patch.object(preferences, "QSettings", MemorySettings):
+            settings = preferences.settings()
+
+        for key in preferences.BUNDLE_OPTION_KEYS:
+            self.assertTrue(settings.value(key), key)
+        self.assertTrue(settings.value("_bundle_options_v1_migrated"))
+
+    def test_old_main_mode_defaults_each_optional_format_to_disabled(self):
+        MemorySettings.stores[("NekoTrack", "NekoTrack")]["bundle_mode"] = "main"
+
+        with patch.object(preferences, "QSettings", MemorySettings):
+            settings = preferences.settings()
+
+        for key in preferences.BUNDLE_OPTION_KEYS:
+            self.assertFalse(settings.value(key), key)
+
     def test_string_true_migration_flag_does_not_restore_legacy_colors(self):
         with patch.object(preferences, "QSettings", MemorySettings):
             settings = preferences.settings()
