@@ -297,6 +297,14 @@ def search_anime(
 
     clean_search = search.strip() if search else None
 
+    def _filter_terms(value):
+        if not value:
+            return []
+        values = value if isinstance(value, (list, tuple, set)) else str(value).split(",")
+        return list(dict.fromkeys(
+            str(part).strip() for part in values if str(part).strip()
+        ))
+
     effective_formats = None
     if format_filter:
         effective_formats = [format_filter]
@@ -355,17 +363,20 @@ def search_anime(
     if min_score is not None:
         variable_lines.append("$minScore: Int")
         argument_lines.append("averageScore_greater: $minScore")
-        variables["minScore"] = int(min_score)
+        # AniList uses a strict greater-than comparison; the UI cutoff is inclusive.
+        variables["minScore"] = max(0, int(min_score) - 1)
 
-    if genre and genre.strip():
+    genre_values = _filter_terms(genre)
+    if genre_values:
         variable_lines.append("$genres: [String]")
         argument_lines.append("genre_in: $genres")
-        variables["genres"] = [genre.strip()]
+        variables["genres"] = genre_values
 
-    if tag and tag.strip():
+    tag_values = _filter_terms(tag)
+    if tag_values:
         variable_lines.append("$tags: [String]")
         argument_lines.append("tag_in: $tags")
-        variables["tags"] = [tag.strip()]
+        variables["tags"] = tag_values
 
     argument_block = ",\n                ".join(argument_lines)
     variable_block = ",\n        ".join(variable_lines)
