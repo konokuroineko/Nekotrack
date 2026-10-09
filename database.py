@@ -751,15 +751,49 @@ def save_reading_item_metadata(work_id, item_type, items):
     for index, item in enumerate(items or [], start=1):
         if not isinstance(item, dict):
             continue
-        raw_number = (
-            item.get("number") or item.get("item_number") or item.get("volume_number")
-            or item.get("chapter_number") or index
-        )
-        try:
-            match = re.search(r"\d+", str(raw_number))
-            number = int(match.group(0)) if match else index
-        except (TypeError, ValueError):
+        raw_number = None
+        has_explicit_number = False
+        for key in ("number", "item_number", "volume_number", "chapter_number"):
+            candidate = item.get(key)
+            if candidate not in (None, ""):
+                raw_number = candidate
+                has_explicit_number = True
+                break
+
+        if not has_explicit_number:
             number = index
+        else:
+            if isinstance(raw_number, bool):
+                continue
+            if isinstance(raw_number, (int, float)):
+                try:
+                    numeric = float(raw_number)
+                    if not numeric.is_integer() or numeric < 1:
+                        continue
+                    number = int(numeric)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+            else:
+                raw_text = str(raw_number).strip()
+                # Strict numeric strings must be positive integers; descriptive
+                # strings such as "Volume 3" can still be normalized safely.
+                if re.fullmatch(r"-?\d+(?:\.\d+)?", raw_text):
+                    try:
+                        numeric = float(raw_text)
+                        if not numeric.is_integer() or numeric < 1:
+                            continue
+                        number = int(numeric)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                else:
+                    match = re.search(r"(?<![-0-9])\d+", raw_text)
+                    if not match:
+                        continue
+                    try:
+                        number = int(match.group(0))
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+
         if number < 1:
             continue
         title_value = item.get("title") or item.get("name")
