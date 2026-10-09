@@ -212,8 +212,8 @@ class UnifiedCatalogAdversarialTests(unittest.TestCase):
                 self.assertTrue(date_key is None or len(date_key) == 3)
                 self.assertIsInstance(score, float)
 
-        with patch("catalog_search.search_anime", return_value={"media": [], "pageInfo": {"lastPage": float("inf")}}), \\
-             patch("catalog_search.search_mangabaka_media", return_value={"media": [], "pageInfo": []}), \\
+        with patch("catalog_search.search_anime", return_value={"media": [], "pageInfo": {"lastPage": float("inf")}}), \
+             patch("catalog_search.search_mangabaka_media", return_value={"media": [], "pageInfo": []}), \
              patch("catalog_search.enrich_anilist_results"):
             result = catalog_search.search_combined_media(
                 "Example", float("inf"), None, None, ["filters are malformed"],
