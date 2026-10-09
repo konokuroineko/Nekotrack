@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import datetime as _dt
 import re
 import threading
 import time
@@ -130,7 +131,10 @@ def _records(payload):
 
 
 def _pagination(payload):
-    return payload.get("pagination") or {} if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    value = payload.get("pagination")
+    return value if isinstance(value, dict) else {}
 
 
 def _filter_values(values):
@@ -476,6 +480,24 @@ def _cover_url(series):
     return _first_text(series.get("cover_url"))
 
 
+def _valid_date_parts(year, month=None, day=None):
+    """Return validated date components, or None for malformed provider data."""
+    try:
+        year_value = int(year)
+        month_value = 1 if month in (None, "") else int(month)
+        day_value = 1 if day in (None, "") else int(day)
+        _dt.date(year_value, month_value, day_value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if isinstance(year, float) and not year.is_integer():
+        return None
+    if isinstance(month, float) and not month.is_integer():
+        return None
+    if isinstance(day, float) and not day.is_integer():
+        return None
+    return {"year": year_value, "month": month_value, "day": day_value}
+
+
 def _date_parts(series):
     published = series.get("published") or {}
     candidates = []
@@ -486,26 +508,37 @@ def _date_parts(series):
                        series.get("published_at"), series.get("created_at")])
     for value in candidates:
         if isinstance(value, dict):
-            year, month, day = value.get("year"), value.get("month"), value.get("day")
-            if year:
-                return {"year": int(year), "month": int(month or 1), "day": int(day or 1)}
+            parts = _valid_date_parts(
+                value.get("year"), value.get("month"), value.get("day")
+            )
+            if parts:
+                return parts
         if isinstance(value, str) and value.strip():
             match = re.search(r"(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?", value)
             if match:
-                return {"year": int(match.group(1)), "month": int(match.group(2) or 1),
-                        "day": int(match.group(3) or 1)}
+                parts = _valid_date_parts(
+                    match.group(1), match.group(2), match.group(3)
+                )
+                if parts:
+                    return parts
     return {"year": None, "month": None, "day": None}
 
 
 def _count_or_none(value):
     if value in (None, ""):
         return None
-    match = re.search(r"\d+", str(value))
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value < 0:
+        return None
+    text = str(value).strip()
+    # Do not turn a negative count such as "-5 chapters" into a positive 5.
+    if re.match(r"^-\s*\d", text):
+        return None
+    match = re.search(r"\d+", text)
     if not match:
         return None
     try:
         number = int(match.group(0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return number if number > 0 else None
 
@@ -789,10 +822,16 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
         if not _matches_local_filters(item, picked_format, filters):
             continue
         normalized.append(normalize_series(item))
-    current_page = int(pagination.get("page") or page)
-    limit_value = int(pagination.get("limit") or limit)
-    total = int(pagination.get("count") or len(normalized))
-    last_page = max(current_page, (total + limit_value - 1) // max(1, limit_value))
+    def safe_int(value, fallback):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return int(fallback)
+
+    current_page = max(1, safe_int(pagination.get("page") or page, page))
+    limit_value = max(1, safe_int(pagination.get("limit") or limit, limit))
+    total = max(0, safe_int(pagination.get("count") or len(normalized), len(normalized)))
+    last_page = max(current_page, (total + limit_value - 1) // limit_value)
     return {
         "pageInfo": {
             "currentPage": current_page,
