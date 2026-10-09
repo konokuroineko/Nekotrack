@@ -9,6 +9,7 @@ def sample_series(series_id=42, series_type="novel", english="Example Work"):
         "id": series_id,
         "type": series_type,
         "status": "completed",
+        "content_rating": "safe",
         "rating": 84.5,
         "total_chapters": 73,
         "final_volume": 12,
@@ -101,6 +102,34 @@ class MangaBakaAPITests(unittest.TestCase):
         self.assertEqual(volumes[0]["number"], 1)
         self.assertEqual(volumes[0]["title"], "The First Volume")
         self.assertEqual(volumes[0]["isbn"], "9780000000001")
+
+    def test_full_series_schema_uses_documented_query_parameter(self):
+        with patch.object(
+            mb, "_request",
+            return_value={"status": 200, "data": {"id": 42, "titles": []}},
+        ) as request:
+            mb.get_series(42, full=True)
+        self.assertEqual(request.call_args.args[0], "series/42")
+        self.assertEqual(request.call_args.kwargs["params"], {"schema": "full"})
+
+    def test_hidden_gems_mode_uses_the_discovery_endpoint(self):
+        payload = {
+            "status": 200,
+            "data": [sample_series(88)],
+            "pagination": {"count": 1, "page": 1, "limit": 20, "next": None},
+        }
+        with patch.object(mb, "get_hidden_gems", return_value=payload) as hidden_gems:
+            result = mb.search_media("", browse_mode="hidden_gems")
+        hidden_gems.assert_called_once()
+        self.assertEqual(result["media"][0]["_mangabaka_id"], 88)
+
+    def test_query_in_hidden_gems_mode_still_performs_title_search(self):
+        payload = {"status": 200, "data": [sample_series(89)],
+                   "pagination": {"count": 1, "page": 1, "limit": 20, "next": None}}
+        with patch.object(mb, "search_series", return_value=payload) as search:
+            mb.search_media("Example", browse_mode="hidden_gems")
+        search.assert_called_once()
+        self.assertEqual(search.call_args.args[0], "Example")
 
     def test_account_and_moderation_routes_are_not_public_catalog_calls(self):
         with self.assertRaises(ValueError):
