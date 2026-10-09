@@ -132,8 +132,10 @@ class SetupWizard(QDialog):
         mark.setPixmap(logo_pixmap(96))
         mark.setScaledContents(True)
         mark.setStyleSheet("background:transparent;border:none;padding:0;")
-        brand = QLabel("NekoTrack")
+        brand = QLabel()
         brand.setObjectName("setupBrand")
+        brand.setTextFormat(Qt.TextFormat.RichText)
+        self.setup_brand = brand
         brand_row.addWidget(mark)
         brand_row.addWidget(brand)
         brand_row.addStretch(1)
@@ -464,6 +466,11 @@ class SetupWizard(QDialog):
 
     def _apply_wizard_style(self):
         theme = THEME_PRESETS[self.selected_theme]
+        if hasattr(self, "setup_brand"):
+            self.setup_brand.setText(
+                f'<span style="color:{theme["accent"]}">Neko</span>'
+                f'<span style="color:{theme["primary"]}">Track</span>'
+            )
         self.setStyleSheet(
             f"""
             QDialog {{
