@@ -576,7 +576,7 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
         query_filters["sort_by"] = sort_map[filters["sort"]]
 
     mode = str(browse_mode or "search").lower()
-    if mode == "hidden_gems":
+    if mode == "hidden_gems" and not str(query or "").strip():
         # This endpoint is a discovery feed, not a title search.
         payload = get_hidden_gems(page=page, limit=limit, **query_filters)
     elif mode == "popular" and not str(query or "").strip():
