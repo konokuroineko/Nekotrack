@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 
@@ -123,6 +124,17 @@ def initialize_database():
         CREATE TABLE IF NOT EXISTS alternate_titles (
             work_id INTEGER NOT NULL, title TEXT NOT NULL, language TEXT,
             PRIMARY KEY (work_id, title, language), FOREIGN KEY (work_id) REFERENCES works(id)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS work_provider_metadata (
+            work_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            provider_id TEXT,
+            payload_json TEXT NOT NULL,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (work_id, provider),
+            FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
         )
     """)
     cursor.execute("""
@@ -690,6 +702,60 @@ def set_episode_watched(work_id, episode_number, watched):
     return watched_count, total
 
 
+def get_provider_metadata(work_id, provider="mangabaka"):
+    """Return preserved raw metadata for a work and provider, if available."""
+    connection = get_connection()
+    row = connection.execute(
+        "SELECT payload_json FROM work_provider_metadata WHERE work_id = ? AND provider = ?",
+        (int(work_id), str(provider).lower()),
+    ).fetchone()
+    connection.close()
+    if not row:
+        return None
+    try:
+        payload = json.loads(row["payload_json"])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def save_reading_item_metadata(work_id, item_type, items):
+    """Merge real provider volume/chapter titles into local reading progress rows."""
+    kind = str(item_type or "").lower()
+    if kind not in {"chapter", "volume"}:
+        raise ValueError("item_type must be chapter or volume")
+    connection = get_connection()
+    saved = 0
+    for index, item in enumerate(items or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_number = (
+            item.get("number") or item.get("item_number") or item.get("volume_number")
+            or item.get("chapter_number") or index
+        )
+        try:
+            match = re.search(r"\d+", str(raw_number))
+            number = int(match.group(0)) if match else index
+        except (TypeError, ValueError):
+            number = index
+        if number < 1:
+            continue
+        title_value = item.get("title") or item.get("name")
+        title_value = str(title_value).strip() if title_value is not None else ""
+        connection.execute("""
+            INSERT INTO reading_items (work_id, item_type, item_number, title, is_read)
+            VALUES (?, ?, ?, ?, 0)
+            ON CONFLICT(work_id, item_type, item_number) DO UPDATE SET
+                title = CASE
+                    WHEN excluded.title IS NOT NULL AND TRIM(excluded.title) != ''
+                    THEN excluded.title ELSE reading_items.title END
+        """, (int(work_id), kind, number, title_value or None))
+        saved += 1
+    connection.commit()
+    connection.close()
+    return saved
+
+
 def save_anime(anime):
     title_data = anime["title"]
     title = title_data.get("english") or title_data.get("romaji") or title_data.get("native")
@@ -723,6 +789,35 @@ def save_anime(anime):
     for synonym in anime.get("synonyms") or []:
         connection.execute("INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
                            (anime["id"], synonym, None))
+
+    # Preserve provider-native metadata instead of flattening it into AniList fields.
+    mangabaka_data = anime.get("_mangabaka")
+    if isinstance(mangabaka_data, dict):
+        import json
+        mangabaka_id = anime.get("_mangabaka_id") or mangabaka_data.get("id")
+        connection.execute("""
+            INSERT INTO work_provider_metadata (work_id, provider, provider_id, payload_json, updated_at)
+            VALUES (?, 'mangabaka', ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(work_id, provider) DO UPDATE SET
+                provider_id = COALESCE(excluded.provider_id, work_provider_metadata.provider_id),
+                payload_json = excluded.payload_json,
+                updated_at = CURRENT_TIMESTAMP
+        """, (
+            anime["id"],
+            str(mangabaka_id) if mangabaka_id is not None else None,
+            json.dumps(mangabaka_data, ensure_ascii=False),
+        ))
+        title_records = mangabaka_data.get("titles") or []
+        for title_record in title_records:
+            if not isinstance(title_record, dict):
+                continue
+            alt_title = str(title_record.get("title") or "").strip()
+            if not alt_title or alt_title.casefold() == str(title or "").casefold():
+                continue
+            connection.execute(
+                "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
+                (anime["id"], alt_title, title_record.get("language")),
+            )
     for edge in (anime.get("studios") or {}).get("edges") or []:
         studio = edge.get("node") or {}
         if studio.get("id") and studio.get("name"):
