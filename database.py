@@ -1391,6 +1391,7 @@ def delete_work_data(work_id):
             "work_studios",
             "work_songs",
             "alternate_titles",
+            "work_provider_metadata",
         ):
             connection.execute(
                 f"DELETE FROM {table} WHERE work_id = ?",
@@ -1446,6 +1447,7 @@ def delete_work_data(work_id):
             ("work_studios", "SELECT 1 FROM work_studios WHERE work_id = ? LIMIT 1"),
             ("work_songs", "SELECT 1 FROM work_songs WHERE work_id = ? LIMIT 1"),
             ("alternate_titles", "SELECT 1 FROM alternate_titles WHERE work_id = ? LIMIT 1"),
+            ("work_provider_metadata", "SELECT 1 FROM work_provider_metadata WHERE work_id = ? LIMIT 1"),
         )
 
         residual = []
@@ -1498,7 +1500,8 @@ def get_all_library():
     connection = get_connection()
     results = connection.execute("""
         SELECT works.*, user_library.status, user_library.progress_episodes,
-               user_library.progress_chapters, user_library.rating, user_library.notes,
+               user_library.progress_chapters, user_library.progress_volumes,
+               user_library.rating, user_library.notes,
                user_library.added_date, user_library.updated_date
         FROM works JOIN user_library ON user_library.work_id = works.id
         ORDER BY user_library.added_date DESC, works.title
