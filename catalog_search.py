@@ -25,9 +25,16 @@ def _provider_id(item):
 
 
 def _media_id(item):
+    if not isinstance(item, dict):
+        return None
+    value = item.get("id")
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
     try:
-        return int(item.get("id"))
-    except (AttributeError, TypeError, ValueError):
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
