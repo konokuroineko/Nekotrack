@@ -38,6 +38,18 @@ No external provider can guarantee complete chapter or volume records for every 
 - Voice-actor and character metadata depend on the fields available from AniList.
 - Some planned media, tracking, metadata, and filtering features are still being developed.
 
+## Adversarial testing
+
+Run the full regression suite followed by a configurable, network-free adversarial soak test:
+
+```powershell
+python stress_test.py --minutes 10
+```
+
+Use `--minutes 20` for a longer run, or `--seconds 30 --seed 7` for a quick run with a reproducible input sequence. The harness repeatedly probes malformed catalog fields, URL edge cases, duplicate search results, random cyclic series graphs, and isolated SQLite progress updates. It writes `nekotrack_stress_report.json`; the report is ignored by Git.
+
+The stress harness does not issue live API requests and does not open or modify the normal NekoTrack database. Database fuzzing uses temporary directories that are deleted at the end. To run the soak on GitHub instead, open **Actions → Adversarial stress → Run workflow** and choose a duration and seed; the generated JSON report is uploaded as a workflow artifact.
+
 ## Data and privacy
 
 NekoTrack stores its local SQLite database as `anime_tracker.db`. Cover images are cached under `data/images/`. These generated/local files are intentionally ignored by Git.
