@@ -24,13 +24,31 @@ class MangaBakaAPIError(RuntimeError):
     """An API response failed or could not be decoded."""
 
 
+def _freeze_cache_value(value):
+    """Recursively convert request parameters to deterministic hashable values."""
+    if isinstance(value, dict):
+        return tuple(sorted(
+            ((str(key), _freeze_cache_value(item)) for key, item in value.items()),
+            key=lambda pair: pair[0],
+        ))
+    if isinstance(value, (list, tuple, set, frozenset)):
+        frozen = [_freeze_cache_value(item) for item in value]
+        return tuple(sorted(frozen, key=repr))
+    if value is None or isinstance(value, (str, int, float, bool, bytes)):
+        return value
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
 def _cache_key(path, params):
-    stable = []
-    for key, value in (params or {}).items():
-        if isinstance(value, (list, tuple, set)):
-            value = tuple(sorted(str(item) for item in value))
-        stable.append((str(key), value))
-    return path, tuple(sorted(stable))
+    stable = [
+        (str(key), _freeze_cache_value(value))
+        for key, value in (params or {}).items()
+    ]
+    return str(path or ""), tuple(sorted(stable, key=lambda pair: pair[0]))
 
 
 def _unwrap(payload):
@@ -130,7 +148,20 @@ def _records(payload):
 
 
 def _pagination(payload):
-    return payload.get("pagination") or {} if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    pagination = payload.get("pagination")
+    return pagination if isinstance(pagination, dict) else {}
+
+
+def _safe_int(value, default=0):
+    """Parse provider numeric fields without letting malformed data abort a search."""
+    if isinstance(value, bool) or value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 def _filter_values(values):
@@ -240,11 +271,14 @@ def _matches_local_filters(record, picked_format, filters):
 
     min_score = filters.get("min_score")
     if min_score is not None:
+        import math
+
         try:
             rating = float(record.get("rating"))
-            if rating < float(min_score):
+            threshold = float(min_score)
+            if not math.isfinite(rating) or not math.isfinite(threshold) or rating < threshold:
                 return False
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return False
 
     year = filters.get("year")
@@ -477,6 +511,9 @@ def _cover_url(series):
 
 
 def _date_parts(series):
+    """Normalize incomplete provider dates; ignore invalid values instead of crashing."""
+    import datetime
+
     published = series.get("published") or {}
     candidates = []
     if isinstance(published, dict):
@@ -484,16 +521,32 @@ def _date_parts(series):
                            published.get("start_date"), published.get("date")])
     candidates.extend([series.get("published_start"), series.get("start_date"),
                        series.get("published_at"), series.get("created_at")])
+
+    def normalize_parts(year, month=None, day=None):
+        year_value = _safe_int(year, default=0)
+        month_value = 1 if month in (None, "") else _safe_int(month, default=0)
+        day_value = 1 if day in (None, "") else _safe_int(day, default=0)
+        if not (1 <= year_value <= 9999 and 1 <= month_value <= 12 and 1 <= day_value <= 31):
+            return None
+        try:
+            datetime.date(year_value, month_value, day_value)
+        except (ValueError, OverflowError):
+            return None
+        return {"year": year_value, "month": month_value, "day": day_value}
+
     for value in candidates:
         if isinstance(value, dict):
-            year, month, day = value.get("year"), value.get("month"), value.get("day")
-            if year:
-                return {"year": int(year), "month": int(month or 1), "day": int(day or 1)}
-        if isinstance(value, str) and value.strip():
-            match = re.search(r"(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?", value)
+            year = value.get("year")
+            if year not in (None, ""):
+                normalized = normalize_parts(year, value.get("month"), value.get("day"))
+                if normalized:
+                    return normalized
+        elif isinstance(value, str) and value.strip():
+            match = re.fullmatch(r"(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?(?:[T ].*)?", value.strip())
             if match:
-                return {"year": int(match.group(1)), "month": int(match.group(2) or 1),
-                        "day": int(match.group(3) or 1)}
+                normalized = normalize_parts(match.group(1), match.group(2), match.group(3))
+                if normalized:
+                    return normalized
     return {"year": None, "month": None, "day": None}
 
 
@@ -514,10 +567,15 @@ def normalize_series(series, preferred_id=None):
     """Convert a MangaBaka series record to NekoTrack's AniList-like media shape."""
     if not isinstance(series, dict):
         raise TypeError("A MangaBaka series record must be an object.")
-    try:
-        mb_id = int(series.get("id"))
-    except (TypeError, ValueError):
+    raw_id = series.get("id")
+    if isinstance(raw_id, bool):
         raise ValueError("MangaBaka response did not include a numeric series ID.")
+    try:
+        mb_id = int(raw_id)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("MangaBaka response did not include a numeric series ID.")
+    if mb_id <= 0:
+        raise ValueError("MangaBaka series IDs must be positive.")
 
     titles = _title_records(series)
     english = _first_text(_pick_title(titles, "en"), series.get("title"), series.get("english_title"))
@@ -728,8 +786,10 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
                 limit=20, browse_mode="search"):
     """Return MangaBaka search results in the envelope expected by SearchPage."""
     filters = dict(filters or {})
+    safe_page = max(1, _safe_int(page, 1))
+    safe_limit = min(50, max(1, _safe_int(limit, 20)))
     if str(media_type or "").upper() == "ANIME" or (filters.get("format_filter") or media_format) == "ONE_SHOT":
-        return {"pageInfo": {"currentPage": int(page), "lastPage": 1, "hasNextPage": False},
+        return {"pageInfo": {"currentPage": safe_page, "lastPage": 1, "hasNextPage": False},
                 "media": [], "_catalog": "MangaBaka"}
 
     query_filters = {}
@@ -768,16 +828,16 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
     mode = str(browse_mode or "search").lower()
     if mode == "hidden_gems" and not str(query or "").strip():
         # This endpoint is a discovery feed, not a title search.
-        payload = get_hidden_gems(page=page, limit=limit, **query_filters)
+        payload = get_hidden_gems(page=safe_page, limit=safe_limit, **query_filters)
     elif mode == "popular" and not str(query or "").strip():
         query_filters.setdefault("sort_by", "popular_desc")
-        payload = get_series_mix(page=page, limit=limit, **query_filters)
+        payload = get_series_mix(page=safe_page, limit=safe_limit, **query_filters)
     elif str(query or "").strip():
         if mode == "popular":
             query_filters.setdefault("sort_by", "popular_desc")
-        payload = search_series(query, page=page, limit=limit, **query_filters)
+        payload = search_series(query, page=safe_page, limit=safe_limit, **query_filters)
     else:
-        payload = get_series_mix(page=page, limit=limit, **query_filters)
+        payload = get_series_mix(page=safe_page, limit=safe_limit, **query_filters)
 
     pagination = _pagination(payload)
     normalized = []
@@ -789,10 +849,11 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
         if not _matches_local_filters(item, picked_format, filters):
             continue
         normalized.append(normalize_series(item))
-    current_page = int(pagination.get("page") or page)
-    limit_value = int(pagination.get("limit") or limit)
-    total = int(pagination.get("count") or len(normalized))
-    last_page = max(current_page, (total + limit_value - 1) // max(1, limit_value))
+    current_page = max(1, _safe_int(pagination.get("page"), safe_page))
+    limit_value = min(100, max(1, _safe_int(pagination.get("limit"), safe_limit)))
+    total_value = _safe_int(pagination.get("count"), len(normalized))
+    total = max(len(normalized), max(0, total_value))
+    last_page = max(current_page, (total + limit_value - 1) // limit_value)
     return {
         "pageInfo": {
             "currentPage": current_page,
@@ -807,8 +868,10 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
 def get_volume_records(series_id, max_pages=4, limit=50):
     """Resolve published volume records when a MangaBaka series has volume collections."""
     collections = []
-    for page in range(1, max(1, int(max_pages)) + 1):
-        payload = get_series_collections(series_id, page=page, limit=limit)
+    page_count = min(20, max(1, _safe_int(max_pages, 4)))
+    safe_limit = min(100, max(1, _safe_int(limit, 50)))
+    for page in range(1, page_count + 1):
+        payload = get_series_collections(series_id, page=page, limit=safe_limit)
         records = _records(payload)
         collections.extend(records)
         if not records or not _pagination(payload).get("next"):
@@ -820,7 +883,7 @@ def get_volume_records(series_id, max_pages=4, limit=50):
         return []
     volume_collections.sort(key=lambda item: (
         0 if str(item.get("language") or "").lower() in {"en", "eng", "english"} else 1,
-        -int(item.get("count") or item.get("works_count") or 0),
+        -_safe_int(item.get("count") or item.get("works_count") or 0, 0),
     ))
     for collection in volume_collections:
         collection_id = collection.get("id")

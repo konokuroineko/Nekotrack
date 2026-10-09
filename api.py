@@ -20,6 +20,21 @@ MAX_RETRIES = 5
 RETRY_DELAY = 1
 
 
+def _anilist_error_message(payload, fallback="Unknown error"):
+    """Extract a safe error message from a possibly malformed GraphQL payload."""
+    if isinstance(payload, dict):
+        errors = payload.get("errors")
+        if isinstance(errors, list) and errors:
+            first = errors[0]
+            if isinstance(first, dict):
+                message = first.get("message")
+                if message not in (None, ""):
+                    return str(message)
+            elif first not in (None, ""):
+                return str(first)
+    return str(fallback or "Unknown error")
+
+
 def anilist_request(query, variables=None):
     """Make a request to AniList GraphQL API with retry logic."""
     last_error = None
@@ -50,8 +65,7 @@ def anilist_request(query, variables=None):
                     time.sleep(wait_time)
                     continue
 
-                errors = data.get("errors") or []
-                message = errors[0].get("message") if errors else response.reason
+                message = _anilist_error_message(data, response.reason)
                 raise Exception(f"AniList request failed (429): {message}")
 
             if response.status_code >= 500:
@@ -67,12 +81,20 @@ def anilist_request(query, variables=None):
                 raise last_error
 
             if response.status_code >= 400:
-                errors = data.get("errors") or []
-                message = errors[0].get("message") if errors else response.reason
+                message = _anilist_error_message(data, response.reason)
                 raise Exception(f"AniList request failed ({response.status_code}): {message}")
 
-            if "errors" in data:
-                raise Exception(data["errors"][0]["message"])
+            if not isinstance(data, dict):
+                raise Exception("AniList returned an invalid response payload (expected a JSON object).")
+
+            errors = data.get("errors")
+            if errors:
+                if isinstance(errors, list):
+                    raise Exception(_anilist_error_message(data))
+                raise Exception("AniList returned a malformed errors payload.")
+
+            if "data" not in data:
+                raise Exception("AniList returned a response without a data field.")
 
             return data["data"]
 
@@ -215,21 +237,30 @@ def parse_anilist_url(value):
 
     try:
         parsed = urlparse(text)
+        hostname = (parsed.hostname or "").lower()
+        port = parsed.port
     except ValueError:
         return None
 
-    hostname = (parsed.hostname or "").lower()
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return None
     if hostname not in {"anilist.co", "www.anilist.co"}:
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    if parsed.scheme.lower() == "https" and port not in (None, 443):
+        return None
+    if parsed.scheme.lower() == "http" and port not in (None, 80):
         return None
 
     parts = [part for part in parsed.path.split("/") if part]
     if len(parts) < 2 or parts[0].lower() not in {"anime", "manga"}:
         return None
-
-    try:
-        return int(parts[1])
-    except ValueError:
+    if not parts[1].isdigit():
         return None
+
+    media_id = int(parts[1])
+    return media_id if media_id > 0 else None
 
 
 def get_media_by_anilist_url(url, include_relations=False):

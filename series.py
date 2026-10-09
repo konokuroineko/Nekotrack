@@ -42,8 +42,9 @@ def _get(item, key, default=None):
 def _title_text(item):
     title = _get(item, "title") or {}
     if isinstance(title, dict):
-        return title.get("english") or title.get("romaji") or title.get("native") or ""
-    return str(title)
+        value = title.get("english") or title.get("romaji") or title.get("native") or ""
+        return str(value or "")
+    return str(title or "")
 
 
 def _media_type(item):
@@ -114,7 +115,7 @@ def _auto_bundleable(item):
 
 
 def _series_key(title):
-    value = (title or "").lower().strip()
+    value = str(title or "").lower().strip()
     value = re.sub(
         r"\s*[:\-–—]?\s*(?:the\s+)?final\s+season(?:\s+part\s+\d+)?(?:\s+\([^)]*\))?\s*$",
         "",
@@ -183,7 +184,7 @@ def _title_family_compatible(left, right):
 
 def _season_marker(title):
     """Return only an explicit season identity, never a bare Part/Cour number."""
-    title = (title or "").lower()
+    title = str(title or "").lower()
 
     if re.search(r"\bfinal\s+season\b", title):
         return "final"
@@ -232,7 +233,7 @@ def _season_marker(title):
 
 
 def _is_continuation(title):
-    title = (title or "").lower()
+    title = str(title or "").lower()
     return bool(
         re.search(r"\b(?:part|cour)\s*(?:\d+|i|ii|iii|iv|v|vi)\b", title)
         or re.search(r"\bfinal\s+season\b", title)
@@ -240,21 +241,25 @@ def _is_continuation(title):
 
 
 def _is_arc(title):
-    return bool(re.search(r"\barc\b", (title or "").lower()))
+    return bool(re.search(r"\barc\b", str(title or "").lower()))
 
 
 def _air_period(member):
     start = _get(member, "startDate") or {}
+    if not isinstance(start, dict):
+        start = {}
     year = start.get("year")
     month = start.get("month")
     if year is None:
         year = _get(member, "start_year")
-    if month is None and year is None:
+    try:
+        year = int(year)
+        month = int(month)
+    except (TypeError, ValueError, OverflowError):
         return None
-    if month is None:
-        return (year, None)
-
-    airing_season = (int(month) - 1) // 3
+    if not (1 <= year <= 9999 and 1 <= month <= 12):
+        return None
+    airing_season = (month - 1) // 3
     return (year, airing_season)
 
 
@@ -304,7 +309,7 @@ def logical_season_count(members):
         member_id = int(_get(member, "id"))
         current_marker = _season_marker(title)
 
-        for edge in (_get(member, "relations") or {}).get("edges", []):
+        for edge in _search_relation_edges(member):
             if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
                 continue
 
@@ -340,7 +345,7 @@ def logical_season_count(members):
         member = by_id[member_id]
         member_period = _air_period(member)
 
-        for edge in (_get(member, "relations") or {}).get("edges", []):
+        for edge in _search_relation_edges(member):
             if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
                 continue
 
@@ -354,7 +359,7 @@ def logical_season_count(members):
                 continue
 
             target_period = _air_period(by_id[target_id])
-            if member_period == target_period:
+            if member_period is not None and member_period == target_period:
                 union(member_id, target_id)
 
     return len({find(media_id) for media_id in ids})
@@ -403,14 +408,28 @@ def _bundle_summary(members):
 
 
 def _search_relation_edges(item):
-    return (_get(item, "relations") or {}).get("edges", [])
+    relations = _get(item, "relations")
+    if not isinstance(relations, dict):
+        return []
+    edges = relations.get("edges")
+    if not isinstance(edges, (list, tuple)):
+        return []
+    return [edge for edge in edges if isinstance(edge, dict)]
 
 
 def _relation_edge_allowed(item, edge):
-    if edge.get("relationType") not in SERIES_RELATIONS:
+    if not isinstance(edge, dict) or edge.get("relationType") not in SERIES_RELATIONS:
         return False
     node = edge.get("node") or {}
-    return bool(_get(node, "id")) and _same_media_family(item, node)
+    media_id = _get(node, "id")
+    if isinstance(media_id, bool):
+        return False
+    try:
+        if int(media_id) == 0:
+            return False
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return _same_media_family(item, node)
 
 
 def _bundle_edge_allowed(item, edge):
@@ -483,10 +502,20 @@ def _relation_group_compatible(item, edge, target):
 
 def _traversal_edge_allowed(item, edge):
     """Walk season chains and carefully include named series extras."""
+    if not isinstance(edge, dict):
+        return False
     relation_type = edge.get("relationType")
     node = edge.get("node") or {}
+    media_id = _get(node, "id")
 
-    if not bool(_get(node, "id")) or not _same_media_family(item, node):
+    if isinstance(media_id, bool):
+        return False
+    try:
+        if int(media_id) == 0:
+            return False
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if not _same_media_family(item, node):
         return False
     if not _auto_bundleable(item) or not _auto_bundleable(node):
         return False
@@ -804,10 +833,21 @@ def _group_discovered(results, discovered):
     represented_original_ids = set()
 
     for group_members in groups.values():
+        def start_year(item):
+            start = _get(item, "startDate")
+            if not isinstance(start, dict):
+                start = {}
+            year = start.get("year") or _get(item, "start_year")
+            try:
+                year = int(year)
+            except (TypeError, ValueError, OverflowError):
+                return 9999
+            return year if 1 <= year <= 9999 else 9999
+
         group_members.sort(
             key=lambda item: (
                 _get(item, "startDate") is None,
-                (_get(item, "startDate") or {}).get("year") or 9999,
+                start_year(item),
                 int(_get(item, "id")),
             )
         )
