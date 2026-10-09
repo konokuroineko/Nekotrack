@@ -217,9 +217,9 @@ class SearchPage(QWidget):
         root.addLayout(intro)
 
         search_panel = QFrame()
-        search_panel.setStyleSheet(
-            f"QFrame {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: 16px; }}"
-        )
+        search_panel.setObjectName("searchPanel")
+        self.search_panel = search_panel
+        search_panel.setStyleSheet(self._search_panel_stylesheet())
         panel = QVBoxLayout(search_panel)
         panel.setContentsMargins(12, 12, 12, 12)
         panel.setSpacing(10)
@@ -227,6 +227,8 @@ class SearchPage(QWidget):
         bar = QHBoxLayout()
         bar.setSpacing(8)
         self.search = QLineEdit()
+        self.search.setObjectName("searchInput")
+        self.search.setStyleSheet(self._search_input_stylesheet())
         self.search.setPlaceholderText("Title, character, franchise, or AniList link...")
         self.search.setMinimumHeight(46)
         self.search.setClearButtonEnabled(True)
@@ -243,10 +245,9 @@ class SearchPage(QWidget):
         panel.addWidget(self.filters_button, 0, Qt.AlignLeft)
 
         self.filters_panel = QFrame()
+        self.filters_panel.setObjectName("searchFiltersPanel")
         self.filters_panel.setVisible(False)
-        self.filters_panel.setStyleSheet(
-            f"QFrame {{ background: {COLORS['background']}; border: 1px solid {COLORS['frame']}; border-radius: 12px; }} QLabel {{ background: transparent; border: none; }}"
-        )
+        self.filters_panel.setStyleSheet(self._filters_panel_stylesheet())
         filters_layout = QGridLayout(self.filters_panel)
         filters_layout.setContentsMargins(12, 12, 12, 12)
         filters_layout.setHorizontalSpacing(10)
@@ -331,6 +332,29 @@ class SearchPage(QWidget):
         self.filters_button.clicked.connect(self.toggle_filters)
         self.clear_filters_button.clicked.connect(self.clear_filters)
         self._refresh_format_filter()
+
+    def _search_panel_stylesheet(self):
+        return (
+            f"QFrame#searchPanel {{ background:{COLORS['surface']}; "
+            f"border:1px solid {COLORS['frame']}; border-radius:16px; }}"
+        )
+
+    def _search_input_stylesheet(self):
+        radius = get("corner_radius")
+        return (
+            f"QLineEdit#searchInput {{ background:{COLORS['surface']}; "
+            f"border:1px solid {COLORS['border']}; border-radius:{radius}px; "
+            f"color:{COLORS['primary']}; padding:10px 12px; "
+            f"selection-background-color:{COLORS['accent']}; }}"
+            f"QLineEdit#searchInput:focus {{ border-color:{COLORS['accent']}; }}"
+        )
+
+    def _filters_panel_stylesheet(self):
+        return (
+            f"QFrame#searchFiltersPanel {{ background:{COLORS['background']}; "
+            f"border:1px solid {COLORS['frame']}; border-radius:12px; }}"
+            "QLabel { background:transparent; border:none; }"
+        )
 
     def _make_combo(self, items):
         combo = QComboBox()
@@ -784,6 +808,16 @@ class SearchPage(QWidget):
         self._update_results_title()
 
     def refresh_theme(self):
+        # These panels and the primary search field carry local stylesheets,
+        # which do not automatically pick up freshly resolved theme colors.
+        # Rebuild those styles when the selected preset changes.
+        if hasattr(self, "search_panel"):
+            self.search_panel.setStyleSheet(self._search_panel_stylesheet())
+        if hasattr(self, "search"):
+            self.search.setStyleSheet(self._search_input_stylesheet())
+        if hasattr(self, "filters_panel"):
+            self.filters_panel.setStyleSheet(self._filters_panel_stylesheet())
+
         # Search results contain independently styled WorkCards. Refresh those
         # existing cards so their title/accent colors follow the active theme.
         from ui.widgets.work_card import WorkCard
