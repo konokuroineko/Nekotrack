@@ -6,6 +6,11 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 from ui.preferences import get
+from mangabaka_api import (
+    enrich_anilist_media,
+    get_series as get_mangabaka_series,
+    normalize_series as normalize_mangabaka_series,
+)
 
 
 ANILIST_URL = "https://graphql.anilist.co"
@@ -502,7 +507,22 @@ def get_media_episodes(media_id):
 
 
 def get_media_details(media_id):
-    """Fetch the complete media record needed by detail/import workflows."""
+    """Fetch the complete provider-aware media record used by detail/import workflows."""
+    try:
+        numeric_id = int(media_id)
+    except (TypeError, ValueError):
+        numeric_id = 0
+
+    # Negative local IDs represent MangaBaka-only series. Never send them to
+    # AniList's GraphQL Media(id:) query as if they were AniList IDs.
+    if numeric_id < 0:
+        payload = get_mangabaka_series(abs(numeric_id), full=True)
+        record = payload.get("data", payload) if isinstance(payload, dict) else payload
+        if isinstance(record, list):
+            record = record[0] if record else None
+        if not isinstance(record, dict):
+            raise RuntimeError("MangaBaka returned no details for this series.")
+        return normalize_mangabaka_series(record, preferred_id=numeric_id)
     query = """
     query ($id: Int) {
         Media(id: $id) {
@@ -615,6 +635,11 @@ def get_media_details(media_id):
             schedule_page_info = schedule_connection.get("pageInfo") or {}
 
         # Keep AniList streamingEpisodes raw; it has no reliable episode-number key.\n
+
+    # Add MangaBaka's complete series payload for reading-media details. The
+    # lookup is best-effort and the AniList record remains the canonical one.
+    if str(media.get("type") or "").upper() == "MANGA":
+        enrich_anilist_media(media)
 
     return media
 
