@@ -253,7 +253,7 @@ def settings():
         stored_palette_version = int(
             current.value("_theme_palette_version", 0) or 0
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         # A malformed setting should trigger the safe palette migration rather
         # than prevent the application from starting.
         stored_palette_version = 0
@@ -291,35 +291,72 @@ def settings():
     return current
 
 
+_INTEGER_BOUNDS = {
+    # Keep corrupted/old QSettings values from making the UI unusable.
+    # Bounds are intentionally generous so existing custom layouts survive.
+    "font_size": (8, 36),
+    "card_size": (120, 480),
+    "card_gap": (0, 120),
+    "corner_radius": (0, 64),
+    "animation_speed": (0, 2000),
+}
+
+
+def _safe_integer(key, value, default):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    minimum, maximum = _INTEGER_BOUNDS.get(key, (None, None))
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+    if maximum is not None:
+        parsed = min(maximum, parsed)
+    return parsed
+
+
 def get(key):
     default = _DEFAULTS[key]
     value = settings().value(key, default)
 
     if isinstance(default, bool):
+        if isinstance(value, bool):
+            return value
         if isinstance(value, str):
-            return value.lower() in ("1", "true", "yes", "on")
-        return bool(value)
+            normalized = value.strip().casefold()
+            if normalized in ("1", "true", "yes", "on"):
+                return True
+            if normalized in ("0", "false", "no", "off", ""):
+                return False
+            return default
+        if isinstance(value, (int, float)) and value in (0, 1):
+            return bool(value)
+        return default
 
     if isinstance(default, int):
-        try:
-            value = int(value)
-        except (TypeError, ValueError):
-            return default
-        if key == "font_size":
-            return max(8, value)
-        return value
+        return _safe_integer(key, value, default)
+
+    if isinstance(default, str):
+        return value if isinstance(value, str) else default
 
     return value
 
 
 def set_value(key, value):
-    if key == "font_size":
-        try:
-            value = max(8, int(value))
-        except (TypeError, ValueError):
-            value = _DEFAULTS["font_size"]
-    settings().setValue(key, value)
-    settings().sync()
+    default = _DEFAULTS.get(key)
+    if isinstance(default, int) and not isinstance(default, bool):
+        value = _safe_integer(key, value, default)
+    elif isinstance(default, bool) and not isinstance(value, bool):
+        value = get(key) if not isinstance(value, (str, int, float)) else (
+            str(value).strip().casefold() in ("1", "true", "yes", "on")
+            if isinstance(value, str)
+            else bool(value) if value in (0, 1) else default
+        )
+    elif isinstance(default, str) and not isinstance(value, str):
+        value = default
+    qsettings = settings()
+    qsettings.setValue(key, value)
+    qsettings.sync()
 
 
 def apply_theme_preset(name):
