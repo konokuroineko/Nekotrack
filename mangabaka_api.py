@@ -130,7 +130,10 @@ def _records(payload):
 
 
 def _pagination(payload):
-    return payload.get("pagination") or {} if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    value = payload.get("pagination")
+    return value if isinstance(value, dict) else {}
 
 
 def _filter_values(values):
@@ -446,15 +449,32 @@ def _title_records(series):
 
 
 def _pick_title(records, language):
-    language = language.lower()
-    localized = [item for item in records
-                 if str(item.get("language") or "").lower() == language]
+    language = str(language or "").lower()
+    localized = [
+        item for item in records
+        if str(item.get("language") or "").lower() == language
+    ]
     for item in localized:
         if item.get("is_primary"):
             return str(item["title"])
+
+    # The documented API uses a list of trait strings, but corrupted or
+    # version-skewed payloads may return a scalar, dict, or non-string value.
+    # Normalize to exact tokens so e.g. "unofficial" does not match "official".
     for trait in ("official", "native", "alternative"):
         for item in localized:
-            if trait in (item.get("traits") or []):
+            raw_traits = item.get("traits")
+            if isinstance(raw_traits, str):
+                traits = {raw_traits.strip().casefold()} if raw_traits.strip() else set()
+            elif isinstance(raw_traits, (list, tuple, set)):
+                traits = {
+                    value.strip().casefold()
+                    for value in raw_traits
+                    if isinstance(value, str) and value.strip()
+                }
+            else:
+                traits = set()
+            if trait in traits:
                 return str(item["title"])
     return str(localized[0]["title"]) if localized else ""
 
@@ -477,23 +497,51 @@ def _cover_url(series):
 
 
 def _date_parts(series):
-    published = series.get("published") or {}
+    """Parse optional publication dates without letting one bad field break a search."""
+    from datetime import date
+
+    if not isinstance(series, dict):
+        return {"year": None, "month": None, "day": None}
+
+    published = series.get("published")
     candidates = []
     if isinstance(published, dict):
-        candidates.extend([published.get("start"), published.get("from"),
-                           published.get("start_date"), published.get("date")])
-    candidates.extend([series.get("published_start"), series.get("start_date"),
-                       series.get("published_at"), series.get("created_at")])
+        candidates.extend([
+            published.get("start"), published.get("from"),
+            published.get("start_date"), published.get("date"),
+        ])
+    candidates.extend([
+        series.get("published_start"), series.get("start_date"),
+        series.get("published_at"), series.get("created_at"),
+    ])
+
     for value in candidates:
-        if isinstance(value, dict):
-            year, month, day = value.get("year"), value.get("month"), value.get("day")
-            if year:
-                return {"year": int(year), "month": int(month or 1), "day": int(day or 1)}
-        if isinstance(value, str) and value.strip():
-            match = re.search(r"(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?", value)
-            if match:
-                return {"year": int(match.group(1)), "month": int(match.group(2) or 1),
-                        "day": int(match.group(3) or 1)}
+        try:
+            if isinstance(value, dict):
+                raw_year = value.get("year")
+                raw_month = value.get("month")
+                raw_day = value.get("day")
+                if raw_year in (None, ""):
+                    continue
+                year = int(raw_year)
+                month = int(raw_month or 1)
+                day = int(raw_day or 1)
+            elif isinstance(value, str) and value.strip():
+                match = re.search(r"(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?", value)
+                if not match:
+                    continue
+                year = int(match.group(1))
+                month = int(match.group(2) or 1)
+                day = int(match.group(3) or 1)
+            else:
+                continue
+
+            # date() rejects impossible calendar dates as well as invalid ranges.
+            date(year, month, day)
+            return {"year": year, "month": month, "day": day}
+        except (TypeError, ValueError, OverflowError):
+            continue
+
     return {"year": None, "month": None, "day": None}
 
 
@@ -728,8 +776,17 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
                 limit=20, browse_mode="search"):
     """Return MangaBaka search results in the envelope expected by SearchPage."""
     filters = dict(filters or {})
+    try:
+        page = max(1, int(page or 1))
+    except (TypeError, ValueError, OverflowError):
+        page = 1
+    try:
+        limit = min(200, max(1, int(limit or 20)))
+    except (TypeError, ValueError, OverflowError):
+        limit = 20
+
     if str(media_type or "").upper() == "ANIME" or (filters.get("format_filter") or media_format) == "ONE_SHOT":
-        return {"pageInfo": {"currentPage": int(page), "lastPage": 1, "hasNextPage": False},
+        return {"pageInfo": {"currentPage": page, "lastPage": 1, "hasNextPage": False},
                 "media": [], "_catalog": "MangaBaka"}
 
     query_filters = {}
@@ -782,17 +839,29 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
     pagination = _pagination(payload)
     normalized = []
     for item in _records(payload):
-        # The query filter is sent upstream, but also enforce it locally in
-        # case a future API revision ignores or changes that filter.
-        if str(item.get("content_rating") or "").lower() not in {"safe", "suggestive"}:
+        # One malformed catalogue row must not hide otherwise usable results.
+        try:
+            # The query filter is sent upstream, but also enforce it locally in
+            # case a future API revision ignores or changes that filter.
+            if str(item.get("content_rating") or "").casefold() not in {"safe", "suggestive"}:
+                continue
+            if not _matches_local_filters(item, picked_format, filters):
+                continue
+            normalized.append(normalize_series(item))
+        except (TypeError, ValueError, KeyError, AttributeError, OverflowError):
             continue
-        if not _matches_local_filters(item, picked_format, filters):
-            continue
-        normalized.append(normalize_series(item))
-    current_page = int(pagination.get("page") or page)
-    limit_value = int(pagination.get("limit") or limit)
-    total = int(pagination.get("count") or len(normalized))
-    last_page = max(current_page, (total + limit_value - 1) // max(1, limit_value))
+
+    def safe_int(value, fallback, minimum=0):
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+        return parsed if parsed >= minimum else fallback
+
+    current_page = safe_int(pagination.get("page"), page, minimum=1)
+    limit_value = safe_int(pagination.get("limit"), limit, minimum=1)
+    total = safe_int(pagination.get("count"), len(normalized), minimum=0)
+    last_page = max(current_page, (total + limit_value - 1) // limit_value)
     return {
         "pageInfo": {
             "currentPage": current_page,
