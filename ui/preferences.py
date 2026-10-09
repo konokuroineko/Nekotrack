@@ -1,5 +1,7 @@
 from PySide6.QtCore import QSettings
 
+from ui.bundle_options import BUNDLE_OPTION_KEYS
+
 
 THEME_PRESETS = {
     "Neko": {
@@ -203,6 +205,7 @@ _DEFAULTS = {
     "maximized": True,
     "tmdb_api_token": "",
     "bundle_mode": "main",
+    **{key: False for key in BUNDLE_OPTION_KEYS},
     "setup_complete": False,
 }
 
@@ -263,6 +266,26 @@ def settings():
             if isinstance(value, str) and value.startswith("#"):
                 current.setValue(key, value)
         current.setValue("_theme_palette_version", _THEME_PALETTE_VERSION)
+        current.sync()
+
+    # Expand the old all-or-nothing bundle choice into per-format options.
+    # Existing installs using "extras" keep their prior behavior; "main" stays
+    # conservative. New options are only initialized once and never overwrite
+    # choices the user has already made.
+    bundle_options_migrated = current.value("_bundle_options_v1_migrated", False)
+    if isinstance(bundle_options_migrated, str):
+        bundle_options_migrated = bundle_options_migrated.strip().lower() in (
+            "1", "true", "yes", "on"
+        )
+    else:
+        bundle_options_migrated = bool(bundle_options_migrated)
+
+    if not bundle_options_migrated:
+        include_all_related = str(current.value("bundle_mode", "main") or "main") == "extras"
+        for key in BUNDLE_OPTION_KEYS:
+            if current.value(key, None) is None:
+                current.setValue(key, include_all_related)
+        current.setValue("_bundle_options_v1_migrated", True)
         current.sync()
 
     return current
