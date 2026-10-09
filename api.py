@@ -681,7 +681,7 @@ def get_media_details(media_id):
     # Add MangaBaka's complete series payload for reading-media details. The
     # lookup is best-effort and the AniList record remains the canonical one.
     if str(media.get("type") or "").upper() == "MANGA":
-        enrich_anilist_media(media)
+        enrich_anilist_media(media, fetch_full=True)
 
     return media
 
