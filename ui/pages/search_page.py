@@ -343,7 +343,7 @@ class SearchPage(QWidget):
         radius = get("corner_radius")
         return (
             f"QLineEdit#searchInput {{ background:{COLORS['surface']}; "
-            f"border:1px solid {COLORS['border']}; border-radius:{radius}px; "
+            f"border:1px solid {COLORS['frame']}; border-radius:{radius}px; "
             f"color:{COLORS['primary']}; padding:10px 12px; "
             f"selection-background-color:{COLORS['accent']}; }}"
             f"QLineEdit#searchInput:focus {{ border-color:{COLORS['accent']}; }}"
