@@ -22,7 +22,7 @@ from database import (
     save_tmdb_mapping,
 )
 from image_cache import download_cover
-from ui.branding import application_icon, logo_pixmap, navigation_icon
+from ui.branding import application_icon, logo_pixmap, navigation_icon, wordmark_pixmap
 from ui.navigation import NavigationController
 from ui.preferences import get
 from ui.setup_wizard import SetupWizard
@@ -285,6 +285,7 @@ class MainWindow(QMainWindow):
         side.setSpacing(5)
 
         brand = QHBoxLayout()
+        brand.setSpacing(6)
         mark = QLabel()
         mark.setObjectName("brandMark")
         mark.setFixedSize(42, 42)
@@ -294,7 +295,10 @@ class MainWindow(QMainWindow):
         self.brand_mark = mark
         word = QLabel()
         word.setObjectName("brandWord")
-        word.setTextFormat(Qt.TextFormat.RichText)
+        word.setAccessibleName("NekoTrack")
+        word.setFixedSize(156, 30)
+        word.setScaledContents(True)
+        word.setStyleSheet("background:transparent;border:none;padding:0;")
         self.brand_word = word
         self._update_brand_word()
         brand.addWidget(mark)
@@ -350,7 +354,7 @@ class MainWindow(QMainWindow):
             + f"""
             QFrame#sidebar {{ background:{COLORS['sidebar']}; border-right:1px solid {COLORS['frame']}; }}
             QLabel#brandMark {{ background:transparent; border:none; }}
-            QLabel#brandWord {{ color:{COLORS['primary']}; font-size:19px; font-weight:800; letter-spacing:-.4px; padding-left:7px; }}
+            QLabel#brandWord {{ background:transparent; border:none; padding:0; }}
             QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:10px; padding:11px 13px; text-align:left; font-size:13px; font-weight:600; }}
             QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
             QPushButton[navButton="true"]:focus {{ background:{COLORS['surface']}; border-color:{COLORS['nav_selected_frame']}; outline:none; }}
@@ -482,14 +486,11 @@ class MainWindow(QMainWindow):
             pass
 
     def _update_brand_word(self):
-        self.brand_word.setText(
-            f'<span style="color:{COLORS["accent"]}">Neko</span>'
-            f'<span style="color:{COLORS["primary"]}">Track</span>'
+        self.brand_word.setPixmap(
+            wordmark_pixmap(COLORS["accent"], COLORS["primary"], 312, 60)
         )
-        self.brand_word.setStyleSheet(
-            "font-size:19px;font-weight:800;letter-spacing:-.4px;"
-            "padding-left:7px;background:transparent;"
-        )
+        self.brand_word.setAccessibleName("NekoTrack")
+        self.brand_word.setStyleSheet("background:transparent;border:none;padding:0;")
 
     def _section(self, layout, title, items):
         label = QLabel(title)
