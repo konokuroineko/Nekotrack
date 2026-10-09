@@ -1,7 +1,6 @@
 ; NekoTrack Windows installer
-; Build the PyInstaller executable first:
-;   pyinstaller --onefile --windowed --name NekoTrack main.py
-; Then open this file with Inno Setup and compile it.
+; Run installer\build-installer.ps1 from the repository root first. It generates
+; the shared application icon, builds the executable, and optionally compiles this installer.
 
 #define MyAppName "NekoTrack"
 #define MyAppVersion "0.1.0-beta.2"
@@ -22,6 +21,7 @@ OutputBaseFilename=NekoTrack-Setup-{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\assets\NekoTrack.ico
 ArchitecturesInstallIn64BitMode=x64
 UninstallDisplayIcon={app}\{#MyAppExeName}
 

@@ -40,6 +40,7 @@ prepare_user_data()
 
 from PySide6.QtWidgets import QApplication, QMessageBox, QProxyStyle, QStyle
 
+from ui.branding import application_icon
 from ui.main_window import MainWindow
 from ui.preferences import get
 from ui.setup_wizard import SetupWizard
@@ -92,6 +93,7 @@ def _check_for_updates(window):
 def main():
     app = QApplication(sys.argv)
     app.setStyle(NekoProxyStyle("Fusion"))
+    app.setWindowIcon(application_icon())
 
     # The first-launch wizard configures preferences only; it does not touch
     # the user's SQLite library or cached artwork. --setup is a developer/user

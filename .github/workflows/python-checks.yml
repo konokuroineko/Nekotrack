@@ -35,6 +35,8 @@ jobs:
           python -m pip install ruff
       - name: Check unused and undefined names
         run: ruff check --select F .
+      - name: Generate Windows application icon
+        run: python installer/generate_icon.py
       - name: Compile Python modules
         run: python -m compileall -q main.py api.py database.py debug_bundle.py debug_tv_bundle.py image_cache.py series.py updater.py ui tests
       - name: Run regression tests
