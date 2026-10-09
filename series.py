@@ -947,7 +947,15 @@ def sync_library_relations():
         | {int(row["target_id"]) for row in existing_rows}
     )
 
-    missing = ids - existing - _relation_sync_checked_ids
+    # MangaBaka-only works have negative local IDs and no AniList relations.
+    anilist_eligible = {
+        int(row["id"]) for row in rows
+        if not (
+            str(_get(row, "catalog_provider") or "ANILIST").upper() == "MANGABAKA"
+            and int(row["id"]) < 0
+        )
+    }
+    missing = anilist_eligible - existing - _relation_sync_checked_ids
     changed = False
 
     for work_id in missing:
