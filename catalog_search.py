@@ -1,6 +1,8 @@
 """Search AniList and MangaBaka together and normalize their results."""
 from __future__ import annotations
 
+from datetime import date
+
 from api import search_anime
 from mangabaka_api import enrich_anilist_results, search_media as search_mangabaka_media
 
