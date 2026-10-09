@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtCore import QByteArray, QRectF, Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
@@ -22,7 +22,7 @@ def _render_svg(svg_text, size):
 
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    renderer.render(painter)
+    renderer.render(painter, QRectF(0, 0, size, size))
     painter.end()
     return pixmap
 
