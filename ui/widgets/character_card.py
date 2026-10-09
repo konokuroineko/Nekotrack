@@ -95,6 +95,7 @@ class CharacterCard(QFrame):
         if character_role:
             role_text = str(character_role).replace("_", " ").title()
             role = QLabel(role_text)
+            role.setObjectName("characterRole")
             role.setWordWrap(True)
             role.setFrameShape(QFrame.NoFrame)
             role.setLineWidth(0)
@@ -106,6 +107,7 @@ class CharacterCard(QFrame):
         names_row.setSpacing(18)
 
         name = QLabel(self._value("character_name") or "Unknown character")
+        name.setObjectName("characterName")
         name.setWordWrap(True)
         name.setFrameShape(QFrame.NoFrame)
         name.setLineWidth(0)
@@ -116,6 +118,7 @@ class CharacterCard(QFrame):
         person_name = self._value("person_name")
         if person_name:
             voice = QLabel(str(person_name))
+            voice.setObjectName("characterVoice")
             voice.setWordWrap(True)
             voice.setFrameShape(QFrame.NoFrame)
             voice.setLineWidth(0)
@@ -148,6 +151,21 @@ class CharacterCard(QFrame):
         else:
             # Reserve the same width as the voice-actor portrait so the text stays centered.
             layout.addSpacing(88)
+
+    def refresh_theme(self):
+        self.setStyleSheet(card_stylesheet())
+        label_styles = {
+            "characterRole": f"background:transparent;border:none;color:{COLORS['primary']};font-size:13px;font-weight:700;",
+            "characterName": f"background:transparent;border:none;color:{COLORS['primary']};font-weight:600;",
+            "characterVoice": f"background:transparent;border:none;color:{COLORS['primary']};font-weight:600;",
+        }
+        for label in self.findChildren(QLabel):
+            stylesheet = label_styles.get(label.objectName())
+            if stylesheet is not None:
+                label.setStyleSheet(stylesheet)
+        for artwork in self.findChildren(CharacterArtwork):
+            artwork.update()
+        self.update()
 
     def _load_image_url(self, url):
         if not url:
