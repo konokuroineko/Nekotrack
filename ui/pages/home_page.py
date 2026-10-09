@@ -27,3 +27,6 @@ class HomePage(QWidget):
             box.addWidget(l); box.addWidget(n); box.addStretch(); box.addWidget(h); card.setMinimumHeight(170); cards.addWidget(card,1)
         old.addLayout(cards); old.addStretch()
         self.setStyleSheet(f"QFrame#homeStat{{background:{COLORS['surface']};border:1px solid {COLORS['frame']};border-radius:18px;}} QFrame#homeStat:hover{{background:{COLORS['surface_hover']};border-color:{COLORS['border_hover']};}}")
+
+    def refresh_theme(self):
+        self.refresh()
