@@ -2,21 +2,22 @@ import requests
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QDialog,
     QFrame,
     QGridLayout,
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
-    QRadioButton,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from ui.branding import application_icon, logo_pixmap, wordmark_pixmap
+from ui.bundle_options import BUNDLE_OPTION_GROUPS, BUNDLE_OPTION_KEYS
 from ui.preferences import (
     THEME_PRESETS,
     apply_theme_preset,
@@ -104,9 +105,8 @@ class SetupWizard(QDialog):
         self.selected_theme = str(get("theme_preset") or "Neko")
         if self.selected_theme not in THEME_PRESETS:
             self.selected_theme = "Neko"
-        self.bundle_mode = str(get("bundle_mode") or "main")
-        if self.bundle_mode not in {"main", "extras"}:
-            self.bundle_mode = "main"
+        self.bundle_options = {key: bool(get(key)) for key in BUNDLE_OPTION_KEYS}
+        self.bundle_checkboxes = {}
 
         self._tmdb_thread = None
         self._tmdb_worker = None
@@ -292,57 +292,80 @@ class SetupWizard(QDialog):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(4, 20, 4, 10)
-        layout.setSpacing(14)
+        layout.setSpacing(10)
 
         title, subtitle = self._heading(
-            "How should bundles work?",
-            "This only controls automatic bundling. You can still manually bundle anything later.",
+            "Choose what gets bundled",
+            "TV seasons and TV Shorts are always grouped. Select which related formats may join them automatically.",
         )
         layout.addWidget(title)
         layout.addWidget(subtitle)
 
-        group = QButtonGroup(self)
-        options = (
-            (
-                "main",
-                "Main seasons only",
-                "Automatically group the main TV / TV Short season chain. Extras such as Break Time, OVAs and specials stay separate.",
-            ),
-            (
-                "extras",
-                "Include related extras",
-                "Also automatically group related extras when NekoTrack can identify them as part of the same series family.",
-            ),
-        )
-        for value, heading, description in options:
-            card = QFrame()
-            card.setObjectName("bundleOption")
-            row = QHBoxLayout(card)
-            row.setContentsMargins(16, 14, 16, 14)
-            row.setSpacing(12)
+        always_panel = QFrame()
+        always_panel.setObjectName("setupFeaturePanel")
+        always_layout = QVBoxLayout(always_panel)
+        always_layout.setContentsMargins(14, 10, 14, 10)
+        always_layout.setSpacing(3)
+        always_heading = QLabel("Always included")
+        always_heading.setObjectName("setupFeatureHeading")
+        always_text = QLabel("TV seasons + TV Shorts")
+        always_text.setObjectName("setupFeatureText")
+        always_layout.addWidget(always_heading)
+        always_layout.addWidget(always_text)
+        layout.addWidget(always_panel)
 
-            radio = QRadioButton()
-            radio.setProperty("bundleValue", value)
-            radio.toggled.connect(lambda checked, v=value: self._bundle_toggled(v, checked))
-            group.addButton(radio)
-            row.addWidget(radio, 0, Qt.AlignTop)
+        scroll = QScrollArea()
+        scroll.setObjectName("bundleOptionsScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(QWidget())
+        content = scroll.widget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 2, 3, 2)
+        content_layout.setSpacing(10)
 
-            text_box = QVBoxLayout()
-            text_box.setSpacing(3)
-            heading_label = QLabel(heading)
-            heading_label.setObjectName("bundleHeading")
-            description_label = QLabel(description)
-            description_label.setObjectName("bundleDescription")
-            description_label.setWordWrap(True)
-            text_box.addWidget(heading_label)
-            text_box.addWidget(description_label)
-            row.addLayout(text_box, 1)
+        self.bundle_checkboxes = {}
+        for group_title, options in BUNDLE_OPTION_GROUPS:
+            group_label = QLabel(group_title)
+            group_label.setObjectName("bundleGroupLabel")
+            content_layout.addWidget(group_label)
 
-            layout.addWidget(card)
-            if value == self.bundle_mode:
-                radio.setChecked(True)
+            grid = QGridLayout()
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setHorizontalSpacing(10)
+            grid.setVerticalSpacing(10)
+            for index, (key, heading, description) in enumerate(options):
+                card = QFrame()
+                card.setObjectName("bundleOption")
+                card_layout = QVBoxLayout(card)
+                card_layout.setContentsMargins(12, 10, 12, 10)
+                card_layout.setSpacing(5)
 
-        layout.addStretch(1)
+                checkbox = QCheckBox(heading)
+                checkbox.setObjectName("bundleOptionCheck")
+                checkbox.setChecked(self.bundle_options[key])
+                checkbox.toggled.connect(
+                    lambda checked, option_key=key: self._bundle_option_toggled(
+                        option_key, checked
+                    )
+                )
+                self.bundle_checkboxes[key] = checkbox
+
+                description_label = QLabel(description)
+                description_label.setObjectName("bundleDescription")
+                description_label.setWordWrap(True)
+                card_layout.addWidget(checkbox)
+                card_layout.addWidget(description_label)
+                grid.addWidget(card, index // 2, index % 2)
+
+            grid.setColumnStretch(0, 1)
+            grid.setColumnStretch(1, 1)
+            content_layout.addLayout(grid)
+
+        content_layout.addStretch(1)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
         return page
 
     def _tmdb_page(self):
@@ -396,9 +419,9 @@ class SetupWizard(QDialog):
             return
         super().reject()
 
-    def _bundle_toggled(self, value, checked):
-        if checked:
-            self.bundle_mode = value
+    def _bundle_option_toggled(self, key, checked):
+        if key in self.bundle_options:
+            self.bundle_options[key] = bool(checked)
 
     def _select_theme(self, name):
         self.selected_theme = name
@@ -430,7 +453,12 @@ class SetupWizard(QDialog):
 
     def _finish(self):
         apply_theme_preset(self.selected_theme)
-        set_value("bundle_mode", self.bundle_mode)
+        for key, enabled in self.bundle_options.items():
+            set_value(key, enabled)
+        set_value(
+            "bundle_mode",
+            "extras" if all(self.bundle_options.values()) else "main",
+        )
         set_value("tmdb_api_token", self.tmdb_token.text().strip())
         set_value("setup_complete", True)
         self.accept()
@@ -543,6 +571,27 @@ class SetupWizard(QDialog):
             QLabel#setupFeatureText, QLabel#bundleDescription {{
                 color:{theme['muted']};
                 font-size:12px;
+            }}
+            QLabel#bundleGroupLabel {{
+                color:{theme['accent']};
+                font-size:10px;
+                font-weight:900;
+                letter-spacing:1.3px;
+                padding:2px 1px;
+            }}
+            QCheckBox#bundleOptionCheck {{
+                color:{theme['primary']};
+                font-size:12px;
+                font-weight:800;
+                spacing:8px;
+                background:transparent;
+            }}
+            QCheckBox#bundleOptionCheck::indicator {{
+                width:16px;
+                height:16px;
+            }}
+            QScrollArea#bundleOptionsScroll, QScrollArea#bundleOptionsScroll QWidget {{
+                background:transparent;
             }}
             QFrame#themeCard {{
                 background:{theme['card']};

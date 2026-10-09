@@ -79,13 +79,38 @@ def _is_bundleable(item):
     return False
 
 def _auto_bundleable(item):
-    """Return whether an entry is eligible for automatic series bundling."""
+    """Return whether an entry is eligible for automatic series bundling.
+
+    TV seasons and TV shorts are always part of the main series chain.
+    Related formats outside that chain are opt-in individually so users can,
+    for example, include OVAs without pulling every movie, special, or manga
+    entry into the same automatic bundle.
+    """
     if not _is_bundleable(item):
         return False
-    if str(get("bundle_mode") or "main") == "main":
-        fmt = str(_get(item, "format") or "").upper()
-        return fmt in {"TV", "TV_SHORT"}
-    return True
+
+    media_family = _media_family(item)
+    media_format = str(_get(item, "format") or "").upper()
+
+    if media_family == "ANIME":
+        if media_format in {"TV", "TV_SHORT"}:
+            return True
+        option_by_format = {
+            "MOVIE": "bundle_include_movies",
+            "OVA": "bundle_include_ovas",
+            "ONA": "bundle_include_onas",
+            "SPECIAL": "bundle_include_specials",
+        }
+        option = option_by_format.get(media_format)
+        return bool(get(option)) if option else False
+
+    option_by_family = {
+        "MANGA": "bundle_include_manga",
+        "NOVEL": "bundle_include_novels",
+        "ONE_SHOT": "bundle_include_one_shots",
+    }
+    option = option_by_family.get(media_family)
+    return bool(get(option)) if option else False
 
 
 def _series_key(title):
