@@ -92,5 +92,56 @@ class PreferenceMigrationTests(unittest.TestCase):
         self.assertEqual(settings.value("corner_radius"), "18")
 
 
+    def test_corrupt_numeric_preferences_are_bounded(self):
+        MemorySettings.stores[("NekoTrack", "NekoTrack")].update({
+            "_theme_palette_version": preferences._THEME_PALETTE_VERSION,
+            "_bundle_options_v1_migrated": True,
+            "font_size": float("inf"),
+            "card_size": -500,
+            "card_gap": 1000000,
+            "corner_radius": -1,
+            "animation_speed": 10**9,
+        })
+
+        with patch.object(preferences, "QSettings", MemorySettings):
+            self.assertEqual(preferences.get("font_size"), 13)
+            self.assertEqual(preferences.get("card_size"), 120)
+            self.assertEqual(preferences.get("card_gap"), 120)
+            self.assertEqual(preferences.get("corner_radius"), 0)
+            self.assertEqual(preferences.get("animation_speed"), 2000)
+
+    def test_corrupt_boolean_and_string_preferences_fall_back_safely(self):
+        MemorySettings.stores[("NekoTrack", "NekoTrack")].update({
+            "_theme_palette_version": preferences._THEME_PALETTE_VERSION,
+            "_bundle_options_v1_migrated": True,
+            "hover_highlight": {"unexpected": "object"},
+            "resize_animation": " maybe ",
+            "maximized": " off ",
+            "tmdb_api_token": ["not", "a", "string"],
+        })
+
+        with patch.object(preferences, "QSettings", MemorySettings):
+            self.assertTrue(preferences.get("hover_highlight"))
+            self.assertTrue(preferences.get("resize_animation"))
+            self.assertFalse(preferences.get("maximized"))
+            self.assertEqual(preferences.get("tmdb_api_token"), "")
+
+    def test_set_value_cannot_persist_pathological_ui_values(self):
+        MemorySettings.stores[("NekoTrack", "NekoTrack")].update({
+            "_theme_palette_version": preferences._THEME_PALETTE_VERSION,
+            "_bundle_options_v1_migrated": True,
+        })
+
+        with patch.object(preferences, "QSettings", MemorySettings):
+            preferences.set_value("card_size", -400)
+            preferences.set_value("font_size", 1000000)
+            preferences.set_value("hover_highlight", "maybe")
+            settings = preferences.settings()
+
+        self.assertEqual(settings.value("card_size"), 120)
+        self.assertEqual(settings.value("font_size"), 36)
+        self.assertTrue(settings.value("hover_highlight"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import re
 import threading
 import time
@@ -25,7 +26,7 @@ class MangaBakaAPIError(RuntimeError):
 
 
 def _freeze_cache_value(value):
-    """Recursively convert request parameters to deterministic hashable values."""
+    """Recursively convert nested request parameters to stable hashable values."""
     if isinstance(value, dict):
         return tuple(sorted(
             ((str(key), _freeze_cache_value(item)) for key, item in value.items()),
@@ -34,6 +35,8 @@ def _freeze_cache_value(value):
     if isinstance(value, (list, tuple, set, frozenset)):
         frozen = [_freeze_cache_value(item) for item in value]
         return tuple(sorted(frozen, key=repr))
+    if isinstance(value, float) and not math.isfinite(value):
+        return repr(value)
     if value is None or isinstance(value, (str, int, float, bool, bytes)):
         return value
     try:
@@ -148,14 +151,15 @@ def _records(payload):
 
 
 def _pagination(payload):
+    """Return well-formed pagination metadata, never a raw scalar/list."""
     if not isinstance(payload, dict):
         return {}
-    pagination = payload.get("pagination")
-    return pagination if isinstance(pagination, dict) else {}
+    value = payload.get("pagination")
+    return value if isinstance(value, dict) else {}
 
 
 def _safe_int(value, default=0):
-    """Parse provider numeric fields without letting malformed data abort a search."""
+    """Parse provider numeric fields without letting malformed metadata abort a request."""
     if isinstance(value, bool) or value in (None, ""):
         return default
     try:
@@ -213,10 +217,13 @@ def _contains_requested_term(available, requested):
 def _publisher_ids(value):
     if value is None:
         return set()
+    if isinstance(value, bool):
+        return set()
     if isinstance(value, (int, str)):
         try:
-            return {int(value)}
-        except (TypeError, ValueError):
+            parsed = int(value)
+            return {parsed} if parsed > 0 else set()
+        except (TypeError, ValueError, OverflowError):
             return set()
     if isinstance(value, (list, tuple, set)):
         result = set()
@@ -249,6 +256,8 @@ def _as_bool(value):
 
 def _matches_local_filters(record, picked_format, filters):
     """Enforce requested filters locally when the provider ignores/falls back on them."""
+    if not isinstance(record, dict):
+        return False
     raw_type = str(record.get("type") or "manga").strip().casefold()
     if picked_format == "NOVEL" and raw_type != "novel":
         return False
@@ -271,12 +280,15 @@ def _matches_local_filters(record, picked_format, filters):
 
     min_score = filters.get("min_score")
     if min_score is not None:
-        import math
-
         try:
             rating = float(record.get("rating"))
             threshold = float(min_score)
-            if not math.isfinite(rating) or not math.isfinite(threshold) or rating < threshold:
+            if (
+                not math.isfinite(rating)
+                or not math.isfinite(threshold)
+                or not 0 <= threshold <= 100
+                or rating < threshold
+            ):
                 return False
         except (TypeError, ValueError, OverflowError):
             return False
@@ -326,12 +338,13 @@ def _matches_local_filters(record, picked_format, filters):
 
     expected_license = filters.get("is_licensed")
     if expected_license is not None:
+        wanted_license = _as_bool(expected_license)
         actual_license = None
         for key in ("is_licensed", "isLicensed", "licensed"):
             if record.get(key) is not None:
                 actual_license = _as_bool(record.get(key))
                 break
-        if actual_license is None or actual_license is not bool(expected_license):
+        if wanted_license is None or actual_license is None or actual_license is not wanted_license:
             return False
 
     return True
@@ -480,15 +493,32 @@ def _title_records(series):
 
 
 def _pick_title(records, language):
-    language = language.lower()
-    localized = [item for item in records
-                 if str(item.get("language") or "").lower() == language]
+    language = str(language or "").lower()
+    localized = [
+        item for item in records
+        if str(item.get("language") or "").lower() == language
+    ]
     for item in localized:
         if item.get("is_primary"):
             return str(item["title"])
+
+    # The documented API uses a list of trait strings, but corrupted or
+    # version-skewed payloads may return a scalar, dict, or non-string value.
+    # Normalize to exact tokens so e.g. "unofficial" does not match "official".
     for trait in ("official", "native", "alternative"):
         for item in localized:
-            if trait in (item.get("traits") or []):
+            raw_traits = item.get("traits")
+            if isinstance(raw_traits, str):
+                traits = {raw_traits.strip().casefold()} if raw_traits.strip() else set()
+            elif isinstance(raw_traits, (list, tuple, set)):
+                traits = {
+                    value.strip().casefold()
+                    for value in raw_traits
+                    if isinstance(value, str) and value.strip()
+                }
+            else:
+                traits = set()
+            if trait in traits:
                 return str(item["title"])
     return str(localized[0]["title"]) if localized else ""
 
@@ -511,57 +541,74 @@ def _cover_url(series):
 
 
 def _date_parts(series):
-    """Normalize incomplete provider dates; ignore invalid values instead of crashing."""
-    import datetime
-
-    published = series.get("published") or {}
+    """Parse optional publication dates strictly; ignore invalid provider fields."""
+    from datetime import date
+    if not isinstance(series, dict):
+        return {"year": None, "month": None, "day": None}
+    published = series.get("published")
     candidates = []
     if isinstance(published, dict):
-        candidates.extend([published.get("start"), published.get("from"),
-                           published.get("start_date"), published.get("date")])
-    candidates.extend([series.get("published_start"), series.get("start_date"),
-                       series.get("published_at"), series.get("created_at")])
-
-    def normalize_parts(year, month=None, day=None):
-        year_value = _safe_int(year, default=0)
-        month_value = 1 if month in (None, "") else _safe_int(month, default=0)
-        day_value = 1 if day in (None, "") else _safe_int(day, default=0)
-        if not (1 <= year_value <= 9999 and 1 <= month_value <= 12 and 1 <= day_value <= 31):
-            return None
-        try:
-            datetime.date(year_value, month_value, day_value)
-        except (ValueError, OverflowError):
-            return None
-        return {"year": year_value, "month": month_value, "day": day_value}
-
+        candidates.extend([
+            published.get("start"), published.get("from"),
+            published.get("start_date"), published.get("date"),
+        ])
+    candidates.extend([
+        series.get("published_start"), series.get("start_date"),
+        series.get("published_at"), series.get("created_at"),
+    ])
     for value in candidates:
         if isinstance(value, dict):
             year = value.get("year")
-            if year not in (None, ""):
-                normalized = normalize_parts(year, value.get("month"), value.get("day"))
-                if normalized:
-                    return normalized
+            month = value.get("month")
+            day = value.get("day")
+            if year in (None, ""):
+                continue
+            year = _safe_int(year, 0)
+            month = 1 if month in (None, "") else _safe_int(month, 0)
+            day = 1 if day in (None, "") else _safe_int(day, 0)
         elif isinstance(value, str) and value.strip():
-            match = re.fullmatch(r"(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?(?:[T ].*)?", value.strip())
-            if match:
-                normalized = normalize_parts(match.group(1), match.group(2), match.group(3))
-                if normalized:
-                    return normalized
+            match = re.fullmatch(
+                r"([0-9]{4})(?:-([0-9]{1,2}))?(?:-([0-9]{1,2}))?(?:[T ].*)?",
+                value.strip(),
+            )
+            if not match:
+                continue
+            year = int(match.group(1))
+            month = int(match.group(2) or 1)
+            day = int(match.group(3) or 1)
+        else:
+            continue
+        try:
+            date(year, month, day)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        return {"year": year, "month": month, "day": day}
     return {"year": None, "month": None, "day": None}
 
-
 def _count_or_none(value):
-    if value in (None, ""):
+    """Normalize positive whole-number chapter/volume counts, rejecting negatives."""
+    if value in (None, "") or isinstance(value, bool):
         return None
-    match = re.search(r"\d+", str(value))
+    if isinstance(value, (int, float)):
+        try:
+            numeric = float(value)
+            if not math.isfinite(numeric) or numeric <= 0 or not numeric.is_integer():
+                return None
+            return int(numeric)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    # Do not reinterpret a negative count such as "-12 chapters" as positive 12.
+    match = re.search(r"(?<![-0-9])[0-9]+", raw)
     if not match:
         return None
     try:
         number = int(match.group(0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return number if number > 0 else None
-
 
 def normalize_series(series, preferred_id=None):
     """Convert a MangaBaka series record to NekoTrack's AniList-like media shape."""
@@ -569,11 +616,15 @@ def normalize_series(series, preferred_id=None):
         raise TypeError("A MangaBaka series record must be an object.")
     raw_id = series.get("id")
     if isinstance(raw_id, bool):
-        raise ValueError("MangaBaka response did not include a numeric series ID.")
+        raise ValueError("MangaBaka response did not include a positive numeric series ID.")
+    if isinstance(raw_id, float) and not raw_id.is_integer():
+        raise ValueError("MangaBaka response did not include a positive numeric series ID.")
+    if isinstance(raw_id, str) and not re.fullmatch(r"\s*[0-9]+\s*", raw_id):
+        raise ValueError("MangaBaka response did not include a positive numeric series ID.")
     try:
         mb_id = int(raw_id)
     except (TypeError, ValueError, OverflowError):
-        raise ValueError("MangaBaka response did not include a numeric series ID.")
+        raise ValueError("MangaBaka response did not include a positive numeric series ID.")
     if mb_id <= 0:
         raise ValueError("MangaBaka series IDs must be positive.")
 
@@ -785,11 +836,21 @@ def enrich_anilist_media(media, fetch_full=False):
 def search_media(query="", page=1, media_type=None, media_format=None, filters=None,
                 limit=20, browse_mode="search"):
     """Return MangaBaka search results in the envelope expected by SearchPage."""
-    filters = dict(filters or {})
-    safe_page = max(1, _safe_int(page, 1))
-    safe_limit = min(50, max(1, _safe_int(limit, 20)))
+    try:
+        filters = dict(filters or {})
+    except (TypeError, ValueError):
+        filters = {}
+    try:
+        page = max(1, int(page or 1))
+    except (TypeError, ValueError, OverflowError):
+        page = 1
+    try:
+        limit = min(200, max(1, int(limit or 20)))
+    except (TypeError, ValueError, OverflowError):
+        limit = 20
+
     if str(media_type or "").upper() == "ANIME" or (filters.get("format_filter") or media_format) == "ONE_SHOT":
-        return {"pageInfo": {"currentPage": safe_page, "lastPage": 1, "hasNextPage": False},
+        return {"pageInfo": {"currentPage": page, "lastPage": 1, "hasNextPage": False},
                 "media": [], "_catalog": "MangaBaka"}
 
     query_filters = {}
@@ -804,7 +865,12 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
     if filters.get("status") in status_map:
         query_filters["status"] = [status_map[filters["status"]]]
     if filters.get("min_score") is not None:
-        query_filters["rating_lower"] = int(filters["min_score"])
+        try:
+            score_threshold = float(filters["min_score"])
+            if math.isfinite(score_threshold) and 0 <= score_threshold <= 100:
+                query_filters["rating_lower"] = int(score_threshold)
+        except (TypeError, ValueError, OverflowError):
+            pass
     year = filters.get("year")
     if year and str(year).isdigit():
         query_filters["start_year"] = int(year)
@@ -817,7 +883,9 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
     if publisher_id and str(publisher_id).isdigit():
         query_filters["publisher_id"] = int(publisher_id)
     if filters.get("is_licensed") is not None:
-        query_filters["is_licensed"] = bool(filters.get("is_licensed"))
+        licensed_filter = _as_bool(filters.get("is_licensed"))
+        if licensed_filter is not None:
+            query_filters["is_licensed"] = licensed_filter
     sort_map = {"SEARCH_MATCH": "relevance", "POPULARITY_DESC": "popular_desc",
                 "SCORE_DESC": "rating_desc", "START_DATE_DESC": "newest",
                 "START_DATE": "oldest", "TITLE_ROMAJI": "title_asc",
@@ -828,31 +896,42 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
     mode = str(browse_mode or "search").lower()
     if mode == "hidden_gems" and not str(query or "").strip():
         # This endpoint is a discovery feed, not a title search.
-        payload = get_hidden_gems(page=safe_page, limit=safe_limit, **query_filters)
+        payload = get_hidden_gems(page=page, limit=limit, **query_filters)
     elif mode == "popular" and not str(query or "").strip():
         query_filters.setdefault("sort_by", "popular_desc")
-        payload = get_series_mix(page=safe_page, limit=safe_limit, **query_filters)
+        payload = get_series_mix(page=page, limit=limit, **query_filters)
     elif str(query or "").strip():
         if mode == "popular":
             query_filters.setdefault("sort_by", "popular_desc")
-        payload = search_series(query, page=safe_page, limit=safe_limit, **query_filters)
+        payload = search_series(query, page=page, limit=limit, **query_filters)
     else:
-        payload = get_series_mix(page=safe_page, limit=safe_limit, **query_filters)
+        payload = get_series_mix(page=page, limit=limit, **query_filters)
 
     pagination = _pagination(payload)
     normalized = []
     for item in _records(payload):
-        # The query filter is sent upstream, but also enforce it locally in
-        # case a future API revision ignores or changes that filter.
-        if str(item.get("content_rating") or "").lower() not in {"safe", "suggestive"}:
+        # One malformed catalogue row must not hide otherwise usable results.
+        try:
+            # The query filter is sent upstream, but also enforce it locally in
+            # case a future API revision ignores or changes that filter.
+            if str(item.get("content_rating") or "").casefold() not in {"safe", "suggestive"}:
+                continue
+            if not _matches_local_filters(item, picked_format, filters):
+                continue
+            normalized.append(normalize_series(item))
+        except (TypeError, ValueError, KeyError, AttributeError, OverflowError):
             continue
-        if not _matches_local_filters(item, picked_format, filters):
-            continue
-        normalized.append(normalize_series(item))
-    current_page = max(1, _safe_int(pagination.get("page"), safe_page))
-    limit_value = min(100, max(1, _safe_int(pagination.get("limit"), safe_limit)))
-    total_value = _safe_int(pagination.get("count"), len(normalized))
-    total = max(len(normalized), max(0, total_value))
+
+    def safe_int(value, fallback, minimum=0):
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+        return parsed if parsed >= minimum else fallback
+
+    current_page = safe_int(pagination.get("page"), page, minimum=1)
+    limit_value = safe_int(pagination.get("limit"), limit, minimum=1)
+    total = safe_int(pagination.get("count"), len(normalized), minimum=0)
     last_page = max(current_page, (total + limit_value - 1) // limit_value)
     return {
         "pageInfo": {

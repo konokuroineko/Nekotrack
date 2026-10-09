@@ -32,11 +32,29 @@ _relation_cache = {}
 def _get(item, key, default=None):
     """Read a field from either an AniList dict or a sqlite3.Row."""
     if hasattr(item, "get"):
-        return item.get(key, default)
+        try:
+            return item.get(key, default)
+        except (TypeError, ValueError, AttributeError):
+            return default
     try:
         return item[key]
     except (KeyError, IndexError, TypeError):
         return default
+
+
+def _valid_relation_id(value):
+    """Return a non-zero integer relation ID, or None for malformed IDs."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    if isinstance(value, str) and not re.fullmatch(r"\s*-?[0-9]+\s*", value):
+        return None
+    try:
+        media_id = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return media_id if media_id != 0 else None
 
 
 def _title_text(item):
@@ -245,13 +263,15 @@ def _is_arc(title):
 
 
 def _air_period(member):
-    start = _get(member, "startDate") or {}
+    start = _get(member, "startDate")
     if not isinstance(start, dict):
         start = {}
     year = start.get("year")
     month = start.get("month")
     if year is None:
         year = _get(member, "start_year")
+    if isinstance(year, bool) or isinstance(month, bool):
+        return None
     try:
         year = int(year)
         month = int(month)
@@ -259,22 +279,22 @@ def _air_period(member):
         return None
     if not (1 <= year <= 9999 and 1 <= month <= 12):
         return None
-    airing_season = (month - 1) // 3
-    return (year, airing_season)
+    return (year, (month - 1) // 3)
 
 
 def logical_season_count(members):
+    """Count logical TV seasons while tolerating malformed optional relation data."""
     tv_members = [
-        member
-        for member in members
+        member for member in members
         if str(_get(member, "format") or "").upper() in {"TV", "TV_SHORT"}
+        and _valid_relation_id(_get(member, "id")) is not None
     ]
     if not tv_members:
         return 0
 
-    ids = {int(_get(member, "id")) for member in tv_members}
+    by_id = {_valid_relation_id(_get(member, "id")): member for member in tv_members}
+    ids = set(by_id)
     parent = {media_id: media_id for media_id in ids}
-    by_id = {int(_get(member, "id")): member for member in tv_members}
 
     def find(media_id):
         while parent[media_id] != media_id:
@@ -289,81 +309,63 @@ def logical_season_count(members):
 
     # 1. Explicit season labels are authoritative.
     by_marker = defaultdict(list)
-    for member in tv_members:
+    for media_id, member in by_id.items():
         marker = _season_marker(_title_text(member))
         if marker:
-            by_marker[marker].append(int(_get(member, "id")))
+            by_marker[marker].append(media_id)
+    for members_for_marker in by_marker.values():
+        for media_id in members_for_marker[1:]:
+            union(members_for_marker[0], media_id)
 
-    for ids_for_marker in by_marker.values():
-        first = ids_for_marker[0]
-        for media_id in ids_for_marker[1:]:
-            union(first, media_id)
-
-    # 2. Explicit Part/Cour/Final continuations inherit their direct TV
-    #    neighbor, but never cross two different explicit season markers.
-    for member in tv_members:
+    # 2. Part/Cour/final continuations inherit directly connected neighbors,
+    #    but never cross two explicit, conflicting season markers.
+    for member_id, member in by_id.items():
         title = _title_text(member)
         if not _is_continuation(title):
             continue
-
-        member_id = int(_get(member, "id"))
         current_marker = _season_marker(title)
-
         for edge in _search_relation_edges(member):
             if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
                 continue
-
-            node = edge.get("node") or {}
-            target_id = node.get("id")
-            if target_id is None:
+            node = edge.get("node")
+            if not isinstance(node, dict):
                 continue
-
-            target_id = int(target_id)
-            if target_id not in by_id:
+            target_id = _valid_relation_id(node.get("id"))
+            if target_id is None or target_id not in by_id:
                 continue
-
-            target_title = _title_text(by_id[target_id])
-            target_marker = _season_marker(target_title)
-
+            target_marker = _season_marker(_title_text(by_id[target_id]))
             if current_marker is not None and target_marker is not None:
                 if current_marker == target_marker:
                     union(member_id, target_id)
             elif current_marker is None and target_marker is None:
                 union(member_id, target_id)
 
-    # 3. Unnumbered named arcs can form a single season. Merge only directly
-    #    linked arc entries that began in the same airing season.
+    # 3. Named unnumbered arcs only combine when both have a valid, matching
+    #    airing season. Unknown dates are not evidence that two arcs are equal.
     arc_ids = {
-        int(_get(member, "id"))
-        for member in tv_members
+        media_id for media_id, member in by_id.items()
         if _is_arc(_title_text(member))
         and _season_marker(_title_text(member)) is None
         and not _is_continuation(_title_text(member))
     }
-
     for member_id in arc_ids:
-        member = by_id[member_id]
-        member_period = _air_period(member)
-
-        for edge in _search_relation_edges(member):
+        member_period = _air_period(by_id[member_id])
+        if member_period is None:
+            continue
+        for edge in _search_relation_edges(by_id[member_id]):
             if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
                 continue
-
-            node = edge.get("node") or {}
-            target_id = node.get("id")
-            if target_id is None:
+            node = edge.get("node")
+            if not isinstance(node, dict):
                 continue
-
-            target_id = int(target_id)
-            if target_id not in arc_ids:
+            target_id = _valid_relation_id(node.get("id"))
+            if target_id is None or target_id not in arc_ids:
                 continue
-
             target_period = _air_period(by_id[target_id])
-            if member_period is not None and member_period == target_period:
+            if target_period is not None and member_period == target_period:
                 union(member_id, target_id)
 
     return len({find(media_id) for media_id in ids})
-
 
 def _bundle_logical_season_count(members):
     return logical_season_count(members)
@@ -420,14 +422,10 @@ def _search_relation_edges(item):
 def _relation_edge_allowed(item, edge):
     if not isinstance(edge, dict) or edge.get("relationType") not in SERIES_RELATIONS:
         return False
-    node = edge.get("node") or {}
-    media_id = _get(node, "id")
-    if isinstance(media_id, bool):
+    node = edge.get("node")
+    if not isinstance(node, dict):
         return False
-    try:
-        if int(media_id) == 0:
-            return False
-    except (TypeError, ValueError, OverflowError):
+    if _valid_relation_id(node.get("id")) is None:
         return False
     return _same_media_family(item, node)
 
@@ -505,15 +503,8 @@ def _traversal_edge_allowed(item, edge):
     if not isinstance(edge, dict):
         return False
     relation_type = edge.get("relationType")
-    node = edge.get("node") or {}
-    media_id = _get(node, "id")
-
-    if isinstance(media_id, bool):
-        return False
-    try:
-        if int(media_id) == 0:
-            return False
-    except (TypeError, ValueError, OverflowError):
+    node = edge.get("node")
+    if not isinstance(node, dict) or _valid_relation_id(node.get("id")) is None:
         return False
     if not _same_media_family(item, node):
         return False
@@ -729,6 +720,7 @@ def _group_discovered(results, discovered):
     original_ids = {int(item["id"]) for item in results}
     ids = {int(item["id"]) for item in discovered}
     parent = {item_id: item_id for item_id in ids}
+    component_members = {item_id: {item_id} for item_id in ids}
 
     def find(item_id):
         while parent[item_id] != item_id:
@@ -737,9 +729,25 @@ def _group_discovered(results, discovered):
         return item_id
 
     def union(left, right):
-        left, right = find(left), find(right)
-        if left != right:
-            parent[right] = left
+        left_root, right_root = find(left), find(right)
+        if left_root == right_root:
+            return True
+
+        # A pair exclusion must survive indirect paths through other works.
+        # Checking only the edge currently being joined allowed A and B to be
+        # regrouped as A -> C -> B after the user explicitly split A from B.
+        left_members = component_members[left_root]
+        right_members = component_members[right_root]
+        if any(
+            tuple(sorted((left_id, right_id))) in excluded_links
+            for left_id in left_members
+            for right_id in right_members
+        ):
+            return False
+
+        parent[right_root] = left_root
+        left_members.update(component_members.pop(right_root))
+        return True
 
     # Explicit manual links are an override: when the user links two works,
     # they belong to the same display bundle regardless of AniList relation type
@@ -760,12 +768,11 @@ def _group_discovered(results, discovered):
     for item in discovered:
         item_id = int(item["id"])
         for edge in _search_relation_edges(item):
-            target = edge.get("node") or {}
-            target_id = target.get("id")
-            if target_id is None:
+            target = edge.get("node")
+            if not isinstance(target, dict):
                 continue
-            target_id = int(target_id)
-            if target_id not in ids:
+            target_id = _valid_relation_id(target.get("id"))
+            if target_id is None or target_id not in ids:
                 continue
             if tuple(sorted((item_id, target_id))) in excluded_links:
                 continue
@@ -836,8 +843,10 @@ def _group_discovered(results, discovered):
         def start_year(item):
             start = _get(item, "startDate")
             if not isinstance(start, dict):
-                start = {}
+                return 9999
             year = start.get("year") or _get(item, "start_year")
+            if isinstance(year, bool):
+                return 9999
             try:
                 year = int(year)
             except (TypeError, ValueError, OverflowError):
@@ -846,7 +855,7 @@ def _group_discovered(results, discovered):
 
         group_members.sort(
             key=lambda item: (
-                _get(item, "startDate") is None,
+                not isinstance(_get(item, "startDate"), dict),
                 start_year(item),
                 int(_get(item, "id")),
             )

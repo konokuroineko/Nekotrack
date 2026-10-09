@@ -448,80 +448,82 @@ def get_staff(work_id):
 
 
 def save_episodes(work_id, episode_data):
-    episodes = list(episode_data or [])
+    """Upsert episode metadata without deleting cached/user-owned episode rows.
+
+    A provider can return only a partial season after a timeout, schema change,
+    or date filter. Treat absence from an update as unknown rather than proof
+    that an episode is obsolete; deleting it could erase the user's watched
+    state and local artwork.
+    """
+    try:
+        episodes = list(episode_data or [])
+    except TypeError:
+        episodes = []
     connection = get_connection()
+    try:
+        for episode in episodes:
+            if not isinstance(episode, dict):
+                continue
+            try:
+                number = int(episode.get("episodeNumber"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if number < 1:
+                continue
 
-    for episode in episodes:
-        number = episode.get("episodeNumber")
-        if number is None:
-            continue
-
-        incoming_thumbnail = str(episode.get("thumbnail") or "").strip() or None
-        existing = connection.execute(
-            """
-            SELECT thumbnail_url
-            FROM episodes
-            WHERE work_id = ? AND episode_number = ?
-            """,
-            (int(work_id), int(number)),
-        ).fetchone()
-        existing_thumbnail = (
-            str(existing["thumbnail_url"]).strip()
-            if existing and existing["thumbnail_url"]
-            else None
-        )
-
-        # Once a thumbnail has been downloaded locally, never replace it
-        # with the provider's remote URL during a normal metadata refresh.
-        if (
-            existing_thumbnail
-            and Path(existing_thumbnail).is_file()
-            and (
-                not incoming_thumbnail
-                or not Path(incoming_thumbnail).is_file()
+            incoming_thumbnail = str(episode.get("thumbnail") or "").strip() or None
+            existing = connection.execute(
+                """
+                SELECT thumbnail_url
+                FROM episodes
+                WHERE work_id = ? AND episode_number = ?
+                """,
+                (int(work_id), number),
+            ).fetchone()
+            existing_thumbnail = (
+                str(existing["thumbnail_url"]).strip()
+                if existing and existing["thumbnail_url"]
+                else None
             )
-        ):
-            thumbnail = existing_thumbnail
-        else:
-            thumbnail = incoming_thumbnail
 
-        connection.execute("""
-            INSERT INTO episodes (
-                work_id, episode_number, title, description, air_date, thumbnail_url
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(work_id, episode_number) DO UPDATE SET
-                title = excluded.title,
-                description = excluded.description,
-                air_date = excluded.air_date,
-                thumbnail_url = excluded.thumbnail_url
-        """, (
-            work_id,
-            number,
-            episode.get("title"),
-            episode.get("description"),
-            episode.get("airdate"),
-            thumbnail,
-        ))
+            # Once a thumbnail has been downloaded locally, never replace it
+            # with the provider's remote URL during a normal metadata refresh.
+            if (
+                existing_thumbnail
+                and Path(existing_thumbnail).is_file()
+                and (
+                    not incoming_thumbnail
+                    or not Path(incoming_thumbnail).is_file()
+                )
+            ):
+                thumbnail = existing_thumbnail
+            else:
+                thumbnail = incoming_thumbnail
 
-    numbers = sorted({
-        int(episode["episodeNumber"])
-        for episode in episodes
-        if episode.get("episodeNumber") is not None
-    })
-    if numbers:
-        placeholders = ",".join("?" for _ in numbers)
-        connection.execute(
-            f"""
-            DELETE FROM episodes
-            WHERE work_id = ?
-              AND episode_number NOT IN ({placeholders})
-            """,
-            (work_id, *numbers),
-        )
-
-    connection.commit()
-    connection.close()
+            connection.execute("""
+                INSERT INTO episodes (
+                    work_id, episode_number, title, description, air_date, thumbnail_url
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(work_id, episode_number) DO UPDATE SET
+                    title = excluded.title,
+                    description = excluded.description,
+                    air_date = excluded.air_date,
+                    thumbnail_url = excluded.thumbnail_url
+            """, (
+                int(work_id),
+                number,
+                episode.get("title"),
+                episode.get("description"),
+                episode.get("airdate"),
+                thumbnail,
+            ))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def get_episodes(work_id):
@@ -1307,13 +1309,35 @@ def clear_bundle_override(work_ids):
 
 
 def add_to_library(work_id, status="Planning"):
+    """Add a work or update its status without erasing saved progress and notes.
+
+    Progress is reconstructed from cached episode/reading rows only when a
+    library membership is newly created (including re-adding a removed work).
+    On conflict, existing counters, ratings, notes, and added_date are retained.
+    """
     connection = get_connection()
-    connection.execute("""
-        INSERT OR REPLACE INTO user_library (work_id, status, progress_episodes, updated_date)
-        VALUES (?, ?, 0, CURRENT_TIMESTAMP)
-    """, (work_id, status))
-    connection.commit()
-    connection.close()
+    try:
+        connection.execute("""
+            INSERT INTO user_library (
+                work_id, status, progress_episodes, progress_chapters,
+                progress_volumes, updated_date
+            )
+            VALUES (
+                ?, ?,
+                (SELECT COUNT(*) FROM episodes WHERE work_id = ? AND watched = 1),
+                (SELECT COALESCE(SUM(is_read), 0) FROM reading_items
+                 WHERE work_id = ? AND item_type = 'chapter'),
+                (SELECT COALESCE(SUM(is_read), 0) FROM reading_items
+                 WHERE work_id = ? AND item_type = 'volume'),
+                CURRENT_TIMESTAMP
+            )
+            ON CONFLICT(work_id) DO UPDATE SET
+                status = excluded.status,
+                updated_date = CURRENT_TIMESTAMP
+        """, (int(work_id), status, int(work_id), int(work_id), int(work_id)))
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def remove_from_library(work_id):
@@ -1367,6 +1391,7 @@ def delete_work_data(work_id):
             "work_studios",
             "work_songs",
             "alternate_titles",
+            "work_provider_metadata",
         ):
             connection.execute(
                 f"DELETE FROM {table} WHERE work_id = ?",
@@ -1422,6 +1447,7 @@ def delete_work_data(work_id):
             ("work_studios", "SELECT 1 FROM work_studios WHERE work_id = ? LIMIT 1"),
             ("work_songs", "SELECT 1 FROM work_songs WHERE work_id = ? LIMIT 1"),
             ("alternate_titles", "SELECT 1 FROM alternate_titles WHERE work_id = ? LIMIT 1"),
+            ("work_provider_metadata", "SELECT 1 FROM work_provider_metadata WHERE work_id = ? LIMIT 1"),
         )
 
         residual = []
@@ -1442,17 +1468,41 @@ def delete_work_data(work_id):
         connection.close()
         raise
 
-    paths = []
-    if row["cover_path"]:
-        paths.append(Path(str(row["cover_path"])))
-    paths.extend(Path(str(path)) for path in override_paths)
-
-    for path in paths:
+    # A custom/cache image path can be shared by multiple works or bundle
+    # overrides. Delete the file only after the database commit and only when
+    # no remaining row references that exact stored path.
+    candidate_paths = {
+        str(path)
+        for path in ([row["cover_path"]] if row["cover_path"] else []) + override_paths
+        if path
+    }
+    if candidate_paths:
+        connection = get_connection()
         try:
-            if path.is_file():
-                path.unlink()
-        except OSError:
-            pass
+            for stored_path in candidate_paths:
+                still_referenced = connection.execute(
+                    """
+                    SELECT 1
+                    FROM works
+                    WHERE cover_path = ?
+                    UNION ALL
+                    SELECT 1
+                    FROM bundle_overrides
+                    WHERE custom_cover_path = ?
+                    LIMIT 1
+                    """,
+                    (stored_path, stored_path),
+                ).fetchone()
+                if still_referenced is not None:
+                    continue
+                path = Path(stored_path)
+                try:
+                    if path.is_file():
+                        path.unlink()
+                except OSError:
+                    pass
+        finally:
+            connection.close()
 
     return True
 
@@ -1474,7 +1524,8 @@ def get_all_library():
     connection = get_connection()
     results = connection.execute("""
         SELECT works.*, user_library.status, user_library.progress_episodes,
-               user_library.progress_chapters, user_library.rating, user_library.notes,
+               user_library.progress_chapters, user_library.progress_volumes,
+               user_library.rating, user_library.notes,
                user_library.added_date, user_library.updated_date
         FROM works JOIN user_library ON user_library.work_id = works.id
         ORDER BY user_library.added_date DESC, works.title

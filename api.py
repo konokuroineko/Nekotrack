@@ -1,5 +1,6 @@
 import datetime as _dt
 import hashlib
+import math
 import re
 import requests
 import time
@@ -20,24 +21,20 @@ MAX_RETRIES = 5
 RETRY_DELAY = 1
 
 
-def _anilist_error_message(payload, fallback="Unknown error"):
-    """Extract a safe error message from a possibly malformed GraphQL payload."""
-    if isinstance(payload, dict):
-        errors = payload.get("errors")
-        if isinstance(errors, list) and errors:
-            first = errors[0]
-            if isinstance(first, dict):
-                message = first.get("message")
-                if message not in (None, ""):
-                    return str(message)
-            elif first not in (None, ""):
-                return str(first)
-    return str(fallback or "Unknown error")
-
-
 def anilist_request(query, variables=None):
     """Make a request to AniList GraphQL API with retry logic."""
     last_error = None
+
+    def error_message(payload, fallback):
+        errors = payload.get("errors") if isinstance(payload, dict) else None
+        if isinstance(errors, list):
+            for error in errors:
+                if not isinstance(error, dict):
+                    continue
+                message = error.get("message")
+                if isinstance(message, str) and message.strip():
+                    return message.strip()
+        return str(fallback or "AniList returned an unreadable error response.")
 
     for attempt in range(MAX_RETRIES):
         try:
@@ -48,15 +45,21 @@ def anilist_request(query, variables=None):
             )
             try:
                 data = response.json()
-            except ValueError:
+            except (ValueError, TypeError):
+                data = None
+            if not isinstance(data, dict):
                 data = {}
 
             if response.status_code == 429:
                 if attempt < MAX_RETRIES - 1:
                     retry_after = response.headers.get("Retry-After")
                     try:
-                        wait_time = max(1.0, float(retry_after)) if retry_after is not None else RETRY_DELAY * (2 ** attempt)
-                    except (TypeError, ValueError):
+                        wait_time = (
+                            max(1.0, float(retry_after))
+                            if retry_after is not None
+                            else RETRY_DELAY * (2 ** attempt)
+                        )
+                    except (TypeError, ValueError, OverflowError):
                         wait_time = RETRY_DELAY * (2 ** attempt)
                     print(
                         f"AniList rate limited the request (attempt {attempt + 1}/{MAX_RETRIES}). "
@@ -65,11 +68,14 @@ def anilist_request(query, variables=None):
                     time.sleep(wait_time)
                     continue
 
-                message = _anilist_error_message(data, response.reason)
-                raise Exception(f"AniList request failed (429): {message}")
+                message = error_message(data, getattr(response, "reason", None))
+                raise RuntimeError(f"AniList request failed (429): {message}")
 
             if response.status_code >= 500:
-                last_error = Exception(f"AniList server error ({response.status_code}): {response.reason}")
+                last_error = RuntimeError(
+                    f"AniList server error ({response.status_code}): "
+                    f"{getattr(response, 'reason', '')}"
+                )
                 if attempt < MAX_RETRIES - 1:
                     wait_time = RETRY_DELAY * (2 ** attempt)
                     print(
@@ -81,25 +87,24 @@ def anilist_request(query, variables=None):
                 raise last_error
 
             if response.status_code >= 400:
-                message = _anilist_error_message(data, response.reason)
-                raise Exception(f"AniList request failed ({response.status_code}): {message}")
-
-            if not isinstance(data, dict):
-                raise Exception("AniList returned an invalid response payload (expected a JSON object).")
+                message = error_message(data, getattr(response, "reason", None))
+                raise RuntimeError(
+                    f"AniList request failed ({response.status_code}): {message}"
+                )
 
             errors = data.get("errors")
             if errors:
-                if isinstance(errors, list):
-                    raise Exception(_anilist_error_message(data))
-                raise Exception("AniList returned a malformed errors payload.")
+                message = error_message(data, None)
+                raise RuntimeError(f"AniList GraphQL request failed: {message}")
+            if "errors" in data and errors not in (None, []):
+                raise RuntimeError("AniList returned a malformed GraphQL error payload.")
 
-            if "data" not in data:
-                raise Exception("AniList returned a response without a data field.")
-
-            if not isinstance(data["data"], dict):
-                raise Exception("AniList returned an invalid data payload (expected an object).")
-
-            return data["data"]
+            result = data.get("data")
+            if not isinstance(result, dict):
+                raise RuntimeError(
+                    "AniList returned an unexpected GraphQL response: missing data object."
+                )
+            return result
 
         except (
             requests.exceptions.ConnectionError,
@@ -109,18 +114,20 @@ def anilist_request(query, variables=None):
             last_error = error
             if attempt < MAX_RETRIES - 1:
                 wait_time = RETRY_DELAY * (2 ** attempt)
-                print(f"Network error (attempt {attempt + 1}/{MAX_RETRIES}): {error}. Retrying in {wait_time}s...")
+                print(
+                    f"Network error (attempt {attempt + 1}/{MAX_RETRIES}): "
+                    f"{error}. Retrying in {wait_time:g}s..."
+                )
                 time.sleep(wait_time)
             else:
                 print(f"Failed after {MAX_RETRIES} attempts: {error}")
-        except requests.exceptions.RequestException as error:
-            raise error
+        except requests.exceptions.RequestException:
+            raise
 
-    raise Exception(
+    raise RuntimeError(
         f"Network error after {MAX_RETRIES} attempts. Please check your internet connection and try again. "
         f"(Last error: {str(last_error)[:100]})"
     )
-
 
 def _media_fields(include_details=False, include_relations=True):
     """Return GraphQL fields shared by search and detail queries."""
@@ -230,41 +237,39 @@ def _media_fields(include_details=False, include_relations=True):
 
 
 def parse_anilist_url(value):
-    """Return the AniList media ID when value is a supported AniList media URL."""
+    """Return a positive AniList media ID from a canonical HTTP(S) media URL."""
     if not isinstance(value, str):
         return None
-
     text = value.strip()
     if not text:
         return None
-
     try:
         parsed = urlparse(text)
         hostname = (parsed.hostname or "").lower()
         port = parsed.port
     except ValueError:
         return None
-
-    if parsed.scheme.lower() not in {"http", "https"}:
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"}:
         return None
     if hostname not in {"anilist.co", "www.anilist.co"}:
         return None
     if parsed.username is not None or parsed.password is not None:
         return None
-    if parsed.scheme.lower() == "https" and port not in (None, 443):
+    if scheme == "https" and port not in (None, 443):
         return None
-    if parsed.scheme.lower() == "http" and port not in (None, 80):
+    if scheme == "http" and port not in (None, 80):
         return None
-
     parts = [part for part in parsed.path.split("/") if part]
     if len(parts) < 2 or parts[0].lower() not in {"anime", "manga"}:
         return None
-    if not parts[1].isdigit():
+    if not re.fullmatch(r"[0-9]+", parts[1]):
         return None
-
-    media_id = int(parts[1])
+    try:
+        media_id = int(parts[1])
+    except (TypeError, ValueError, OverflowError):
+        return None
     return media_id if media_id > 0 else None
-
 
 def get_media_by_anilist_url(url, include_relations=False):
     """Fetch the exact AniList media entry referenced by an AniList URL."""
@@ -480,11 +485,17 @@ def get_media_relations(media_id):
 def get_media_relations_batch(media_ids):
     """Fetch lightweight relation data for multiple media IDs in one request."""
     # MangaBaka-only works use negative local IDs and are deliberately
-    # excluded from AniList relation queries.
-    ids = sorted({
-        int(media_id) for media_id in media_ids
-        if media_id is not None and int(media_id) > 0
-    })
+    # excluded from AniList relation queries. Ignore malformed IDs instead of
+    # letting one bad cached record invalidate the entire batch.
+    valid_ids = set()
+    for media_id in media_ids or []:
+        try:
+            numeric_id = int(media_id)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if numeric_id > 0:
+            valid_ids.add(numeric_id)
+    ids = sorted(valid_ids)
     if not ids:
         return {}
 
@@ -523,49 +534,130 @@ def get_media_relations_batch(media_ids):
     }
     """
     data = anilist_request(query, {"ids": ids, "perPage": len(ids)})
-    media = (data.get("Page") or {}).get("media") or []
+    page_data = data.get("Page") if isinstance(data, dict) else None
+    if not isinstance(page_data, dict):
+        return {}
+    media = page_data.get("media")
     if isinstance(media, dict):
         media = [media]
-    return {
-        int(item["id"]): item
-        for item in media
-        if isinstance(item, dict) and item.get("id") is not None
-    }
+    if not isinstance(media, list):
+        return {}
+
+    result = {}
+    for item in media:
+        if not isinstance(item, dict):
+            continue
+        try:
+            item_id = int(item.get("id"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if item_id > 0:
+            result[item_id] = item
+    return result
 
 
 def get_media_episodes(media_id):
-    """Fetch and normalize an AniList airing schedule into local episode rows."""
+    """Fetch all available AniList airing-schedule pages as local episode rows."""
     query = """
-    query ($id: Int) {
+    query ($id: Int, $page: Int) {
         Media(id: $id) {
-            airingSchedule(perPage: 50) {
+            airingSchedule(page: $page, perPage: 50) {
                 nodes {
                     airingAt
                     episode
+                }
+                pageInfo {
+                    currentPage
+                    lastPage
+                    hasNextPage
                 }
             }
         }
     }
     """
-    data = anilist_request(query, {"id": media_id})
-    schedule = ((data.get("Media") or {}).get("airingSchedule") or {}).get("nodes") or []
+
+    data = anilist_request(query, {"id": media_id, "page": 1})
+    media = data.get("Media") if isinstance(data, dict) else None
+    connection = media.get("airingSchedule") if isinstance(media, dict) else None
+    if not isinstance(connection, dict):
+        return []
+
+    def safe_page(value, fallback=1):
+        try:
+            result = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+        return result if result >= 1 else fallback
+
+    def clean_nodes(value):
+        return value if isinstance(value, list) else []
+
+    schedule = []
+    seen_episodes = set()
+    raw_nodes = clean_nodes(connection.get("nodes"))
+    page_info = connection.get("pageInfo")
+    if not isinstance(page_info, dict):
+        page_info = {}
+    page = safe_page(page_info.get("currentPage"))
+    max_page = min(safe_page(page_info.get("lastPage"), 100), 100)
+
+    def append_nodes(nodes):
+        added = 0
+        for node in clean_nodes(nodes):
+            if not isinstance(node, dict):
+                continue
+            try:
+                episode_number = int(node.get("episode"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if episode_number < 1 or episode_number in seen_episodes:
+                continue
+            seen_episodes.add(episode_number)
+            schedule.append(node)
+            added += 1
+        return added
+
+    append_nodes(raw_nodes)
+    while page_info.get("hasNextPage") is True and page < max_page:
+        requested_page = page + 1
+        page_data = anilist_request(query, {"id": media_id, "page": requested_page})
+        page_media = page_data.get("Media") if isinstance(page_data, dict) else None
+        connection = page_media.get("airingSchedule") if isinstance(page_media, dict) else None
+        if not isinstance(connection, dict):
+            break
+        previous_count = len(schedule)
+        append_nodes(connection.get("nodes"))
+        page_info = connection.get("pageInfo")
+        if not isinstance(page_info, dict):
+            page_info = {}
+        page = requested_page
+        if len(schedule) == previous_count:
+            break
 
     import datetime
 
-    return [
-        {
-            "episodeNumber": node.get("episode"),
-            "title": f"Episode {node.get('episode')}",
+    output = []
+    for node in sorted(schedule, key=lambda item: safe_page(item.get("episode"), 10**9)):
+        try:
+            episode_number = int(node.get("episode"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+
+        airdate = None
+        airing_at = node.get("airingAt")
+        if airing_at is not None:
+            try:
+                airdate = datetime.datetime.fromtimestamp(int(airing_at)).strftime("%Y-%m-%d")
+            except (TypeError, ValueError, OverflowError, OSError):
+                airdate = None
+
+        output.append({
+            "episodeNumber": episode_number,
+            "title": f"Episode {episode_number}",
             "description": None,
-            "airdate": (
-                datetime.datetime.fromtimestamp(int(node["airingAt"])).strftime("%Y-%m-%d")
-                if node.get("airingAt") is not None
-                else None
-            ),
-        }
-        for node in schedule
-        if node.get("episode") is not None
-    ]
+            "airdate": airdate,
+        })
+    return output
 
 
 def get_media_details(media_id):
@@ -634,99 +726,188 @@ def get_media_details(media_id):
     }
     """ % _media_fields(include_details=True)
     data = anilist_request(query, {"id": media_id})
-    media = data["Media"]
+    media = data.get("Media") if isinstance(data, dict) else None
+    if not isinstance(media, dict):
+        raise RuntimeError(f"AniList returned no media details for ID {media_id}.")
 
-    # AniList paginates character connections. Fetch every page so imports
-    # never stop at the first 25 characters.
-    characters_connection = (media.get("characters") or {}) if isinstance(media, dict) else {}
-    all_character_edges = list(characters_connection.get("edges") or [])
-    page_info = characters_connection.get("pageInfo") or {}
-    page = int(page_info.get("currentPage") or 1)
+    # AniList paginates character and airing-schedule connections. Guard against
+    # malformed pageInfo and repeated pages so a provider bug cannot create an
+    # unbounded request loop.
+    MAX_DETAIL_PAGES = 100
 
-    while page_info.get("hasNextPage"):
-        page += 1
-        characters_query = """
-        query ($id: Int, $page: Int) {
-            Media(id: $id) {
-                characters(page: $page, perPage: 25, sort: ROLE) {
-                    edges {
-                        node {
-                            id
-                            name { full }
-                            image { large }
-                        }
-                        role
-                        voiceActors {
-                            id
-                            name { full }
-                            language
-                            image { large }
-                        }
+    def _safe_page(value, fallback=1):
+        try:
+            page_number = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+        return page_number if page_number >= 1 else fallback
+
+    def _append_unique_records(existing, incoming, key_function):
+        result = []
+        seen = set()
+        existing_records = existing if isinstance(existing, list) else []
+        incoming_records = incoming if isinstance(incoming, list) else []
+        for record in existing_records + incoming_records:
+            if not isinstance(record, dict):
+                continue
+            key = key_function(record)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(record)
+        return result
+
+    def _character_key(edge):
+        node = edge.get("node") if isinstance(edge, dict) else None
+        if isinstance(node, dict) and node.get("id") is not None:
+            return ("character", str(node["id"]), str(edge.get("role") or ""))
+        return ("raw", repr(edge))
+
+    def _schedule_key(node):
+        if node.get("episode") is not None:
+            return ("episode", str(node.get("episode")), str(node.get("airingAt")))
+        return ("raw", repr(node))
+
+    def _page_limit(page_info):
+        return min(_safe_page(page_info.get("lastPage"), MAX_DETAIL_PAGES), MAX_DETAIL_PAGES)
+
+    characters_connection = media.get("characters")
+    if not isinstance(characters_connection, dict):
+        characters_connection = {}
+    page_info = characters_connection.get("pageInfo")
+    if not isinstance(page_info, dict):
+        page_info = {}
+    all_character_edges = _append_unique_records(
+        [], characters_connection.get("edges"), _character_key
+    )
+    page = _safe_page(page_info.get("currentPage"))
+    characters_query = """
+    query ($id: Int, $page: Int) {
+        Media(id: $id) {
+            characters(page: $page, perPage: 25, sort: ROLE) {
+                edges {
+                    node {
+                        id
+                        name { full }
+                        image { large }
                     }
-                    pageInfo {
-                        currentPage
-                        lastPage
-                        hasNextPage
+                    role
+                    voiceActors {
+                        id
+                        name { full }
+                        language
+                        image { large }
                     }
+                }
+                pageInfo {
+                    currentPage
+                    lastPage
+                    hasNextPage
                 }
             }
         }
-        """
-        page_data = anilist_request(characters_query, {"id": media_id, "page": page})
-        connection = ((page_data.get("Media") or {}).get("characters") or {})
-        all_character_edges.extend(connection.get("edges") or [])
-        page_info = connection.get("pageInfo") or {}
+    }
+    """
+    while page_info.get("hasNextPage") is True and page < _page_limit(page_info):
+        requested_page = page + 1
+        page_data = anilist_request(
+            characters_query, {"id": media_id, "page": requested_page}
+        )
+        page_media = page_data.get("Media") if isinstance(page_data, dict) else None
+        connection = page_media.get("characters") if isinstance(page_media, dict) else None
+        if not isinstance(connection, dict):
+            break
+        incoming_edges = connection.get("edges")
+        previous_count = len(all_character_edges)
+        all_character_edges = _append_unique_records(
+            all_character_edges, incoming_edges, _character_key
+        )
+        page_info = connection.get("pageInfo")
+        if not isinstance(page_info, dict):
+            page_info = {}
+        page = requested_page
+        # A repeated/empty page despite hasNextPage=True is a broken provider
+        # response. Stop instead of repeatedly downloading the same page.
+        if len(all_character_edges) == previous_count:
+            break
 
-    if isinstance(media, dict):
-        media["characters"] = {
-            **characters_connection,
-            "edges": all_character_edges,
-            "pageInfo": {
-                **page_info,
-                "currentPage": page,
-                "hasNextPage": False,
-            },
-        }
+    media["characters"] = {
+        **characters_connection,
+        "edges": all_character_edges,
+        "pageInfo": {
+            **page_info,
+            "currentPage": page,
+            "hasNextPage": False,
+        },
+    }
 
-        # Normalize AniList's airing schedule into the episode shape used by
-        # the local database. The detail/import code expects episodeNumber,
-        # title, and airdate, while the current AniList query provides
-        # episode numbers and timestamps through airingSchedule.
-        schedule_connection = media.get("airingSchedule") or {}
-        schedule = list(schedule_connection.get("nodes") or [])
-        schedule_page_info = schedule_connection.get("pageInfo") or {}
-        schedule_page = int(schedule_page_info.get("currentPage") or 1)
-
-        while schedule_page_info.get("hasNextPage"):
-            schedule_page += 1
-            schedule_query = """
-            query ($id: Int, $page: Int) {
-                Media(id: $id) {
-                    airingSchedule(page: $page, perPage: 50) {
-                        nodes {
-                            airingAt
-                            episode
-                        }
-                        pageInfo {
-                            currentPage
-                            lastPage
-                            hasNextPage
-                        }
-                    }
+    # The schedule data is used by detail/import views; write the complete
+    # deduplicated node list back onto the returned media object.
+    schedule_connection = media.get("airingSchedule")
+    if not isinstance(schedule_connection, dict):
+        schedule_connection = {}
+    schedule_page_info = schedule_connection.get("pageInfo")
+    if not isinstance(schedule_page_info, dict):
+        schedule_page_info = {}
+    schedule = _append_unique_records(
+        [], schedule_connection.get("nodes"), _schedule_key
+    )
+    schedule_page = _safe_page(schedule_page_info.get("currentPage"))
+    schedule_query = """
+    query ($id: Int, $page: Int) {
+        Media(id: $id) {
+            airingSchedule(page: $page, perPage: 50) {
+                nodes {
+                    airingAt
+                    episode
+                }
+                pageInfo {
+                    currentPage
+                    lastPage
+                    hasNextPage
                 }
             }
-            """
-            schedule_data = anilist_request(
-                schedule_query,
-                {"id": media_id, "page": schedule_page},
-            )
-            schedule_connection = (
-                (schedule_data.get("Media") or {}).get("airingSchedule") or {}
-            )
-            schedule.extend(schedule_connection.get("nodes") or [])
-            schedule_page_info = schedule_connection.get("pageInfo") or {}
+        }
+    }
+    """
+    while (
+        schedule_page_info.get("hasNextPage") is True
+        and schedule_page < _page_limit(schedule_page_info)
+    ):
+        requested_page = schedule_page + 1
+        schedule_data = anilist_request(
+            schedule_query, {"id": media_id, "page": requested_page}
+        )
+        schedule_media = (
+            schedule_data.get("Media") if isinstance(schedule_data, dict) else None
+        )
+        schedule_connection = (
+            schedule_media.get("airingSchedule")
+            if isinstance(schedule_media, dict)
+            else None
+        )
+        if not isinstance(schedule_connection, dict):
+            break
+        previous_count = len(schedule)
+        schedule = _append_unique_records(
+            schedule, schedule_connection.get("nodes"), _schedule_key
+        )
+        schedule_page_info = schedule_connection.get("pageInfo")
+        if not isinstance(schedule_page_info, dict):
+            schedule_page_info = {}
+        schedule_page = requested_page
+        if len(schedule) == previous_count:
+            break
 
-        # Keep AniList streamingEpisodes raw; it has no reliable episode-number key.\n
+    media["airingSchedule"] = {
+        **schedule_connection,
+        "nodes": schedule,
+        "pageInfo": {
+            **schedule_page_info,
+            "currentPage": schedule_page,
+            "hasNextPage": False,
+        },
+    }
 
     # Add MangaBaka's complete series payload for reading-media details. The
     # lookup is best-effort and the AniList record remains the canonical one.
@@ -767,8 +948,13 @@ def _tmdb_get(path, params=None):
     )
     response.raise_for_status()
     time.sleep(0.15)
-    return response.json() or {}
-
+    try:
+        payload = response.json()
+    except (ValueError, TypeError) as error:
+        raise RuntimeError(f"TMDB returned invalid JSON for {path}.") from error
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"TMDB returned an unexpected response for {path}.")
+    return payload
 
 def _parse_date(value):
     text = str(value or "").strip()
@@ -785,6 +971,7 @@ def _normalize_title(value):
 
 
 def _candidate_score(candidate, title_variants, target_date):
+    candidate = candidate if isinstance(candidate, dict) else {}
     names = {
         _normalize_title(candidate.get("name")),
         _normalize_title(candidate.get("original_name")),
@@ -803,12 +990,16 @@ def _candidate_score(candidate, title_variants, target_date):
     if candidate_date and target_date:
         score -= abs((candidate_date - target_date).days) / 10
 
-    if "JP" in {str(value).upper() for value in (candidate.get("origin_country") or [])}:
+    countries = candidate.get("origin_country") or []
+    if isinstance(countries, str):
+        countries = [countries]
+    if isinstance(countries, (list, tuple, set)) and "JP" in {
+        str(value).upper() for value in countries
+    }:
         score += 20
 
-    score += min(float(candidate.get("popularity") or 0), 20)
+    score += min(max(_safe_float(candidate.get("popularity")), 0.0), 20.0)
     return score
-
 
 def _find_tmdb_series(title_variants, target_date):
     variants = [
@@ -823,101 +1014,105 @@ def _find_tmdb_series(title_variants, target_date):
     year = target_date.year if target_date else None
 
     for query in variants[:6]:
-        params = {
-            "query": query,
-            "include_adult": "false",
-        }
+        params = {"query": query, "include_adult": "false"}
         if year:
             params["first_air_date_year"] = year
-
-        payload = _tmdb_get("/search/tv", params)
-        for candidate in payload.get("results") or []:
-            if candidate.get("id") is not None:
-                candidates[int(candidate["id"])] = candidate
+        for candidate in _tmdb_result_records(_tmdb_get("/search/tv", params)):
+            candidates[candidate["id"]] = candidate
 
     if not candidates:
         for query in variants[:3]:
             payload = _tmdb_get(
                 "/search/tv",
-                {
-                    "query": query,
-                    "include_adult": "false",
-                },
+                {"query": query, "include_adult": "false"},
             )
-            for candidate in payload.get("results") or []:
-                if candidate.get("id") is not None:
-                    candidates[int(candidate["id"])] = candidate
+            for candidate in _tmdb_result_records(payload):
+                candidates[candidate["id"]] = candidate
 
     if not candidates:
         raise RuntimeError("TMDB could not find a matching TV series.")
 
     return max(
         candidates.values(),
-        key=lambda candidate: _candidate_score(
-            candidate,
-            variants,
-            target_date,
-        ),
+        key=lambda candidate: _candidate_score(candidate, variants, target_date),
     )
 
-
 def _find_tmdb_season(series_details, target_date):
-    seasons = [
-        season
-        for season in (series_details.get("seasons") or [])
-        if int(season.get("season_number") or -1) >= 0
-    ]
+    if not isinstance(series_details, dict):
+        raise RuntimeError("TMDB returned an invalid TV series payload.")
+    raw_seasons = series_details.get("seasons")
+    if not isinstance(raw_seasons, list):
+        raw_seasons = []
+
+    seasons = []
+    for season in raw_seasons:
+        if not isinstance(season, dict):
+            continue
+        try:
+            season_number = int(season.get("season_number"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        # Season 0 is valid in TMDB and represents specials.
+        if season_number >= 0:
+            seasons.append({**season, "season_number": season_number})
+
     if not seasons:
         raise RuntimeError("TMDB series has no usable seasons.")
 
     def score(season):
         season_date = _parse_date(season.get("air_date"))
         if season_date is None or target_date is None:
-            return (1, 999999, int(season.get("season_number") or 0))
+            return (1, 999999, season["season_number"])
         return (
             0,
             abs((season_date - target_date).days),
-            int(season.get("season_number") or 0),
+            season["season_number"],
         )
 
     return min(seasons, key=score)
 
-
 def _episode_still_url(path):
-    if not path:
+    if not isinstance(path, str):
+        return None
+    path = path.strip()
+    if not path.startswith("/") or path.startswith("//"):
         return None
     return f"{TMDB_IMAGE_BASE_URL}{path}"
 
-
 def _pick_best_episode_still(series_id, season_number, episode):
+    if not isinstance(episode, dict):
+        return None, 0
     primary = _episode_still_url(episode.get("still_path"))
     if primary:
         return primary, 1
 
     try:
+        episode_number = int(episode.get("episode_number"))
         payload = _tmdb_get(
-            f"/tv/{int(series_id)}/season/{int(season_number)}/episode/{int(episode['episode_number'])}/images",
-            {
-                "include_image_language": "en,null",
-            },
+            f"/tv/{int(series_id)}/season/{int(season_number)}/episode/{episode_number}/images",
+            {"include_image_language": "en,null"},
         )
-    except requests.RequestException:
+    except (requests.RequestException, RuntimeError, TypeError, ValueError, OverflowError, KeyError):
         return None, 0
 
-    stills = payload.get("stills") or []
+    if not isinstance(payload, dict):
+        return None, 0
+    raw_stills = payload.get("stills")
+    if not isinstance(raw_stills, list):
+        return None, 0
+    stills = [item for item in raw_stills if isinstance(item, dict)]
     if not stills:
         return None, 0
 
     stills.sort(
         key=lambda item: (
-            float(item.get("vote_average") or 0),
-            int(item.get("vote_count") or 0),
-            int(item.get("width") or 0),
+            _safe_float(item.get("vote_average")),
+            _safe_float(item.get("vote_count")),
+            _safe_float(item.get("width")),
         ),
         reverse=True,
     )
     return _episode_still_url(stills[0].get("file_path")), len(stills)
-
 
 def _movie_title_similarity(candidate, title_variants):
     names = [
@@ -957,6 +1152,7 @@ def _movie_title_similarity(candidate, title_variants):
 
 
 def _candidate_movie_score(candidate, title_variants, target_date):
+    candidate = candidate if isinstance(candidate, dict) else {}
     similarity = _movie_title_similarity(candidate, title_variants)
     score = similarity * 1000
 
@@ -964,9 +1160,8 @@ def _candidate_movie_score(candidate, title_variants, target_date):
     if release_date and target_date:
         score -= abs((release_date - target_date).days) / 10
 
-    score += min(float(candidate.get("popularity") or 0), 20)
+    score += min(max(_safe_float(candidate.get("popularity")), 0.0), 20.0)
     return score, similarity, release_date
-
 
 def _find_tmdb_movie(title_variants, target_date):
     variants = [
@@ -988,11 +1183,8 @@ def _find_tmdb_movie(title_variants, target_date):
         }
         if year:
             params["primary_release_year"] = year
-
-        payload = _tmdb_get("/search/movie", params)
-        for candidate in payload.get("results") or []:
-            if candidate.get("id") is not None:
-                candidates[int(candidate["id"])] = candidate
+        for candidate in _tmdb_result_records(_tmdb_get("/search/movie", params)):
+            candidates[candidate["id"]] = candidate
 
     if not candidates:
         for query in variants[:10]:
@@ -1004,33 +1196,22 @@ def _find_tmdb_movie(title_variants, target_date):
                     "include_video": "false",
                 },
             )
-            for candidate in payload.get("results") or []:
-                if candidate.get("id") is not None:
-                    candidates[int(candidate["id"])] = candidate
+            for candidate in _tmdb_result_records(payload):
+                candidates[candidate["id"]] = candidate
 
     if not candidates:
         raise RuntimeError("TMDB could not find a matching OVA movie.")
 
     ranked = sorted(
         candidates.values(),
-        key=lambda candidate: _candidate_movie_score(
-            candidate,
-            variants,
-            target_date,
-        ),
+        key=lambda candidate: _candidate_movie_score(candidate, variants, target_date),
         reverse=True,
     )
     best = ranked[0]
-    _, similarity, release_date = _candidate_movie_score(
-        best,
-        variants,
-        target_date,
-    )
+    _, similarity, release_date = _candidate_movie_score(best, variants, target_date)
 
     if similarity < 0.70:
-        raise RuntimeError(
-            "TMDB could not confidently match this OVA by title."
-        )
+        raise RuntimeError("TMDB could not confidently match this OVA by title.")
     if (
         release_date is not None
         and target_date is not None
@@ -1042,7 +1223,6 @@ def _find_tmdb_movie(title_variants, target_date):
         )
 
     return best
-
 
 def _find_tmdb_ova_movies(title_variants, target_date, expected_episodes):
     """Resolve one TMDB movie per OVA episode using AniList alternate titles."""
@@ -1111,18 +1291,44 @@ def _find_tmdb_ova_movies(title_variants, target_date, expected_episodes):
     return selected[:expected]
 
 
+def _tmdb_result_records(payload):
+    """Return only TMDB result objects with usable positive numeric IDs."""
+    if not isinstance(payload, dict):
+        return []
+    records = payload.get("results")
+    if not isinstance(records, list):
+        return []
+    output = []
+    for candidate in records:
+        if not isinstance(candidate, dict):
+            continue
+        try:
+            candidate_id = int(candidate.get("id"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if candidate_id <= 0:
+            continue
+        normalized = dict(candidate)
+        normalized["id"] = candidate_id
+        output.append(normalized)
+    return output
+
+
+def _safe_float(value, fallback=0.0):
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    return result if math.isfinite(result) else fallback
+
+
 def _tmdb_search_movies(query, target_date):
     query = str(query or "").strip()
     if not query:
         return []
 
     def fetch(params):
-        payload = _tmdb_get("/search/movie", params)
-        return [
-            candidate
-            for candidate in (payload.get("results") or [])
-            if candidate.get("id") is not None
-        ]
+        return _tmdb_result_records(_tmdb_get("/search/movie", params))
 
     base_params = {
         "query": query,
@@ -1139,7 +1345,7 @@ def _tmdb_search_movies(query, target_date):
             "primary_release_year": target_date.year,
         })
         for candidate in year_candidates:
-            candidate_id = int(candidate["id"])
+            candidate_id = candidate["id"]
             if candidate_id not in seen_ids:
                 candidates.append(candidate)
                 seen_ids.add(candidate_id)
@@ -1148,20 +1354,34 @@ def _tmdb_search_movies(query, target_date):
     # year. Only make the broader request when the year-constrained results do
     # not contain a convincing title match.
     best_similarity = max(
-        (
-            _movie_title_similarity(candidate, [query])
-            for candidate in candidates
-        ),
+        (_movie_title_similarity(candidate, [query]) for candidate in candidates),
         default=0.0,
     )
     if best_similarity < 0.70:
         for candidate in fetch(base_params):
-            candidate_id = int(candidate["id"])
+            candidate_id = candidate["id"]
             if candidate_id not in seen_ids:
                 candidates.append(candidate)
                 seen_ids.add(candidate_id)
 
     return candidates
+
+def _valid_image_data(data):
+    """Validate downloaded/cache bytes before retaining them as artwork."""
+    if not isinstance(data, (bytes, bytearray, memoryview)) or not data:
+        return False
+    raw = bytes(data)
+    try:
+        from PySide6.QtGui import QImage
+        return not QImage.fromData(raw).isNull()
+    except Exception:
+        # If Qt's image reader is unavailable, accept only recognizable file
+        # signatures rather than caching an HTML/error response as a picture.
+        return (
+            raw.startswith(b"\xFF\xD8\xFF")
+            or raw.startswith(b"\x89PNG\r\n\x1a\n")
+            or (len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP")
+        )
 
 
 def cache_tmdb_episode_image(url, work_id, episode_number):
@@ -1184,12 +1404,21 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
 
     path = directory / f"{int(episode_number)}_{digest}{suffix}"
     if path.is_file() and path.stat().st_size > 0:
-        return str(path)
+        try:
+            cached_data = path.read_bytes()
+        except OSError:
+            cached_data = b""
+        if _valid_image_data(cached_data):
+            return str(path)
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
     response = requests.get(url, timeout=20)
     response.raise_for_status()
     data = response.content
-    if not data:
+    if not _valid_image_data(data):
         return None
 
     path.write_bytes(data)
@@ -1197,8 +1426,9 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
         return None
     return str(path)
 
-
 def _pick_best_movie_image(movie_id, movie):
+    if not isinstance(movie, dict):
+        return None, 0
     primary = _episode_still_url(movie.get("backdrop_path"))
     if primary:
         return primary, 1
@@ -1206,27 +1436,29 @@ def _pick_best_movie_image(movie_id, movie):
     try:
         payload = _tmdb_get(
             f"/movie/{int(movie_id)}/images",
-            {
-                "include_image_language": "en,null",
-            },
+            {"include_image_language": "en,null"},
         )
-    except requests.RequestException:
+    except (requests.RequestException, RuntimeError, TypeError, ValueError, OverflowError):
         return None, 0
 
-    backdrops = payload.get("backdrops") or []
+    if not isinstance(payload, dict):
+        return None, 0
+    raw_backdrops = payload.get("backdrops")
+    if not isinstance(raw_backdrops, list):
+        return None, 0
+    backdrops = [item for item in raw_backdrops if isinstance(item, dict)]
     if not backdrops:
         return None, 0
 
     backdrops.sort(
         key=lambda item: (
-            float(item.get("vote_average") or 0),
-            int(item.get("vote_count") or 0),
-            int(item.get("width") or 0),
+            _safe_float(item.get("vote_average")),
+            _safe_float(item.get("vote_count")),
+            _safe_float(item.get("width")),
         ),
         reverse=True,
     )
     return _episode_still_url(backdrops[0].get("file_path")), len(backdrops)
-
 
 def _get_tmdb_movie_episode(
     title_variants,
@@ -1311,26 +1543,53 @@ def get_tmdb_episode_data(
 
     target_start = _parse_date(start_date)
     target_end = _parse_date(end_date)
-
     if target_start is None:
         raise RuntimeError("NekoTrack needs a valid start date to match TMDB.")
 
     if tmdb_id is None:
         candidate = _find_tmdb_series(title_variants, target_start)
-        tmdb_id = int(candidate["id"])
+        tmdb_id = candidate["id"]
+    try:
+        tmdb_id = int(tmdb_id)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise RuntimeError("NekoTrack has an invalid TMDB series ID.") from error
+    if tmdb_id <= 0:
+        raise RuntimeError("NekoTrack has an invalid TMDB series ID.")
 
-    series_details = _tmdb_get(f"/tv/{int(tmdb_id)}")
+    # When the season is already mapped, skip the unnecessary series-details request.
     if tmdb_season_number is None:
+        series_details = _tmdb_get(f"/tv/{tmdb_id}")
         selected_season = _find_tmdb_season(series_details, target_start)
-        tmdb_season_number = int(selected_season["season_number"])
+        tmdb_season_number = selected_season["season_number"]
+    try:
+        tmdb_season_number = int(tmdb_season_number)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise RuntimeError("NekoTrack has an invalid TMDB season number.") from error
+    if tmdb_season_number < 0:
+        raise RuntimeError("NekoTrack has an invalid TMDB season number.")
 
     season = _tmdb_get(
-        f"/tv/{int(tmdb_id)}/season/{int(tmdb_season_number)}",
+        f"/tv/{tmdb_id}/season/{tmdb_season_number}",
         {"language": "en-US"},
     )
+    if not isinstance(season, dict):
+        raise RuntimeError("TMDB returned an invalid season payload.")
+
+    raw_episodes = season.get("episodes")
+    if not isinstance(raw_episodes, list):
+        raw_episodes = []
 
     selected = []
-    for episode in season.get("episodes") or []:
+    for episode in raw_episodes:
+        if not isinstance(episode, dict):
+            continue
+        try:
+            episode_number = int(episode.get("episode_number"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if episode_number < 1:
+            continue
+
         air_date = _parse_date(episode.get("air_date"))
         if air_date is None or air_date < target_start:
             continue
@@ -1342,11 +1601,12 @@ def get_tmdb_episode_data(
             tmdb_season_number,
             episode,
         )
-
+        name = episode.get("name")
+        overview = episode.get("overview")
         selected.append({
-            "episodeNumber": int(episode["episode_number"]),
-            "title": episode.get("name") or f"Episode {episode['episode_number']}",
-            "description": episode.get("overview") or None,
+            "episodeNumber": episode_number,
+            "title": name if isinstance(name, str) and name.strip() else f"Episode {episode_number}",
+            "description": overview if isinstance(overview, str) and overview.strip() else None,
             "airdate": air_date.isoformat(),
             "thumbnail": thumbnail,
             "episode_type": episode.get("episode_type"),
@@ -1359,18 +1619,17 @@ def get_tmdb_episode_data(
     if expected_episodes:
         try:
             expected = int(expected_episodes)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             expected = 0
         if expected > 0 and len(selected) > expected:
             selected = selected[:expected]
 
     return {
-        "tmdb_id": int(tmdb_id),
-        "tmdb_season_number": int(tmdb_season_number),
+        "tmdb_id": tmdb_id,
+        "tmdb_season_number": tmdb_season_number,
         "episodes": selected,
         "tmdb_count": len(selected),
     }
-
 
 def get_tmdb_episode_sample(
     title_variants,
