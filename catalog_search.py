@@ -102,10 +102,14 @@ def _page_info(data, page):
     info = info if isinstance(info, dict) else {}
     try:
         last_page = max(1, int(info.get("lastPage") or 1))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         last_page = 1
+    try:
+        current_page = max(1, int(page or 1))
+    except (TypeError, ValueError, OverflowError):
+        current_page = 1
     return {
-        "currentPage": int(page),
+        "currentPage": current_page,
         "lastPage": last_page,
         "hasNextPage": bool(info.get("hasNextPage")),
     }
