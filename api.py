@@ -1,5 +1,6 @@
 import datetime as _dt
 import hashlib
+import math
 import re
 import requests
 import time
@@ -751,6 +752,7 @@ def _normalize_title(value):
 
 
 def _candidate_score(candidate, title_variants, target_date):
+    candidate = candidate if isinstance(candidate, dict) else {}
     names = {
         _normalize_title(candidate.get("name")),
         _normalize_title(candidate.get("original_name")),
@@ -769,12 +771,16 @@ def _candidate_score(candidate, title_variants, target_date):
     if candidate_date and target_date:
         score -= abs((candidate_date - target_date).days) / 10
 
-    if "JP" in {str(value).upper() for value in (candidate.get("origin_country") or [])}:
+    countries = candidate.get("origin_country") or []
+    if isinstance(countries, str):
+        countries = [countries]
+    if isinstance(countries, (list, tuple, set)) and "JP" in {
+        str(value).upper() for value in countries
+    }:
         score += 20
 
-    score += min(float(candidate.get("popularity") or 0), 20)
+    score += min(max(_safe_float(candidate.get("popularity")), 0.0), 20.0)
     return score
-
 
 def _find_tmdb_series(title_variants, target_date):
     variants = [
@@ -789,65 +795,62 @@ def _find_tmdb_series(title_variants, target_date):
     year = target_date.year if target_date else None
 
     for query in variants[:6]:
-        params = {
-            "query": query,
-            "include_adult": "false",
-        }
+        params = {"query": query, "include_adult": "false"}
         if year:
             params["first_air_date_year"] = year
-
-        payload = _tmdb_get("/search/tv", params)
-        for candidate in payload.get("results") or []:
-            if candidate.get("id") is not None:
-                candidates[int(candidate["id"])] = candidate
+        for candidate in _tmdb_result_records(_tmdb_get("/search/tv", params)):
+            candidates[candidate["id"]] = candidate
 
     if not candidates:
         for query in variants[:3]:
             payload = _tmdb_get(
                 "/search/tv",
-                {
-                    "query": query,
-                    "include_adult": "false",
-                },
+                {"query": query, "include_adult": "false"},
             )
-            for candidate in payload.get("results") or []:
-                if candidate.get("id") is not None:
-                    candidates[int(candidate["id"])] = candidate
+            for candidate in _tmdb_result_records(payload):
+                candidates[candidate["id"]] = candidate
 
     if not candidates:
         raise RuntimeError("TMDB could not find a matching TV series.")
 
     return max(
         candidates.values(),
-        key=lambda candidate: _candidate_score(
-            candidate,
-            variants,
-            target_date,
-        ),
+        key=lambda candidate: _candidate_score(candidate, variants, target_date),
     )
 
-
 def _find_tmdb_season(series_details, target_date):
-    seasons = [
-        season
-        for season in (series_details.get("seasons") or [])
-        if int(season.get("season_number") or -1) >= 0
-    ]
+    if not isinstance(series_details, dict):
+        raise RuntimeError("TMDB returned an invalid TV series payload.")
+    raw_seasons = series_details.get("seasons")
+    if not isinstance(raw_seasons, list):
+        raw_seasons = []
+
+    seasons = []
+    for season in raw_seasons:
+        if not isinstance(season, dict):
+            continue
+        try:
+            season_number = int(season.get("season_number"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        # Season 0 is valid in TMDB and represents specials.
+        if season_number >= 0:
+            seasons.append({**season, "season_number": season_number})
+
     if not seasons:
         raise RuntimeError("TMDB series has no usable seasons.")
 
     def score(season):
         season_date = _parse_date(season.get("air_date"))
         if season_date is None or target_date is None:
-            return (1, 999999, int(season.get("season_number") or 0))
+            return (1, 999999, season["season_number"])
         return (
             0,
             abs((season_date - target_date).days),
-            int(season.get("season_number") or 0),
+            season["season_number"],
         )
 
     return min(seasons, key=score)
-
 
 def _episode_still_url(path):
     if not path:
@@ -856,34 +859,39 @@ def _episode_still_url(path):
 
 
 def _pick_best_episode_still(series_id, season_number, episode):
+    if not isinstance(episode, dict):
+        return None, 0
     primary = _episode_still_url(episode.get("still_path"))
     if primary:
         return primary, 1
 
     try:
+        episode_number = int(episode.get("episode_number"))
         payload = _tmdb_get(
-            f"/tv/{int(series_id)}/season/{int(season_number)}/episode/{int(episode['episode_number'])}/images",
-            {
-                "include_image_language": "en,null",
-            },
+            f"/tv/{int(series_id)}/season/{int(season_number)}/episode/{episode_number}/images",
+            {"include_image_language": "en,null"},
         )
-    except requests.RequestException:
+    except (requests.RequestException, TypeError, ValueError, OverflowError, KeyError):
         return None, 0
 
-    stills = payload.get("stills") or []
+    if not isinstance(payload, dict):
+        return None, 0
+    raw_stills = payload.get("stills")
+    if not isinstance(raw_stills, list):
+        return None, 0
+    stills = [item for item in raw_stills if isinstance(item, dict)]
     if not stills:
         return None, 0
 
     stills.sort(
         key=lambda item: (
-            float(item.get("vote_average") or 0),
-            int(item.get("vote_count") or 0),
-            int(item.get("width") or 0),
+            _safe_float(item.get("vote_average")),
+            _safe_float(item.get("vote_count")),
+            _safe_float(item.get("width")),
         ),
         reverse=True,
     )
     return _episode_still_url(stills[0].get("file_path")), len(stills)
-
 
 def _movie_title_similarity(candidate, title_variants):
     names = [
@@ -923,6 +931,7 @@ def _movie_title_similarity(candidate, title_variants):
 
 
 def _candidate_movie_score(candidate, title_variants, target_date):
+    candidate = candidate if isinstance(candidate, dict) else {}
     similarity = _movie_title_similarity(candidate, title_variants)
     score = similarity * 1000
 
@@ -930,9 +939,8 @@ def _candidate_movie_score(candidate, title_variants, target_date):
     if release_date and target_date:
         score -= abs((release_date - target_date).days) / 10
 
-    score += min(float(candidate.get("popularity") or 0), 20)
+    score += min(max(_safe_float(candidate.get("popularity")), 0.0), 20.0)
     return score, similarity, release_date
-
 
 def _find_tmdb_movie(title_variants, target_date):
     variants = [
@@ -954,11 +962,8 @@ def _find_tmdb_movie(title_variants, target_date):
         }
         if year:
             params["primary_release_year"] = year
-
-        payload = _tmdb_get("/search/movie", params)
-        for candidate in payload.get("results") or []:
-            if candidate.get("id") is not None:
-                candidates[int(candidate["id"])] = candidate
+        for candidate in _tmdb_result_records(_tmdb_get("/search/movie", params)):
+            candidates[candidate["id"]] = candidate
 
     if not candidates:
         for query in variants[:10]:
@@ -970,33 +975,22 @@ def _find_tmdb_movie(title_variants, target_date):
                     "include_video": "false",
                 },
             )
-            for candidate in payload.get("results") or []:
-                if candidate.get("id") is not None:
-                    candidates[int(candidate["id"])] = candidate
+            for candidate in _tmdb_result_records(payload):
+                candidates[candidate["id"]] = candidate
 
     if not candidates:
         raise RuntimeError("TMDB could not find a matching OVA movie.")
 
     ranked = sorted(
         candidates.values(),
-        key=lambda candidate: _candidate_movie_score(
-            candidate,
-            variants,
-            target_date,
-        ),
+        key=lambda candidate: _candidate_movie_score(candidate, variants, target_date),
         reverse=True,
     )
     best = ranked[0]
-    _, similarity, release_date = _candidate_movie_score(
-        best,
-        variants,
-        target_date,
-    )
+    _, similarity, release_date = _candidate_movie_score(best, variants, target_date)
 
     if similarity < 0.70:
-        raise RuntimeError(
-            "TMDB could not confidently match this OVA by title."
-        )
+        raise RuntimeError("TMDB could not confidently match this OVA by title.")
     if (
         release_date is not None
         and target_date is not None
@@ -1008,7 +1002,6 @@ def _find_tmdb_movie(title_variants, target_date):
         )
 
     return best
-
 
 def _find_tmdb_ova_movies(title_variants, target_date, expected_episodes):
     """Resolve one TMDB movie per OVA episode using AniList alternate titles."""
@@ -1077,18 +1070,44 @@ def _find_tmdb_ova_movies(title_variants, target_date, expected_episodes):
     return selected[:expected]
 
 
+def _tmdb_result_records(payload):
+    """Return only TMDB result objects with usable positive numeric IDs."""
+    if not isinstance(payload, dict):
+        return []
+    records = payload.get("results")
+    if not isinstance(records, list):
+        return []
+    output = []
+    for candidate in records:
+        if not isinstance(candidate, dict):
+            continue
+        try:
+            candidate_id = int(candidate.get("id"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if candidate_id <= 0:
+            continue
+        normalized = dict(candidate)
+        normalized["id"] = candidate_id
+        output.append(normalized)
+    return output
+
+
+def _safe_float(value, fallback=0.0):
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    return result if math.isfinite(result) else fallback
+
+
 def _tmdb_search_movies(query, target_date):
     query = str(query or "").strip()
     if not query:
         return []
 
     def fetch(params):
-        payload = _tmdb_get("/search/movie", params)
-        return [
-            candidate
-            for candidate in (payload.get("results") or [])
-            if candidate.get("id") is not None
-        ]
+        return _tmdb_result_records(_tmdb_get("/search/movie", params))
 
     base_params = {
         "query": query,
@@ -1105,7 +1124,7 @@ def _tmdb_search_movies(query, target_date):
             "primary_release_year": target_date.year,
         })
         for candidate in year_candidates:
-            candidate_id = int(candidate["id"])
+            candidate_id = candidate["id"]
             if candidate_id not in seen_ids:
                 candidates.append(candidate)
                 seen_ids.add(candidate_id)
@@ -1114,21 +1133,17 @@ def _tmdb_search_movies(query, target_date):
     # year. Only make the broader request when the year-constrained results do
     # not contain a convincing title match.
     best_similarity = max(
-        (
-            _movie_title_similarity(candidate, [query])
-            for candidate in candidates
-        ),
+        (_movie_title_similarity(candidate, [query]) for candidate in candidates),
         default=0.0,
     )
     if best_similarity < 0.70:
         for candidate in fetch(base_params):
-            candidate_id = int(candidate["id"])
+            candidate_id = candidate["id"]
             if candidate_id not in seen_ids:
                 candidates.append(candidate)
                 seen_ids.add(candidate_id)
 
     return candidates
-
 
 def cache_tmdb_episode_image(url, work_id, episode_number):
     """Download one TMDB episode image into NekoTrack's persistent cache."""
@@ -1277,26 +1292,53 @@ def get_tmdb_episode_data(
 
     target_start = _parse_date(start_date)
     target_end = _parse_date(end_date)
-
     if target_start is None:
         raise RuntimeError("NekoTrack needs a valid start date to match TMDB.")
 
     if tmdb_id is None:
         candidate = _find_tmdb_series(title_variants, target_start)
-        tmdb_id = int(candidate["id"])
+        tmdb_id = candidate["id"]
+    try:
+        tmdb_id = int(tmdb_id)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise RuntimeError("NekoTrack has an invalid TMDB series ID.") from error
+    if tmdb_id <= 0:
+        raise RuntimeError("NekoTrack has an invalid TMDB series ID.")
 
-    series_details = _tmdb_get(f"/tv/{int(tmdb_id)}")
+    # When the season is already mapped, skip the unnecessary series-details request.
     if tmdb_season_number is None:
+        series_details = _tmdb_get(f"/tv/{tmdb_id}")
         selected_season = _find_tmdb_season(series_details, target_start)
-        tmdb_season_number = int(selected_season["season_number"])
+        tmdb_season_number = selected_season["season_number"]
+    try:
+        tmdb_season_number = int(tmdb_season_number)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise RuntimeError("NekoTrack has an invalid TMDB season number.") from error
+    if tmdb_season_number < 0:
+        raise RuntimeError("NekoTrack has an invalid TMDB season number.")
 
     season = _tmdb_get(
-        f"/tv/{int(tmdb_id)}/season/{int(tmdb_season_number)}",
+        f"/tv/{tmdb_id}/season/{tmdb_season_number}",
         {"language": "en-US"},
     )
+    if not isinstance(season, dict):
+        raise RuntimeError("TMDB returned an invalid season payload.")
+
+    raw_episodes = season.get("episodes")
+    if not isinstance(raw_episodes, list):
+        raw_episodes = []
 
     selected = []
-    for episode in season.get("episodes") or []:
+    for episode in raw_episodes:
+        if not isinstance(episode, dict):
+            continue
+        try:
+            episode_number = int(episode.get("episode_number"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if episode_number < 1:
+            continue
+
         air_date = _parse_date(episode.get("air_date"))
         if air_date is None or air_date < target_start:
             continue
@@ -1308,11 +1350,12 @@ def get_tmdb_episode_data(
             tmdb_season_number,
             episode,
         )
-
+        name = episode.get("name")
+        overview = episode.get("overview")
         selected.append({
-            "episodeNumber": int(episode["episode_number"]),
-            "title": episode.get("name") or f"Episode {episode['episode_number']}",
-            "description": episode.get("overview") or None,
+            "episodeNumber": episode_number,
+            "title": name if isinstance(name, str) and name.strip() else f"Episode {episode_number}",
+            "description": overview if isinstance(overview, str) and overview.strip() else None,
             "airdate": air_date.isoformat(),
             "thumbnail": thumbnail,
             "episode_type": episode.get("episode_type"),
@@ -1325,18 +1368,17 @@ def get_tmdb_episode_data(
     if expected_episodes:
         try:
             expected = int(expected_episodes)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             expected = 0
         if expected > 0 and len(selected) > expected:
             selected = selected[:expected]
 
     return {
-        "tmdb_id": int(tmdb_id),
-        "tmdb_season_number": int(tmdb_season_number),
+        "tmdb_id": tmdb_id,
+        "tmdb_season_number": tmdb_season_number,
         "episodes": selected,
         "tmdb_count": len(selected),
     }
-
 
 def get_tmdb_episode_sample(
     title_variants,
