@@ -80,6 +80,48 @@ class ThemePresetCard(QFrame):
         text.addStretch(1)
         layout.addLayout(text, 1)
 
+    def refresh_theme(self, selected=False):
+        # Apply these colors directly to the card, instead of relying only on
+        # the parent page's selector rules. This prevents stale custom colors
+        # and dynamic-property styling from leaving a blue outline behind.
+        background = COLORS["accent_soft"] if selected else COLORS["card"]
+        border = (
+            f"2px solid {COLORS['accent']}"
+            if selected
+            else f"1px solid {COLORS['frame']}"
+        )
+        hover_background = (
+            COLORS["accent_soft"] if selected else COLORS["card_hover"]
+        )
+        self.setStyleSheet(
+            f"""
+            QFrame#themePresetCard {{
+                background:{background};
+                border:{border};
+                border-radius:12px;
+            }}
+            QFrame#themePresetCard:hover {{
+                background:{hover_background};
+                border:2px solid {COLORS['accent']};
+            }}
+            QLabel#themePresetTitle {{
+                color:{COLORS['primary']};
+                font-size:13px;
+                font-weight:800;
+                background:transparent;
+            }}
+            QLabel#themePresetDescription {{
+                color:{COLORS['muted']};
+                font-size:10px;
+                background:transparent;
+            }}
+            """
+        )
+        style = self.style()
+        style.unpolish(self)
+        style.polish(self)
+        self.update()
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.clicked.emit(self.name)
@@ -253,19 +295,67 @@ class SettingsPage(QWidget):
         scroll.setWidget(content)
         outer.addWidget(scroll)
 
-        self._apply_page_style()
+        self.refresh_theme()
 
     def refresh_theme(self):
         self._apply_page_style()
         current = str(get("theme_preset") or "Neko")
         for name, card in getattr(self, "theme_cards", {}).items():
-            card.setProperty("selected", name == current)
-            card.style().unpolish(card)
-            card.style().polish(card)
-            card.update()
+            selected = name == current
+            card.setProperty("selected", selected)
+            card.refresh_theme(selected)
 
-        # Re-polish descendants as well: Qt can retain the previous rendered
-        # colors for labels and frames whose rules come from this page's QSS.
+        # Give section headers and action buttons explicit theme colors. These
+        # were previously inherited from the page stylesheet, which could
+        # retain the old custom accent color after a preset switch.
+        for label in self.findChildren(QLabel):
+            if label.objectName() == "settingsSectionTitle":
+                label.setStyleSheet(
+                    f"color:{COLORS['accent']};font-size:10px;"
+                    "font-weight:900;letter-spacing:1.4px;"
+                    "background:transparent;"
+                )
+
+        for button in self.findChildren(QPushButton):
+            if button.objectName() == "settingsAction":
+                button.setStyleSheet(
+                    f"""
+                    QPushButton#settingsAction {{
+                        background:{COLORS['accent']};
+                        border:1px solid {COLORS['accent']};
+                        border-radius:9px;
+                        color:{COLORS['accent_text']};
+                        font-weight:800;
+                        padding:9px 14px;
+                        min-height:38px;
+                    }}
+                    QPushButton#settingsAction:hover {{
+                        background:{COLORS['accent_hover']};
+                        border-color:{COLORS['accent_hover']};
+                    }}
+                    """
+                )
+            elif button.objectName() == "settingsSecondaryAction":
+                button.setStyleSheet(
+                    f"""
+                    QPushButton#settingsSecondaryAction {{
+                        background:{COLORS['surface_alt']};
+                        border:1px solid {COLORS['frame']};
+                        border-radius:9px;
+                        color:{COLORS['secondary']};
+                        font-weight:700;
+                        padding:9px 14px;
+                        min-height:38px;
+                    }}
+                    QPushButton#settingsSecondaryAction:hover {{
+                        background:{COLORS['surface_hover']};
+                        color:{COLORS['primary']};
+                    }}
+                    """
+                )
+
+        # Re-polish the updated widgets so Qt discards cached style metrics and
+        # colors immediately, not just the next time the page is recreated.
         for widget in self.findChildren(QWidget):
             style = widget.style()
             style.unpolish(widget)
