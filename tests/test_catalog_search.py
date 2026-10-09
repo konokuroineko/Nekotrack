@@ -81,3 +81,43 @@ class CombinedCatalogSearchTests(unittest.TestCase):
         )
         self.assertEqual([row["id"] for row in result["media"]], [100])
         search_mb.assert_not_called()
+
+    @patch("catalog_search.enrich_anilist_results")
+    @patch("catalog_search.search_mangabaka_media")
+    @patch("catalog_search.search_anime")
+    def test_malformed_attached_provider_payload_does_not_crash_provider_filter(
+        self, search_anilist, search_mb, enrich
+    ):
+        malformed = anime_item(100, "Malformed linked work")
+        malformed["_mangabaka"] = ["unexpected", "provider", "payload"]
+        search_anilist.return_value = {
+            "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+            "media": [malformed],
+        }
+        search_mb.return_value = {
+            "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+            "media": [mb_item(9, "Matching provider row")],
+        }
+
+        result = catalog_search.search_combined_media(
+            "", 1, None, None, {"publisher_id": "5"}
+        )
+        self.assertEqual(result["media"], [])
+
+    @patch("catalog_search.search_anime")
+    def test_invalid_page_and_malformed_pagination_fall_back_safely(self, search_anilist):
+        search_anilist.return_value = {
+            "pageInfo": {
+                "currentPage": "bad",
+                "lastPage": float("inf"),
+                "hasNextPage": "false",
+            },
+            "media": [anime_item(100, "Valid work")],
+        }
+        result = catalog_search.search_combined_media(
+            "", float("inf"), "ANIME", None, {}
+        )
+        self.assertEqual(result["pageInfo"]["currentPage"], 1)
+        self.assertEqual(result["pageInfo"]["lastPage"], 1)
+        self.assertFalse(result["pageInfo"]["hasNextPage"])
+
