@@ -1,6 +1,8 @@
 """Search AniList and MangaBaka together and normalize their results."""
 from __future__ import annotations
 
+from datetime import date as _date
+
 from api import search_anime
 from mangabaka_api import enrich_anilist_results, search_media as search_mangabaka_media
 
@@ -25,9 +27,10 @@ def _provider_id(item):
 
 def _media_id(item):
     try:
-        return int(item.get("id"))
-    except (AttributeError, TypeError, ValueError):
+        media_id = int(item.get("id"))
+    except (AttributeError, TypeError, ValueError, OverflowError):
         return None
+    return media_id
 
 
 def _title(item):
@@ -42,8 +45,12 @@ def _date_parts(item):
     if not isinstance(value, dict):
         return None
     try:
-        return int(value.get("year")), int(value.get("month") or 1), int(value.get("day") or 1)
-    except (TypeError, ValueError):
+        year = int(value.get("year"))
+        month = int(value.get("month") or 1)
+        day = int(value.get("day") or 1)
+        _date(year, month, day)
+        return year, month, day
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -51,7 +58,7 @@ def _score(item):
     try:
         value = float(item.get("averageScore"))
         return value if 0 <= value <= 100 else -1.0
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return -1.0
 
 
