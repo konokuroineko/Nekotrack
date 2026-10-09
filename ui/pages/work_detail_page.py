@@ -1685,11 +1685,6 @@ class WorkDetailPage(QWidget):
             and selected_id not in self._episode_sync_completed
             and selected_id not in self._episode_sync_errors
         ):
-            local_mal_id = (
-                selected_work["mal_id"]
-                if selected_work is not None and "mal_id" in selected_work.keys()
-                else None
-            )
             (
                 title_variants,
                 start_date,
@@ -2057,39 +2052,7 @@ class WorkDetailPage(QWidget):
         members = self._value("_series_members") or []
         ids = []
 
-        for member in members:
-            try:
-                work_id = int(member["id"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if work_id not in ids:
-                ids.append(work_id)
-
-        if ids:
-            return ids
-
-        work_id = self._value("id")
-        try:
-            return [int(work_id)] if work_id is not None else []
-        except (TypeError, ValueError):
-            return []
-
-    def _detail_relations(self, work_ids=None):
-        """Merge relations from represented works and hide internal bundle links."""
-        ids = self._detail_work_ids() if work_ids is None else list(work_ids)
-        if not ids:
-            return []
-
-        internal_ids = {int(work_id) for work_id in ids}
-        return [
-            relation
-            for relation in get_relations(ids)
-            if int(relation["target_id"]) not in internal_ids
-        ]
-
-    def _detail_section_frame_stylesheet(self):
-        return (
-            f"QFrame#charactersSection {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
+        for memberpx; }}"
             f" QFrame#section {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
         )
 
@@ -2143,9 +2106,6 @@ class WorkDetailPage(QWidget):
 
         lay.addWidget(container)
         return frame
-
-    def _relations(self):
-        return self._grid_section("Relations", get_relations(self._value("id")), RelationCard, self.relation_selected, 6)
 
     @staticmethod
     def _member_release_date(member):
