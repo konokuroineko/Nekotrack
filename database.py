@@ -717,7 +717,26 @@ def get_provider_metadata(work_id, provider="mangabaka"):
         payload = json.loads(row["payload_json"])
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
-    return payload if isinstance(payload, dict) else None
+    return payload if isinstance(payload, (dict, list)) else None
+
+
+def save_provider_metadata(work_id, provider, payload, provider_id=None):
+    """Persist an unmodified provider payload, including auxiliary endpoint results."""
+    connection = get_connection()
+    connection.execute("""
+        INSERT INTO work_provider_metadata (work_id, provider, provider_id, payload_json, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(work_id, provider) DO UPDATE SET
+            provider_id = COALESCE(excluded.provider_id, work_provider_metadata.provider_id),
+            payload_json = excluded.payload_json,
+            updated_at = CURRENT_TIMESTAMP
+    """, (
+        int(work_id), str(provider).lower(),
+        str(provider_id) if provider_id is not None else None,
+        json.dumps(payload, ensure_ascii=False),
+    ))
+    connection.commit()
+    connection.close()
 
 
 def save_reading_item_metadata(work_id, item_type, items):
