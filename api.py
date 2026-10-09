@@ -96,6 +96,9 @@ def anilist_request(query, variables=None):
             if "data" not in data:
                 raise Exception("AniList returned a response without a data field.")
 
+            if not isinstance(data["data"], dict):
+                raise Exception("AniList returned an invalid data payload (expected an object).")
+
             return data["data"]
 
         except (
