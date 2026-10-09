@@ -944,8 +944,13 @@ class SearchPage(QWidget):
             style.polish(self.search_frame)
             self.search_frame.update()
 
+        # The search input installs this filter before results_scroll is
+        # created. Qt can dispatch events during input initialization, so
+        # guard against accessing the results widgets too early.
+        results_scroll = getattr(self, "results_scroll", None)
         if (
-            watched is self.results_scroll.viewport()
+            results_scroll is not None
+            and watched is results_scroll.viewport()
             and event.type() == QEvent.Type.Resize
             and self._result_cards()
         ):
