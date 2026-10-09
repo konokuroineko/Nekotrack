@@ -400,7 +400,7 @@ def normalize_series(series, preferred_id=None):
         "format": media_format,
         "episodes": None,
         "chapters": _count_or_none(series.get("total_chapters", series.get("chapters"))),
-        "volumes": _count_or_none(series.get("final_volume", series.get("total_volumes", series.get("volumes"))),
+        "volumes": _count_or_none(series.get("final_volume", series.get("total_volumes", series.get("volumes")))),
         "averageScore": rating,
         "startDate": _date_parts(series),
         "endDate": {"year": None, "month": None, "day": None},
