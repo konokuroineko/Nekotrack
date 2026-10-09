@@ -315,23 +315,27 @@ def _safe_integer(key, value, default):
     return parsed
 
 
+def _safe_boolean(value, default):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in ("1", "true", "yes", "on"):
+            return True
+        if normalized in ("0", "false", "no", "off", ""):
+            return False
+        return default
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    return default
+
+
 def get(key):
     default = _DEFAULTS[key]
     value = settings().value(key, default)
 
     if isinstance(default, bool):
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            normalized = value.strip().casefold()
-            if normalized in ("1", "true", "yes", "on"):
-                return True
-            if normalized in ("0", "false", "no", "off", ""):
-                return False
-            return default
-        if isinstance(value, (int, float)) and value in (0, 1):
-            return bool(value)
-        return default
+        return _safe_boolean(value, default)
 
     if isinstance(default, int):
         return _safe_integer(key, value, default)
@@ -346,12 +350,8 @@ def set_value(key, value):
     default = _DEFAULTS.get(key)
     if isinstance(default, int) and not isinstance(default, bool):
         value = _safe_integer(key, value, default)
-    elif isinstance(default, bool) and not isinstance(value, bool):
-        value = get(key) if not isinstance(value, (str, int, float)) else (
-            str(value).strip().casefold() in ("1", "true", "yes", "on")
-            if isinstance(value, str)
-            else bool(value) if value in (0, 1) else default
-        )
+    elif isinstance(default, bool):
+        value = _safe_boolean(value, default)
     elif isinstance(default, str) and not isinstance(value, str):
         value = default
     qsettings = settings()
