@@ -4,6 +4,7 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QThread, Qt, Signal, QTimer,
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from api import get_media_by_anilist_url, parse_anilist_url, search_anime
+from mangabaka import search_reading_catalog
 from series import group_media_results
 from ui.preferences import get
 from ui.theme import COLORS
@@ -117,14 +118,23 @@ class SearchWorker(QObject):
                 )
                 return
 
-            data = search_anime(
-                self.search_text,
-                self.page,
-                media_type=self.media_type,
-                media_format=self.media_format,
-                include_relations=self.include_relations,
-                **self.filters,
-            )
+            if self.media_type == "MANGA":
+                data = search_reading_catalog(
+                    self.search_text,
+                    self.page,
+                    media_format=self.media_format,
+                    filters=self.filters,
+                    include_relations=self.include_relations,
+                )
+            else:
+                data = search_anime(
+                    self.search_text,
+                    self.page,
+                    media_type=self.media_type,
+                    media_format=self.media_format,
+                    include_relations=self.include_relations,
+                    **self.filters,
+                )
             self.finished.emit(data)
         except Exception as error:
             self.error.emit(str(error))
@@ -209,7 +219,7 @@ class SearchPage(QWidget):
         heading = QLabel("Discover")
         heading.setObjectName("searchPageHeading")
         heading.setStyleSheet(f"font-size: 34px; font-weight: 850; color: {COLORS['primary']};")
-        sub = QLabel("Search the AniList catalog and build your library.")
+        sub = QLabel("Search AniList for anime and MangaBaka + AniList for manga and novels.")
         sub.setObjectName("searchPageSubtitle")
         sub.setStyleSheet(f"font-size: 12px; color: {COLORS['muted']};")
         intro.addWidget(heading)
@@ -286,7 +296,7 @@ class SearchPage(QWidget):
         self.tag_filter.setFixedHeight(38)
 
         self.fast_search = QCheckBox("Fast Search")
-        self.fast_search.setToolTip("Skip series and bundle enrichment. Results are shown directly from AniList.")
+        self.fast_search.setToolTip("Skip series and bundle enrichment. Results are shown directly from the selected catalogs.")
         self.fast_search.setCursor(Qt.PointingHandCursor)
         self.fast_search.stateChanged.connect(self.fast_search_changed)
         if self.selection_mode:
@@ -495,7 +505,8 @@ class SearchPage(QWidget):
 
         self._clear_results()
         self._append_skeletons(20)
-        self.results_title.setText("Browsing AniList" if not text else f"Searching for \"{text}\"")
+        source = "MangaBaka + AniList" if self.current_media_type == "MANGA" else "AniList"
+        self.results_title.setText(f"Browsing {source}" if not text else f"Searching {source} for \"{text}\"")
         self._start_search(1)
 
     def load_more_results(self):
