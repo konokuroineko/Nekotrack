@@ -1,0 +1,41 @@
+name: Python checks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
+      - name: Check unused and undefined names
+        run: ruff check --select F .
+      - name: Compile Python modules
+        run: python -m compileall -q main.py api.py database.py debug_bundle.py debug_tv_bundle.py image_cache.py series.py updater.py ui tests
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v

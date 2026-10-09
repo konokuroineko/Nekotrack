@@ -3,7 +3,7 @@ import re
 import time
 
 from api import get_media_details, get_media_relations_batch
-from database import get_all_library, get_bundle_override, get_bundle_exclusions, get_connection, get_manual_bundle_links, get_work, save_anime
+from database import get_all_library, get_bundle_override, get_bundle_exclusions, get_connection, get_manual_bundle_links, save_anime
 from ui.preferences import get
 
 

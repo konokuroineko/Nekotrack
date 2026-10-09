@@ -11,7 +11,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout,
     QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
-    QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
+    QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 )
 
 from database import (
@@ -20,7 +20,7 @@ from database import (
     get_tmdb_mapping,
     get_work, save_anime, save_characters, save_cover_path, save_episode_thumbnail_path,
     save_episodes, save_staff,
-    save_tmdb_mapping, save_work_mal_id, set_episode_progress, set_episode_watched,
+    save_tmdb_mapping, set_episode_watched,
 )
 from series import get_library_series
 from ui.preferences import get
@@ -565,6 +565,28 @@ class WorkDetailPage(QWidget):
 
     def _detail_cache_key(self, work_ids):
         return tuple(int(work_id) for work_id in work_ids)
+
+    def _detail_work_ids(self):
+        """Return each distinct work ID represented by this detail page."""
+        members = self._value("_series_members") or []
+        ids = []
+
+        for member in members:
+            try:
+                work_id = int(member["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if work_id not in ids:
+                ids.append(work_id)
+
+        if ids:
+            return ids
+
+        work_id = self._value("id")
+        try:
+            return [int(work_id)] if work_id is not None else []
+        except (TypeError, ValueError):
+            return []
 
     def _prepare_detail_state(self, work):
         self.work = work
@@ -1685,11 +1707,6 @@ class WorkDetailPage(QWidget):
             and selected_id not in self._episode_sync_completed
             and selected_id not in self._episode_sync_errors
         ):
-            local_mal_id = (
-                selected_work["mal_id"]
-                if selected_work is not None and "mal_id" in selected_work.keys()
-                else None
-            )
             (
                 title_variants,
                 start_date,
@@ -2052,41 +2069,6 @@ class WorkDetailPage(QWidget):
                     break
             return
 
-    def _detail_work_ids(self):
-        """Return every work ID represented by this detail page."""
-        members = self._value("_series_members") or []
-        ids = []
-
-        for member in members:
-            try:
-                work_id = int(member["id"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if work_id not in ids:
-                ids.append(work_id)
-
-        if ids:
-            return ids
-
-        work_id = self._value("id")
-        try:
-            return [int(work_id)] if work_id is not None else []
-        except (TypeError, ValueError):
-            return []
-
-    def _detail_relations(self, work_ids=None):
-        """Merge relations from represented works and hide internal bundle links."""
-        ids = self._detail_work_ids() if work_ids is None else list(work_ids)
-        if not ids:
-            return []
-
-        internal_ids = {int(work_id) for work_id in ids}
-        return [
-            relation
-            for relation in get_relations(ids)
-            if int(relation["target_id"]) not in internal_ids
-        ]
-
     def _detail_section_frame_stylesheet(self):
         return (
             f"QFrame#charactersSection {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
@@ -2143,9 +2125,6 @@ class WorkDetailPage(QWidget):
 
         lay.addWidget(container)
         return frame
-
-    def _relations(self):
-        return self._grid_section("Relations", get_relations(self._value("id")), RelationCard, self.relation_selected, 6)
 
     @staticmethod
     def _member_release_date(member):

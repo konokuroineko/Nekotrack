@@ -55,31 +55,42 @@ class BundleAppearanceTests(unittest.TestCase):
                 os.chdir(old_cwd)
 
     def test_search_bundle_keeps_match_identity_but_uses_earliest_presentation(self):
-        later = {
-            "id": 3,
-            "type": "ANIME",
-            "format": "TV",
-            "title": {"romaji": "Example 3", "english": None, "native": None},
-            "coverImage": {"large": "https://example.test/third.jpg"},
-            "startDate": {"year": 2022, "month": 1, "day": 1},
-        }
-        earliest = {
-            "id": 1,
-            "type": "ANIME",
-            "format": "TV",
-            "title": {"romaji": "Example 1", "english": None, "native": None},
-            "coverImage": {"large": "https://example.test/first.jpg"},
-            "startDate": {"year": 2020, "month": 1, "day": 1},
-        }
+        # _group_discovered also checks persisted manual bundle links and
+        # exclusions. Give it an isolated database so this test is independent
+        # of whichever working directory or local database ran it previously.
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
 
-        grouped = series._group_discovered([later], [later, earliest])
-        self.assertEqual(len(grouped), 1)
-        self.assertEqual(grouped[0]["id"], 3)
-        self.assertEqual(grouped[0]["title"]["romaji"], "Example 1")
-        self.assertEqual(
-            grouped[0]["coverImage"]["large"],
-            "https://example.test/first.jpg",
-        )
+                later = {
+                    "id": 3,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "title": {"romaji": "Example 3", "english": None, "native": None},
+                    "coverImage": {"large": "https://example.test/third.jpg"},
+                    "startDate": {"year": 2022, "month": 1, "day": 1},
+                }
+                earliest = {
+                    "id": 1,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "title": {"romaji": "Example 1", "english": None, "native": None},
+                    "coverImage": {"large": "https://example.test/first.jpg"},
+                    "startDate": {"year": 2020, "month": 1, "day": 1},
+                }
+
+                grouped = series._group_discovered([later], [later, earliest])
+                self.assertEqual(len(grouped), 1)
+                self.assertEqual(grouped[0]["id"], 3)
+                self.assertEqual(grouped[0]["title"]["romaji"], "Example 1")
+                self.assertEqual(
+                    grouped[0]["coverImage"]["large"],
+                    "https://example.test/first.jpg",
+                )
+            finally:
+                os.chdir(old_cwd)
 
 
 if __name__ == "__main__":
