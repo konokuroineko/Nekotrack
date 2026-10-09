@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QFont, QFontMetrics
@@ -352,7 +353,27 @@ class WorkCard(QFrame):
     def _title(self):
         title = self._value("title")
         if isinstance(title, dict):
-            title = title.get("english") or title.get("romaji") or title.get("native")
+            english = title.get("english")
+            romanized = title.get("romaji")
+            raw = self._value("_mangabaka")
+            if isinstance(raw, dict):
+                # MangaBaka may contain multiple works with the same English
+                # display name (for example alternate routes/IF novels). Make
+                # the canonical romanized title visible on cards as a
+                # disambiguator rather than burying it in the detail page.
+                for record in raw.get("titles") or []:
+                    if not isinstance(record, dict):
+                        continue
+                    language = str(record.get("language") or "").lower()
+                    if language == "ja-latn" and record.get("title"):
+                        romanized = record["title"]
+                        if record.get("is_primary"):
+                            break
+                def key(value):
+                    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+                if english and romanized and key(english) != key(romanized):
+                    return f"{english} — {romanized}"
+            title = english or romanized or title.get("native")
         if title:
             return str(title)
         fallback = self._fallback_member()
