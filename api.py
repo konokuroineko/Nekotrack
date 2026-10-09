@@ -550,38 +550,107 @@ def get_media_relations_batch(media_ids):
 
 
 def get_media_episodes(media_id):
-    """Fetch and normalize an AniList airing schedule into local episode rows."""
+    """Fetch all available AniList airing-schedule pages as local episode rows."""
     query = """
-    query ($id: Int) {
+    query ($id: Int, $page: Int) {
         Media(id: $id) {
-            airingSchedule(perPage: 50) {
+            airingSchedule(page: $page, perPage: 50) {
                 nodes {
                     airingAt
                     episode
+                }
+                pageInfo {
+                    currentPage
+                    lastPage
+                    hasNextPage
                 }
             }
         }
     }
     """
-    data = anilist_request(query, {"id": media_id})
-    schedule = ((data.get("Media") or {}).get("airingSchedule") or {}).get("nodes") or []
+
+    data = anilist_request(query, {"id": media_id, "page": 1})
+    media = data.get("Media") if isinstance(data, dict) else None
+    connection = media.get("airingSchedule") if isinstance(media, dict) else None
+    if not isinstance(connection, dict):
+        return []
+
+    def safe_page(value, fallback=1):
+        try:
+            result = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+        return result if result >= 1 else fallback
+
+    def clean_nodes(value):
+        return value if isinstance(value, list) else []
+
+    schedule = []
+    seen_episodes = set()
+    raw_nodes = clean_nodes(connection.get("nodes"))
+    page_info = connection.get("pageInfo")
+    if not isinstance(page_info, dict):
+        page_info = {}
+    page = safe_page(page_info.get("currentPage"))
+    max_page = min(safe_page(page_info.get("lastPage"), 100), 100)
+
+    def append_nodes(nodes):
+        added = 0
+        for node in clean_nodes(nodes):
+            if not isinstance(node, dict):
+                continue
+            try:
+                episode_number = int(node.get("episode"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if episode_number < 1 or episode_number in seen_episodes:
+                continue
+            seen_episodes.add(episode_number)
+            schedule.append(node)
+            added += 1
+        return added
+
+    append_nodes(raw_nodes)
+    while page_info.get("hasNextPage") is True and page < max_page:
+        requested_page = page + 1
+        page_data = anilist_request(query, {"id": media_id, "page": requested_page})
+        page_media = page_data.get("Media") if isinstance(page_data, dict) else None
+        connection = page_media.get("airingSchedule") if isinstance(page_media, dict) else None
+        if not isinstance(connection, dict):
+            break
+        previous_count = len(schedule)
+        append_nodes(connection.get("nodes"))
+        page_info = connection.get("pageInfo")
+        if not isinstance(page_info, dict):
+            page_info = {}
+        page = requested_page
+        if len(schedule) == previous_count:
+            break
 
     import datetime
 
-    return [
-        {
-            "episodeNumber": node.get("episode"),
-            "title": f"Episode {node.get('episode')}",
+    output = []
+    for node in sorted(schedule, key=lambda item: safe_page(item.get("episode"), 10**9)):
+        try:
+            episode_number = int(node.get("episode"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+
+        airdate = None
+        airing_at = node.get("airingAt")
+        if airing_at is not None:
+            try:
+                airdate = datetime.datetime.fromtimestamp(int(airing_at)).strftime("%Y-%m-%d")
+            except (TypeError, ValueError, OverflowError, OSError):
+                airdate = None
+
+        output.append({
+            "episodeNumber": episode_number,
+            "title": f"Episode {episode_number}",
             "description": None,
-            "airdate": (
-                datetime.datetime.fromtimestamp(int(node["airingAt"])).strftime("%Y-%m-%d")
-                if node.get("airingAt") is not None
-                else None
-            ),
-        }
-        for node in schedule
-        if node.get("episode") is not None
-    ]
+            "airdate": airdate,
+        })
+    return output
 
 
 def get_media_details(media_id):
