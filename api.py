@@ -217,6 +217,7 @@ def parse_anilist_url(value):
         parsed = urlparse(text)
         hostname = (parsed.hostname or "").lower()
         path = parsed.path
+        parsed.port  # Accessing this validates malformed and out-of-range ports.
     except ValueError:
         return None
 
