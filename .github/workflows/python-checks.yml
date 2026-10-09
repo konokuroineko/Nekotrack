@@ -38,6 +38,8 @@ jobs:
       - name: Generate Windows application icon
         run: python installer/generate_icon.py
       - name: Compile Python modules
-        run: python -m compileall -q main.py api.py mangabaka_api.py database.py debug_bundle.py debug_tv_bundle.py image_cache.py series.py updater.py ui tests
+        run: python -m compileall -q main.py api.py mangabaka_api.py database.py debug_bundle.py debug_tv_bundle.py image_cache.py series.py updater.py stress_test.py ui tests
       - name: Run regression tests
         run: python -m unittest discover -s tests -v
+      - name: Smoke-test adversarial stress harness
+        run: python stress_test.py --seconds 1 --seed 17 --report "${{ runner.temp }}/nekotrack-stress-smoke.json"
