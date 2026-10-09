@@ -46,13 +46,19 @@ def _title(item):
 
 
 def _date_parts(item):
+    if not isinstance(item, dict):
+        return None
     value = item.get("startDate") or {}
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or value.get("year") in (None, ""):
         return None
     try:
-        return int(value.get("year")), int(value.get("month") or 1), int(value.get("day") or 1)
-    except (TypeError, ValueError):
+        year = int(value["year"])
+        month = 1 if value.get("month") in (None, "") else int(value["month"])
+        day = 1 if value.get("day") in (None, "") else int(value["day"])
+        date(year, month, day)
+    except (TypeError, ValueError, OverflowError):
         return None
+    return year, month, day
 
 
 def _score(item):
