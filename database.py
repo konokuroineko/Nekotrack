@@ -1048,68 +1048,6 @@ def clear_bundle_override(work_ids):
     return cursor.rowcount > 0
 
 
-def get_all_relation_cards(relation_type=None, source_id=None):
-    """Return stored relations with both sides populated for the Relations explorer."""
-    connection = get_connection()
-    clauses = []
-    params = []
-    if relation_type and relation_type != "All":
-        clauses.append("work_relations.relation_type = ?")
-        params.append(relation_type)
-    if source_id is not None:
-        clauses.append("work_relations.source_id = ?")
-        params.append(source_id)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    results = connection.execute(f"""
-        SELECT work_relations.source_id,
-               source.title AS source_title,
-               work_relations.target_id,
-               target.title AS title,
-               target.format,
-               target.type,
-               target.cover_url,
-               target.cover_path,
-               work_relations.relation_type
-        FROM work_relations
-        LEFT JOIN works AS source ON source.id = work_relations.source_id
-        LEFT JOIN works AS target ON target.id = work_relations.target_id
-        {where}
-        ORDER BY work_relations.relation_type, source.title, target.title
-    """, params).fetchall()
-    connection.close()
-    return results
-
-
-def get_relation_type_counts():
-    connection = get_connection()
-    results = connection.execute("""
-        SELECT relation_type, COUNT(*) AS count
-        FROM work_relations
-        GROUP BY relation_type
-        ORDER BY count DESC, relation_type
-    """).fetchall()
-    connection.close()
-    return results
-
-
-def get_library_relation_sync_ids():
-    """Return library works that have not contributed any stored relation edge yet."""
-    connection = get_connection()
-    results = connection.execute("""
-        SELECT works.id
-        FROM works
-        JOIN user_library ON user_library.work_id = works.id
-        WHERE NOT EXISTS (
-            SELECT 1 FROM work_relations
-            WHERE work_relations.source_id = works.id
-               OR work_relations.target_id = works.id
-        )
-        ORDER BY works.id
-    """).fetchall()
-    connection.close()
-    return [int(row["id"]) for row in results]
-
-
 def add_to_library(work_id, status="Planning"):
     connection = get_connection()
     connection.execute("""
