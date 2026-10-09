@@ -1,8 +1,8 @@
 # NekoTrack
 
-Your personal anime & manga tracker.
+Your personal anime, manga, and novel tracker.
 
-Track what you watch and read, explore characters and staff, manage your library, and keep your collection organized — all from a clean desktop app.
+Track what you watch and read, manage your library, and keep your collection organized — all from a desktop app.
 
 ## Features
 
@@ -12,14 +12,14 @@ Track what you watch and read, explore characters and staff, manage your library
 - Add works to your personal library
 - Episode progress and watched-state tracking
 - Local cover caching
-- Work relationships and franchise connections
-- Character and voice-actor data model
-- Staff data model
+- Work relationships and franchise connections shown in work details
+- Character, voice-actor, and staff information shown in work details
+- Character, staff, studio, alternate-title, episode, and song data models
 - Studio data model
 - Alternate titles
 - Episode data model
 - Song/music data model
-- Work detail, character, person, and relationship pages
+- Work detail page with related works, characters, voice actors, and staff
 - Configurable dark desktop interface built with PySide6
 - Library card sizing, spacing, hover, and resize animation preferences
 - Maximized startup preference
