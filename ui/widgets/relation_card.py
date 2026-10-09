@@ -42,34 +42,7 @@ class RelationCard(QFrame):
         card_width = get("card_size") + 8
         self.setFixedWidth(card_width)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.setStyleSheet(
-            f"""
-            QFrame#relationCard {{
-                background: transparent;
-                border: 2px solid {COLORS['frame']};
-                border-radius: {get('corner_radius') + 2}px;
-            }}
-            QFrame#relationCard:hover {{
-                background: {COLORS['surface_hover']};
-            }}
-            QLabel {{
-                background: transparent;
-                border: none;
-            }}
-            QLabel#title {{
-                color: {COLORS['primary']};
-                font-size: {get('font_size')}px;
-                font-weight: 760;
-            }}
-            QFrame#relationCard:hover QLabel#title {{
-                color: {COLORS['accent_hover']};
-            }}
-            QLabel#meta {{
-                color: {COLORS['muted']};
-                font-size: 11px;
-            }}
-            """
-        )
+        self._apply_theme_style()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(2, 2, 2, 2)
@@ -129,6 +102,41 @@ class RelationCard(QFrame):
             + root.contentsMargins().bottom()
             + root.spacing() * 2
         )
+
+    def _apply_theme_style(self):
+        self.setStyleSheet(
+            f"""
+            QFrame#relationCard {{
+                background: transparent;
+                border: 2px solid {COLORS['frame']};
+                border-radius: {get('corner_radius') + 2}px;
+            }}
+            QFrame#relationCard:hover {{
+                background: {COLORS['surface_hover']};
+            }}
+            QLabel {{
+                background: transparent;
+                border: none;
+            }}
+            QLabel#title {{
+                color: {COLORS['primary']};
+                font-size: {get('font_size')}px;
+                font-weight: 760;
+            }}
+            QFrame#relationCard:hover QLabel#title {{
+                color: {COLORS['accent_hover']};
+            }}
+            QLabel#meta {{
+                color: {COLORS['muted']};
+                font-size: 11px;
+            }}
+            """
+        )
+
+    def refresh_theme(self):
+        self._apply_theme_style()
+        self.cover.update()
+        self.update()
 
     @staticmethod
     def _fit_title_to_two_lines(text, width, font):
