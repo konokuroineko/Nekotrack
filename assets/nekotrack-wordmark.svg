@@ -1,16 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="396" height="72" viewBox="0 0 396 72">
   <title>NekoTrack custom feline wordmark</title>
-  <desc>Custom feline lettering: ear-shaped terminals on the N and T, a tail curl on the e and c, a cat-shaped o, claw-like k strokes, and a slit eye hidden in the a.</desc>
+  <desc>Custom feline lettering: ear-shaped terminals on the N and T, a tail curl on the e and c, claw-like k strokes, and a slit eye hidden in the a; the o remains a normal lowercase letter.</desc>
   <path d="M96 0H456V621C456 683 455 806 450 951C527 811 598 689 641 620L1029 0H1402V1490H1042V844C1042 777 1044 656 1047 538C989 645 926 757 891 813L468 1490H390L330 1620L270 1490H235L175 1620L115 1490H96Z" transform="translate(7.000 59.000) scale(0.03600 -0.03600)" fill="__ACCENT__"/>
   <path d="M596 -24C863 -24 1076 125 1115 338H806C781 268 709 224 608 224C472 224 392 309 388 443H1123V536C1123 856 904 1080 587 1080C274 1080 52 850 52 528C52 206 272 -24 596 -24ZM390 649C405 760 480 826 596 826C711 826 787 760 802 649Z" transform="translate(60.928 59.000) scale(0.03600 -0.03600)" fill="__ACCENT__"/>
   <path d="M96 0H440V314L513 399L782 0H1179L769 595L1162 1056H765L444 681H440V1490H96Z" transform="translate(103.084 59.000) scale(0.03600 -0.03600)" fill="__ACCENT__"/>
-  <g transform="translate(144.952 59.000) scale(0.03600 -0.03600)">
-    <path d="M 105 420 L 70 1390 Q 67 1470 145 1426 L 448 1206 Q 610 1290 772 1206 L 1078 1426 Q 1154 1470 1150 1390 L 1113 420 Q 1105 208 944 82 Q 795 -8 610 -8 Q 425 -8 276 82 Q 115 208 105 420 Z" fill="#0b0a14" stroke="__ACCENT__" stroke-width="56" stroke-linejoin="round"/>
-    <path d="M 218 475 Q 342 605 474 490 Q 350 425 218 475 Z" fill="__ACCENT__"/>
-    <path d="M 746 490 Q 878 605 1002 475 Q 870 425 746 490 Z" fill="__ACCENT__"/>
-    <path d="M 574 590 L 610 557 L 646 590 L 610 625 Z" fill="__ACCENT__"/>
-    <path d="M 610 625 Q 572 676 534 648 M 610 625 Q 648 676 686 648" fill="none" stroke="__ACCENT__" stroke-width="31" stroke-linecap="round"/>
-  </g>
+  <path d="M587 -24C880 -24 1122 186 1122 528C1122 870 880 1080 587 1080C294 1080 52 870 52 528C52 186 294 -24 587 -24Z M587 264C704 264 773 365 773 528C773 691 704 792 587 792C470 792 401 691 401 528C401 365 470 264 587 264Z" transform="translate(144.952 59.000) scale(0.03600 -0.03600)" fill="__ACCENT__" fill-rule="evenodd"/>
   <path d="M 99.4 42.8 C 101.5 42.3 102.5 40.7 101.1 39.7 C 99.8 38.8 98.7 40.0 99.5 40.8" fill="none" stroke="__PRIMARY__" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M 125.0 47.7 C 127.1 50.1 128.3 53.3 130.0 56.6" fill="none" stroke="__PRIMARY__" stroke-width="1.15" stroke-linecap="round" opacity=".95"/>
   <path d="M42 1184H481V0H841V1184H1279V1490H42Z" transform="translate(188.692 59.000) scale(0.03600 -0.03600)" fill="__PRIMARY__"/>
