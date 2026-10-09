@@ -154,8 +154,10 @@ def _title_family_compatible(left, right):
     left_tokens = left_key.split()
     right_tokens = right_key.split()
 
-    if left_tokens and right_tokens and (
-        left_tokens <= right_tokens or right_tokens <= left_tokens
+    left_token_set = set(left_tokens)
+    right_token_set = set(right_tokens)
+    if left_token_set and right_token_set and (
+        left_token_set <= right_token_set or right_token_set <= left_token_set
     ):
         return True
 
