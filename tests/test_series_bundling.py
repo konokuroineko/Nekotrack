@@ -72,6 +72,57 @@ class BundleOptionTests(unittest.TestCase):
             groups = series.group_media_results([first, second], enrich=False)
         self.assertEqual(len(groups), 2)
 
+    def test_exclusion_cannot_be_bypassed_through_a_transitive_relation(self):
+        first = media(11, "Echo Series", "TV", relations=[
+            edge("SEQUEL", {
+                "id": 12, "type": "ANIME", "format": "TV",
+                "title": {"english": "Echo Series Season 2", "romaji": "Echo Series Season 2"},
+                "coverImage": {"large": None},
+                "startDate": {"year": 2021, "month": 1, "day": 1},
+            }),
+            edge("SEQUEL", {
+                "id": 13, "type": "ANIME", "format": "TV",
+                "title": {"english": "Echo Series Season 3", "romaji": "Echo Series Season 3"},
+                "coverImage": {"large": None},
+                "startDate": {"year": 2022, "month": 1, "day": 1},
+            }),
+        ])
+        second = media(12, "Echo Series Season 2", "TV", relations=[
+            edge("PREQUEL", {
+                "id": 11, "type": "ANIME", "format": "TV",
+                "title": {"english": "Echo Series", "romaji": "Echo Series"},
+                "coverImage": {"large": None},
+                "startDate": {"year": 2020, "month": 1, "day": 1},
+            }),
+            edge("SEQUEL", {
+                "id": 13, "type": "ANIME", "format": "TV",
+                "title": {"english": "Echo Series Season 3", "romaji": "Echo Series Season 3"},
+                "coverImage": {"large": None},
+                "startDate": {"year": 2022, "month": 1, "day": 1},
+            }),
+        ])
+        third = media(13, "Echo Series Season 3", "TV", relations=[
+            edge("PREQUEL", {
+                "id": 12, "type": "ANIME", "format": "TV",
+                "title": {"english": "Echo Series Season 2", "romaji": "Echo Series Season 2"},
+                "coverImage": {"large": None},
+                "startDate": {"year": 2021, "month": 1, "day": 1},
+            }),
+        ])
+
+        with patch("series.get_manual_bundle_links", return_value=[]), \
+             patch("series.get_bundle_exclusions", return_value=[{"work_a": 11, "work_b": 12}]), \
+             patch("series.get", return_value=False):
+            groups = series.group_media_results([first, second, third], enrich=False)
+
+        memberships = [
+            {member["id"] for member in group["_series_members"]}
+            for group in groups
+        ]
+        self.assertTrue(any(11 in members for members in memberships))
+        self.assertTrue(any(12 in members for members in memberships))
+        self.assertFalse(any({11, 12} <= members for members in memberships))
+
     def test_unrelated_spin_off_is_not_traversed(self):
         root = media(1, "One Piece", "TV", relations=[
             edge("SPIN_OFF", {
