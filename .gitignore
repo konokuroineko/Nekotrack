@@ -189,3 +189,6 @@ __marimo__/
 
 # Downloaded/cached cover images
 data/
+
+# Generated from assets/nekotrack-logo.svg during the Windows build
+assets/NekoTrack.ico
