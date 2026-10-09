@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 from database import (
     add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
-    get_reading_items, get_reading_progress, ensure_reading_placeholders,
+    get_reading_progress, ensure_reading_placeholders,
     get_tmdb_mapping, get_work, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_path, save_episodes, save_staff, save_tmdb_mapping,
     set_episode_watched, set_reading_item_read,
