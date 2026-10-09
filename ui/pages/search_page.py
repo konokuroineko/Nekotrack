@@ -226,16 +226,30 @@ class SearchPage(QWidget):
 
         bar = QHBoxLayout()
         bar.setSpacing(8)
+        # Keep the input border on a themed QFrame rather than the native
+        # QLineEdit frame, which can draw its own platform-colored focus border.
+        self.search_frame = QFrame()
+        self.search_frame.setObjectName("searchInputFrame")
+        self.search_frame.setProperty("focused", False)
+        self.search_frame.setStyleSheet(self._search_input_frame_stylesheet())
+        search_input_layout = QHBoxLayout(self.search_frame)
+        search_input_layout.setContentsMargins(10, 2, 10, 2)
+        search_input_layout.setSpacing(0)
+
         self.search = QLineEdit()
         self.search.setObjectName("searchInput")
+        self.search.setFrame(False)
         self.search.setStyleSheet(self._search_input_stylesheet())
+        self.search.installEventFilter(self)
         self.search.setPlaceholderText("Title, character, franchise, or AniList link...")
-        self.search.setMinimumHeight(46)
+        self.search.setMinimumHeight(42)
         self.search.setClearButtonEnabled(True)
+        search_input_layout.addWidget(self.search, 1)
+
         self.search_button = QPushButton("Search")
         self.search_button.setMinimumHeight(46)
         self.search_button.setMinimumWidth(100)
-        bar.addWidget(self.search, 1)
+        bar.addWidget(self.search_frame, 1)
         bar.addWidget(self.search_button)
         panel.addLayout(bar)
 
@@ -339,14 +353,20 @@ class SearchPage(QWidget):
             f"border:1px solid {COLORS['frame']}; border-radius:16px; }}"
         )
 
-    def _search_input_stylesheet(self):
+    def _search_input_frame_stylesheet(self):
         radius = get("corner_radius")
         return (
-            f"QLineEdit#searchInput {{ background:{COLORS['surface']}; "
-            f"border:1px solid {COLORS['frame']}; border-radius:{radius}px; "
-            f"color:{COLORS['primary']}; padding:10px 12px; "
+            f"QFrame#searchInputFrame {{ background:{COLORS['surface']}; "
+            f"border:1px solid {COLORS['frame']}; border-radius:{radius}px; }}"
+            f"QFrame#searchInputFrame[focused=\"true\"] "
+            f"{{ border-color:{COLORS['accent']}; }}"
+        )
+
+    def _search_input_stylesheet(self):
+        return (
+            f"QLineEdit#searchInput {{ background:transparent; border:none; "
+            f"outline:none; color:{COLORS['primary']}; padding:8px 2px; "
             f"selection-background-color:{COLORS['accent']}; }}"
-            f"QLineEdit#searchInput:focus {{ border-color:{COLORS['accent']}; }}"
         )
 
     def _filters_panel_stylesheet(self):
@@ -813,8 +833,16 @@ class SearchPage(QWidget):
         # Rebuild those styles when the selected preset changes.
         if hasattr(self, "search_panel"):
             self.search_panel.setStyleSheet(self._search_panel_stylesheet())
+        if hasattr(self, "search_frame"):
+            self.search_frame.setStyleSheet(self._search_input_frame_stylesheet())
+            self.search_frame.style().unpolish(self.search_frame)
+            self.search_frame.style().polish(self.search_frame)
+            self.search_frame.update()
         if hasattr(self, "search"):
             self.search.setStyleSheet(self._search_input_stylesheet())
+            self.search.style().unpolish(self.search)
+            self.search.style().polish(self.search)
+            self.search.update()
         if hasattr(self, "filters_panel"):
             self.filters_panel.setStyleSheet(self._filters_panel_stylesheet())
 
@@ -903,6 +931,19 @@ class SearchPage(QWidget):
             )
 
     def eventFilter(self, watched, event):
+        if watched is getattr(self, "search", None) and event.type() in (
+            QEvent.Type.FocusIn,
+            QEvent.Type.FocusOut,
+        ):
+            self.search_frame.setProperty(
+                "focused",
+                event.type() == QEvent.Type.FocusIn,
+            )
+            style = self.search_frame.style()
+            style.unpolish(self.search_frame)
+            style.polish(self.search_frame)
+            self.search_frame.update()
+
         if (
             watched is self.results_scroll.viewport()
             and event.type() == QEvent.Type.Resize
