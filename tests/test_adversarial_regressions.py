@@ -197,7 +197,7 @@ class UnifiedCatalogAdversarialTests(unittest.TestCase):
         for _ in range(80):
             anilist_rows = []
             mb_rows = []
-            for index in range(rng.randint(1, 18)):
+            for _ in range(rng.randint(1, 18)):
                 media_id = rng.randint(1000, 1010)
                 anilist_rows.append(media(media_id, f"Anime {media_id}", "MANGA", "MANGA"))
             for index in range(rng.randint(1, 18)):
