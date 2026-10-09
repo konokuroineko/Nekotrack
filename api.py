@@ -765,8 +765,13 @@ def _tmdb_get(path, params=None):
     )
     response.raise_for_status()
     time.sleep(0.15)
-    return response.json() or {}
-
+    try:
+        payload = response.json()
+    except (ValueError, TypeError) as error:
+        raise RuntimeError(f"TMDB returned invalid JSON for {path}.") from error
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"TMDB returned an unexpected response for {path}.")
+    return payload
 
 def _parse_date(value):
     text = str(value or "").strip()
@@ -884,10 +889,12 @@ def _find_tmdb_season(series_details, target_date):
     return min(seasons, key=score)
 
 def _episode_still_url(path):
-    if not path:
+    if not isinstance(path, str):
+        return None
+    path = path.strip()
+    if not path.startswith("/") or path.startswith("//"):
         return None
     return f"{TMDB_IMAGE_BASE_URL}{path}"
-
 
 def _pick_best_episode_still(series_id, season_number, episode):
     if not isinstance(episode, dict):
@@ -1176,6 +1183,24 @@ def _tmdb_search_movies(query, target_date):
 
     return candidates
 
+def _valid_image_data(data):
+    """Validate downloaded/cache bytes before retaining them as artwork."""
+    if not isinstance(data, (bytes, bytearray, memoryview)) or not data:
+        return False
+    raw = bytes(data)
+    try:
+        from PySide6.QtGui import QImage
+        return not QImage.fromData(raw).isNull()
+    except Exception:
+        # If Qt's image reader is unavailable, accept only recognizable file
+        # signatures rather than caching an HTML/error response as a picture.
+        return (
+            raw.startswith(b"\\xFF\\xD8\\xFF")
+            or raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n")
+            or (len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP")
+        )
+
+
 def cache_tmdb_episode_image(url, work_id, episode_number):
     """Download one TMDB episode image into NekoTrack's persistent cache."""
     if not url:
@@ -1196,12 +1221,21 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
 
     path = directory / f"{int(episode_number)}_{digest}{suffix}"
     if path.is_file() and path.stat().st_size > 0:
-        return str(path)
+        try:
+            cached_data = path.read_bytes()
+        except OSError:
+            cached_data = b""
+        if _valid_image_data(cached_data):
+            return str(path)
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
     response = requests.get(url, timeout=20)
     response.raise_for_status()
     data = response.content
-    if not data:
+    if not _valid_image_data(data):
         return None
 
     path.write_bytes(data)
@@ -1209,8 +1243,9 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
         return None
     return str(path)
 
-
 def _pick_best_movie_image(movie_id, movie):
+    if not isinstance(movie, dict):
+        return None, 0
     primary = _episode_still_url(movie.get("backdrop_path"))
     if primary:
         return primary, 1
@@ -1218,27 +1253,29 @@ def _pick_best_movie_image(movie_id, movie):
     try:
         payload = _tmdb_get(
             f"/movie/{int(movie_id)}/images",
-            {
-                "include_image_language": "en,null",
-            },
+            {"include_image_language": "en,null"},
         )
-    except requests.RequestException:
+    except (requests.RequestException, TypeError, ValueError, OverflowError):
         return None, 0
 
-    backdrops = payload.get("backdrops") or []
+    if not isinstance(payload, dict):
+        return None, 0
+    raw_backdrops = payload.get("backdrops")
+    if not isinstance(raw_backdrops, list):
+        return None, 0
+    backdrops = [item for item in raw_backdrops if isinstance(item, dict)]
     if not backdrops:
         return None, 0
 
     backdrops.sort(
         key=lambda item: (
-            float(item.get("vote_average") or 0),
-            int(item.get("vote_count") or 0),
-            int(item.get("width") or 0),
+            _safe_float(item.get("vote_average")),
+            _safe_float(item.get("vote_count")),
+            _safe_float(item.get("width")),
         ),
         reverse=True,
     )
     return _episode_still_url(backdrops[0].get("file_path")), len(backdrops)
-
 
 def _get_tmdb_movie_episode(
     title_variants,
