@@ -238,7 +238,9 @@ def settings():
     if int(current.value("_theme_palette_version", 0) or 0) != _THEME_PALETTE_VERSION:
         theme = THEME_PRESETS[stored_theme]
         for key, value in theme.items():
-            if key != "description":
+            # Refresh only saved palette colors. Card size, UI scale, and other
+            # user preferences should survive a palette cleanup/migration.
+            if isinstance(value, str) and value.startswith("#"):
                 current.setValue(key, value)
         current.setValue("_theme_palette_version", _THEME_PALETTE_VERSION)
         current.sync()
