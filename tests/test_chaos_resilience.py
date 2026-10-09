@@ -753,6 +753,71 @@ class AniListPaginationChaosTests(unittest.TestCase):
                 nt_api.get_media_details(999999)
 
 
+    def test_get_media_episodes_paginates_skips_bad_rows_and_deduplicates(self):
+        first = {
+            "Media": {
+                "airingSchedule": {
+                    "nodes": [
+                        {"episode": 1, "airingAt": None},
+                        None,
+                        {"episode": "not-a-number", "airingAt": 1000},
+                    ],
+                    "pageInfo": {"currentPage": 1, "lastPage": 2, "hasNextPage": True},
+                }
+            }
+        }
+        second = {
+            "Media": {
+                "airingSchedule": {
+                    "nodes": [
+                        {"episode": 1, "airingAt": 9999},
+                        {"episode": "2", "airingAt": "bad-timestamp"},
+                        "bad node",
+                    ],
+                    "pageInfo": {"currentPage": 2, "lastPage": 2, "hasNextPage": False},
+                }
+            }
+        }
+        with patch.object(nt_api, "anilist_request", side_effect=[first, second]) as request:
+            episodes = nt_api.get_media_episodes(7001)
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual([item["episodeNumber"] for item in episodes], [1, 2])
+        self.assertIsNone(episodes[0]["airdate"])
+        self.assertIsNone(episodes[1]["airdate"])
+
+    def test_get_media_episodes_stops_on_repeated_pages(self):
+        page = {
+            "Media": {
+                "airingSchedule": {
+                    "nodes": [{"episode": 1, "airingAt": 1000}],
+                    "pageInfo": {"currentPage": 1, "lastPage": 999999, "hasNextPage": True},
+                }
+            }
+        }
+        repeat = {
+            "Media": {
+                "airingSchedule": {
+                    "nodes": [{"episode": 1, "airingAt": 1000}],
+                    "pageInfo": {"currentPage": 2, "lastPage": 999999, "hasNextPage": True},
+                }
+            }
+        }
+        with patch.object(nt_api, "anilist_request", side_effect=[page, repeat]) as request:
+            episodes = nt_api.get_media_episodes(7001)
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(len(episodes), 1)
+
+    def test_get_media_episodes_handles_malformed_page_info_and_connections(self):
+        payload = {"Media": {"airingSchedule": {
+            "nodes": "bad nodes",
+            "pageInfo": {"currentPage": "bad", "lastPage": {}, "hasNextPage": "true"},
+        }}}
+        with patch.object(nt_api, "anilist_request", return_value=payload) as request:
+            episodes = nt_api.get_media_episodes(7001)
+        self.assertEqual(episodes, [])
+        request.assert_called_once()
+
+
 class AniListRelationsChaosTests(unittest.TestCase):
     def test_invalid_ids_do_not_crash_batch_relation_fetch(self):
         with patch.object(nt_api, "anilist_request") as request:
