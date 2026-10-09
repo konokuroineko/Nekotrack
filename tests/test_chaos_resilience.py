@@ -753,6 +753,40 @@ class AniListPaginationChaosTests(unittest.TestCase):
                 nt_api.get_media_details(999999)
 
 
+class AniListRelationsChaosTests(unittest.TestCase):
+    def test_invalid_ids_do_not_crash_batch_relation_fetch(self):
+        with patch.object(nt_api, "anilist_request") as request:
+            result = nt_api.get_media_relations_batch([None, "bad-id", -7, 0])
+        self.assertEqual(result, {})
+        request.assert_not_called()
+
+    def test_relation_batch_skips_invalid_returned_media_rows(self):
+        payload = {
+            "Page": {
+                "media": [
+                    {"id": "12", "title": {"romaji": "Valid"}},
+                    None,
+                    "not an object",
+                    {"id": "not-an-id"},
+                    {"id": -5},
+                ]
+            }
+        }
+        with patch.object(nt_api, "anilist_request", return_value=payload) as request:
+            result = nt_api.get_media_relations_batch(["bad", None, 12, "12", -9])
+        self.assertEqual(set(result), {12})
+        self.assertEqual(result[12]["title"]["romaji"], "Valid")
+        self.assertEqual(request.call_args.args[1]["ids"], [12])
+
+    def test_optional_artwork_lookup_errors_do_not_discard_episode_data(self):
+        with patch.object(nt_api, "_tmdb_get", side_effect=RuntimeError("invalid images JSON")):
+            self.assertEqual(
+                nt_api._pick_best_episode_still(12, 1, {"episode_number": 4}),
+                (None, 0),
+            )
+            self.assertEqual(nt_api._pick_best_movie_image(12, {}), (None, 0))
+
+
 class UpdateFeedChaosTests(unittest.TestCase):
     def test_malformed_release_entries_do_not_hide_a_valid_update(self):
         response = Mock()
