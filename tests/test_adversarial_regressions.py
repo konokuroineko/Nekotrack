@@ -16,6 +16,15 @@ import mangabaka_api as mb
 import series
 
 
+
+def _seed(default):
+    """Allow the standalone stress runner to vary the deterministic test seeds."""
+    try:
+        return int(os.environ.get("NEKOTRACK_FUZZ_SEED", default)) + int(default)
+    except (TypeError, ValueError, OverflowError):
+        return int(default)
+
+
 def manga_baka_series(series_id=1, series_type="novel", **overrides):
     record = {
         "id": series_id,
@@ -72,7 +81,7 @@ class AniListURLAdversarialTests(unittest.TestCase):
     def test_valid_url_variants_and_deterministic_random_noise_never_raise(self):
         self.assertEqual(api.parse_anilist_url("https://anilist.co/anime/1/Test"), 1)
         self.assertEqual(api.parse_anilist_url("http://www.anilist.co/manga/987/title?x=1"), 987)
-        rng = random.Random(911731)
+        rng = random.Random(_seed(911731))
         alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:/.-_@?#[]"
         for _ in range(1200):
             value = "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 90)))
@@ -101,7 +110,7 @@ class MangaBakaAdversarialTests(unittest.TestCase):
         self.assertEqual(mb._count_or_none(9), 9)
 
     def test_random_malformed_provider_fields_never_crash_normalizer(self):
-        rng = random.Random(1429)
+        rng = random.Random(_seed(1429))
         strange = [
             None, "", "not-a-date", "2024-99-99", {"year": "x", "month": [], "day": {}},
             {"year": 2020, "month": 0, "day": -3}, 0, -1, [], {}, True,
@@ -183,7 +192,7 @@ class UnifiedCatalogAdversarialTests(unittest.TestCase):
         self.assertEqual(set(ids), {100, 101, -44, -45})
 
     def test_random_duplicate_catalog_pages_preserve_unique_ids(self):
-        rng = random.Random(7719)
+        rng = random.Random(_seed(7719))
         page = {"currentPage": 1, "lastPage": 1, "hasNextPage": False}
         for _ in range(80):
             anilist_rows = []
@@ -217,7 +226,7 @@ class UnifiedCatalogAdversarialTests(unittest.TestCase):
 
 class BundleGraphAdversarialTests(unittest.TestCase):
     def test_random_cyclic_relation_graphs_partition_all_input_ids_once(self):
-        rng = random.Random(29384)
+        rng = random.Random(_seed(29384))
         formats = ["TV", "TV_SHORT", "OVA", "ONA", "MOVIE", "SPECIAL", "MANGA", "NOVEL", "ONE_SHOT", None]
         relations = ["PREQUEL", "SEQUEL", "PARENT", "SIDE_STORY", "SUMMARY",
                      "SPIN_OFF", "ALTERNATIVE", "COMPILATION", "CONTAINS", "ADAPTATION"]
