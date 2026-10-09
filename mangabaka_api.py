@@ -592,6 +592,10 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
     pagination = _pagination(payload)
     normalized = []
     for item in _records(payload):
+        # The query filter is sent upstream, but also enforce it locally in
+        # case a future API revision ignores or changes that filter.
+        if str(item.get("content_rating") or "").lower() not in {"safe", "suggestive"}:
+            continue
         raw_type = str(item.get("type") or "manga").lower()
         if picked_format == "NOVEL" and raw_type != "novel":
             continue
