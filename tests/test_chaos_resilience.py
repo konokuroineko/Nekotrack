@@ -412,6 +412,60 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         self.assertEqual([(row["episode_number"], row["title"]) for row in rows],
                          [(1, "Valid episode")])
 
+    def test_get_all_library_includes_volume_progress(self):
+        work_id = 505
+        database.save_anime(self.work(work_id, "MANGA", "NOVEL"))
+        database.add_to_library(work_id)
+        database.ensure_reading_placeholders(work_id, "volume", 3, limit=3)
+        database.set_reading_item_read(work_id, "volume", 2, True)
+
+        rows = database.get_all_library()
+        row = next(item for item in rows if item["id"] == work_id)
+        self.assertEqual(row["progress_volumes"], 1)
+
+    def test_delete_work_removes_provider_metadata(self):
+        work_id = 506
+        item = self.work(work_id, "MANGA", "NOVEL")
+        item["_mangabaka_id"] = 77
+        item["_mangabaka"] = {
+            "id": 77,
+            "titles": [{"language": "en", "title": "Stored Provider Title"}],
+        }
+        database.save_anime(item)
+
+        connection = database.get_connection()
+        before = connection.execute(
+            "SELECT COUNT(*) FROM work_provider_metadata WHERE work_id = ?",
+            (work_id,),
+        ).fetchone()[0]
+        connection.close()
+        self.assertEqual(before, 1)
+
+        self.assertTrue(database.delete_work_data(work_id))
+        connection = database.get_connection()
+        after = connection.execute(
+            "SELECT COUNT(*) FROM work_provider_metadata WHERE work_id = ?",
+            (work_id,),
+        ).fetchone()[0]
+        connection.close()
+        self.assertEqual(after, 0)
+
+    def test_deleting_a_work_does_not_remove_shared_cover_still_in_use(self):
+        first_id, second_id = 507, 508
+        database.save_anime(self.work(first_id, "ANIME", "TV"))
+        database.save_anime(self.work(second_id, "ANIME", "TV"))
+        shared_cover = Path(self.temp_dir.name) / "shared-cover.jpg"
+        shared_cover.write_bytes(b"dummy image file used only for path ownership")
+        database.save_cover_path(first_id, str(shared_cover))
+        database.save_cover_path(second_id, str(shared_cover))
+
+        self.assertTrue(database.delete_work_data(first_id))
+        self.assertTrue(shared_cover.exists())
+
+        # Once the last reference is removed, cleanup may delete the file.
+        self.assertTrue(database.delete_work_data(second_id))
+        self.assertFalse(shared_cover.exists())
+
     def test_900_random_database_operations_keep_relations_and_progress_consistent(self):
         rng = random.Random(self.SEED)
         active = set(range(1, 41))
