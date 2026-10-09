@@ -62,6 +62,20 @@ class UiStartupTests(unittest.TestCase):
                         set(window.navigation.pages),
                         {"home", "collections", "search", "work_detail", "settings"},
                     )
+                    self.assertFalse(window.windowIcon().isNull())
+                    self.assertFalse(window.brand_mark.pixmap().isNull())
+                    self.assertEqual(
+                        {name: button.text() for name, button in window.navigation_buttons.items()},
+                        {
+                            "home": "Home",
+                            "collections": "Library",
+                            "search": "Search",
+                            "settings": "Settings",
+                        },
+                    )
+                    self.assertTrue(
+                        all(not button.icon().isNull() for button in window.navigation_buttons.values())
+                    )
                     window.close()
                     window.deleteLater()
                     self.app.processEvents()
