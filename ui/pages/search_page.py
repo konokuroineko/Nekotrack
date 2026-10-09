@@ -929,7 +929,7 @@ class SearchPage(QWidget):
         elif self.enrichment_pending:
             self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · refining")
         elif self.current_catalog == "MangaBaka":
-            self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · MangaBaka")
+            self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · {self.current_catalog}")
         elif self.fast_search.isChecked():
             self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · fast")
         else:
