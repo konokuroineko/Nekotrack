@@ -263,6 +263,7 @@ class MainWindow(QMainWindow):
         mark = QLabel("N")
         mark.setObjectName("brandMark")
         self.brand_mark = mark
+        mark.setStyleSheet(self._brand_mark_stylesheet())
         word = QLabel("NekoTrack")
         word.setObjectName("brandWord")
         self.brand_word = word
@@ -278,8 +279,9 @@ class MainWindow(QMainWindow):
         self.search_page = SearchPage(self.add_to_library)
         self.work_detail_page = WorkDetailPage()
         self.settings_page = SettingsPage()
+        self.home_page = HomePage()
         pages = {
-            "home": HomePage(),
+            "home": self.home_page,
             "collections": self.library_page,
             "search": self.search_page,
             "work_detail": self.work_detail_page,
@@ -375,17 +377,18 @@ class MainWindow(QMainWindow):
         )
 
         if hasattr(self, "brand_mark"):
-            self.brand_mark.setStyleSheet(
-                f"background:{COLORS['accent']};color:{COLORS['accent_text']};"
-                f"border:1px solid {COLORS['nav_selected_frame']};"
-                "border-radius:9px;font-size:19px;font-weight:900;"
-                "min-width:38px;max-width:38px;min-height:38px;max-height:38px;"
-            )
+            self.brand_mark.setStyleSheet(self._brand_mark_stylesheet())
+            self.brand_mark.style().unpolish(self.brand_mark)
+            self.brand_mark.style().polish(self.brand_mark)
+            self.brand_mark.update()
         if hasattr(self, "brand_word"):
             self.brand_word.setStyleSheet(
                 f"color:{COLORS['primary']};font-size:19px;font-weight:800;"
                 "letter-spacing:-.4px;padding-left:7px;"
             )
+
+        if hasattr(self, "home_page"):
+            self.home_page.refresh_theme()
 
         if hasattr(self, "library_page"):
             self.library_page.refresh_theme()
@@ -445,6 +448,16 @@ class MainWindow(QMainWindow):
         else:
             # Preserve normal-window geometry without forcing another show cycle.
             pass
+
+    def _brand_mark_stylesheet(self):
+        return (
+            f"background:{COLORS['accent']};"
+            f"color:{COLORS['accent_text']};"
+            f"border:1px solid {COLORS['nav_selected_frame']};"
+            "border-radius:9px;font-size:19px;font-weight:900;"
+            "min-width:38px;max-width:38px;min-height:38px;max-height:38px;"
+            "qproperty-alignment:AlignCenter;"
+        )
 
     def _section(self, layout, title, items):
         label = QLabel(title)
