@@ -128,7 +128,19 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
             **anilist_filters,
         )
         data = data if isinstance(data, dict) else {}
-        anilist_items = [item for item in (data.get("media") or []) if isinstance(item, dict)]
+        raw_anilist_items = [
+            item for item in (data.get("media") or []) if isinstance(item, dict)
+        ]
+        # Defend against duplicate records from partial or inconsistent provider responses.
+        anilist_items = []
+        seen_anilist_ids = set()
+        for item in raw_anilist_items:
+            media_id = _media_id(item)
+            if media_id is not None:
+                if media_id in seen_anilist_ids:
+                    continue
+                seen_anilist_ids.add(media_id)
+            anilist_items.append(item)
         anilist_page = _page_info(data, page)
     except Exception as error:
         anilist_error = str(error)
@@ -185,6 +197,7 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
     anilist_ids = {_media_id(item) for item in anilist_items if _media_id(item) is not None}
     unique_mb = []
     seen_mb = set()
+    seen_mb_media_ids = set()
     for item in mangabaka_items:
         provider_id = _provider_id(item)
         media_id = _media_id(item)
@@ -196,6 +209,10 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
             if provider_id in seen_mb:
                 continue
             seen_mb.add(provider_id)
+        if media_id is not None:
+            if media_id in seen_mb_media_ids:
+                continue
+            seen_mb_media_ids.add(media_id)
         # MangaBaka-only entries have no AniList relation graph to fetch.
         if media_id is not None and media_id < 0:
             item["_relations_loaded"] = True
