@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ui.branding import application_icon, logo_pixmap
+from ui.branding import application_icon, logo_pixmap, wordmark_pixmap
 from ui.preferences import (
     THEME_PRESETS,
     apply_theme_preset,
@@ -134,7 +134,10 @@ class SetupWizard(QDialog):
         mark.setStyleSheet("background:transparent;border:none;padding:0;")
         brand = QLabel()
         brand.setObjectName("setupBrand")
-        brand.setTextFormat(Qt.TextFormat.RichText)
+        brand.setAccessibleName("NekoTrack")
+        brand.setFixedSize(156, 30)
+        brand.setScaledContents(True)
+        brand.setStyleSheet("background:transparent;border:none;padding:0;")
         self.setup_brand = brand
         brand_row.addWidget(mark)
         brand_row.addWidget(brand)
@@ -467,9 +470,8 @@ class SetupWizard(QDialog):
     def _apply_wizard_style(self):
         theme = THEME_PRESETS[self.selected_theme]
         if hasattr(self, "setup_brand"):
-            self.setup_brand.setText(
-                f'<span style="color:{theme["accent"]}">Neko</span>'
-                f'<span style="color:{theme["primary"]}">Track</span>'
+            self.setup_brand.setPixmap(
+                wordmark_pixmap(theme["accent"], theme["primary"], 312, 60)
             )
         self.setStyleSheet(
             f"""

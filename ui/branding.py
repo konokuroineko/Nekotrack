@@ -3,7 +3,7 @@ from pathlib import Path
 import sys
 
 from PySide6.QtCore import QByteArray, QRectF, Qt
-from PySide6.QtGui import QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 
@@ -15,14 +15,19 @@ def resource_path(relative_path):
 
 def _render_svg(svg_text, size):
     renderer = QSvgRenderer(QByteArray(svg_text.encode("utf-8")))
-    pixmap = QPixmap(size, size)
+    if isinstance(size, tuple):
+        width, height = (max(1, int(value)) for value in size)
+    else:
+        width = height = max(16, int(size))
+    pixmap = QPixmap(width, height)
     pixmap.fill(Qt.GlobalColor.transparent)
     if not renderer.isValid():
         return pixmap
 
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    renderer.render(painter, QRectF(0, 0, size, size))
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+    renderer.render(painter, QRectF(0, 0, width, height))
     painter.end()
     return pixmap
 
@@ -32,10 +37,26 @@ def _logo_svg():
     return resource_path("assets/nekotrack-logo.svg").read_text(encoding="utf-8")
 
 
+@lru_cache(maxsize=1)
+def _wordmark_svg():
+    return resource_path("assets/nekotrack-wordmark.svg").read_text(encoding="utf-8")
+
+
 @lru_cache(maxsize=4)
 def logo_pixmap(size=128):
     """Render the shared vector logo for the sidebar and setup wizard."""
     return _render_svg(_logo_svg(), max(16, int(size)))
+
+
+@lru_cache(maxsize=128)
+def wordmark_pixmap(accent, primary, width=312, height=60):
+    """Render the custom cat-letter wordmark with the active theme's colors."""
+    accent_color = QColor(accent).name(QColor.NameFormat.HexRgb)
+    primary_color = QColor(primary).name(QColor.NameFormat.HexRgb)
+    svg = _wordmark_svg().replace("__ACCENT__", accent_color).replace(
+        "__PRIMARY__", primary_color
+    )
+    return _render_svg(svg, (max(16, int(width)), max(16, int(height))))
 
 
 @lru_cache(maxsize=1)
