@@ -55,6 +55,23 @@ class PreferenceMigrationTests(unittest.TestCase):
         self.assertEqual(settings.value("card_size"), "240")
         self.assertEqual(settings.value("corner_radius"), "18")
 
+    def test_invalid_palette_version_recovers_without_resetting_layout_preferences(self):
+        MemorySettings.stores[("NekoTrack", "NekoTrack")].update({
+            "theme_preset": "Sakura",
+            "_theme_palette_version": "not-a-version",
+            "accent": "#000080",
+        })
+
+        with patch.object(preferences, "QSettings", MemorySettings):
+            settings = preferences.settings()
+
+        self.assertEqual(settings.value("theme_preset"), "Sakura")
+        self.assertEqual(settings.value("accent"), preferences.THEME_PRESETS["Sakura"]["accent"])
+        self.assertEqual(settings.value("_theme_palette_version"), preferences._THEME_PALETTE_VERSION)
+        self.assertEqual(settings.value("font_size"), "15")
+        self.assertEqual(settings.value("card_size"), "240")
+        self.assertEqual(settings.value("corner_radius"), "18")
+
 
 if __name__ == "__main__":
     unittest.main()
