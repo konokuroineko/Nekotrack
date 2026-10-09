@@ -8,7 +8,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 import ui.preferences as preferences
-from ui.main_window import MainWindow
 
 
 class MemorySettings:
@@ -28,6 +27,13 @@ class MemorySettings:
 
     def sync(self):
         pass
+
+
+# ui.theme reads settings while the UI modules are imported. Use an isolated
+# in-memory settings backend even at import time so this smoke test never edits
+# the developer's real NekoTrack preferences.
+with patch.object(preferences, "QSettings", MemorySettings):
+    from ui.main_window import MainWindow
 
 
 class UiStartupTests(unittest.TestCase):
