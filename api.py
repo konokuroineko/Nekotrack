@@ -215,21 +215,25 @@ def parse_anilist_url(value):
 
     try:
         parsed = urlparse(text)
+        hostname = (parsed.hostname or "").lower()
+        path = parsed.path
     except ValueError:
         return None
 
-    hostname = (parsed.hostname or "").lower()
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return None
     if hostname not in {"anilist.co", "www.anilist.co"}:
         return None
 
-    parts = [part for part in parsed.path.split("/") if part]
+    parts = [part for part in path.split("/") if part]
     if len(parts) < 2 or parts[0].lower() not in {"anime", "manga"}:
         return None
 
     try:
-        return int(parts[1])
-    except ValueError:
+        media_id = int(parts[1])
+    except (TypeError, ValueError, OverflowError):
         return None
+    return media_id if media_id > 0 else None
 
 
 def get_media_by_anilist_url(url, include_relations=False):
