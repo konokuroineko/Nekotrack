@@ -84,8 +84,10 @@ class MangaBakaFilterMappingTests(unittest.TestCase):
         wrong_year["published"]["start"] = "2019-04-02"
         wrong_genre = sample_series(6, "Wrong genre", "completed", rating=90)
         wrong_genre["tags"][0]["name"] = "Comedy"
+        wrong_genre["tags"][0]["name_path"] = "Comedy"
         wrong_tag = sample_series(7, "Wrong tag", "completed", rating=90)
         wrong_tag["tags"][2]["name"] = "Romance"
+        wrong_tag["tags"][2]["name_path"] = "Romance"
         search.return_value = {
             "status": 200,
             "data": [matching, wrong_publisher, wrong_license, low_score, wrong_year, wrong_genre, wrong_tag],
