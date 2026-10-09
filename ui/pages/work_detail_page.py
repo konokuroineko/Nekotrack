@@ -1293,7 +1293,10 @@ class WorkDetailPage(QWidget):
         published = data.get("published") or {}
         if isinstance(published, dict):
             published_text = " – ".join(
-                str(value) for value in (published.get("start"), published.get("end"))
+                str(value) for value in (
+                    published.get("start_date") or published.get("start"),
+                    published.get("end_date") or published.get("end"),
+                )
                 if value
             )
         else:
@@ -1301,11 +1304,14 @@ class WorkDetailPage(QWidget):
 
         type_text = str(data.get("type") or "").replace("_", " ").title()
         status_text = str(data.get("status") or "").replace("_", " ").title()
+        record_state = str(data.get("state") or "").replace("_", " ").title()
         facts = []
         if type_text:
             facts.append(type_text)
         if status_text:
             facts.append(status_text)
+        if record_state:
+            facts.append(f"Catalog record: {record_state}")
         if data.get("rating") is not None:
             facts.append(f"Rating {data.get('rating')}/100")
         if data.get("content_rating"):
@@ -1314,6 +1320,15 @@ class WorkDetailPage(QWidget):
             facts.append("Licensed" if data.get("is_licensed") else "Unlicensed")
         if published_text:
             facts.append(f"Published {published_text}")
+        if data.get("last_updated_at"):
+            facts.append(f"Metadata updated {data.get('last_updated_at')}")
+        anime_data = data.get("anime")
+        if isinstance(anime_data, dict) and anime_data.get("exists") is not None:
+            anime_text = "Yes" if anime_data.get("exists") else "No"
+            anime_dates = " – ".join(
+                str(value) for value in (anime_data.get("start"), anime_data.get("end")) if value
+            )
+            facts.append(f"Anime adaptation: {anime_text}" + (f" ({anime_dates})" if anime_dates else ""))
         add_line("Series", " · ".join(facts))
 
         if data.get("total_chapters") is not None:
