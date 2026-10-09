@@ -700,6 +700,7 @@ def _group_discovered(results, discovered):
     original_ids = {int(item["id"]) for item in results}
     ids = {int(item["id"]) for item in discovered}
     parent = {item_id: item_id for item_id in ids}
+    component_members = {item_id: {item_id} for item_id in ids}
 
     def find(item_id):
         while parent[item_id] != item_id:
@@ -708,9 +709,25 @@ def _group_discovered(results, discovered):
         return item_id
 
     def union(left, right):
-        left, right = find(left), find(right)
-        if left != right:
-            parent[right] = left
+        left_root, right_root = find(left), find(right)
+        if left_root == right_root:
+            return True
+
+        # A pair exclusion must survive indirect paths through other works.
+        # Checking only the edge currently being joined allowed A and B to be
+        # regrouped as A -> C -> B after the user explicitly split A from B.
+        left_members = component_members[left_root]
+        right_members = component_members[right_root]
+        if any(
+            tuple(sorted((left_id, right_id))) in excluded_links
+            for left_id in left_members
+            for right_id in right_members
+        ):
+            return False
+
+        parent[right_root] = left_root
+        left_members.update(component_members.pop(right_root))
+        return True
 
     # Explicit manual links are an override: when the user links two works,
     # they belong to the same display bundle regardless of AniList relation type
