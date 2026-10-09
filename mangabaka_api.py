@@ -333,6 +333,19 @@ def _date_parts(series):
     return {"year": None, "month": None, "day": None}
 
 
+def _count_or_none(value):
+    if value in (None, ""):
+        return None
+    match = re.search(r"\d+", str(value))
+    if not match:
+        return None
+    try:
+        number = int(match.group(0))
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
 def normalize_series(series, preferred_id=None):
     """Convert a MangaBaka series record to NekoTrack's AniList-like media shape."""
     if not isinstance(series, dict):
@@ -381,11 +394,11 @@ def normalize_series(series, preferred_id=None):
         "id": local_id,
         "idMal": mal_id,
         "type": "MANGA",
-        "title": {"english": english, "romaji": romanized, "native": native},
+        "title": {"english": english or primary, "romaji": romanized, "native": native},
         "format": media_format,
         "episodes": None,
-        "chapters": series.get("total_chapters", series.get("chapters")),
-        "volumes": series.get("final_volume", series.get("total_volumes", series.get("volumes"))),
+        "chapters": _count_or_none(series.get("total_chapters", series.get("chapters"))),
+        "volumes": _count_or_none(series.get("final_volume", series.get("total_volumes", series.get("volumes"))),
         "averageScore": rating,
         "startDate": _date_parts(series),
         "endDate": {"year": None, "month": None, "day": None},
