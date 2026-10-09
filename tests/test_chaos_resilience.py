@@ -297,6 +297,118 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         self.assertEqual(invalid_reading, 0)
         connection.close()
 
+    def test_adding_existing_library_item_preserves_progress_and_user_metadata(self):
+        work_id = 501
+        database.save_anime(self.work(work_id, "ANIME", "TV"))
+        database.add_to_library(work_id)
+        database.save_episodes(work_id, [
+            {"episodeNumber": 1, "title": "Episode 1"},
+            {"episodeNumber": 2, "title": "Episode 2"},
+            {"episodeNumber": 3, "title": "Episode 3"},
+        ])
+        database.set_episode_watched(work_id, 1, True)
+        database.set_episode_watched(work_id, 2, True)
+        database.ensure_reading_placeholders(work_id, "chapter", 5, limit=5)
+        database.ensure_reading_placeholders(work_id, "volume", 3, limit=3)
+        database.set_reading_item_read(work_id, "chapter", 2, True)
+        database.set_reading_item_read(work_id, "volume", 1, True)
+
+        connection = database.get_connection()
+        connection.execute(
+            "UPDATE user_library SET rating = 9, notes = ?, added_date = ? WHERE work_id = ?",
+            ("keep this note", "2020-01-02 03:04:05", work_id),
+        )
+        connection.commit()
+        before = dict(connection.execute(
+            "SELECT * FROM user_library WHERE work_id = ?", (work_id,)
+        ).fetchone())
+        connection.close()
+
+        database.add_to_library(work_id, "Paused")
+
+        connection = database.get_connection()
+        after = dict(connection.execute(
+            "SELECT * FROM user_library WHERE work_id = ?", (work_id,)
+        ).fetchone())
+        connection.close()
+        self.assertEqual(after["status"], "Paused")
+        for key in ("progress_episodes", "progress_chapters", "progress_volumes",
+                    "rating", "notes", "added_date"):
+            with self.subTest(field=key):
+                self.assertEqual(after[key], before[key])
+
+    def test_readding_removed_work_rebuilds_progress_from_cached_rows(self):
+        work_id = 502
+        database.save_anime(self.work(work_id, "ANIME", "TV"))
+        database.add_to_library(work_id)
+        database.save_episodes(work_id, [
+            {"episodeNumber": 1, "title": "Episode 1"},
+            {"episodeNumber": 2, "title": "Episode 2"},
+            {"episodeNumber": 3, "title": "Episode 3"},
+        ])
+        database.set_episode_watched(work_id, 2, True)
+        database.ensure_reading_placeholders(work_id, "chapter", 6, limit=6)
+        database.ensure_reading_placeholders(work_id, "volume", 4, limit=4)
+        database.set_reading_item_read(work_id, "chapter", 4, True)
+        database.set_reading_item_read(work_id, "volume", 3, True)
+
+        self.assertTrue(database.remove_from_library(work_id))
+        database.add_to_library(work_id)
+
+        connection = database.get_connection()
+        row = dict(connection.execute(
+            "SELECT * FROM user_library WHERE work_id = ?", (work_id,)
+        ).fetchone())
+        connection.close()
+        self.assertEqual(row["progress_episodes"], 1)
+        self.assertEqual(row["progress_chapters"], 1)
+        self.assertEqual(row["progress_volumes"], 1)
+
+    def test_partial_episode_refresh_never_deletes_missing_or_watched_rows(self):
+        work_id = 503
+        database.save_anime(self.work(work_id, "ANIME", "TV"))
+        database.save_episodes(work_id, [
+            {"episodeNumber": 1, "title": "Episode 1"},
+            {"episodeNumber": 2, "title": "Episode 2"},
+            {"episodeNumber": 3, "title": "Episode 3"},
+        ])
+        database.set_episode_watched(work_id, 2, True)
+
+        # Simulates an upstream response that contains only part of a season.
+        database.save_episodes(work_id, [
+            {"episodeNumber": 1, "title": "Updated episode 1"},
+        ])
+
+        connection = database.get_connection()
+        rows = connection.execute(
+            "SELECT episode_number, title, watched FROM episodes "
+            "WHERE work_id = ? ORDER BY episode_number", (work_id,)
+        ).fetchall()
+        connection.close()
+        self.assertEqual([row["episode_number"] for row in rows], [1, 2, 3])
+        self.assertEqual(rows[0]["title"], "Updated episode 1")
+        self.assertEqual(rows[1]["watched"], 1)
+
+    def test_malformed_episode_rows_do_not_abort_valid_episode_updates(self):
+        work_id = 504
+        database.save_anime(self.work(work_id, "ANIME", "TV"))
+        database.save_episodes(work_id, [
+            None,
+            "not an episode object",
+            {},
+            {"episodeNumber": "not-a-number", "title": "bad row"},
+            {"episodeNumber": 0, "title": "invalid zero"},
+            {"episodeNumber": "1", "title": "Valid episode"},
+        ])
+
+        connection = database.get_connection()
+        rows = connection.execute(
+            "SELECT episode_number, title FROM episodes WHERE work_id = ?", (work_id,)
+        ).fetchall()
+        connection.close()
+        self.assertEqual([(row["episode_number"], row["title"]) for row in rows],
+                         [(1, "Valid episode")])
+
     def test_900_random_database_operations_keep_relations_and_progress_consistent(self):
         rng = random.Random(self.SEED)
         active = set(range(1, 41))
