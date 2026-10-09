@@ -191,6 +191,36 @@ class UnifiedCatalogAdversarialTests(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual(set(ids), {100, 101, -44, -45})
 
+    def test_malformed_catalog_metadata_is_safe_to_sort_and_merge(self):
+        strange_values = [
+            None, "", "invalid", "NaN", "inf", 0, -1, 1.75,
+            float("inf"), float("-inf"), float("nan"), [], {}, [1],
+            {"id": "not-a-number"}, 10 ** 400,
+        ]
+        for value in strange_values:
+            with self.subTest(value_type=type(value).__name__, value=str(value)[:30]):
+                provider = catalog_search._provider_id({"_mangabaka_id": value})
+                nested_provider = catalog_search._provider_id({"_mangabaka": value})
+                media_id = catalog_search._media_id({"id": value})
+                date_key = catalog_search._date_parts({
+                    "startDate": {"year": value, "month": value, "day": value}
+                })
+                score = catalog_search._score({"averageScore": value})
+                self.assertTrue(provider is None or isinstance(provider, int))
+                self.assertTrue(nested_provider is None or isinstance(nested_provider, int))
+                self.assertTrue(media_id is None or isinstance(media_id, int))
+                self.assertTrue(date_key is None or len(date_key) == 3)
+                self.assertIsInstance(score, float)
+
+        with patch("catalog_search.search_anime", return_value={"media": [], "pageInfo": {"lastPage": float("inf")}}), \\
+             patch("catalog_search.search_mangabaka_media", return_value={"media": [], "pageInfo": []}), \\
+             patch("catalog_search.enrich_anilist_results"):
+            result = catalog_search.search_combined_media(
+                "Example", float("inf"), None, None, ["filters are malformed"],
+                include_relations=False,
+            )
+        self.assertEqual(result["pageInfo"]["currentPage"], 1)
+
     def test_random_duplicate_catalog_pages_preserve_unique_ids(self):
         rng = random.Random(_seed(7719))
         page = {"currentPage": 1, "lastPage": 1, "hasNextPage": False}
