@@ -637,6 +637,122 @@ class TMDBPayloadChaosTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1)
         self.assertFalse(exists_after)
 
+class AniListPaginationChaosTests(unittest.TestCase):
+    @staticmethod
+    def initial_media(character_page_info=None, schedule_page_info=None):
+        character = {"id": 101, "name": {"full": "Character 101"}}
+        return {
+            "Media": {
+                "id": 7001,
+                "type": "ANIME",
+                "characters": {
+                    "edges": [{"node": character, "role": "MAIN", "voiceActors": []}],
+                    "pageInfo": character_page_info or {
+                        "currentPage": 1, "lastPage": 2, "hasNextPage": True,
+                    },
+                },
+                "airingSchedule": {
+                    "nodes": [{"episode": 1, "airingAt": 1000}],
+                    "pageInfo": schedule_page_info or {
+                        "currentPage": 1, "lastPage": 2, "hasNextPage": True,
+                    },
+                },
+            }
+        }
+
+    def test_details_collects_all_pages_for_characters_and_schedule(self):
+        character_two = {
+            "node": {"id": 102, "name": {"full": "Character 102"}},
+            "role": "SUPPORTING",
+            "voiceActors": [],
+        }
+        character_page = {
+            "Media": {
+                "characters": {
+                    "edges": [character_two],
+                    "pageInfo": {"currentPage": 2, "lastPage": 2, "hasNextPage": False},
+                }
+            }
+        }
+        schedule_page = {
+            "Media": {
+                "airingSchedule": {
+                    "nodes": [{"episode": 2, "airingAt": 2000}],
+                    "pageInfo": {"currentPage": 2, "lastPage": 2, "hasNextPage": False},
+                }
+            }
+        }
+        with patch.object(
+            nt_api, "anilist_request",
+            side_effect=[self.initial_media(), character_page, schedule_page],
+        ) as request:
+            media = nt_api.get_media_details(7001)
+
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual(
+            [edge["node"]["id"] for edge in media["characters"]["edges"]],
+            [101, 102],
+        )
+        self.assertEqual(
+            [node["episode"] for node in media["airingSchedule"]["nodes"]],
+            [1, 2],
+        )
+        self.assertFalse(media["characters"]["pageInfo"]["hasNextPage"])
+        self.assertFalse(media["airingSchedule"]["pageInfo"]["hasNextPage"])
+
+    def test_repeated_pages_are_deduplicated_and_cannot_loop_forever(self):
+        repeated = self.initial_media(
+            {"currentPage": 1, "lastPage": 999999, "hasNextPage": True},
+            {"currentPage": 1, "lastPage": 999999, "hasNextPage": True},
+        )
+        repeated_character_page = {
+            "Media": {
+                "characters": {
+                    "edges": repeated["Media"]["characters"]["edges"],
+                    "pageInfo": {"currentPage": 2, "lastPage": 999999, "hasNextPage": True},
+                }
+            }
+        }
+        repeated_schedule_page = {
+            "Media": {
+                "airingSchedule": {
+                    "nodes": repeated["Media"]["airingSchedule"]["nodes"],
+                    "pageInfo": {"currentPage": 2, "lastPage": 999999, "hasNextPage": True},
+                }
+            }
+        }
+        with patch.object(
+            nt_api, "anilist_request",
+            side_effect=[repeated, repeated_character_page, repeated_schedule_page],
+        ) as request:
+            media = nt_api.get_media_details(7001)
+
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual(len(media["characters"]["edges"]), 1)
+        self.assertEqual(len(media["airingSchedule"]["nodes"]), 1)
+        self.assertFalse(media["characters"]["pageInfo"]["hasNextPage"])
+        self.assertFalse(media["airingSchedule"]["pageInfo"]["hasNextPage"])
+
+    def test_malformed_connection_shapes_degrade_to_empty_connections(self):
+        payload = {
+            "Media": {
+                "id": 7001,
+                "type": "ANIME",
+                "characters": "not a connection object",
+                "airingSchedule": ["not", "a", "connection"],
+            }
+        }
+        with patch.object(nt_api, "anilist_request", return_value=payload):
+            media = nt_api.get_media_details(7001)
+        self.assertEqual(media["characters"]["edges"], [])
+        self.assertEqual(media["airingSchedule"]["nodes"], [])
+
+    def test_missing_media_result_raises_descriptive_error(self):
+        with patch.object(nt_api, "anilist_request", return_value={"Media": None}):
+            with self.assertRaisesRegex(RuntimeError, "no media details"):
+                nt_api.get_media_details(999999)
+
+
 class UpdateFeedChaosTests(unittest.TestCase):
     def test_malformed_release_entries_do_not_hide_a_valid_update(self):
         response = Mock()
