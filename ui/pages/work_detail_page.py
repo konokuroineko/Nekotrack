@@ -604,6 +604,7 @@ class WorkDetailPage(QWidget):
         self.work = None
         self.mangabaka_metadata = None
         self.mangabaka_volume_records = []
+        self.mangabaka_news = []
         self._selected_episode_work_id = None
         self._episode_sync_thread = None
         self._episode_sync_worker = None
@@ -656,6 +657,7 @@ class WorkDetailPage(QWidget):
 
         self.mangabaka_metadata = self._value("_mangabaka")
         self.mangabaka_volume_records = []
+        self.mangabaka_news = []
         primary_id = self._value("id")
         if not isinstance(self.mangabaka_metadata, dict):
             for provider_work_id in detail_ids or ([primary_id] if primary_id is not None else []):
@@ -674,6 +676,12 @@ class WorkDetailPage(QWidget):
                     self.mangabaka_volume_records = saved_volumes
             except Exception:
                 self.mangabaka_volume_records = []
+            try:
+                saved_news = get_provider_metadata(int(primary_id), "mangabaka_news")
+                if isinstance(saved_news, list):
+                    self.mangabaka_news = saved_news
+            except Exception:
+                self.mangabaka_news = []
 
         previous_selected = self._selected_episode_work_id
         if previous_selected in detail_ids:
@@ -1412,6 +1420,26 @@ class WorkDetailPage(QWidget):
                 volume_lines.append(label + (f" ({'; '.join(extras)})" if extras else ""))
             if volume_lines:
                 add_line("Published volume records", " | ".join(volume_lines))
+
+        if self.mangabaka_news:
+            news_lines = []
+            for news in self.mangabaka_news[:8]:
+                if not isinstance(news, dict):
+                    continue
+                title = str(news.get("title") or news.get("headline") or news.get("name") or "").strip()
+                summary = str(news.get("summary") or news.get("description") or news.get("excerpt") or "").strip()
+                published_at = str(
+                    news.get("published_at") or news.get("published")
+                    or news.get("created_at") or news.get("date") or ""
+                ).strip()
+                url = str(news.get("url") or news.get("link") or "").strip()
+                parts = [part for part in (title, published_at, summary) if part]
+                if url.startswith("https://"):
+                    parts.append(url)
+                if parts:
+                    news_lines.append(" — ".join(parts))
+            if news_lines:
+                add_line("MangaBaka news", " | ".join(news_lines))
 
         attribution = QLabel("Metadata aggregated by MangaBaka; source-site data remains subject to its own terms.")
         attribution.setWordWrap(True)
