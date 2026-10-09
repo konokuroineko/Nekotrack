@@ -106,6 +106,11 @@ def _media_fields(include_details=False, include_relations=True):
         title { romaji english native }
         episodes
         averageScore
+        status
+        season
+        seasonYear
+        genres
+        tags { name }
         startDate { year month day }
         coverImage { large }
         format

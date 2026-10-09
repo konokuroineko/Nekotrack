@@ -506,6 +506,7 @@ class SearchPage(QWidget):
         for control in controls:
             control.blockSignals(True)
         self.media_filter.setCurrentIndex(0)
+        self.format_filter.setCurrentIndex(0)
         self.status_filter.setCurrentIndex(0)
         self.season_filter.setCurrentIndex(0)
         self.year_filter.clear()
