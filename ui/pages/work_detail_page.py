@@ -2047,12 +2047,9 @@ class WorkDetailPage(QWidget):
                     break
             return
 
-    def _detail_work_ids(self):
-        """Return every work ID represented by this detail page."""
-        members = self._value("_series_members") or []
-        ids = []
-
-        for memberpx; }}"
+    def _detail_section_frame_stylesheet(self):
+        return (
+            f"QFrame#charactersSection {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
             f" QFrame#section {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
         )
 
