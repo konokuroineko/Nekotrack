@@ -18,10 +18,13 @@ from database import (
     save_characters,
     save_cover_path,
     save_episodes,
+    save_provider_metadata,
+    save_reading_item_metadata,
     save_staff,
     save_tmdb_mapping,
 )
 from image_cache import download_cover
+from mangabaka_api import get_volume_records
 from ui.branding import application_icon, logo_pixmap, navigation_icon, wordmark_pixmap
 from ui.navigation import NavigationController
 from ui.preferences import get
@@ -65,6 +68,35 @@ class LibraryImportWorker(QObject):
                 raise RuntimeError("AniList returned no details for this work.")
 
             save_anime(details)
+
+            # Pull published volume/work records when MangaBaka has them. The
+            # local progress rows stay authoritative; this only fills real
+            # titles into the existing volume placeholders.
+            if str(details.get("type") or "").upper() == "MANGA":
+                mb_id = details.get("_mangabaka_id")
+                if mb_id is None and self.work_id < 0:
+                    mb_id = abs(self.work_id)
+                if mb_id:
+                    try:
+                        volume_records = get_volume_records(int(mb_id), max_pages=2)
+                        if volume_records:
+                            save_provider_metadata(
+                                self.work_id,
+                                "mangabaka_volumes",
+                                volume_records,
+                                provider_id=mb_id,
+                            )
+                            save_reading_item_metadata(
+                                self.work_id,
+                                "volume",
+                                volume_records,
+                            )
+                    except Exception as volume_error:
+                        print(
+                            f"MangaBaka volume lookup failed for work {self.work_id}: "
+                            f"{volume_error}"
+                        )
+
             save_characters(
                 self.work_id,
                 (details.get("characters") or {}).get("edges"),
