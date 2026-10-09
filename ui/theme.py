@@ -1,7 +1,9 @@
-from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QApplication
+import re
 
-from ui.preferences import get
+from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import QApplication, QDialog, QWidget
+
+from ui.preferences import THEME_PRESETS, get
 
 
 COLOR_KEYS = (
@@ -100,13 +102,91 @@ def refresh_theme():
 
 
 def retint_widget_styles(old_theme_name, new_theme_name):
-    """Compatibility hook for the settings page.
+    """Retint cached, widget-local stylesheets when the active palette changes.
 
-    Theme changes are applied through the semantic theme roles and live refresh
-    methods. Existing widgets are refreshed directly, so no historical color
-    rewriting is needed here.
+    Many widgets build their stylesheets once from COLORS during construction.
+    Updating the global palette does not rewrite those already-rendered strings.
+    Replace known theme-palette colors with their equivalent role in the new
+    palette before the pages regenerate their own stylesheets.
     """
-    return
+    new_theme = THEME_PRESETS.get(str(new_theme_name))
+    if not new_theme or str(old_theme_name) == str(new_theme_name):
+        return
+
+    # Include every preset as stale inline styles may still contain a color
+    # from a theme selected earlier, not only from the immediately previous one.
+    candidates = {}
+    for preset in THEME_PRESETS.values():
+        for key in COLOR_KEYS:
+            old_color = preset.get(key)
+            new_color = new_theme.get(key)
+            if (
+                isinstance(old_color, str)
+                and isinstance(new_color, str)
+                and old_color.startswith("#")
+                and new_color.startswith("#")
+                and old_color.lower() != new_color.lower()
+            ):
+                candidates.setdefault(old_color.lower(), set()).add(new_color)
+
+    # If the same literal represents different semantic roles in the theme
+    # catalog, leave it untouched rather than guessing which role it meant.
+    replacements = {
+        old_color: next(iter(new_colors))
+        for old_color, new_colors in candidates.items()
+        if len(new_colors) == 1
+    }
+    if not replacements:
+        return
+
+    color_pattern = re.compile(
+        "|".join(re.escape(color) for color in sorted(replacements, key=len, reverse=True)),
+        re.IGNORECASE,
+    )
+    app = QApplication.instance()
+    if app is None:
+        return
+
+    def is_theme_preview(widget):
+        # Theme cards and their swatches intentionally display each preset's
+        # own palette and must not be recolored to the currently active theme.
+        parent = widget
+        while parent is not None:
+            if isinstance(parent, QDialog):
+                return True
+            if parent.objectName() in {"themePresetCard", "themeCard"}:
+                return True
+            parent = parent.parentWidget()
+        return False
+
+    widgets = []
+    for window in app.topLevelWidgets():
+        if isinstance(window, QDialog):
+            continue
+        widgets.append(window)
+        widgets.extend(window.findChildren(QWidget))
+
+    seen = set()
+    for widget in widgets:
+        if id(widget) in seen or is_theme_preview(widget):
+            continue
+        seen.add(id(widget))
+        stylesheet = widget.styleSheet()
+        if not stylesheet:
+            continue
+
+        updated = color_pattern.sub(
+            lambda match: replacements[match.group(0).lower()],
+            stylesheet,
+        )
+        if updated == stylesheet:
+            continue
+
+        widget.setStyleSheet(updated)
+        style = widget.style()
+        style.unpolish(widget)
+        style.polish(widget)
+        widget.update()
 
 
 def application_stylesheet():
