@@ -169,7 +169,12 @@ def _title_family_compatible(left, right):
     if len(shorter) >= 2 and longer[:len(shorter)] == shorter:
         return True
 
-    return False
+    common_prefix = 0
+    for left, right in zip(left_tokens, right_tokens):
+        if left != right:
+            break
+        common_prefix += 1
+    return common_prefix >= 2
 
 
 # Season counting belongs to the series bundling system. Keeping it here
