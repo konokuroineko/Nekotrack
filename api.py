@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from ui.preferences import get
 from mangabaka_api import (
     enrich_anilist_media,
+    get_related_series as get_mangabaka_related_series,
     get_series as get_mangabaka_series,
     normalize_series as normalize_mangabaka_series,
 )
@@ -392,6 +393,12 @@ def search_anime(
 
 def get_media_relations(media_id):
     """Fetch only the lightweight relation data used by series grouping."""
+    if int(media_id) < 0:
+        details = get_media_details(media_id)
+        return details or {
+            "id": int(media_id), "type": "MANGA", "format": "MANGA",
+            "title": {"english": "MangaBaka entry"}, "relations": {"edges": []},
+        }
     query = """
     query ($id: Int) {
         Media(id: $id) {
@@ -422,7 +429,12 @@ def get_media_relations(media_id):
 
 def get_media_relations_batch(media_ids):
     """Fetch lightweight relation data for multiple media IDs in one request."""
-    ids = sorted({int(media_id) for media_id in media_ids if media_id is not None})
+    # MangaBaka-only works use negative local IDs and are deliberately
+    # excluded from AniList relation queries.
+    ids = sorted({
+        int(media_id) for media_id in media_ids
+        if media_id is not None and int(media_id) > 0
+    })
     if not ids:
         return {}
 
@@ -522,7 +534,37 @@ def get_media_details(media_id):
             record = record[0] if record else None
         if not isinstance(record, dict):
             raise RuntimeError("MangaBaka returned no details for this series.")
-        return normalize_mangabaka_series(record, preferred_id=numeric_id)
+        media = normalize_mangabaka_series(record, preferred_id=numeric_id)
+        # Bring in the provider's native relationship graph where it exists.
+        try:
+            related_payload = get_mangabaka_related_series(abs(numeric_id))
+            related_data = related_payload.get("data", related_payload) if isinstance(related_payload, dict) else related_payload
+            if isinstance(related_data, dict):
+                related_data = related_data.get("related") or related_data.get("series") or related_data.get("items") or []
+            edges = []
+            for related in related_data if isinstance(related_data, list) else []:
+                if not isinstance(related, dict):
+                    continue
+                raw_node = related.get("series") if isinstance(related.get("series"), dict) else related
+                if not raw_node.get("id"):
+                    continue
+                node = normalize_mangabaka_series(raw_node)
+                edges.append({
+                    "relationType": str(related.get("relation_type") or related.get("relationType") or "RELATED").upper(),
+                    "node": {
+                        "id": node["id"],
+                        "idMal": node.get("idMal"),
+                        "type": node.get("type"),
+                        "format": node.get("format"),
+                        "title": node.get("title"),
+                        "coverImage": node.get("coverImage"),
+                        "startDate": node.get("startDate"),
+                    },
+                })
+            media["relations"] = {"edges": edges}
+        except Exception as error:
+            print(f"MangaBaka related-series lookup skipped: {error}")
+        return media
     query = """
     query ($id: Int) {
         Media(id: $id) {
