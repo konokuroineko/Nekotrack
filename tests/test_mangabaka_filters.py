@@ -13,7 +13,7 @@ class MangaBakaFilterMappingTests(unittest.TestCase):
             "pagination": {"page": 1, "limit": 7, "count": 0, "next": None},
         }
         result = mb.search_media(
-            "", page=1, media_type="MANGA", media_format=None,
+            "Example", page=1, media_type="MANGA", media_format=None,
             filters={
                 "format_filter": "MANGA", "status": "FINISHED", "min_score": 80,
                 "year": "2020", "genre": "Action, Fantasy",
@@ -22,7 +22,7 @@ class MangaBakaFilterMappingTests(unittest.TestCase):
             }, limit=7,
         )
         self.assertEqual(result["media"], [])
-        self.assertEqual(search.call_args.args[0], "")
+        self.assertEqual(search.call_args.args[0], "Example")
         kwargs = search.call_args.kwargs
         self.assertEqual(kwargs["page"], 1)
         self.assertEqual(kwargs["limit"], 7)
