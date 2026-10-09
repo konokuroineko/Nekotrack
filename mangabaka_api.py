@@ -143,6 +143,168 @@ def _filter_values(values):
     return [values]
 
 
+def _local_filter_terms(value):
+    if value in (None, ""):
+        return []
+    values = value if isinstance(value, (list, tuple, set)) else str(value).split(",")
+    return [str(part).strip() for part in values if str(part).strip()]
+
+
+def _record_term_values(values):
+    if values is None:
+        return []
+    if isinstance(values, (str, int, float)):
+        return [str(values).strip()]
+    if isinstance(values, dict):
+        values = [values]
+    output = []
+    for value in values:
+        if isinstance(value, dict):
+            for key in ("name", "title", "name_path", "slug"):
+                candidate = value.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    output.append(candidate.strip())
+        elif value is not None:
+            candidate = str(value).strip()
+            if candidate:
+                output.append(candidate)
+    return output
+
+
+def _contains_requested_term(available, requested):
+    available_terms = {
+        str(value).strip().casefold()
+        for value in available if str(value).strip()
+    }
+    return any(term.casefold() in available_terms for term in requested)
+
+
+def _publisher_ids(value):
+    if value is None:
+        return set()
+    if isinstance(value, (int, str)):
+        try:
+            return {int(value)}
+        except (TypeError, ValueError):
+            return set()
+    if isinstance(value, (list, tuple, set)):
+        result = set()
+        for item in value:
+            result.update(_publisher_ids(item))
+        return result
+    if isinstance(value, dict):
+        result = set()
+        for key in ("id", "publisher_id", "publisherId"):
+            candidate = value.get(key)
+            if candidate is not None:
+                result.update(_publisher_ids(candidate))
+        return result
+    return set()
+
+
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"true", "yes", "1", "licensed"}:
+            return True
+        if normalized in {"false", "no", "0", "unlicensed"}:
+            return False
+    return None
+
+
+def _matches_local_filters(record, picked_format, filters):
+    """Enforce requested filters locally when the provider ignores/falls back on them."""
+    raw_type = str(record.get("type") or "manga").strip().casefold()
+    if picked_format == "NOVEL" and raw_type != "novel":
+        return False
+    if picked_format == "MANGA" and raw_type == "novel":
+        return False
+
+    status_map = {
+        "FINISHED": {"completed", "finished"},
+        "RELEASING": {"releasing", "ongoing"},
+        "NOT_YET_RELEASED": {"upcoming", "not yet released", "not_yet_released"},
+        "CANCELLED": {"cancelled", "canceled"},
+        "HIATUS": {"hiatus", "on hiatus"},
+    }
+    wanted_status = str(filters.get("status") or "").strip().upper()
+    if wanted_status in status_map:
+        actual_status = str(record.get("status") or "").strip().casefold().replace("_", " ")
+        allowed_statuses = {value.replace("_", " ") for value in status_map[wanted_status]}
+        if actual_status not in allowed_statuses:
+            return False
+
+    min_score = filters.get("min_score")
+    if min_score is not None:
+        try:
+            rating = float(record.get("rating"))
+            if rating < float(min_score):
+                return False
+        except (TypeError, ValueError):
+            return False
+
+    year = filters.get("year")
+    if year and str(year).isdigit():
+        published_year = (_date_parts(record) or {}).get("year")
+        try:
+            if int(published_year) != int(year):
+                return False
+        except (TypeError, ValueError):
+            return False
+
+    for key in ("genre", "tag"):
+        requested = _local_filter_terms(filters.get(key))
+        if not requested:
+            continue
+        tags = record.get("tags") or record.get("tag") or []
+        if isinstance(tags, dict):
+            tags = [tags]
+        if not isinstance(tags, list):
+            tags = [tags]
+
+        explicit_genres = _record_term_values(record.get("genres") or record.get("genre"))
+        all_tags = _record_term_values(tags)
+        genre_tags = []
+        for tag in tags:
+            if isinstance(tag, dict) and tag.get("is_genre") is True:
+                genre_tags.extend(_record_term_values(tag))
+        available = (
+            explicit_genres or genre_tags or all_tags
+            if key == "genre"
+            else all_tags
+        )
+        if not _contains_requested_term(available, requested):
+            return False
+
+    publisher_id = filters.get("publisher_id")
+    if publisher_id not in (None, ""):
+        if not str(publisher_id).isdigit():
+            return False
+        known_ids = set()
+        for key in ("publisher_id", "publisherId", "publisher_ids", "publisher", "publishers"):
+            known_ids.update(_publisher_ids(record.get(key)))
+        if int(publisher_id) not in known_ids:
+            return False
+
+    expected_license = filters.get("is_licensed")
+    if expected_license is not None:
+        actual_license = None
+        for key in ("is_licensed", "isLicensed", "licensed"):
+            if record.get(key) is not None:
+                actual_license = _as_bool(record.get(key))
+                break
+        if actual_license is None or actual_license is not bool(expected_license):
+            return False
+
+    return True
+
+
+
+
 def search_series(query="", page=1, limit=20, **filters):
     """Search series with filters. Basic title search survives filter-schema changes."""
     params = {
@@ -624,10 +786,7 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
         # case a future API revision ignores or changes that filter.
         if str(item.get("content_rating") or "").lower() not in {"safe", "suggestive"}:
             continue
-        raw_type = str(item.get("type") or "manga").lower()
-        if picked_format == "NOVEL" and raw_type != "novel":
-            continue
-        if picked_format == "MANGA" and raw_type == "novel":
+        if not _matches_local_filters(item, picked_format, filters):
             continue
         normalized.append(normalize_series(item))
     current_page = int(pagination.get("page") or page)
