@@ -14,6 +14,8 @@ import database
 import mangabaka_api as mb
 import series
 import updater
+import api as nt_api
+from datetime import date
 
 
 class ProviderPayloadChaosTests(unittest.TestCase):
@@ -467,6 +469,113 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         self.assert_database_invariants()
         current_ids = {row["id"] for row in database.get_saved_anime()}
         self.assertEqual(current_ids, active)
+
+
+class TMDBPayloadChaosTests(unittest.TestCase):
+    def test_tv_search_ignores_malformed_results_and_scores_bad_popularity_safely(self):
+        payload = {
+            "results": [
+                None,
+                "not a result object",
+                {},
+                {"id": "bad-id", "name": "Example Show"},
+                {"id": "41", "name": "Example Show", "popularity": "not-a-number",
+                 "origin_country": "JP", "first_air_date": "2020-01-01"},
+                {"id": 42, "name": "Unrelated Show", "popularity": float("nan")},
+            ]
+        }
+        with patch.object(nt_api, "_tmdb_get", return_value=payload):
+            candidate = nt_api._find_tmdb_series(["Example Show"], date(2020, 1, 1))
+        self.assertEqual(candidate["id"], 41)
+        self.assertEqual(nt_api._candidate_score({"popularity": float("inf")}, [], None), 0)
+
+    def test_movie_search_ignores_malformed_results(self):
+        payload = {
+            "results": [
+                None,
+                {"id": [], "title": "Special"},
+                {"id": "87", "title": "Special", "release_date": "2020-01-01",
+                 "popularity": "broken"},
+            ]
+        }
+        with patch.object(nt_api, "_tmdb_get", return_value=payload):
+            candidate = nt_api._find_tmdb_movie(["Special"], date(2020, 1, 1))
+        self.assertEqual(candidate["id"], 87)
+
+    def test_season_picker_skips_bad_rows_and_keeps_season_zero(self):
+        details = {
+            "seasons": [
+                None,
+                "not a season",
+                {},
+                {"season_number": "bad"},
+                {"season_number": 0, "air_date": "2019-01-01"},
+                {"season_number": "1", "air_date": "2020-01-01"},
+                {"season_number": 2, "air_date": "2021-01-01"},
+            ]
+        }
+        selected = nt_api._find_tmdb_season(details, date(2019, 1, 4))
+        self.assertEqual(selected["season_number"], 0)
+
+    def test_episode_fetch_skips_malformed_rows_and_avoids_extra_mapping_request(self):
+        season = {
+            "episodes": [
+                None,
+                "bad row",
+                {},
+                {"episode_number": "not-a-number", "air_date": "2020-01-01"},
+                {"episode_number": 0, "air_date": "2020-01-01"},
+                {"episode_number": "3", "air_date": "not-a-date"},
+                {"episode_number": "2", "air_date": "2020-01-02", "name": "Second"},
+                {"episode_number": 1, "air_date": "2020-01-01", "name": "First"},
+                {"episode_number": 4, "air_date": "2020-01-02", "name": 123},
+            ]
+        }
+        with patch.object(nt_api, "_tmdb_get", return_value=season) as request, \
+             patch.object(nt_api, "_pick_best_episode_still", return_value=(None, 0)):
+            result = nt_api.get_tmdb_episode_data(
+                ["Example Show"], "2020-01-01", tmdb_id=12,
+                tmdb_season_number=1,
+            )
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual([episode["episodeNumber"] for episode in result["episodes"]], [1, 2, 4])
+        self.assertEqual(result["episodes"][2]["title"], "Episode 4")
+        self.assertEqual(result["tmdb_count"], 3)
+
+    def test_episode_still_ranking_survives_corrupted_image_metadata(self):
+        with patch.object(nt_api, "_tmdb_get", return_value={
+            "stills": [
+                None,
+                "not an image",
+                {"file_path": "/bad.jpg", "vote_average": "bad", "vote_count": [], "width": "wide"},
+                {"file_path": "/good.jpg", "vote_average": 8.7, "vote_count": 2, "width": 1920},
+            ]
+        }):
+            url, count = nt_api._pick_best_episode_still(
+                12, 1, {"episode_number": 4}
+            )
+        self.assertEqual(url, f"{nt_api.TMDB_IMAGE_BASE_URL}/good.jpg")
+        self.assertEqual(count, 2)
+
+    def test_anilist_rejects_malformed_graphql_payload_with_clear_error(self):
+        response = Mock()
+        response.status_code = 200
+        response.reason = "OK"
+        response.json.return_value = ["not", "an", "object"]
+        with patch.object(nt_api.requests, "post", return_value=response), \
+             patch.object(nt_api, "MAX_RETRIES", 1):
+            with self.assertRaisesRegex(RuntimeError, "unexpected GraphQL response"):
+                nt_api.anilist_request("query { Page { pageInfo { currentPage } } }")
+
+    def test_anilist_error_payload_skips_malformed_error_objects(self):
+        response = Mock()
+        response.status_code = 400
+        response.reason = "Bad Request"
+        response.json.return_value = {"errors": [None, "bad error", {"message": 17}]}
+        with patch.object(nt_api.requests, "post", return_value=response), \
+             patch.object(nt_api, "MAX_RETRIES", 1):
+            with self.assertRaisesRegex(RuntimeError, "AniList request failed"):
+                nt_api.anilist_request("query { invalid }")
 
 
 class UpdateFeedChaosTests(unittest.TestCase):
