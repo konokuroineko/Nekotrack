@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ui.branding import application_icon, logo_pixmap
 from ui.preferences import (
     THEME_PRESETS,
     apply_theme_preset,
@@ -95,6 +96,7 @@ class SetupWizard(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("NekoTrack Setup")
+        self.setWindowIcon(application_icon())
         self.setModal(True)
         self.setMinimumSize(900, 620)
         self.resize(980, 650)
@@ -124,8 +126,12 @@ class SetupWizard(QDialog):
 
         brand_row = QHBoxLayout()
         brand_row.setSpacing(9)
-        mark = QLabel("N")
+        mark = QLabel()
         mark.setObjectName("setupMark")
+        mark.setFixedSize(38, 38)
+        mark.setPixmap(logo_pixmap(96))
+        mark.setScaledContents(True)
+        mark.setStyleSheet("background:transparent;border:none;padding:0;")
         brand = QLabel("NekoTrack")
         brand.setObjectName("setupBrand")
         brand_row.addWidget(mark)
@@ -476,18 +482,7 @@ class SetupWizard(QDialog):
                 color:{theme['primary']};
                 font-family:"Segoe UI";
             }}
-            QLabel#setupMark {{
-                background:{theme['accent']};
-                color:{theme['accent_text']};
-                border-radius:9px;
-                min-width:38px;
-                max-width:38px;
-                min-height:38px;
-                max-height:38px;
-                font-size:19px;
-                font-weight:900;
-                qproperty-alignment:AlignCenter;
-            }}
+            QLabel#setupMark {{ background:transparent; border:none; }}
             QLabel#setupBrand {{
                 font-size:19px;
                 font-weight:800;
