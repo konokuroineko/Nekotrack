@@ -1,7 +1,8 @@
 import threading
 
 from api import get_media_details, get_tmdb_episode_data
-from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer
+from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer, QSize
+
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
 from database import (
@@ -21,6 +22,7 @@ from database import (
     save_tmdb_mapping,
 )
 from image_cache import download_cover
+from ui.branding import application_icon, logo_pixmap, navigation_icon
 from ui.navigation import NavigationController
 from ui.preferences import get
 from ui.setup_wizard import SetupWizard
@@ -211,15 +213,21 @@ class LibraryEpisodePreloadWorker(QObject):
 
 
 class NavigationButton(QPushButton):
-    def __init__(self, icon_text, label):
+    def __init__(self, icon_name, label):
         super().__init__()
+        self.icon_name = icon_name
         self.label = label
-        self.setText(f"{icon_text}  {label}")
+        self.setText(label)
+        self.setIcon(navigation_icon(icon_name, COLORS["secondary"]))
+        self.setIconSize(QSize(18, 18))
         self.setCheckable(True)
         self.setFocusPolicy(Qt.NoFocus)
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(44)
         self.setProperty("navButton", True)
+
+    def refresh_icon(self, color):
+        self.setIcon(navigation_icon(self.icon_name, color))
 
 
 class MainWindow(QMainWindow):
@@ -227,6 +235,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         initialize_database()
         self.setWindowTitle("NekoTrack")
+        self.setWindowIcon(application_icon())
         self.resize(1380, 860)
         self.image_threads = []
         self.library_import_threads = []
@@ -260,13 +269,18 @@ class MainWindow(QMainWindow):
         side.setSpacing(5)
 
         brand = QHBoxLayout()
-        mark = QLabel("N")
+        mark = QLabel()
         mark.setObjectName("brandMark")
+        mark.setFixedSize(42, 42)
+        mark.setPixmap(logo_pixmap(96))
+        mark.setScaledContents(True)
+        mark.setStyleSheet("background:transparent;border:none;padding:0;")
         self.brand_mark = mark
-        mark.setStyleSheet(self._brand_mark_stylesheet())
-        word = QLabel("NekoTrack")
+        word = QLabel()
         word.setObjectName("brandWord")
+        word.setTextFormat(Qt.TextFormat.RichText)
         self.brand_word = word
+        self._update_brand_word()
         brand.addWidget(mark)
         brand.addWidget(word)
         brand.addStretch()
@@ -290,9 +304,17 @@ class MainWindow(QMainWindow):
         for name, page in pages.items():
             self.navigation.add_page(name, page)
 
-        self._section(side, "LIBRARY", [("⌂", "Home", "home"), ("▦", "Library", "collections"), ("⌕", "Search", "search")])
+        self._section(
+            side,
+            "LIBRARY",
+            [
+                ("home", "Home", "home"),
+                ("library", "Library", "collections"),
+                ("search", "Search", "search"),
+            ],
+        )
         side.addStretch()
-        self._add_nav(side, "⚙", "Settings", "settings")
+        self._add_nav(side, "settings", "Settings", "settings")
 
         self.navigation.page_changed.connect(self.update_navigation_state)
         self.navigation.page_changed.connect(self._page_changed)
@@ -311,7 +333,7 @@ class MainWindow(QMainWindow):
             application_stylesheet()
             + f"""
             QFrame#sidebar {{ background:{COLORS['sidebar']}; border-right:1px solid {COLORS['frame']}; }}
-            QLabel#brandMark {{ background:{COLORS['accent']}; color:{COLORS['accent_text']}; border:1px solid {COLORS['nav_selected_frame']}; border-radius:9px; font-size:19px; font-weight:900; min-width:38px; max-width:38px; min-height:38px; max-height:38px; qproperty-alignment:AlignCenter; }}
+            QLabel#brandMark {{ background:transparent; border:none; }}
             QLabel#brandWord {{ color:{COLORS['primary']}; font-size:19px; font-weight:800; letter-spacing:-.4px; padding-left:7px; }}
             QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:10px; padding:11px 13px; text-align:left; font-size:13px; font-weight:600; }}
             QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
@@ -367,7 +389,7 @@ class MainWindow(QMainWindow):
             application_stylesheet()
             + f"""
             QFrame#sidebar {{ background:{COLORS['sidebar']}; border-right:1px solid {COLORS['frame']}; }}
-            QLabel#brandMark {{ background:{COLORS['accent']}; color:{COLORS['accent_text']}; border-radius:9px; font-size:19px; font-weight:900; min-width:38px; max-width:38px; min-height:38px; max-height:38px; qproperty-alignment:AlignCenter; }}
+            QLabel#brandMark {{ background:transparent; border:none; }}
             QLabel#brandWord {{ color:{COLORS['primary']}; font-size:19px; font-weight:800; letter-spacing:-.4px; padding-left:7px; }}
             QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:10px; padding:11px 13px; text-align:left; font-size:13px; font-weight:600; }}
             QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
@@ -376,15 +398,11 @@ class MainWindow(QMainWindow):
             """
         )
 
-        if hasattr(self, "brand_mark"):
-            self.brand_mark.setStyleSheet(self._brand_mark_stylesheet())
-            self.brand_mark.style().unpolish(self.brand_mark)
-            self.brand_mark.style().polish(self.brand_mark)
-            self.brand_mark.update()
         if hasattr(self, "brand_word"):
-            self.brand_word.setStyleSheet(
-                f"color:{COLORS['primary']};font-size:19px;font-weight:800;"
-                "letter-spacing:-.4px;padding-left:7px;"
+            self._update_brand_word()
+        for button in self.navigation_buttons.values():
+            button.refresh_icon(
+                COLORS["accent"] if button.isChecked() else COLORS["secondary"]
             )
 
         if hasattr(self, "home_page"):
@@ -449,14 +467,14 @@ class MainWindow(QMainWindow):
             # Preserve normal-window geometry without forcing another show cycle.
             pass
 
-    def _brand_mark_stylesheet(self):
-        return (
-            f"background:{COLORS['accent']};"
-            f"color:{COLORS['accent_text']};"
-            f"border:1px solid {COLORS['nav_selected_frame']};"
-            "border-radius:9px;font-size:19px;font-weight:900;"
-            "min-width:38px;max-width:38px;min-height:38px;max-height:38px;"
-            "qproperty-alignment:AlignCenter;"
+    def _update_brand_word(self):
+        self.brand_word.setText(
+            f'<span style="color:{COLORS["accent"]}">Neko</span>'
+            f'<span style="color:{COLORS["primary"]}">Track</span>'
+        )
+        self.brand_word.setStyleSheet(
+            "font-size:19px;font-weight:800;letter-spacing:-.4px;"
+            "padding-left:7px;background:transparent;"
         )
 
     def _section(self, layout, title, items):
@@ -475,7 +493,11 @@ class MainWindow(QMainWindow):
 
     def update_navigation_state(self, page_name):
         for name, button in self.navigation_buttons.items():
-            button.setChecked(name == page_name)
+            selected = name == page_name
+            button.setChecked(selected)
+            button.refresh_icon(
+                COLORS["accent"] if selected else COLORS["secondary"]
+            )
 
     def _start_existing_library_episode_preload(self):
         if (
