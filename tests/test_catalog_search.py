@@ -121,3 +121,18 @@ class CombinedCatalogSearchTests(unittest.TestCase):
         self.assertEqual(result["pageInfo"]["lastPage"], 1)
         self.assertFalse(result["pageInfo"]["hasNextPage"])
 
+    @patch("catalog_search.search_mangabaka_media")
+    @patch("catalog_search.search_anime")
+    def test_invalid_start_date_does_not_break_date_sort(self, search_anilist, search_mb):
+        valid = anime_item(100, "Dated work")
+        invalid = anime_item(101, "Undated work")
+        invalid["startDate"] = {"year": float("inf"), "month": 13, "day": 99}
+        search_anilist.return_value = {
+            "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+            "media": [invalid, valid],
+        }
+        result = catalog_search.search_combined_media(
+            "", 1, "ANIME", None, {"sort": "START_DATE_DESC"}
+        )
+        self.assertEqual([item["id"] for item in result["media"]], [100, 101])
+
