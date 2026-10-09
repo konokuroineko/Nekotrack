@@ -246,19 +246,6 @@ def save_tmdb_mapping(work_id, tmdb_id, tmdb_season_number):
     connection.close()
 
 
-def save_work_mal_id(work_id, mal_id):
-    """Store the MyAnimeList ID resolved from AniList for future episode metadata syncs."""
-    if mal_id is None:
-        return
-
-    connection = get_connection()
-    connection.execute(
-        "UPDATE works SET mal_id = ? WHERE id = ?",
-        (int(mal_id), int(work_id)),
-    )
-    connection.commit()
-    connection.close()
-
 def save_character_image_path(character_id, image_path):
     connection = get_connection()
     connection.execute(
@@ -525,27 +512,6 @@ def set_episode_watched(work_id, episode_number, watched):
     connection.commit()
     connection.close()
     return watched_count, total
-
-
-def set_episode_progress(work_id, progress):
-    """Set the library episode counter and, when episode rows exist, keep their watched state in sync."""
-    connection = get_connection()
-    work = connection.execute("SELECT episodes FROM works WHERE id = ?", (work_id,)).fetchone()
-    if not work or not connection.execute("SELECT 1 FROM user_library WHERE work_id = ?", (work_id,)).fetchone():
-        connection.close()
-        return
-    total = int(work["episodes"] or 0)
-    progress = max(0, min(int(progress), total)) if total else max(0, int(progress))
-    episode_count = connection.execute("SELECT COUNT(*) FROM episodes WHERE work_id = ?", (work_id,)).fetchone()[0]
-    if episode_count:
-        connection.execute("UPDATE episodes SET watched = CASE WHEN episode_number <= ? THEN 1 ELSE 0 END WHERE work_id = ?", (progress, work_id))
-        watched_count = connection.execute("SELECT COUNT(*) FROM episodes WHERE work_id = ? AND watched = 1", (work_id,)).fetchone()[0]
-        progress = watched_count
-    status = "Completed" if total and progress >= total else "Watching" if progress > 0 else "Planning"
-    connection.execute("UPDATE user_library SET progress_episodes = ?, status = ?, updated_date = CURRENT_TIMESTAMP WHERE work_id = ?",
-                       (progress, status, work_id))
-    connection.commit()
-    connection.close()
 
 
 def save_anime(anime):
