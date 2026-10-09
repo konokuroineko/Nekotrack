@@ -59,11 +59,21 @@ def initialize_database():
         CREATE TABLE IF NOT EXISTS user_library (
             work_id INTEGER PRIMARY KEY, status TEXT NOT NULL DEFAULT 'Planning',
             progress_episodes INTEGER DEFAULT 0, progress_chapters INTEGER DEFAULT 0,
+            progress_volumes INTEGER DEFAULT 0,
             rating INTEGER, notes TEXT, added_date DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_date DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (work_id) REFERENCES works(id)
         )
     """)
+    library_columns = {
+        column["name"]
+        for column in cursor.execute("PRAGMA table_info(user_library)").fetchall()
+    }
+    if "progress_volumes" not in library_columns:
+        cursor.execute(
+            "ALTER TABLE user_library ADD COLUMN progress_volumes INTEGER NOT NULL DEFAULT 0"
+        )
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS characters (
             id INTEGER PRIMARY KEY, name TEXT NOT NULL, image_url TEXT, image_path TEXT
@@ -140,6 +150,17 @@ def initialize_database():
     if "thumbnail_url" not in episode_column_names:
         cursor.execute("ALTER TABLE episodes ADD COLUMN thumbnail_url TEXT")
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reading_items (
+            work_id INTEGER NOT NULL,
+            item_type TEXT NOT NULL CHECK(item_type IN ('chapter', 'volume')),
+            item_number INTEGER NOT NULL CHECK(item_number >= 1),
+            title TEXT,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (work_id, item_type, item_number),
+            FOREIGN KEY (work_id) REFERENCES works(id)
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS songs (
             id INTEGER PRIMARY KEY, title TEXT NOT NULL, artist TEXT, image_url TEXT
         )
@@ -150,6 +171,21 @@ def initialize_database():
             song_number INTEGER, PRIMARY KEY (work_id, song_id, song_type),
             FOREIGN KEY (work_id) REFERENCES works(id), FOREIGN KEY (song_id) REFERENCES songs(id)
         )
+    """)
+    # TV episode records and TMDB season mappings are only valid for anime.
+    # Remove accidental TV episode imports from Manga entries from older builds.
+    cursor.execute("""
+        DELETE FROM episodes
+        WHERE work_id IN (
+            SELECT id FROM works
+            WHERE UPPER(COALESCE(type, '')) != 'ANIME'
+        )
+    """)
+    cursor.execute("""
+        UPDATE works
+        SET tmdb_id = NULL, tmdb_season_number = NULL
+        WHERE UPPER(COALESCE(type, '')) != 'ANIME'
+          AND (tmdb_id IS NOT NULL OR tmdb_season_number IS NOT NULL)
     """)
     connection.commit()
     connection.close()
@@ -482,6 +518,146 @@ def get_episodes(work_id):
     return results
 
 
+def _reading_item_type(value):
+    value = str(value or "").strip().lower()
+    if value not in {"chapter", "volume"}:
+        raise ValueError("Reading item type must be 'chapter' or 'volume'.")
+    return value
+
+
+def ensure_reading_placeholders(work_id, item_type, total_count, offset=0, limit=24):
+    """Create generic numbered placeholders only for the visible reading-list page."""
+    item_type = _reading_item_type(item_type)
+    try:
+        total = max(0, int(total_count or 0))
+        start_offset = max(0, int(offset))
+        page_size = min(100, max(1, int(limit)))
+    except (TypeError, ValueError):
+        return []
+
+    if total <= start_offset:
+        return []
+    end = min(total, start_offset + page_size)
+    start_number = start_offset + 1
+    connection = get_connection()
+    connection.executemany(
+        """
+        INSERT OR IGNORE INTO reading_items
+            (work_id, item_type, item_number, title, is_read)
+        VALUES (?, ?, ?, NULL, 0)
+        """,
+        [
+            (int(work_id), item_type, number)
+            for number in range(start_number, end + 1)
+        ],
+    )
+    connection.commit()
+    rows = connection.execute(
+        """
+        SELECT work_id, item_type, item_number, title, is_read
+        FROM reading_items
+        WHERE work_id = ? AND item_type = ?
+          AND item_number BETWEEN ? AND ?
+        ORDER BY item_number
+        """,
+        (int(work_id), item_type, start_number, end),
+    ).fetchall()
+    connection.close()
+    return rows
+
+
+def get_reading_items(work_id, item_type, limit=24, offset=0):
+    """Return the already-created placeholder entries for one chapter/volume page."""
+    item_type = _reading_item_type(item_type)
+    connection = get_connection()
+    rows = connection.execute(
+        """
+        SELECT work_id, item_type, item_number, title, is_read
+        FROM reading_items
+        WHERE work_id = ? AND item_type = ?
+        ORDER BY item_number
+        LIMIT ? OFFSET ?
+        """,
+        (int(work_id), item_type, max(1, min(100, int(limit))), max(0, int(offset))),
+    ).fetchall()
+    connection.close()
+    return rows
+
+
+def get_reading_progress(work_id, item_type, total_hint=None):
+    """Return read and available counts, using AniList's total when known."""
+    item_type = _reading_item_type(item_type)
+    connection = get_connection()
+    row = connection.execute(
+        """
+        SELECT COALESCE(SUM(is_read), 0) AS read_count,
+               COALESCE(MAX(item_number), 0) AS highest_item
+        FROM reading_items
+        WHERE work_id = ? AND item_type = ?
+        """,
+        (int(work_id), item_type),
+    ).fetchone()
+    connection.close()
+    try:
+        hinted_total = int(total_hint or 0)
+    except (TypeError, ValueError):
+        hinted_total = 0
+    total = hinted_total if hinted_total > 0 else int(row["highest_item"] or 0)
+    return int(row["read_count"] or 0), total
+
+
+def set_reading_item_read(work_id, item_type, item_number, is_read):
+    """Save read state and keep the Library's aggregate chapter/volume counters in sync."""
+    item_type = _reading_item_type(item_type)
+    work_id = int(work_id)
+    item_number = int(item_number)
+    if item_number < 1:
+        raise ValueError("Reading item number must be positive.")
+
+    connection = get_connection()
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO reading_items
+            (work_id, item_type, item_number, title, is_read)
+        VALUES (?, ?, ?, NULL, 0)
+        """,
+        (work_id, item_type, item_number),
+    )
+    connection.execute(
+        """
+        UPDATE reading_items SET is_read = ?
+        WHERE work_id = ? AND item_type = ? AND item_number = ?
+        """,
+        (1 if is_read else 0, work_id, item_type, item_number),
+    )
+    chapter_count = connection.execute(
+        """
+        SELECT COALESCE(SUM(is_read), 0)
+        FROM reading_items WHERE work_id = ? AND item_type = 'chapter'
+        """,
+        (work_id,),
+    ).fetchone()[0]
+    volume_count = connection.execute(
+        """
+        SELECT COALESCE(SUM(is_read), 0)
+        FROM reading_items WHERE work_id = ? AND item_type = 'volume'
+        """,
+        (work_id,),
+    ).fetchone()[0]
+    connection.execute(
+        """
+        UPDATE user_library
+        SET progress_chapters = ?, progress_volumes = ?,
+            updated_date = CURRENT_TIMESTAMP
+        WHERE work_id = ?
+        """,
+        (int(chapter_count or 0), int(volume_count or 0), work_id),
+    )
+    connection.commit()
+    connection.close()
+    return get_reading_progress(work_id, item_type)
+
+
 def save_episode_thumbnail_path(work_id, episode_number, thumbnail_path):
     """Persist the local cached image path for one episode."""
     connection = get_connection()
@@ -630,7 +806,8 @@ def get_work(work_id):
     connection = get_connection()
     result = connection.execute("""
         SELECT works.*, user_library.status, user_library.progress_episodes,
-               user_library.progress_chapters, user_library.rating, user_library.notes,
+               user_library.progress_chapters, user_library.progress_volumes,
+               user_library.rating, user_library.notes,
                user_library.added_date, user_library.updated_date
         FROM works LEFT JOIN user_library ON user_library.work_id = works.id
         WHERE works.id = ?
@@ -1069,6 +1246,7 @@ def delete_work_data(work_id):
         # bundle system, relation graph, or cached work data.
         for table in (
             "episodes",
+            "reading_items",
             "work_characters",
             "work_staff",
             "work_studios",
@@ -1123,6 +1301,7 @@ def delete_work_data(work_id):
                 "SELECT 1 FROM work_relations WHERE source_id = ? OR target_id = ? LIMIT 1",
             ),
             ("episodes", "SELECT 1 FROM episodes WHERE work_id = ? LIMIT 1"),
+            ("reading_items", "SELECT 1 FROM reading_items WHERE work_id = ? LIMIT 1"),
             ("work_characters", "SELECT 1 FROM work_characters WHERE work_id = ? LIMIT 1"),
             ("work_staff", "SELECT 1 FROM work_staff WHERE work_id = ? LIMIT 1"),
             ("work_studios", "SELECT 1 FROM work_studios WHERE work_id = ? LIMIT 1"),
@@ -1167,7 +1346,8 @@ def get_library_by_status(status):
     connection = get_connection()
     results = connection.execute("""
         SELECT works.*, user_library.status, user_library.progress_episodes, user_library.progress_chapters,
-               user_library.rating, user_library.notes, user_library.added_date, user_library.updated_date
+               user_library.progress_volumes, user_library.rating, user_library.notes,
+               user_library.added_date, user_library.updated_date
         FROM works JOIN user_library ON user_library.work_id = works.id
         WHERE user_library.status = ? ORDER BY user_library.added_date DESC
     """, (status,)).fetchall()

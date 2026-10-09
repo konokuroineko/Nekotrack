@@ -17,10 +17,10 @@ from PySide6.QtWidgets import (
 from database import (
     add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
-    get_tmdb_mapping,
-    get_work, save_anime, save_characters, save_cover_path, save_episode_thumbnail_path,
-    save_episodes, save_staff,
-    save_tmdb_mapping, set_episode_watched,
+    get_reading_progress, ensure_reading_placeholders,
+    get_tmdb_mapping, get_work, save_anime, save_characters, save_cover_path,
+    save_episode_thumbnail_path, save_episodes, save_staff, save_tmdb_mapping,
+    set_episode_watched, set_reading_item_read,
 )
 from series import get_library_series
 from ui.preferences import get
@@ -296,6 +296,65 @@ class EpisodeCard(QFrame):
             except (ValueError, IndexError):
                 pass
         return text
+
+
+
+
+class ReadingItemCard(QFrame):
+    """A numbered chapter/volume placeholder with individually saved read state."""
+
+    read_changed = Signal(str, int, bool)
+
+    def __init__(self, item, parent=None):
+        super().__init__(parent)
+        self.item_type = str(item["item_type"])
+        self.item_number = int(item["item_number"])
+        self.setObjectName("readingItemCard")
+        self.setMinimumHeight(82)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(12, 10, 12, 10)
+        row.setSpacing(10)
+
+        number = QLabel(
+            f"{self.item_type.upper()} {self.item_number:03d}"
+        )
+        number.setObjectName("readingItemNumber")
+        number.setMinimumWidth(112)
+        row.addWidget(number, 0, Qt.AlignVCenter)
+
+        description = QVBoxLayout()
+        description.setSpacing(3)
+        title = QLabel(
+            str(item["title"] or f"{self.item_type.title()} {self.item_number}")
+        )
+        title.setObjectName("readingItemTitle")
+        title.setWordWrap(True)
+        detail = QLabel(
+            f"{self.item_type.title()} details placeholder — "
+            "titles and artwork can be added later."
+        )
+        detail.setObjectName("readingItemDescription")
+        detail.setWordWrap(True)
+        description.addWidget(title)
+        description.addWidget(detail)
+        row.addLayout(description, 1)
+
+        self.read_checkbox = QCheckBox("Read")
+        self.read_checkbox.setObjectName("readingItemCheck")
+        self.read_checkbox.setCursor(Qt.PointingHandCursor)
+        self.read_checkbox.setChecked(bool(item["is_read"]))
+        self.read_checkbox.toggled.connect(
+            lambda checked: self.read_changed.emit(
+                self.item_type, self.item_number, checked
+            )
+        )
+        row.addWidget(self.read_checkbox, 0, Qt.AlignVCenter)
+
+    def refresh_theme(self):
+        self.update()
+
 
 
 
@@ -615,6 +674,9 @@ class WorkDetailPage(QWidget):
             detail_data_ready = False
 
         episode_data_ready = True
+        if self._is_reading_media():
+            return detail_data_ready, True
+
         for work_id in detail_ids:
             try:
                 work_row = get_work(work_id)
@@ -654,7 +716,12 @@ class WorkDetailPage(QWidget):
         episode_layout = QVBoxLayout(episode_host)
         episode_layout.setContentsMargins(20, 18, 20, 20)
 
-        if episode_data_ready:
+        if self._is_reading_media():
+            reading_frame = self._reading_section()
+            reading_frame.setProperty("_reading_section", True)
+            episode_host.deleteLater()
+            episode_host = reading_frame
+        elif episode_data_ready:
             ready_episode_frame = self._episodes_section()
             ready_episode_frame.setProperty("_episodes_section", True)
             episode_host.deleteLater()
@@ -819,6 +886,57 @@ class WorkDetailPage(QWidget):
                 background: {COLORS['surface_hover']};
                 border-color: {COLORS['border_hover']};
             }}
+            QFrame#readingKindSection {{
+                background:{COLORS['surface_alt']};
+                border:1px solid {COLORS['border']};
+                border-radius:12px;
+            }}
+            QFrame#readingItemCard {{
+                background:{COLORS['surface']};
+                border:1px solid {COLORS['border']};
+                border-radius:10px;
+            }}
+            QFrame#readingItemCard:hover {{
+                background:{COLORS['surface_hover']};
+                border-color:{COLORS['border_hover']};
+            }}
+            QLabel#readingItemNumber {{
+                color:{COLORS['accent']};
+                font-size:10px;
+                font-weight:900;
+                letter-spacing:.4px;
+                background:transparent;
+            }}
+            QLabel#readingItemTitle {{
+                color:{COLORS['primary']};
+                font-size:12px;
+                font-weight:800;
+                background:transparent;
+            }}
+            QLabel#readingItemDescription {{
+                color:{COLORS['muted']};
+                font-size:10px;
+                background:transparent;
+            }}
+            QCheckBox#readingItemCheck {{
+                color:{COLORS['secondary']};
+                font-size:11px;
+                font-weight:750;
+                spacing:5px;
+                background:transparent;
+            }}
+            QPushButton#readingLoadMore {{
+                color:{COLORS['accent']};
+                background:{COLORS['surface']};
+                border:1px solid {COLORS['border']};
+                border-radius:9px;
+                padding:8px 12px;
+                font-weight:800;
+            }}
+            QPushButton#readingLoadMore:hover {{
+                background:{COLORS['surface_hover']};
+                border-color:{COLORS['accent']};
+            }}
             QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:2px solid transparent; border-radius:{get('corner_radius') + 2}px; font-size:30px; font-weight:900; padding:0; }}
             QToolButton#detailMenu:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
             QFrame#deleteOverlay {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}
@@ -869,6 +987,13 @@ class WorkDetailPage(QWidget):
                 "detailHeroScore": f"color:{COLORS['accent']};font-size:18px;font-weight:800;",
                 "detailHeroDescription": f"color:{COLORS['secondary']};font-size:14px;",
                 "detailSectionHeader": f"font-size:17px;font-weight:800;color:{COLORS['primary']};",
+                "readingSectionTitle": f"font-size:17px;font-weight:800;color:{COLORS['primary']};",
+                "readingKindHeading": f"font-size:14px;font-weight:850;color:{COLORS['primary']};",
+                "readingKindProgress": f"color:{COLORS['accent']};font-size:11px;font-weight:850;",
+                "readingPlaceholderNote": f"color:{COLORS['secondary']};font-size:12px;background:{COLORS['surface_alt']};border:1px solid {COLORS['border']};border-radius:10px;padding:10px 12px;",
+                "readingItemNumber": f"color:{COLORS['accent']};font-size:10px;font-weight:900;letter-spacing:.4px;background:transparent;",
+                "readingItemTitle": f"color:{COLORS['primary']};font-size:12px;font-weight:800;background:transparent;",
+                "readingItemDescription": f"color:{COLORS['muted']};font-size:10px;background:transparent;",
             }
             for label in content.findChildren(QLabel):
                 stylesheet = label_styles.get(label.objectName())
@@ -1127,7 +1252,23 @@ class WorkDetailPage(QWidget):
         alt = self._value("native") or self._value("title_native") or ""
         if alt:
             native = QLabel(str(alt)); native.setObjectName("detailHeroNativeTitle"); native.setStyleSheet(muted_label_stylesheet()); info.addWidget(native)
-        meta = "  ·  ".join(str(x) for x in [self._value("format"), self._value("start_year"), f"{self._value('episodes')} eps" if self._value("episodes") else None, f"{self._value('chapters')} ch" if self._value("chapters") else None] if x)
+        if self._is_reading_media():
+            chapter_total = self._value("chapters")
+            volume_total = self._value("volumes")
+            counts = [
+                f"{chapter_total} chapters" if chapter_total else None,
+                f"{volume_total} volumes" if volume_total else None,
+            ]
+        else:
+            counts = [
+                f"{self._value('episodes')} eps" if self._value("episodes") else None,
+                f"{self._value('chapters')} ch" if self._value("chapters") else None,
+            ]
+        meta = "  ·  ".join(
+            str(value)
+            for value in [self._value("format"), self._value("start_year"), *counts]
+            if value
+        )
         if meta:
             metadata = QLabel(meta); metadata.setObjectName("detailHeroMetadata"); metadata.setStyleSheet(f"color:{COLORS['secondary']};font-size:13px;"); info.addWidget(metadata)
         score = self._value("score") or self._value("averageScore")
@@ -1576,7 +1717,239 @@ class WorkDetailPage(QWidget):
         painter.end()
         return result
 
+    def _is_reading_media(self):
+        """True for AniList Manga entries, including light novels and one-shots."""
+        media_type = str(self._value("type") or "").upper()
+        media_format = str(self._value("format") or "").upper()
+        return media_type == "MANGA" or media_format in {
+            "MANGA", "NOVEL", "ONE_SHOT",
+        }
+
+    @staticmethod
+    def _work_count(work, key):
+        try:
+            value = work[key]
+            return max(0, int(value or 0))
+        except (KeyError, IndexError, TypeError, ValueError):
+            return 0
+
+    def _reading_section(self):
+        """Show count-backed chapter/volume placeholders and save reading progress."""
+        members = self._episode_members()
+        member_ids = {int(member["id"]) for member in members}
+        if self._selected_episode_work_id not in member_ids:
+            self._selected_episode_work_id = (
+                int(members[0]["id"]) if members else self._value("id")
+            )
+        selected_id = self._selected_episode_work_id
+        selected_work = get_work(selected_id) if selected_id is not None else None
+        if selected_work is None:
+            selected_work = self.work
+
+        frame = QFrame()
+        frame.setObjectName("section")
+        frame.setProperty("_reading_section", True)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(20, 18, 20, 20)
+        layout.setSpacing(14)
+
+        header = QHBoxLayout()
+        title = QLabel("Reading progress")
+        title.setObjectName("readingSectionTitle")
+        title.setStyleSheet(
+            f"font-size:17px;font-weight:800;color:{COLORS['primary']};"
+        )
+        header.addWidget(title)
+
+        placeholder_badge = QLabel("PLACEHOLDER DETAILS")
+        placeholder_badge.setObjectName("readingPlaceholderBadge")
+        placeholder_badge.setStyleSheet(
+            f"color:{COLORS['accent']};background:{COLORS['accent_soft']};"
+            f"border:1px solid {COLORS['border']};border-radius:8px;"
+            "padding:4px 8px;font-size:9px;font-weight:900;letter-spacing:.4px;"
+        )
+        header.addWidget(placeholder_badge)
+        header.addStretch(1)
+
+        if len(members) > 1:
+            selected_index = next(
+                (
+                    index
+                    for index, member in enumerate(members, start=1)
+                    if int(member["id"]) == int(selected_id)
+                ),
+                1,
+            )
+            member_button = QToolButton()
+            member_button.setText(f"Entry {selected_index}  ▾")
+            member_button.setPopupMode(QToolButton.InstantPopup)
+            member_button.setCursor(Qt.PointingHandCursor)
+            menu = QMenu(member_button)
+            for index, member in enumerate(members, start=1):
+                member_id = int(member["id"])
+                action = menu.addAction(
+                    f"Entry {index} — {self._member_title(member)}"
+                )
+                action.setCheckable(True)
+                action.setChecked(member_id == int(selected_id))
+                action.triggered.connect(
+                    lambda checked=False, work_id=member_id:
+                        self._reading_member_changed(work_id)
+                )
+            member_button.setMenu(menu)
+            header.addWidget(member_button)
+
+        layout.addLayout(header)
+
+        note = QLabel(
+            "Chapter and volume titles, individual descriptions, and volume artwork "
+            "are placeholders for now. Your read progress is saved locally."
+        )
+        note.setObjectName("readingPlaceholderNote")
+        note.setWordWrap(True)
+        note.setStyleSheet(
+            f"color:{COLORS['secondary']};font-size:12px;"
+            f"background:{COLORS['surface_alt']};border:1px solid {COLORS['border']};"
+            "border-radius:10px;padding:10px 12px;"
+        )
+        layout.addWidget(note)
+
+        if selected_id is None:
+            empty = QLabel("Save this work to your Library to track reading progress.")
+            empty.setStyleSheet(muted_label_stylesheet())
+            layout.addWidget(empty)
+            return frame
+
+        chapter_total = self._work_count(selected_work, "chapters")
+        volume_total = self._work_count(selected_work, "volumes")
+        self._reading_kind_section(
+            layout, int(selected_id), "chapter", chapter_total
+        )
+        self._reading_kind_section(
+            layout, int(selected_id), "volume", volume_total
+        )
+        return frame
+
+    def _reading_kind_section(self, parent_layout, work_id, item_type, total):
+        label = "Chapters" if item_type == "chapter" else "Volumes"
+        section = QFrame()
+        section.setObjectName("readingKindSection")
+        box = QVBoxLayout(section)
+        box.setContentsMargins(12, 12, 12, 12)
+        box.setSpacing(8)
+
+        header = QHBoxLayout()
+        heading = QLabel(label)
+        heading.setObjectName("readingKindHeading")
+        heading.setStyleSheet(
+            f"font-size:14px;font-weight:850;color:{COLORS['primary']};"
+        )
+        header.addWidget(heading)
+        header.addStretch(1)
+
+        read_count, _ = get_reading_progress(work_id, item_type, total)
+        progress_label = QLabel(
+            f"{read_count} / {total} read" if total else f"{read_count} read · total unknown"
+        )
+        progress_label.setObjectName("readingKindProgress")
+        progress_label.setStyleSheet(
+            f"color:{COLORS['accent']};font-size:11px;font-weight:850;"
+        )
+        header.addWidget(progress_label)
+        box.addLayout(header)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        box.addLayout(grid)
+
+        if total <= 0:
+            empty = QLabel(
+                f"A {item_type} count is not available yet. "
+                f"{label} placeholders will appear when AniList provides a total."
+            )
+            empty.setObjectName("readingKindEmpty")
+            empty.setWordWrap(True)
+            empty.setStyleSheet(muted_label_stylesheet())
+            box.addWidget(empty)
+            parent_layout.addWidget(section)
+            return
+
+        page_size = 24
+        state = {"offset": 0}
+
+        def load_page():
+            offset = state["offset"]
+            items = ensure_reading_placeholders(
+                work_id, item_type, total, offset=offset, limit=page_size
+            )
+            for local_index, item in enumerate(items):
+                item_index = offset + local_index
+                card = ReadingItemCard(item)
+                card.read_changed.connect(
+                    lambda kind, number, checked, wid=work_id, total_count=total,
+                           count_label=progress_label:
+                        self._reading_item_toggled(
+                            wid, kind, number, checked, total_count, count_label
+                        )
+                )
+                grid.addWidget(card, item_index // 2, item_index % 2)
+
+            state["offset"] += len(items)
+            if state["offset"] >= total:
+                load_more.hide()
+            else:
+                load_more.setText(
+                    f"Load more {label.lower()} "
+                    f"({state['offset']} of {total} shown)"
+                )
+
+        load_more = QPushButton()
+        load_more.setObjectName("readingLoadMore")
+        load_more.setCursor(Qt.PointingHandCursor)
+        load_more.clicked.connect(load_page)
+        box.addWidget(load_more)
+        load_page()
+        parent_layout.addWidget(section)
+
+    def _reading_item_toggled(
+        self, work_id, item_type, item_number, checked, total_hint, label
+    ):
+        read_count, _total = set_reading_item_read(
+            work_id, item_type, item_number, checked
+        )
+        label.setText(
+            f"{read_count} / {total_hint} read"
+            if total_hint
+            else f"{read_count} read · total unknown"
+        )
+
+    def _reading_member_changed(self, work_id):
+        self._selected_episode_work_id = int(work_id)
+        self._replace_reading_section()
+
+    def _replace_reading_section(self):
+        content = self.scroll_area.widget()
+        root = content.layout() if content is not None else None
+        if root is None:
+            return
+
+        for index in range(root.count()):
+            item = root.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is None or not widget.property("_reading_section"):
+                continue
+            new_frame = self._reading_section()
+            new_frame.setProperty("_reading_section", True)
+            root.replaceWidget(widget, new_frame)
+            widget.deleteLater()
+            return
+
     def _episodes_section(self, defer_cards=False):
+        if self._is_reading_media():
+            return self._reading_section()
+
         members = self._episode_members()
         member_ids = {int(member["id"]) for member in members}
         if self._selected_episode_work_id not in member_ids:
@@ -1854,6 +2227,8 @@ class WorkDetailPage(QWidget):
         tmdb_season_number,
         media_format=None,
     ):
+        if self._is_reading_media():
+            return
         work_id = int(work_id)
 
         if work_id in self._episode_sync_completed:
