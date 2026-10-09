@@ -632,99 +632,186 @@ def get_media_details(media_id):
     }
     """ % _media_fields(include_details=True)
     data = anilist_request(query, {"id": media_id})
-    media = data["Media"]
+    media = data.get("Media") if isinstance(data, dict) else None
+    if not isinstance(media, dict):
+        raise RuntimeError(f"AniList returned no media details for ID {media_id}.")
 
-    # AniList paginates character connections. Fetch every page so imports
-    # never stop at the first 25 characters.
-    characters_connection = (media.get("characters") or {}) if isinstance(media, dict) else {}
-    all_character_edges = list(characters_connection.get("edges") or [])
-    page_info = characters_connection.get("pageInfo") or {}
-    page = int(page_info.get("currentPage") or 1)
+    # AniList paginates character and airing-schedule connections. Guard against
+    # malformed pageInfo and repeated pages so a provider bug cannot create an
+    # unbounded request loop.
+    MAX_DETAIL_PAGES = 100
 
-    while page_info.get("hasNextPage"):
-        page += 1
-        characters_query = """
-        query ($id: Int, $page: Int) {
-            Media(id: $id) {
-                characters(page: $page, perPage: 25, sort: ROLE) {
-                    edges {
-                        node {
-                            id
-                            name { full }
-                            image { large }
-                        }
-                        role
-                        voiceActors {
-                            id
-                            name { full }
-                            language
-                            image { large }
-                        }
+    def _safe_page(value, fallback=1):
+        try:
+            page_number = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+        return page_number if page_number >= 1 else fallback
+
+    def _append_unique_records(existing, incoming, key_function):
+        result = []
+        seen = set()
+        for record in list(existing or []) + list(incoming or []):
+            if not isinstance(record, dict):
+                continue
+            key = key_function(record)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(record)
+        return result
+
+    def _character_key(edge):
+        node = edge.get("node") if isinstance(edge, dict) else None
+        if isinstance(node, dict) and node.get("id") is not None:
+            return ("character", str(node["id"]), str(edge.get("role") or ""))
+        return ("raw", repr(edge))
+
+    def _schedule_key(node):
+        if node.get("episode") is not None:
+            return ("episode", str(node.get("episode")), str(node.get("airingAt")))
+        return ("raw", repr(node))
+
+    def _page_limit(page_info):
+        return min(_safe_page(page_info.get("lastPage"), MAX_DETAIL_PAGES), MAX_DETAIL_PAGES)
+
+    characters_connection = media.get("characters")
+    if not isinstance(characters_connection, dict):
+        characters_connection = {}
+    page_info = characters_connection.get("pageInfo")
+    if not isinstance(page_info, dict):
+        page_info = {}
+    all_character_edges = _append_unique_records(
+        [], characters_connection.get("edges"), _character_key
+    )
+    page = _safe_page(page_info.get("currentPage"))
+    characters_query = """
+    query ($id: Int, $page: Int) {
+        Media(id: $id) {
+            characters(page: $page, perPage: 25, sort: ROLE) {
+                edges {
+                    node {
+                        id
+                        name { full }
+                        image { large }
                     }
-                    pageInfo {
-                        currentPage
-                        lastPage
-                        hasNextPage
+                    role
+                    voiceActors {
+                        id
+                        name { full }
+                        language
+                        image { large }
                     }
+                }
+                pageInfo {
+                    currentPage
+                    lastPage
+                    hasNextPage
                 }
             }
         }
-        """
-        page_data = anilist_request(characters_query, {"id": media_id, "page": page})
-        connection = ((page_data.get("Media") or {}).get("characters") or {})
-        all_character_edges.extend(connection.get("edges") or [])
-        page_info = connection.get("pageInfo") or {}
+    }
+    """
+    while page_info.get("hasNextPage") is True and page < _page_limit(page_info):
+        requested_page = page + 1
+        page_data = anilist_request(
+            characters_query, {"id": media_id, "page": requested_page}
+        )
+        page_media = page_data.get("Media") if isinstance(page_data, dict) else None
+        connection = page_media.get("characters") if isinstance(page_media, dict) else None
+        if not isinstance(connection, dict):
+            break
+        incoming_edges = connection.get("edges")
+        previous_count = len(all_character_edges)
+        all_character_edges = _append_unique_records(
+            all_character_edges, incoming_edges, _character_key
+        )
+        page_info = connection.get("pageInfo")
+        if not isinstance(page_info, dict):
+            page_info = {}
+        page = requested_page
+        # A repeated/empty page despite hasNextPage=True is a broken provider
+        # response. Stop instead of repeatedly downloading the same page.
+        if len(all_character_edges) == previous_count:
+            break
 
-    if isinstance(media, dict):
-        media["characters"] = {
-            **characters_connection,
-            "edges": all_character_edges,
-            "pageInfo": {
-                **page_info,
-                "currentPage": page,
-                "hasNextPage": False,
-            },
-        }
+    media["characters"] = {
+        **characters_connection,
+        "edges": all_character_edges,
+        "pageInfo": {
+            **page_info,
+            "currentPage": page,
+            "hasNextPage": False,
+        },
+    }
 
-        # Normalize AniList's airing schedule into the episode shape used by
-        # the local database. The detail/import code expects episodeNumber,
-        # title, and airdate, while the current AniList query provides
-        # episode numbers and timestamps through airingSchedule.
-        schedule_connection = media.get("airingSchedule") or {}
-        schedule = list(schedule_connection.get("nodes") or [])
-        schedule_page_info = schedule_connection.get("pageInfo") or {}
-        schedule_page = int(schedule_page_info.get("currentPage") or 1)
-
-        while schedule_page_info.get("hasNextPage"):
-            schedule_page += 1
-            schedule_query = """
-            query ($id: Int, $page: Int) {
-                Media(id: $id) {
-                    airingSchedule(page: $page, perPage: 50) {
-                        nodes {
-                            airingAt
-                            episode
-                        }
-                        pageInfo {
-                            currentPage
-                            lastPage
-                            hasNextPage
-                        }
-                    }
+    # The schedule data is used by detail/import views; write the complete
+    # deduplicated node list back onto the returned media object.
+    schedule_connection = media.get("airingSchedule")
+    if not isinstance(schedule_connection, dict):
+        schedule_connection = {}
+    schedule_page_info = schedule_connection.get("pageInfo")
+    if not isinstance(schedule_page_info, dict):
+        schedule_page_info = {}
+    schedule = _append_unique_records(
+        [], schedule_connection.get("nodes"), _schedule_key
+    )
+    schedule_page = _safe_page(schedule_page_info.get("currentPage"))
+    schedule_query = """
+    query ($id: Int, $page: Int) {
+        Media(id: $id) {
+            airingSchedule(page: $page, perPage: 50) {
+                nodes {
+                    airingAt
+                    episode
+                }
+                pageInfo {
+                    currentPage
+                    lastPage
+                    hasNextPage
                 }
             }
-            """
-            schedule_data = anilist_request(
-                schedule_query,
-                {"id": media_id, "page": schedule_page},
-            )
-            schedule_connection = (
-                (schedule_data.get("Media") or {}).get("airingSchedule") or {}
-            )
-            schedule.extend(schedule_connection.get("nodes") or [])
-            schedule_page_info = schedule_connection.get("pageInfo") or {}
+        }
+    }
+    """
+    while (
+        schedule_page_info.get("hasNextPage") is True
+        and schedule_page < _page_limit(schedule_page_info)
+    ):
+        requested_page = schedule_page + 1
+        schedule_data = anilist_request(
+            schedule_query, {"id": media_id, "page": requested_page}
+        )
+        schedule_media = (
+            schedule_data.get("Media") if isinstance(schedule_data, dict) else None
+        )
+        schedule_connection = (
+            schedule_media.get("airingSchedule")
+            if isinstance(schedule_media, dict)
+            else None
+        )
+        if not isinstance(schedule_connection, dict):
+            break
+        previous_count = len(schedule)
+        schedule = _append_unique_records(
+            schedule, schedule_connection.get("nodes"), _schedule_key
+        )
+        schedule_page_info = schedule_connection.get("pageInfo")
+        if not isinstance(schedule_page_info, dict):
+            schedule_page_info = {}
+        schedule_page = requested_page
+        if len(schedule) == previous_count:
+            break
 
-        # Keep AniList streamingEpisodes raw; it has no reliable episode-number key.\n
+    media["airingSchedule"] = {
+        **schedule_connection,
+        "nodes": schedule,
+        "pageInfo": {
+            **schedule_page_info,
+            "currentPage": schedule_page,
+            "hasNextPage": False,
+        },
+    }
 
     # Add MangaBaka's complete series payload for reading-media details. The
     # lookup is best-effort and the AniList record remains the canonical one.
