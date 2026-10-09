@@ -478,11 +478,17 @@ def get_media_relations(media_id):
 def get_media_relations_batch(media_ids):
     """Fetch lightweight relation data for multiple media IDs in one request."""
     # MangaBaka-only works use negative local IDs and are deliberately
-    # excluded from AniList relation queries.
-    ids = sorted({
-        int(media_id) for media_id in media_ids
-        if media_id is not None and int(media_id) > 0
-    })
+    # excluded from AniList relation queries. Ignore malformed IDs instead of
+    # letting one bad cached record invalidate the entire batch.
+    valid_ids = set()
+    for media_id in media_ids or []:
+        try:
+            numeric_id = int(media_id)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if numeric_id > 0:
+            valid_ids.add(numeric_id)
+    ids = sorted(valid_ids)
     if not ids:
         return {}
 
@@ -521,14 +527,26 @@ def get_media_relations_batch(media_ids):
     }
     """
     data = anilist_request(query, {"ids": ids, "perPage": len(ids)})
-    media = (data.get("Page") or {}).get("media") or []
+    page_data = data.get("Page") if isinstance(data, dict) else None
+    if not isinstance(page_data, dict):
+        return {}
+    media = page_data.get("media")
     if isinstance(media, dict):
         media = [media]
-    return {
-        int(item["id"]): item
-        for item in media
-        if isinstance(item, dict) and item.get("id") is not None
-    }
+    if not isinstance(media, list):
+        return {}
+
+    result = {}
+    for item in media:
+        if not isinstance(item, dict):
+            continue
+        try:
+            item_id = int(item.get("id"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if item_id > 0:
+            result[item_id] = item
+    return result
 
 
 def get_media_episodes(media_id):
@@ -998,7 +1016,7 @@ def _pick_best_episode_still(series_id, season_number, episode):
             f"/tv/{int(series_id)}/season/{int(season_number)}/episode/{episode_number}/images",
             {"include_image_language": "en,null"},
         )
-    except (requests.RequestException, TypeError, ValueError, OverflowError, KeyError):
+    except (requests.RequestException, RuntimeError, TypeError, ValueError, OverflowError, KeyError):
         return None, 0
 
     if not isinstance(payload, dict):
@@ -1344,7 +1362,7 @@ def _pick_best_movie_image(movie_id, movie):
             f"/movie/{int(movie_id)}/images",
             {"include_image_language": "en,null"},
         )
-    except (requests.RequestException, TypeError, ValueError, OverflowError):
+    except (requests.RequestException, RuntimeError, TypeError, ValueError, OverflowError):
         return None, 0
 
     if not isinstance(payload, dict):
