@@ -12,13 +12,15 @@ PAGE_SIZE = 20
 
 
 def _provider_id(item):
-    value = item.get("_mangabaka_id")
-    if value is None:
-        value = (item.get("_mangabaka") or {}).get("id")
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
+    if not isinstance(item, dict):
         return None
+    value = item.get("_mangabaka_id")
+    raw_provider = item.get("_mangabaka")
+    if value is None and isinstance(raw_provider, dict):
+        value = raw_provider.get("id")
+    try:
+        return int(value) if value is not None and not isinstance(value, bool) else None
+    except (TypeError, ValueError, OverflowError):
 
 
 def _media_id(item):
