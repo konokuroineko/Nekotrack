@@ -3,10 +3,10 @@ from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from pathlib import Path
 
-from PySide6.QtWidgets import QFrame, QLabel, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QGridLayout, QHBoxLayout, QWidget
 
 from database import save_character_image_path, save_person_image_path
-from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
+from ui.theme import COLORS, card_stylesheet
 
 
 class CharacterArtwork(QFrame):
