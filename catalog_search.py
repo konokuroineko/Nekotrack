@@ -10,13 +10,17 @@ PAGE_SIZE = 20
 
 
 def _provider_id(item):
+    if not isinstance(item, dict):
+        return None
     value = item.get("_mangabaka_id")
     if value is None:
-        value = (item.get("_mangabaka") or {}).get("id")
+        raw = item.get("_mangabaka")
+        value = raw.get("id") if isinstance(raw, dict) else None
     try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
+        provider_id = int(value) if value is not None else None
+    except (TypeError, ValueError, OverflowError):
         return None
+    return provider_id if provider_id is not None and provider_id > 0 else None
 
 
 def _media_id(item):
@@ -81,13 +85,33 @@ def _page_info(data, page):
     info = data.get("pageInfo") if isinstance(data, dict) else {}
     info = info if isinstance(info, dict) else {}
     try:
+        current_page = max(1, int(page or 1))
+    except (TypeError, ValueError, OverflowError):
+        current_page = 1
+
+    try:
         last_page = max(1, int(info.get("lastPage") or 1))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         last_page = 1
+    # Guard against corrupt pagination values making infinite scrolling believe
+    # the catalogue has millions of pages.
+    last_page = min(last_page, 10000)
+
+    raw_next = info.get("hasNextPage", False)
+    if isinstance(raw_next, str):
+        normalized = raw_next.strip().casefold()
+        has_next = normalized in {"1", "true", "yes", "on"}
+    elif isinstance(raw_next, bool):
+        has_next = raw_next
+    elif isinstance(raw_next, (int, float)) and raw_next in (0, 1):
+        has_next = bool(raw_next)
+    else:
+        has_next = False
+
     return {
-        "currentPage": int(page),
-        "lastPage": last_page,
-        "hasNextPage": bool(info.get("hasNextPage")),
+        "currentPage": current_page,
+        "lastPage": max(current_page, last_page),
+        "hasNextPage": has_next,
     }
 
 
@@ -95,8 +119,14 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
                           include_relations=True):
     """Return a single de-duplicated page shaped for the existing result UI."""
     query = str(search_text or "").strip()
-    page = max(1, int(page or 1))
-    filters = dict(filters or {})
+    try:
+        page = max(1, int(page or 1))
+    except (TypeError, ValueError, OverflowError):
+        page = 1
+    try:
+        filters = dict(filters or {})
+    except (TypeError, ValueError):
+        filters = {}
     requested_format = filters.get("format_filter") or media_format
     season = filters.get("season")
 
