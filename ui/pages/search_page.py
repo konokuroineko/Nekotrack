@@ -103,13 +103,17 @@ class SearchWorker(QObject):
 
     def run(self):
         try:
-            if self.catalog == "MangaBaka":
+            if self.catalog.startswith("MangaBaka"):
+                browse_mode = "hidden_gems" if self.catalog.endswith("Hidden Gems") else (
+                    "popular" if self.catalog.endswith("Popular") else "search"
+                )
                 data = search_mangabaka_media(
                     self.search_text,
                     self.page,
                     self.media_type,
                     self.media_format,
                     self.filters,
+                    browse_mode=browse_mode,
                 )
                 self.finished.emit(data)
                 return
@@ -245,9 +249,9 @@ class SearchPage(QWidget):
         bar = QHBoxLayout()
         bar.setSpacing(8)
         self.catalog_filter = QComboBox()
-        self.catalog_filter.addItems(["AniList", "MangaBaka"])
+        self.catalog_filter.addItems(["AniList", "MangaBaka", "MangaBaka Popular", "MangaBaka Hidden Gems"])
         self.catalog_filter.setFixedHeight(46)
-        self.catalog_filter.setMinimumWidth(126)
+        self.catalog_filter.setMinimumWidth(168)
         self.catalog_filter.setToolTip("Choose the catalog used for search and metadata.")
         bar.addWidget(self.catalog_filter)
         # Keep the input border on a themed QFrame rather than the native
@@ -308,6 +312,10 @@ class SearchPage(QWidget):
         self.tag_filter = QLineEdit()
         self.tag_filter.setPlaceholderText("e.g. Isekai, Reincarnation")
         self.tag_filter.setFixedHeight(38)
+        self.publisher_filter = QLineEdit()
+        self.publisher_filter.setPlaceholderText("MangaBaka publisher ID")
+        self.publisher_filter.setFixedHeight(38)
+        self.licensing_filter = self._make_combo(["Any licensing", "Licensed only", "Unlicensed only"])
 
         self.fast_search = QCheckBox("Fast Search")
         self.fast_search.setToolTip("Skip series and bundle enrichment. AniList results are refined; MangaBaka results are shown directly.")
@@ -327,6 +335,8 @@ class SearchPage(QWidget):
             ("Sort", self.sort_filter, 1, 2),
             ("Genre", self.genre_filter, 1, 3),
             ("Tag", self.tag_filter, 2, 0),
+            ("Publisher ID", self.publisher_filter, 2, 1),
+            ("Licensing", self.licensing_filter, 2, 2),
         ]
         for label_text, widget, row, col in fields:
             label = QLabel(label_text)
@@ -435,7 +445,7 @@ class SearchPage(QWidget):
 
     def catalog_changed(self, _value=None):
         self.current_catalog = self.catalog_filter.currentText()
-        if self.current_catalog == "MangaBaka":
+        if self.current_catalog.startswith("MangaBaka"):
             self.search.setPlaceholderText("Search manga, manhwa, manhua, or light novels...")
         else:
             self.search.setPlaceholderText("Title, character, franchise, or AniList link...")
@@ -485,6 +495,8 @@ class SearchPage(QWidget):
             "min_score": min_score,
             "genre": self.genre_filter.text().strip() or None,
             "tag": self.tag_filter.text().strip() or None,
+            "publisher_id": self.publisher_filter.text().strip() if self.publisher_filter.text().strip().isdigit() else None,
+            "is_licensed": True if self.licensing_filter.currentIndex() == 1 else False if self.licensing_filter.currentIndex() == 2 else None,
         }
 
     def fast_search_changed(self, _state):
@@ -531,9 +543,12 @@ class SearchPage(QWidget):
         self._append_skeletons(20)
         catalog = self.catalog_filter.currentText()
         self.current_catalog = catalog
-        self.results_title.setText(
-            f"Browsing {catalog}" if not text else f"Searching {catalog} for \"{text}\""
-        )
+        if catalog.endswith("Hidden Gems") and not text:
+            self.results_title.setText("Discovering MangaBaka hidden gems")
+        else:
+            self.results_title.setText(
+                f"Browsing {catalog}" if not text else f"Searching {catalog} for \"{text}\""
+            )
         self._start_search(1)
 
     def load_more_results(self):
