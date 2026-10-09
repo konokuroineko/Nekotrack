@@ -22,6 +22,7 @@ OutputBaseFilename=NekoTrack-Setup-{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\assets\NekoTrack.ico
 ArchitecturesInstallIn64BitMode=x64
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
