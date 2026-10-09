@@ -24,7 +24,7 @@ from database import (
     save_tmdb_mapping,
 )
 from image_cache import download_cover
-from mangabaka_api import get_volume_records
+from mangabaka_api import get_series_news, get_volume_records
 from ui.branding import application_icon, logo_pixmap, navigation_icon, wordmark_pixmap
 from ui.navigation import NavigationController
 from ui.preferences import get
@@ -95,6 +95,33 @@ class LibraryImportWorker(QObject):
                         print(
                             f"MangaBaka volume lookup failed for work {self.work_id}: "
                             f"{volume_error}"
+                        )
+
+                    # Series news is optional metadata: preserve the endpoint's
+                    # available records, but never block library preparation if
+                    # the feed is empty, unavailable, or has changed schema.
+                    try:
+                        news_payload = get_series_news(int(mb_id), page=1, limit=10)
+                        news_data = (
+                            news_payload.get("data", news_payload)
+                            if isinstance(news_payload, dict) else news_payload
+                        )
+                        if isinstance(news_data, dict):
+                            news_data = (
+                                news_data.get("items") or news_data.get("news")
+                                or news_data.get("results") or []
+                            )
+                        if isinstance(news_data, list) and news_data:
+                            save_provider_metadata(
+                                self.work_id,
+                                "mangabaka_news",
+                                news_data,
+                                provider_id=mb_id,
+                            )
+                    except Exception as news_error:
+                        print(
+                            f"MangaBaka news lookup failed for work {self.work_id}: "
+                            f"{news_error}"
                         )
 
             save_characters(
