@@ -264,6 +264,14 @@ class SettingsPage(QWidget):
             card.style().polish(card)
             card.update()
 
+        # Re-polish descendants as well: Qt can retain the previous rendered
+        # colors for labels and frames whose rules come from this page's QSS.
+        for widget in self.findChildren(QWidget):
+            style = widget.style()
+            style.unpolish(widget)
+            style.polish(widget)
+            widget.update()
+
     def _apply_page_style(self):
         self.setStyleSheet(
             f"""
@@ -303,12 +311,12 @@ class SettingsPage(QWidget):
             }}
             QFrame#themePresetCard {{
                 background:{COLORS['card']};
-                border:1px solid {COLORS['border']};
+                border:1px solid {COLORS['frame']};
                 border-radius:12px;
             }}
             QFrame#themePresetCard:hover {{
                 background:{COLORS['card_hover']};
-                border-color:{COLORS['border_hover']};
+                border-color:{COLORS['accent']};
             }}
             QFrame#themePresetCard[selected="true"] {{
                 background:{COLORS['accent_soft']};
