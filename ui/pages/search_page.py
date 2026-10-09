@@ -231,7 +231,7 @@ class SearchPage(QWidget):
         heading = QLabel("Discover")
         heading.setObjectName("searchPageHeading")
         heading.setStyleSheet(f"font-size: 34px; font-weight: 850; color: {COLORS['primary']};")
-        sub = QLabel("Search the AniList catalog and build your library.")
+        sub = QLabel("Search AniList or MangaBaka and build your library.")
         sub.setObjectName("searchPageSubtitle")
         sub.setStyleSheet(f"font-size: 12px; color: {COLORS['muted']};")
         intro.addWidget(heading)
@@ -446,7 +446,12 @@ class SearchPage(QWidget):
     def catalog_changed(self, _value=None):
         self.current_catalog = self.catalog_filter.currentText()
         if self.current_catalog.startswith("MangaBaka"):
-            self.search.setPlaceholderText("Search manga, manhwa, manhua, or light novels...")
+            if self.current_catalog.endswith("Hidden Gems"):
+                self.search.setPlaceholderText("Browse hidden gems or search by title...")
+            elif self.current_catalog.endswith("Popular"):
+                self.search.setPlaceholderText("Search manga, manhwa, manhua, or light novels by popularity...")
+            else:
+                self.search.setPlaceholderText("Search manga, manhwa, manhua, or light novels...")
         else:
             self.search.setPlaceholderText("Title, character, franchise, or AniList link...")
         if self.has_searched and not self.is_loading:
@@ -928,7 +933,7 @@ class SearchPage(QWidget):
             self.results_title.setText("Loading…")
         elif self.enrichment_pending:
             self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · refining")
-        elif self.current_catalog == "MangaBaka":
+        elif self.current_catalog.startswith("MangaBaka"):
             self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · {self.current_catalog}")
         elif self.fast_search.isChecked():
             self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · fast")
