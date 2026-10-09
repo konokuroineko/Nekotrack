@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 
@@ -21,6 +22,19 @@ def initialize_database():
             cover_url TEXT, format TEXT
         )
     """)
+    work_columns = {
+        column["name"]
+        for column in cursor.execute("PRAGMA table_info(works)").fetchall()
+    }
+    for column_name, definition in (
+        ("catalog_provider", "TEXT NOT NULL DEFAULT 'ANILIST'"),
+        ("catalog_provider_id", "TEXT"),
+        ("catalog_url", "TEXT"),
+        ("catalog_data", "TEXT"),
+    ):
+        if column_name not in work_columns:
+            cursor.execute(f"ALTER TABLE works ADD COLUMN {column_name} {definition}")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS work_relations (
             source_id INTEGER NOT NULL, target_id INTEGER NOT NULL, relation_type TEXT NOT NULL,
@@ -692,7 +706,7 @@ def set_episode_watched(work_id, episode_number, watched):
 
 def save_anime(anime):
     title_data = anime["title"]
-    title = title_data.get("english") or title_data.get("romaji") or title_data.get("native")
+    title = anime.get("_display_title_override") or title_data.get("english") or title_data.get("romaji") or title_data.get("native")
     start_date = anime.get("startDate") or {}
     start_year = start_date.get("year")
     start_month = start_date.get("month")
@@ -702,24 +716,45 @@ def save_anime(anime):
     connection.execute("""
         INSERT INTO works (
             id, title, type, description, episodes, score, start_year, start_month, start_day,
-            cover_url, format, chapters, volumes, source, end_year, duration, mal_id
+            cover_url, format, chapters, volumes, source, end_year, duration, mal_id,
+            catalog_provider, catalog_provider_id, catalog_url, catalog_data
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             title=excluded.title, type=excluded.type, description=excluded.description,
             episodes=excluded.episodes, score=excluded.score, start_year=excluded.start_year,
             start_month=excluded.start_month, start_day=excluded.start_day,
             cover_url=excluded.cover_url, format=excluded.format, chapters=excluded.chapters,
             volumes=excluded.volumes, source=excluded.source, end_year=excluded.end_year,
-            duration=excluded.duration, mal_id=COALESCE(excluded.mal_id, works.mal_id)
+            duration=excluded.duration, mal_id=COALESCE(excluded.mal_id, works.mal_id),
+            catalog_provider=CASE
+                WHEN excluded.catalog_provider = 'ANILIST'
+                     AND COALESCE(works.catalog_provider, 'ANILIST') = 'MANGABAKA'
+                THEN works.catalog_provider ELSE excluded.catalog_provider END,
+            catalog_provider_id=COALESCE(excluded.catalog_provider_id, works.catalog_provider_id),
+            catalog_url=COALESCE(excluded.catalog_url, works.catalog_url),
+            catalog_data=COALESCE(excluded.catalog_data, works.catalog_data)
     """, (
         anime["id"], title, anime.get("type") or "ANIME", anime.get("description"),
         anime.get("episodes"), anime.get("averageScore"),
         start_year, start_month, start_day, cover_image.get("large"),
         anime.get("format"), anime.get("chapters"), anime.get("volumes"),
         anime.get("source"), (anime.get("endDate") or {}).get("year"),
-        anime.get("duration"), anime.get("idMal")
+        anime.get("duration"), anime.get("idMal"),
+        str(anime.get("_provider") or "ANILIST").upper(),
+        str(anime.get("_provider_id")) if anime.get("_provider_id") is not None else None,
+        anime.get("_provider_url"),
+        json.dumps(anime.get("_provider_data"), ensure_ascii=False) if anime.get("_provider_data") is not None else None,
     ))
+    for entry in anime.get("_alternate_title_entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        alt_title = str(entry.get("title") or "").strip()
+        if alt_title:
+            connection.execute(
+                "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
+                (anime["id"], alt_title, entry.get("language")),
+            )
     for synonym in anime.get("synonyms") or []:
         connection.execute("INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
                            (anime["id"], synonym, None))
