@@ -12,6 +12,7 @@ from unittest.mock import patch
 import api
 import catalog_search
 import database
+import stress_test
 import mangabaka_api as mb
 import series
 
@@ -52,6 +53,30 @@ def media(media_id, title, media_type="ANIME", media_format="TV", relations=None
         "relations": {"edges": relations or []},
         "_relations_loaded": True,
     }
+
+
+class StressHarnessArgumentTests(unittest.TestCase):
+    def test_duration_validation_rejects_nan_infinity_zero_and_excessive_requests(self):
+        invalid = [
+            (float("nan"), None),
+            (float("inf"), None),
+            (-float("inf"), None),
+            (0, None),
+            (-1, None),
+            (31, None),
+            (0, float("nan")),
+            (0, float("inf")),
+            (0, 30 * 60 + 0.1),
+        ]
+        for minutes, seconds in invalid:
+            with self.subTest(minutes=minutes, seconds=seconds):
+                with self.assertRaises(ValueError):
+                    stress_test._resolve_duration(minutes, seconds)
+
+    def test_duration_validation_accepts_seconds_override_and_maximum(self):
+        self.assertEqual(stress_test._resolve_duration(10, seconds=15), 15)
+        self.assertEqual(stress_test._resolve_duration(0, seconds=0.25), 0.25)
+        self.assertEqual(stress_test._resolve_duration(30, seconds=None), 1800)
 
 
 class AniListURLAdversarialTests(unittest.TestCase):

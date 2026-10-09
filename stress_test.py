@@ -14,6 +14,7 @@ import argparse
 import importlib.util
 import io
 import json
+import math
 import os
 import random
 import subprocess
@@ -26,6 +27,17 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent
 TEST_FILE = ROOT / "tests" / "test_adversarial_regressions.py"
+MAX_SOAK_SECONDS = 30 * 60
+
+
+def _resolve_duration(minutes, seconds=None):
+    """Reject invalid or accidentally unbounded soak durations."""
+    duration = seconds if seconds is not None else minutes * 60
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError("The soak duration must be a finite number greater than zero.")
+    if duration > MAX_SOAK_SECONDS:
+        raise ValueError("The soak duration cannot exceed 30 minutes.")
+    return duration
 
 
 def load_adversarial_tests():
@@ -72,9 +84,10 @@ def main():
                         help="JSON report path (written under the repository if relative).")
     args = parser.parse_args()
 
-    duration = args.seconds if args.seconds is not None else args.minutes * 60
-    if duration <= 0:
-        parser.error("The soak duration must be greater than zero.")
+    try:
+        duration = _resolve_duration(args.minutes, args.seconds)
+    except ValueError as error:
+        parser.error(str(error))
 
     report = {
         "app": "NekoTrack",
