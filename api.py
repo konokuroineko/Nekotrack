@@ -651,7 +651,9 @@ def get_media_details(media_id):
     def _append_unique_records(existing, incoming, key_function):
         result = []
         seen = set()
-        for record in list(existing or []) + list(incoming or []):
+        existing_records = existing if isinstance(existing, list) else []
+        incoming_records = incoming if isinstance(incoming, list) else []
+        for record in existing_records + incoming_records:
             if not isinstance(record, dict):
                 continue
             key = key_function(record)
