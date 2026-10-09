@@ -213,7 +213,7 @@ _LEGACY_APPLICATION = "AniTrack"
 
 _MIGRATION_KEY = "_legacy_anitrack_preferences_migrated"
 
-_THEME_PALETTE_VERSION = 5
+_THEME_PALETTE_VERSION = 6
 
 
 def settings():
