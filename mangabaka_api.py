@@ -498,24 +498,6 @@ def _valid_date_parts(year, month=None, day=None):
     return {"year": year_value, "month": month_value, "day": day_value}
 
 
-def _valid_date_parts(year, month=None, day=None):
-    """Return validated date components, or None for malformed provider data."""
-    try:
-        year_value = int(year)
-        month_value = 1 if month in (None, "") else int(month)
-        day_value = 1 if day in (None, "") else int(day)
-        _dt.date(year_value, month_value, day_value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if isinstance(year, float) and not year.is_integer():
-        return None
-    if isinstance(month, float) and not month.is_integer():
-        return None
-    if isinstance(day, float) and not day.is_integer():
-        return None
-    return {"year": year_value, "month": month_value, "day": day_value}
-
-
 def _date_parts(series):
     published = series.get("published") or {}
     candidates = []
