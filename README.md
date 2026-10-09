@@ -6,11 +6,11 @@ Track what you watch and read, manage your library, and keep your collection org
 
 ## Features
 
-- Search AniList or MangaBaka catalogs
-- Anime, manga, manhwa, manhua, one-shot, and light-novel search modes where the selected catalog supports them
+- Search AniList and MangaBaka together in one unified result list, with linked titles deduplicated
+- Anime, manga, manhwa, manhua, one-shot, and light-novel searches with provider-aware filters
 - AniList anime catalog, relationships, characters, staff, voice actors, and franchise grouping
 - MangaBaka-backed manga and novel titles, including English, native Japanese, and romanized titles
-- MangaBaka publisher, tag, author, artist, status, licensing, and publication metadata when present
+- MangaBaka publisher, tag, author, artist, status, licensing, and publication metadata when present; publisher/licensing filters require matching MangaBaka metadata
 - Published volume records (including titles, ISBNs, and dates) when MangaBaka has matching collection data
 - Local SQLite library and offline watch/read progress
 - Chapter and volume checklists; missing upstream item details remain trackable using local placeholders
