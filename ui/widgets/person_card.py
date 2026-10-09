@@ -81,6 +81,7 @@ class PersonCard(QFrame):
         text_width = 156
 
         name = QLabel(self._value("name") or "Unknown person")
+        name.setObjectName("personName")
         name.setWordWrap(True)
         name.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         name.setStyleSheet(
@@ -99,6 +100,7 @@ class PersonCard(QFrame):
         role = self._value("role")
         if role:
             role_label = QLabel(role)
+            role_label.setObjectName("personRole")
             role_label.setWordWrap(True)
             role_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
             role_label.setStyleSheet(
@@ -117,6 +119,20 @@ class PersonCard(QFrame):
         if role:
             content_height += 8 + role_height
         self.setMinimumHeight(max(215, content_height))
+
+    def refresh_theme(self):
+        self.setStyleSheet(card_stylesheet())
+        for label in self.findChildren(QLabel):
+            if label.objectName() == "personName":
+                label.setStyleSheet(
+                    f"background:transparent;border:none;color:{COLORS['primary']};font-weight:600;"
+                )
+            elif label.objectName() == "personRole":
+                label.setStyleSheet(
+                    f"background:transparent;border:none;{muted_label_stylesheet()}"
+                )
+        self.image.update()
+        self.update()
 
     def _load_image_url(self, url):
         if not url:
