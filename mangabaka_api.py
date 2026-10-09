@@ -498,19 +498,32 @@ def _attach_mangabaka_record(media, raw):
     return media
 
 
-def enrich_anilist_results(media_items, query):
-    """Enrich a page of AniList results with one MangaBaka search request."""
+def enrich_anilist_results(media_items, query, candidates=None):
+    """Attach unambiguous MangaBaka matches, optionally using current search results."""
     items = [item for item in (media_items or []) if isinstance(item, dict)]
     manga_items = [item for item in items if str(item.get("type") or "").upper() == "MANGA"]
     query = str(query or "").strip()
-    if not manga_items or not query:
+    if not manga_items or (not query and candidates is None):
         return items
     try:
-        candidates = _records(search_series(query, page=1, limit=50))
+        if candidates is None:
+            candidates = _records(search_series(query, page=1, limit=50))
+        else:
+            candidates = [item for item in candidates if isinstance(item, dict)]
+        used_ids = set()
         for item in manga_items:
             matched = match_series_for_anilist(item, candidates)
-            if matched:
-                _attach_mangabaka_record(item, matched)
+            if not matched:
+                continue
+            try:
+                matched_id = int(matched.get("id"))
+            except (AttributeError, TypeError, ValueError):
+                matched_id = None
+            if matched_id is not None and matched_id in used_ids:
+                continue
+            _attach_mangabaka_record(item, matched)
+            if matched_id is not None:
+                used_ids.add(matched_id)
     except Exception as error:
         print(f"MangaBaka result enrichment skipped: {error}")
     return items
@@ -553,12 +566,12 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
                 limit=20, browse_mode="search"):
     """Return MangaBaka search results in the envelope expected by SearchPage."""
     filters = dict(filters or {})
-    if str(media_type or "").upper() == "ANIME":
+    if str(media_type or "").upper() == "ANIME" or (filters.get("format_filter") or media_format) == "ONE_SHOT":
         return {"pageInfo": {"currentPage": int(page), "lastPage": 1, "hasNextPage": False},
                 "media": [], "_catalog": "MangaBaka"}
 
     query_filters = {}
-    picked_format = media_format or filters.get("format_filter")
+    picked_format = filters.get("format_filter") or media_format
     if picked_format == "NOVEL":
         query_filters["type"] = ["novel"]
     elif picked_format == "MANGA":
