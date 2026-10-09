@@ -448,14 +448,34 @@ def get_staff(work_id):
 
 
 def save_episodes(work_id, episode_data):
-    episodes = list(episode_data or [])
+    """Upsert valid numbered episodes without letting malformed provider rows break a refresh."""
+    normalized_episodes = []
+    if isinstance(episode_data, (list, tuple)):
+        for episode in episode_data:
+            if not isinstance(episode, dict):
+                continue
+            raw_number = episode.get("episodeNumber")
+            if isinstance(raw_number, bool):
+                continue
+            try:
+                number = int(raw_number)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if number < 1:
+                continue
+            if isinstance(raw_number, float) and not raw_number.is_integer():
+                continue
+            if isinstance(raw_number, str) and not re.fullmatch(r"\s*\d+\s*", raw_number):
+                continue
+            normalized = dict(episode)
+            normalized["episodeNumber"] = number
+            normalized_episodes.append(normalized)
+
+    episodes = normalized_episodes
     connection = get_connection()
 
     for episode in episodes:
-        number = episode.get("episodeNumber")
-        if number is None:
-            continue
-
+        number = episode["episodeNumber"]
         incoming_thumbnail = str(episode.get("thumbnail") or "").strip() or None
         existing = connection.execute(
             """
@@ -463,7 +483,7 @@ def save_episodes(work_id, episode_data):
             FROM episodes
             WHERE work_id = ? AND episode_number = ?
             """,
-            (int(work_id), int(number)),
+            (int(work_id), number),
         ).fetchone()
         existing_thumbnail = (
             str(existing["thumbnail_url"]).strip()
@@ -496,7 +516,7 @@ def save_episodes(work_id, episode_data):
                 air_date = excluded.air_date,
                 thumbnail_url = excluded.thumbnail_url
         """, (
-            work_id,
+            int(work_id),
             number,
             episode.get("title"),
             episode.get("description"),
@@ -504,11 +524,7 @@ def save_episodes(work_id, episode_data):
             thumbnail,
         ))
 
-    numbers = sorted({
-        int(episode["episodeNumber"])
-        for episode in episodes
-        if episode.get("episodeNumber") is not None
-    })
+    numbers = sorted({episode["episodeNumber"] for episode in episodes})
     if numbers:
         placeholders = ",".join("?" for _ in numbers)
         connection.execute(
@@ -517,7 +533,7 @@ def save_episodes(work_id, episode_data):
             WHERE work_id = ?
               AND episode_number NOT IN ({placeholders})
             """,
-            (work_id, *numbers),
+            (int(work_id), *numbers),
         )
 
     connection.commit()
