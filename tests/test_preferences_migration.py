@@ -104,7 +104,7 @@ class PreferenceMigrationTests(unittest.TestCase):
         })
 
         with patch.object(preferences, "QSettings", MemorySettings):
-            self.assertEqual(preferences.get("font_size"), 36)
+            self.assertEqual(preferences.get("font_size"), 13)
             self.assertEqual(preferences.get("card_size"), 120)
             self.assertEqual(preferences.get("card_gap"), 120)
             self.assertEqual(preferences.get("corner_radius"), 0)
