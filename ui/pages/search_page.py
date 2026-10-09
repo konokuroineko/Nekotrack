@@ -189,6 +189,7 @@ class SearchPage(QWidget):
         self.current_media_type = None
         self.current_media_format = None
         self.current_filters = {}
+        self.current_catalog = "AniList"
         self.current_page = 1
         self.has_next_page = False
         self.is_loading = False
@@ -243,6 +244,12 @@ class SearchPage(QWidget):
 
         bar = QHBoxLayout()
         bar.setSpacing(8)
+        self.catalog_filter = QComboBox()
+        self.catalog_filter.addItems(["AniList", "MangaBaka"])
+        self.catalog_filter.setFixedHeight(46)
+        self.catalog_filter.setMinimumWidth(126)
+        self.catalog_filter.setToolTip("Choose the catalog used for search and metadata.")
+        bar.addWidget(self.catalog_filter)
         # Keep the input border on a themed QFrame rather than the native
         # QLineEdit frame, which can draw its own platform-colored focus border.
         self.search_frame = QFrame()
@@ -303,7 +310,7 @@ class SearchPage(QWidget):
         self.tag_filter.setFixedHeight(38)
 
         self.fast_search = QCheckBox("Fast Search")
-        self.fast_search.setToolTip("Skip series and bundle enrichment. Results are shown directly from AniList.")
+        self.fast_search.setToolTip("Skip series and bundle enrichment. AniList results are refined; MangaBaka results are shown directly.")
         self.fast_search.setCursor(Qt.PointingHandCursor)
         self.fast_search.stateChanged.connect(self.fast_search_changed)
         if self.selection_mode:
@@ -358,6 +365,7 @@ class SearchPage(QWidget):
         root.addWidget(self.results_scroll, 1)
 
         self.search_button.clicked.connect(self.search_clicked)
+        self.catalog_filter.currentTextChanged.connect(self.catalog_changed)
         self.search.returnPressed.connect(self.search_clicked)
         self.media_filter.currentIndexChanged.connect(self.media_filter_changed)
         self.filters_button.clicked.connect(self.toggle_filters)
@@ -424,6 +432,15 @@ class SearchPage(QWidget):
             self.format_filter.setCurrentIndex(0)
         self.format_filter.setEnabled(True)
         self.format_filter.blockSignals(False)
+
+    def catalog_changed(self, _value=None):
+        self.current_catalog = self.catalog_filter.currentText()
+        if self.current_catalog == "MangaBaka":
+            self.search.setPlaceholderText("Search manga, manhwa, manhua, or light novels...")
+        else:
+            self.search.setPlaceholderText("Title, character, franchise, or AniList link...")
+        if self.has_searched and not self.is_loading:
+            self.search_clicked()
 
     def media_filter_changed(self):
         self.current_media_type, self.current_media_format = self.selected_media_filter()
@@ -512,7 +529,11 @@ class SearchPage(QWidget):
 
         self._clear_results()
         self._append_skeletons(20)
-        self.results_title.setText("Browsing AniList" if not text else f"Searching for \"{text}\"")
+        catalog = self.catalog_filter.currentText()
+        self.current_catalog = catalog
+        self.results_title.setText(
+            f"Browsing {catalog}" if not text else f"Searching {catalog} for \"{text}\""
+        )
         self._start_search(1)
 
     def load_more_results(self):
@@ -537,6 +558,7 @@ class SearchPage(QWidget):
             self.current_media_format,
             self.current_filters,
             include_relations=not self.fast_search.isChecked(),
+            catalog=self.catalog_filter.currentText(),
         )
         thread = QThread(self)
         worker.moveToThread(thread)
@@ -589,9 +611,9 @@ class SearchPage(QWidget):
         # what determines the real series/season bundle, so rendering this
         # search payload first can briefly show incorrect counts such as
         # "2 seasons" for Demon Slayer before enrichment catches up.
-        if self.fast_search.isChecked():
-            # Fast Search deliberately bypasses the entire series/bundle
-            # enrichment pipeline and renders AniList's raw results directly.
+        if self.fast_search.isChecked() or self.current_catalog == "MangaBaka":
+            # MangaBaka records have provider-native local IDs and no AniList
+            # relation graph; render them directly rather than cross-querying IDs.
             if self.current_page == 1:
                 self._clear_results()
                 self.displayed_items = []
@@ -698,7 +720,7 @@ class SearchPage(QWidget):
         self._reflow_results()
 
     def _start_enrichment(self):
-        if self.fast_search.isChecked():
+        if self.fast_search.isChecked() or self.current_catalog == "MangaBaka":
             return
         if not self.raw_results:
             return
@@ -891,6 +913,8 @@ class SearchPage(QWidget):
             self.results_title.setText("Loading…")
         elif self.enrichment_pending:
             self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · refining")
+        elif self.current_catalog == "MangaBaka":
+            self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · MangaBaka")
         elif self.fast_search.isChecked():
             self.results_title.setText(f"{count} result{'s' if count != 1 else ''} · fast")
         else:
