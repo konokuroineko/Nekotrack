@@ -181,12 +181,14 @@ def get_series(series_id, full=False):
     series_id = int(series_id)
     if series_id <= 0:
         raise ValueError("MangaBaka series IDs must be positive.")
+    # MangaBaka selects the expanded schema with ?schema=full; /full is not
+    # a separate endpoint. The fallback keeps the core record usable if this
+    # optional query parameter changes in a future API revision.
     if full:
         try:
-            return _request(f"series/{series_id}/full")
-        except MangaBakaAPIError as error:
-            if "404" not in str(error):
-                raise
+            return _request(f"series/{series_id}", params={"schema": "full"})
+        except MangaBakaAPIError:
+            return _request(f"series/{series_id}")
     return _request(f"series/{series_id}")
 
 
@@ -532,7 +534,8 @@ def enrich_anilist_media(media):
     return media
 
 
-def search_media(query="", page=1, media_type=None, media_format=None, filters=None, limit=20):
+def search_media(query="", page=1, media_type=None, media_format=None, filters=None,
+                limit=20, browse_mode="search"):
     """Return MangaBaka search results in the envelope expected by SearchPage."""
     filters = dict(filters or {})
     if str(media_type or "").upper() == "ANIME":
@@ -560,6 +563,11 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
         value = filters.get(key)
         if value:
             query_filters[key] = [part.strip() for part in str(value).split(",") if part.strip()]
+    publisher_id = filters.get("publisher_id")
+    if publisher_id and str(publisher_id).isdigit():
+        query_filters["publisher_id"] = int(publisher_id)
+    if filters.get("is_licensed") is not None:
+        query_filters["is_licensed"] = bool(filters.get("is_licensed"))
     sort_map = {"SEARCH_MATCH": "relevance", "POPULARITY_DESC": "popular_desc",
                 "SCORE_DESC": "rating_desc", "START_DATE_DESC": "newest",
                 "START_DATE": "oldest", "TITLE_ROMAJI": "title_asc",
@@ -567,7 +575,16 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
     if filters.get("sort") in sort_map:
         query_filters["sort_by"] = sort_map[filters["sort"]]
 
-    if str(query or "").strip():
+    mode = str(browse_mode or "search").lower()
+    if mode == "hidden_gems":
+        # This endpoint is a discovery feed, not a title search.
+        payload = get_hidden_gems(page=page, limit=limit, **query_filters)
+    elif mode == "popular" and not str(query or "").strip():
+        query_filters.setdefault("sort_by", "popular_desc")
+        payload = get_series_mix(page=page, limit=limit, **query_filters)
+    elif str(query or "").strip():
+        if mode == "popular":
+            query_filters.setdefault("sort_by", "popular_desc")
         payload = search_series(query, page=page, limit=limit, **query_filters)
     else:
         payload = get_series_mix(page=page, limit=limit, **query_filters)
