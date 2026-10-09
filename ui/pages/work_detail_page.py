@@ -566,6 +566,28 @@ class WorkDetailPage(QWidget):
     def _detail_cache_key(self, work_ids):
         return tuple(int(work_id) for work_id in work_ids)
 
+    def _detail_work_ids(self):
+        """Return each distinct work ID represented by this detail page."""
+        members = self._value("_series_members") or []
+        ids = []
+
+        for member in members:
+            try:
+                work_id = int(member["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if work_id not in ids:
+                ids.append(work_id)
+
+        if ids:
+            return ids
+
+        work_id = self._value("id")
+        try:
+            return [int(work_id)] if work_id is not None else []
+        except (TypeError, ValueError):
+            return []
+
     def _prepare_detail_state(self, work):
         self.work = work
         detail_ids = self._detail_work_ids()
