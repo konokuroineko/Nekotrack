@@ -59,11 +59,21 @@ def initialize_database():
         CREATE TABLE IF NOT EXISTS user_library (
             work_id INTEGER PRIMARY KEY, status TEXT NOT NULL DEFAULT 'Planning',
             progress_episodes INTEGER DEFAULT 0, progress_chapters INTEGER DEFAULT 0,
+            progress_volumes INTEGER DEFAULT 0,
             rating INTEGER, notes TEXT, added_date DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_date DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (work_id) REFERENCES works(id)
         )
     """)
+    library_columns = {
+        column["name"]
+        for column in cursor.execute("PRAGMA table_info(user_library)").fetchall()
+    }
+    if "progress_volumes" not in library_columns:
+        cursor.execute(
+            "ALTER TABLE user_library ADD COLUMN progress_volumes INTEGER NOT NULL DEFAULT 0"
+        )
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS characters (
             id INTEGER PRIMARY KEY, name TEXT NOT NULL, image_url TEXT, image_path TEXT
@@ -140,6 +150,17 @@ def initialize_database():
     if "thumbnail_url" not in episode_column_names:
         cursor.execute("ALTER TABLE episodes ADD COLUMN thumbnail_url TEXT")
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reading_items (
+            work_id INTEGER NOT NULL,
+            item_type TEXT NOT NULL CHECK(item_type IN ('chapter', 'volume')),
+            item_number INTEGER NOT NULL CHECK(item_number >= 1),
+            title TEXT,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (work_id, item_type, item_number),
+            FOREIGN KEY (work_id) REFERENCES works(id)
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS songs (
             id INTEGER PRIMARY KEY, title TEXT NOT NULL, artist TEXT, image_url TEXT
         )
@@ -150,6 +171,21 @@ def initialize_database():
             song_number INTEGER, PRIMARY KEY (work_id, song_id, song_type),
             FOREIGN KEY (work_id) REFERENCES works(id), FOREIGN KEY (song_id) REFERENCES songs(id)
         )
+    """)
+    # TV episode records and TMDB season mappings are only valid for anime.
+    # Remove accidental TV episode imports from Manga entries from older builds.
+    cursor.execute("""
+        DELETE FROM episodes
+        WHERE work_id IN (
+            SELECT id FROM works
+            WHERE UPPER(COALESCE(type, '')) != 'ANIME'
+        )
+    """)
+    cursor.execute("""
+        UPDATE works
+        SET tmdb_id = NULL, tmdb_season_number = NULL
+        WHERE UPPER(COALESCE(type, '')) != 'ANIME'
+          AND (tmdb_id IS NOT NULL OR tmdb_season_number IS NOT NULL)
     """)
     connection.commit()
     connection.close()
@@ -630,7 +666,8 @@ def get_work(work_id):
     connection = get_connection()
     result = connection.execute("""
         SELECT works.*, user_library.status, user_library.progress_episodes,
-               user_library.progress_chapters, user_library.rating, user_library.notes,
+               user_library.progress_chapters, user_library.progress_volumes,
+               user_library.rating, user_library.notes,
                user_library.added_date, user_library.updated_date
         FROM works LEFT JOIN user_library ON user_library.work_id = works.id
         WHERE works.id = ?
@@ -1069,6 +1106,7 @@ def delete_work_data(work_id):
         # bundle system, relation graph, or cached work data.
         for table in (
             "episodes",
+            "reading_items",
             "work_characters",
             "work_staff",
             "work_studios",
@@ -1123,6 +1161,7 @@ def delete_work_data(work_id):
                 "SELECT 1 FROM work_relations WHERE source_id = ? OR target_id = ? LIMIT 1",
             ),
             ("episodes", "SELECT 1 FROM episodes WHERE work_id = ? LIMIT 1"),
+            ("reading_items", "SELECT 1 FROM reading_items WHERE work_id = ? LIMIT 1"),
             ("work_characters", "SELECT 1 FROM work_characters WHERE work_id = ? LIMIT 1"),
             ("work_staff", "SELECT 1 FROM work_staff WHERE work_id = ? LIMIT 1"),
             ("work_studios", "SELECT 1 FROM work_studios WHERE work_id = ? LIMIT 1"),
@@ -1167,7 +1206,8 @@ def get_library_by_status(status):
     connection = get_connection()
     results = connection.execute("""
         SELECT works.*, user_library.status, user_library.progress_episodes, user_library.progress_chapters,
-               user_library.rating, user_library.notes, user_library.added_date, user_library.updated_date
+               user_library.progress_volumes, user_library.rating, user_library.notes,
+               user_library.added_date, user_library.updated_date
         FROM works JOIN user_library ON user_library.work_id = works.id
         WHERE user_library.status = ? ORDER BY user_library.added_date DESC
     """, (status,)).fetchall()
