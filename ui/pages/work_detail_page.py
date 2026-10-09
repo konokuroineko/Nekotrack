@@ -127,6 +127,13 @@ class EpisodeArtwork(QLabel):
             f"color:{COLORS['muted']};font-size:11px;font-weight:800;"
         )
 
+    def refresh_theme(self):
+        self.setStyleSheet(
+            f"background:{COLORS['background_alt']};border-radius:10px;"
+            f"color:{COLORS['muted']};font-size:11px;font-weight:800;"
+        )
+        self.update()
+
     def load(self, url):
         url = str(url or "").strip()
         if not url:
@@ -213,6 +220,7 @@ class EpisodeCard(QFrame):
 
         top = QHBoxLayout()
         number = QLabel(f"EPISODE {int(episode['episode_number']):02d}")
+        number.setObjectName("detailEpisodeNumber")
         number.setStyleSheet(
             f"color:{COLORS['accent']};font-size:11px;font-weight:900;"
             "letter-spacing:0.6px;"
@@ -220,6 +228,7 @@ class EpisodeCard(QFrame):
         top.addWidget(number)
 
         date = QLabel(self._format_date(episode["air_date"]))
+        date.setObjectName("detailEpisodeDate")
         date.setStyleSheet(f"color:{COLORS['muted']};font-size:11px;")
         top.addStretch()
         if date.text():
@@ -227,6 +236,7 @@ class EpisodeCard(QFrame):
         body.addLayout(top)
 
         title = QLabel(episode["title"] or f"Episode {episode['episode_number']}")
+        title.setObjectName("detailEpisodeTitle")
         title.setWordWrap(True)
         title.setStyleSheet(
             f"color:{COLORS['primary']};font-size:15px;font-weight:800;"
@@ -237,6 +247,7 @@ class EpisodeCard(QFrame):
         description = QLabel(
             description_text if description_text else "Synopsis unavailable."
         )
+        description.setObjectName("detailEpisodeDescription")
         description.setWordWrap(True)
         description.setTextFormat(Qt.PlainText)
         description.setMaximumHeight(42)
@@ -255,6 +266,21 @@ class EpisodeCard(QFrame):
                 self.watched_changed.emit(n, checked)
         )
         layout.addWidget(watched, 0, Qt.AlignTop)
+
+    def refresh_theme(self):
+        styles = {
+            "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:11px;font-weight:900;letter-spacing:0.6px;",
+            "detailEpisodeDate": f"color:{COLORS['muted']};font-size:11px;",
+            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:15px;font-weight:800;",
+            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:12px;",
+        }
+        for label in self.findChildren(QLabel):
+            stylesheet = styles.get(label.objectName())
+            if stylesheet is not None:
+                label.setStyleSheet(stylesheet)
+        for artwork in self.findChildren(EpisodeArtwork):
+            artwork.refresh_theme()
+        self.update()
 
     @staticmethod
     def _format_date(value):
@@ -785,6 +811,51 @@ class WorkDetailPage(QWidget):
             QCheckBox::indicator:checked {{ background: {COLORS['accent']}; border-color: {COLORS['accent']}; }}
         """)
 
+    def refresh_theme(self):
+        self._apply_detail_styles()
+
+        roots = []
+        current = self.scroll_area.widget()
+        if current is not None:
+            roots.append(current)
+        roots.extend(self._detail_content_cache.values())
+
+        seen = set()
+        for content in roots:
+            if content is None or id(content) in seen:
+                continue
+            seen.add(id(content))
+
+            # These section frames have their own local stylesheet, which takes
+            # precedence over the page's stylesheet and must be regenerated.
+            for frame in content.findChildren(QFrame):
+                if frame.objectName() in {"charactersSection", "section"}:
+                    frame.setStyleSheet(self._detail_section_frame_stylesheet())
+
+            # Cards and episode widgets use local stylesheets too. Refresh them
+            # individually; artwork borders repaint from the live COLORS map.
+            for widget in content.findChildren(QWidget):
+                updater = getattr(widget, "refresh_theme", None)
+                if callable(updater):
+                    updater()
+
+            label_styles = {
+                "detailHeroCover": f"color:{COLORS['muted']};background:{COLORS['background_alt']};border-radius:14px;",
+                "detailHeroTitle": f"font-size:34px;font-weight:850;color:{COLORS['primary']};letter-spacing:-1px;",
+                "detailHeroNativeTitle": muted_label_stylesheet(),
+                "detailHeroMetadata": f"color:{COLORS['secondary']};font-size:13px;",
+                "detailHeroScore": f"color:{COLORS['accent']};font-size:18px;font-weight:800;",
+                "detailHeroDescription": f"color:{COLORS['secondary']};font-size:14px;",
+                "detailSectionHeader": f"font-size:17px;font-weight:800;color:{COLORS['primary']};",
+            }
+            for label in content.findChildren(QLabel):
+                stylesheet = label_styles.get(label.objectName())
+                if stylesheet is not None:
+                    label.setStyleSheet(stylesheet)
+                    label.update()
+
+            content.update()
+
     def _populate_episode_section(self, token, content, host):
         if token != self._detail_build_token:
             return
@@ -1004,7 +1075,7 @@ class WorkDetailPage(QWidget):
     def _hero(self):
         hero = QFrame(); hero.setObjectName("hero")
         box = QHBoxLayout(hero); box.setContentsMargins(24, 24, 28, 24); box.setSpacing(30)
-        cover = QLabel(); cover.setFixedSize(235, 335); cover.setAlignment(Qt.AlignCenter)
+        cover = QLabel(); cover.setObjectName("detailHeroCover"); cover.setFixedSize(235, 335); cover.setAlignment(Qt.AlignCenter)
         cover.setStyleSheet(f"background:{COLORS['background_alt']}; border-radius:14px;")
         path = self._value("cover_path")
         if path:
@@ -1017,7 +1088,7 @@ class WorkDetailPage(QWidget):
         box.addWidget(cover, alignment=Qt.AlignTop)
 
         info = QVBoxLayout(); info.setSpacing(10)
-        title = QLabel(self._title()); title.setWordWrap(True)
+        title = QLabel(self._title()); title.setObjectName("detailHeroTitle"); title.setWordWrap(True)
         title.setStyleSheet(f"font-size:34px;font-weight:850;color:{COLORS['primary']};letter-spacing:-1px;")
         title_row = QHBoxLayout()
         title_row.setSpacing(12)
@@ -1033,15 +1104,16 @@ class WorkDetailPage(QWidget):
         info.addLayout(title_row)
         alt = self._value("native") or self._value("title_native") or ""
         if alt:
-            native = QLabel(str(alt)); native.setStyleSheet(muted_label_stylesheet()); info.addWidget(native)
+            native = QLabel(str(alt)); native.setObjectName("detailHeroNativeTitle"); native.setStyleSheet(muted_label_stylesheet()); info.addWidget(native)
         meta = "  ·  ".join(str(x) for x in [self._value("format"), self._value("start_year"), f"{self._value('episodes')} eps" if self._value("episodes") else None, f"{self._value('chapters')} ch" if self._value("chapters") else None] if x)
         if meta:
-            metadata = QLabel(meta); metadata.setStyleSheet(f"color:{COLORS['secondary']};font-size:13px;"); info.addWidget(metadata)
+            metadata = QLabel(meta); metadata.setObjectName("detailHeroMetadata"); metadata.setStyleSheet(f"color:{COLORS['secondary']};font-size:13px;"); info.addWidget(metadata)
         score = self._value("score") or self._value("averageScore")
-        score_label = QLabel(f"★  {score}%" if score else "—  No score"); score_label.setStyleSheet(f"color:{COLORS['accent']};font-size:18px;font-weight:800;"); info.addWidget(score_label)
+        score_label = QLabel(f"★  {score}%" if score else "—  No score"); score_label.setObjectName("detailHeroScore"); score_label.setStyleSheet(f"color:{COLORS['accent']};font-size:18px;font-weight:800;"); info.addWidget(score_label)
 
         info.addSpacing(10)
         description = QLabel(self._value("description") or "No description saved locally.")
+        description.setObjectName("detailHeroDescription")
         description.setWordWrap(True)
         description.setTextFormat(Qt.RichText)
         description.setStyleSheet(f"color:{COLORS['secondary']};font-size:14px;")
@@ -2015,18 +2087,22 @@ class WorkDetailPage(QWidget):
             if int(relation["target_id"]) not in internal_ids
         ]
 
-    def _grid_section(self, title, items, cls, signal, columns):
-        frame = QFrame()
-        frame.setObjectName("charactersSection" if title == "Characters" else "section")
-        frame.setStyleSheet(
+    def _detail_section_frame_stylesheet(self):
+        return (
             f"QFrame#charactersSection {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
             f" QFrame#section {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
         )
+
+    def _grid_section(self, title, items, cls, signal, columns):
+        frame = QFrame()
+        frame.setObjectName("charactersSection" if title == "Characters" else "section")
+        frame.setStyleSheet(self._detail_section_frame_stylesheet())
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(20, 18, 20, 20)
         lay.setSpacing(12)
 
         header = QLabel(title)
+        header.setObjectName("detailSectionHeader")
         header.setStyleSheet(
             f"font-size:17px;font-weight:800;color:{COLORS['primary']};"
         )
