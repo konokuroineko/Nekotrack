@@ -226,8 +226,24 @@ class NavigationButton(QPushButton):
         self.setMinimumHeight(44)
         self.setProperty("navButton", True)
 
-    def refresh_icon(self, color):
+    def refresh_icon(self, color=None):
+        if color is None:
+            color = (
+                COLORS["accent"]
+                if self.isChecked()
+                else COLORS["primary"]
+                if self.underMouse()
+                else COLORS["secondary"]
+            )
         self.setIcon(navigation_icon(self.icon_name, color))
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self.refresh_icon()
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self.refresh_icon()
 
 
 class MainWindow(QMainWindow):
@@ -401,9 +417,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "brand_word"):
             self._update_brand_word()
         for button in self.navigation_buttons.values():
-            button.refresh_icon(
-                COLORS["accent"] if button.isChecked() else COLORS["secondary"]
-            )
+            button.refresh_icon()
 
         if hasattr(self, "home_page"):
             self.home_page.refresh_theme()
@@ -495,9 +509,7 @@ class MainWindow(QMainWindow):
         for name, button in self.navigation_buttons.items():
             selected = name == page_name
             button.setChecked(selected)
-            button.refresh_icon(
-                COLORS["accent"] if selected else COLORS["secondary"]
-            )
+            button.refresh_icon()
 
     def _start_existing_library_episode_preload(self):
         if (
