@@ -29,6 +29,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -m pip install ruff
+      - name: Check unused and undefined names
+        run: ruff check --select F .
       - name: Compile Python modules
         run: python -m compileall -q main.py api.py database.py debug_bundle.py debug_tv_bundle.py image_cache.py series.py updater.py ui tests
       - name: Run regression tests
