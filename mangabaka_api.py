@@ -461,6 +461,44 @@ def match_series_for_anilist(anilist_media, candidates):
     return scored[0][1]
 
 
+def _attach_mangabaka_record(media, raw):
+    if not isinstance(media, dict) or not isinstance(raw, dict):
+        return media
+    title_data = media.get("title") or {}
+    query = _first_text(title_data.get("english"), title_data.get("romaji"), title_data.get("native"))
+    raw_copy = copy.deepcopy(raw)
+    media["_mangabaka"] = raw_copy
+    media["_mangabaka_id"] = raw_copy.get("id")
+    for title in _series_title_candidates(raw_copy):
+        if title.casefold() != query.casefold() and title not in (media.get("synonyms") or []):
+            media.setdefault("synonyms", []).append(title)
+    if not ((media.get("coverImage") or {}).get("large")):
+        cover = _cover_url(raw_copy)
+        if cover:
+            media["coverImage"] = {"large": cover}
+    if not media.get("description"):
+        media["description"] = raw_copy.get("description")
+    return media
+
+
+def enrich_anilist_results(media_items, query):
+    """Enrich a page of AniList results with one MangaBaka search request."""
+    items = [item for item in (media_items or []) if isinstance(item, dict)]
+    manga_items = [item for item in items if str(item.get("type") or "").upper() == "MANGA"]
+    query = str(query or "").strip()
+    if not manga_items or not query:
+        return items
+    try:
+        candidates = _records(search_series(query, page=1, limit=50))
+        for item in manga_items:
+            matched = match_series_for_anilist(item, candidates)
+            if matched:
+                _attach_mangabaka_record(item, matched)
+    except Exception as error:
+        print(f"MangaBaka result enrichment skipped: {error}")
+    return items
+
+
 def enrich_anilist_media(media):
     """Best-effort enrichment of one AniList manga or novel with MangaBaka metadata."""
     if not isinstance(media, dict) or str(media.get("type") or "").upper() != "MANGA":
@@ -472,18 +510,8 @@ def enrich_anilist_media(media):
     try:
         candidates = _records(search_series(query, page=1, limit=10))
         matched = match_series_for_anilist(media, candidates)
-        if not matched:
-            return media
-        raw = copy.deepcopy(matched)
-        media["_mangabaka"] = raw
-        media["_mangabaka_id"] = raw.get("id")
-        for title in _series_title_candidates(raw):
-            if title.casefold() != query.casefold() and title not in (media.get("synonyms") or []):
-                media.setdefault("synonyms", []).append(title)
-        if not ((media.get("coverImage") or {}).get("large")):
-            media["coverImage"] = {"large": _cover_url(raw)}
-        if not media.get("description"):
-            media["description"] = raw.get("description")
+        if matched:
+            _attach_mangabaka_record(media, matched)
     except Exception as error:
         print(f"MangaBaka enrichment skipped: {error}")
     return media
