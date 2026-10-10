@@ -374,6 +374,19 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
             connection.close()
         self.assertEqual([(row["item_number"], row["title"]) for row in rows], [(1, "Chapter One")])
 
+    def test_save_anime_rolls_back_and_closes_when_sql_write_fails(self):
+        work = self.work(619, "ANIME", "TV")
+        connection = Mock()
+        connection.execute.side_effect = RuntimeError("simulated metadata write failure")
+
+        with patch.object(database, "get_connection", return_value=connection):
+            with self.assertRaisesRegex(RuntimeError, "simulated metadata write failure"):
+                database.save_anime(work)
+
+        connection.rollback.assert_called_once()
+        connection.close.assert_called_once()
+
+
     def assert_database_invariants(self):
         connection = database.get_connection()
         self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
