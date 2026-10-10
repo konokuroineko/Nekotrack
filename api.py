@@ -673,10 +673,26 @@ def get_media_episodes(media_id):
 
 def get_media_details(media_id):
     """Fetch the complete provider-aware media record used by detail/import workflows."""
+    if isinstance(media_id, bool):
+        raise ValueError("Media ID must be a non-zero integer.")
+    if isinstance(media_id, str):
+        text_id = media_id.strip()
+        if not text_id or len(text_id) > 20 or not re.fullmatch(r"[+-]?[0-9]+", text_id):
+            raise ValueError("Media ID must be a non-zero integer.")
+        media_id = text_id
+    elif isinstance(media_id, float):
+        if not math.isfinite(media_id) or not media_id.is_integer():
+            raise ValueError("Media ID must be a non-zero integer.")
+    elif not isinstance(media_id, int):
+        raise ValueError("Media ID must be a non-zero integer.")
+
     try:
         numeric_id = int(media_id)
-    except (TypeError, ValueError):
-        numeric_id = 0
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Media ID must be a non-zero integer.") from error
+    if numeric_id == 0:
+        raise ValueError("Media ID must be a non-zero integer.")
+    media_id = numeric_id
 
     # Negative local IDs represent MangaBaka-only series. Never send them to
     # AniList's GraphQL Media(id:) query as if they were AniList IDs.
