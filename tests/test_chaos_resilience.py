@@ -1473,24 +1473,26 @@ class AniListRelationsChaosTests(unittest.TestCase):
             }
         }
         with patch.object(nt_api, "anilist_request", return_value=payload) as request:
-            result = nt_api.get_media_relations_batch(["bad", None, 12, "12", -9])
+            result = nt_api.get_media_relations_batch(["bad", None, 12, "12"])
         self.assertEqual(set(result), {12})
         self.assertEqual(result[12]["title"]["romaji"], "Valid")
         self.assertEqual(request.call_args.args[1]["ids"], [12])
 
     def test_relation_batch_rejects_non_integral_bool_and_out_of_range_ids(self):
-        with patch.object(nt_api, "anilist_request") as request:
+        with patch.object(nt_api, "anilist_request") as request, \
+             patch.object(nt_api, "get_media_relations") as local_lookup:
             result = nt_api.get_media_relations_batch([
                 True,
                 12.5,
                 "12.5",
                 0,
-                -1,
+                -(1 << 63),
                 1 << 31,
                 "2147483648",
             ])
         self.assertEqual(result, {})
         request.assert_not_called()
+        local_lookup.assert_not_called()
 
     def test_relation_batch_splits_large_libraries_into_supported_pages(self):
         requested_ids = list(range(1, 52))
