@@ -144,6 +144,26 @@ class CombinedCatalogSearchTests(unittest.TestCase):
         self.assertEqual(result["pageInfo"]["lastPage"], 1)
         self.assertFalse(result["pageInfo"]["hasNextPage"])
 
+    @patch("catalog_search.search_anime")
+    def test_extreme_page_numbers_are_clamped_and_cannot_request_page_10001(self, search_anilist):
+        search_anilist.return_value = {
+            "pageInfo": {
+                "currentPage": 10**100,
+                "lastPage": 10**100,
+                "hasNextPage": True,
+            },
+            "media": [],
+        }
+
+        result = catalog_search.search_combined_media(
+            "", 10**100, "ANIME", None, {}
+        )
+
+        self.assertEqual(search_anilist.call_args.args[1], catalog_search.MAX_CATALOG_PAGES)
+        self.assertEqual(result["pageInfo"]["currentPage"], catalog_search.MAX_CATALOG_PAGES)
+        self.assertEqual(result["pageInfo"]["lastPage"], catalog_search.MAX_CATALOG_PAGES)
+        self.assertFalse(result["pageInfo"]["hasNextPage"])
+
     @patch("catalog_search.search_mangabaka_media")
     @patch("catalog_search.search_anime")
     def test_invalid_start_date_does_not_break_date_sort(self, search_anilist, search_mb):
