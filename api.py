@@ -972,32 +972,21 @@ def get_media_details(media_id):
         },
     }
 
-    # Normalize the remaining connections too. UI/import callers access
-    # staff, studios, and relations as dictionaries with edge lists; malformed
-    # outer shapes must not crash those callers before DB-level guards run.
-    # For relations/studios, retain a supplied list exactly as received: removing
-    # bad members here would make a partial snapshot look complete and could
-    # cause the database to delete still-valid cached links.
+    # Normalize the remaining connection containers without converting
+    # missing/malformed data into an authoritative empty snapshot. Preserve
+    # edge members as received; database persistence validates each edge and
+    # will only reconcile stale links for a complete, well-formed list.
     for connection_name in ("staff", "studios", "relations"):
         raw_connection = media.get(connection_name)
         if not isinstance(raw_connection, dict):
-            media[connection_name] = {"edges": [] if connection_name == "staff" else None}
+            media[connection_name] = {"edges": None}
             continue
 
         raw_edges = raw_connection.get("edges")
-        if connection_name == "staff":
-            clean_edges = []
-            if isinstance(raw_edges, list):
-                clean_edges = [
-                    edge for edge in raw_edges
-                    if isinstance(edge, dict) and isinstance(edge.get("node"), dict)
-                ]
-            media[connection_name] = {**raw_connection, "edges": clean_edges}
-        else:
-            media[connection_name] = {
-                **raw_connection,
-                "edges": raw_edges if isinstance(raw_edges, list) else None,
-            }
+        media[connection_name] = {
+            **raw_connection,
+            "edges": raw_edges if isinstance(raw_edges, list) else None,
+        }
 
     # Add MangaBaka's complete series payload for reading-media details. The
     # lookup is best-effort and the AniList record remains the canonical one.
