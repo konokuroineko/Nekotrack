@@ -475,6 +475,11 @@ class DatabasePartialMetadataStressTests(unittest.TestCase):
                 database.save_anime(work([studio_edge(10), None]))
                 self.assertEqual(saved_studios(), [10, 11])
 
+                # SQLite integers are signed 64-bit. An out-of-range provider ID
+                # must mark the snapshot malformed instead of crashing the save.
+                database.save_anime(work([studio_edge(10), studio_edge(10**100)]))
+                self.assertEqual(saved_studios(), [10, 11])
+
                 # A complete refresh replaces stale associations, and empty is
                 # meaningful when the provider confirms that no studios remain.
                 database.save_anime(work([studio_edge(10)]))
