@@ -13,7 +13,7 @@ import api
 import catalog_search
 import database
 import stress_test
-import mangabaka_api as mb
+import api as mb
 import series
 
 
@@ -124,7 +124,7 @@ class MangaBakaAdversarialTests(unittest.TestCase):
             total_chapters="-5 chapters",
             final_volume=-2,
         )
-        normalized = mb.normalize_series(invalid_date)
+        normalized = mb.normalize_mangabaka_series(invalid_date)
         self.assertEqual(normalized["startDate"], {"year": 2020, "month": 2, "day": 29})
         self.assertIsNone(normalized["chapters"])
         self.assertIsNone(normalized["volumes"])
@@ -153,7 +153,7 @@ class MangaBakaAdversarialTests(unittest.TestCase):
                 final_volume=rng.choice(counts),
                 rating=rng.choice([None, "?", 0, 50, 101, -5, [], {}]),
             )
-            normalized = mb.normalize_series(record)
+            normalized = mb.normalize_mangabaka_series(record)
             self.assertEqual(normalized["_mangabaka_id"], index + 1)
             start = normalized["startDate"]
             self.assertIsInstance(start, dict)
@@ -166,8 +166,8 @@ class MangaBakaAdversarialTests(unittest.TestCase):
             "data": [manga_baka_series(123)],
             "pagination": ["this should be an object"],
         }
-        with patch.object(mb, "search_series", return_value=payload):
-            result = mb.search_media(
+        with patch.object(mb, "search_mangabaka_series", return_value=payload):
+            result = mb.search_mangabaka_media(
                 "Adversarial Example",
                 page=3,
                 media_type="MANGA",
