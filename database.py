@@ -417,7 +417,16 @@ def save_characters(work_id, characters):
     try:
         for character in normalized:
             connection.execute(
-                "INSERT OR REPLACE INTO characters (id, name, image_url) VALUES (?, ?, ?)",
+                """
+                INSERT INTO characters (id, name, image_url) VALUES (?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    image_path = CASE
+                        WHEN excluded.image_url IS NOT NULL
+                         AND excluded.image_url IS NOT characters.image_url
+                        THEN NULL ELSE characters.image_path END,
+                    image_url = COALESCE(excluded.image_url, characters.image_url)
+                """,
                 (character["id"], character["name"], character["image_url"]),
             )
             connection.execute(
@@ -430,13 +439,24 @@ def save_characters(work_id, characters):
             )
             for actor in character["actors"]:
                 connection.execute(
-                    "INSERT OR REPLACE INTO people (id, name, image_url) VALUES (?, ?, ?)",
+                    """
+                    INSERT INTO people (id, name, image_url) VALUES (?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        name = excluded.name,
+                        image_path = CASE
+                            WHEN excluded.image_url IS NOT NULL
+                             AND excluded.image_url IS NOT people.image_url
+                            THEN NULL ELSE people.image_path END,
+                        image_url = COALESCE(excluded.image_url, people.image_url)
+                    """,
                     (actor["id"], actor["name"], actor["image_url"]),
                 )
                 connection.execute(
                     """
-                    INSERT OR REPLACE INTO character_voice_actors (character_id, person_id, language)
+                    INSERT INTO character_voice_actors (character_id, person_id, language)
                     VALUES (?, ?, ?)
+                    ON CONFLICT(character_id, person_id) DO UPDATE SET
+                        language = COALESCE(excluded.language, character_voice_actors.language)
                     """,
                     (character["id"], actor["id"], actor["language"]),
                 )
@@ -712,7 +732,16 @@ def save_staff(work_id, staff_edges):
     try:
         for person_id, person_name, image_url, role in normalized:
             connection.execute(
-                "INSERT OR REPLACE INTO people (id, name, image_url) VALUES (?, ?, ?)",
+                """
+                INSERT INTO people (id, name, image_url) VALUES (?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    image_path = CASE
+                        WHEN excluded.image_url IS NOT NULL
+                         AND excluded.image_url IS NOT people.image_url
+                        THEN NULL ELSE people.image_path END,
+                    image_url = COALESCE(excluded.image_url, people.image_url)
+                """,
                 (person_id, person_name, image_url),
             )
             connection.execute(
