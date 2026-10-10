@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+import api
 import mangabaka_api as mb
 
 
@@ -136,6 +137,36 @@ class MangaBakaAPITests(unittest.TestCase):
             mb.get_public_data("my/profile")
         with self.assertRaises(ValueError):
             mb.get_public_data("mod/statistics")
+
+
+    def test_mangabaka_api_is_exposed_through_the_public_api_module(self):
+        exports = {
+            "MangaBakaAPIError": "MangaBakaAPIError",
+            "enrich_anilist_media": "enrich_anilist_media",
+            "enrich_anilist_results": "enrich_anilist_results",
+            "get_mangabaka_external_id": "extract_external_id",
+            "get_mangabaka_public_data": "get_public_data",
+            "get_mangabaka_series": "get_series",
+            "get_mangabaka_work": "get_work",
+            "get_mangabaka_related_series": "get_related_series",
+            "get_mangabaka_series_news": "get_series_news",
+            "get_mangabaka_volume_records": "get_volume_records",
+            "get_mangabaka_series_collections": "get_series_collections",
+            "get_mangabaka_collection_works": "get_collection_works",
+            "get_mangabaka_series_mix": "get_series_mix",
+            "get_mangabaka_hidden_gems": "get_hidden_gems",
+            "get_mangabaka_publishers": "get_publishers",
+            "get_mangabaka_publisher": "get_publisher",
+            "get_mangabaka_similar_publishers": "get_similar_publishers",
+            "get_mangabaka_publisher_stats": "get_publisher_stats",
+            "normalize_mangabaka_series": "normalize_series",
+            "search_mangabaka_media": "search_media",
+            "search_mangabaka_series": "search_series",
+        }
+        for public_name, implementation_name in exports.items():
+            with self.subTest(api_name=public_name):
+                self.assertIs(getattr(api, public_name), getattr(mb, implementation_name))
+
 
 
 if __name__ == "__main__":
