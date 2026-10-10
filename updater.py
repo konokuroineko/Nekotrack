@@ -2,6 +2,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 import requests
 from PySide6.QtCore import QThread, Signal
@@ -9,23 +10,151 @@ from PySide6.QtCore import QThread, Signal
 
 REPO_API_URL = "https://api.github.com/repos/konokuroineko/Nekotrack/releases"
 REQUEST_TIMEOUT = 8
+MAX_INSTALLER_BYTES = 512 * 1024 * 1024
+MAX_INSTALLER_REDIRECTS = 5
+RELEASE_OWNER = "konokuroineko"
+RELEASE_REPO = "Nekotrack"
+
+
+def _https_url_parts(value):
+    """Parse an HTTPS URL while rejecting credentials and unusual ports."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = urlsplit(value.strip())
+        port = parsed.port
+    except (TypeError, ValueError):
+        return None
+    if (
+        parsed.scheme.casefold() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+    ):
+        return None
+    return parsed
+
+
+def _is_setup_asset_name(value):
+    if not isinstance(value, str):
+        return False
+    name = value.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    return "setup" in name and name.endswith(".exe")
+
+
+def _is_trusted_release_asset_url(value):
+    """Accept only installer assets published in this repository's releases."""
+    parsed = _https_url_parts(value)
+    if parsed is None or parsed.hostname.casefold() != "github.com" or parsed.fragment:
+        return False
+
+    parts = parsed.path.split("/")
+    return (
+        len(parts) == 7
+        and parts[0] == ""
+        and parts[1].casefold() == RELEASE_OWNER.casefold()
+        and parts[2].casefold() == RELEASE_REPO.casefold()
+        and parts[3:5] == ["releases", "download"]
+        and bool(parts[5])
+        and _is_setup_asset_name(parts[6])
+    )
+
+
+def _is_trusted_download_location(value):
+    """Validate the final URL after GitHub redirects a release asset download."""
+    parsed = _https_url_parts(value)
+    if parsed is None or parsed.fragment:
+        return False
+    host = parsed.hostname.casefold()
+    if host == "github.com":
+        return _is_trusted_release_asset_url(value)
+
+    # Do not trust every githubusercontent.com subdomain: that includes places
+    # where arbitrary user-controlled files can be hosted. These are the exact
+    # documented/observed release-asset delivery hosts.
+    return host in {
+        "release-assets.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "github-production-release-asset-2e65be.s3.amazonaws.com",
+    }
+
+
+def _open_trusted_download(start_url):
+    """Follow only HTTPS redirects to GitHub's own release-asset infrastructure.
+
+    Requests' automatic redirect handling contacts a redirect destination before
+    the caller can inspect it. Disable that behavior so an unexpected redirect
+    is rejected before any request is made to the destination.
+    """
+    url = start_url
+    redirect_codes = {301, 302, 303, 307, 308}
+    for _ in range(MAX_INSTALLER_REDIRECTS + 1):
+        response = requests.get(
+            url,
+            headers={"Accept": "application/octet-stream"},
+            stream=True,
+            timeout=30,
+            allow_redirects=False,
+        )
+        status_code = getattr(response, "status_code", None)
+        if status_code in redirect_codes:
+            headers = getattr(response, "headers", None) or {}
+            location = headers.get("Location")
+            response.close()
+            if not isinstance(location, str) or not location.strip():
+                raise ValueError("GitHub returned a redirect without a location.")
+            destination = urljoin(url, location.strip())
+            if not _is_trusted_download_location(destination):
+                raise ValueError("GitHub redirected the installer download to an untrusted host.")
+            url = destination
+            continue
+
+        response.raise_for_status()
+        final_url = getattr(response, "url", None) or url
+        if not _is_trusted_download_location(final_url):
+            response.close()
+            raise ValueError("The installer response came from an untrusted host.")
+        return response
+
+    raise ValueError("The installer download exceeded the redirect limit.")
+
+
+def _is_windows_pe_installer(path):
+    """Reject empty/error pages masquerading as .exe files before launching."""
+    try:
+        with Path(path).open("rb") as handle:
+            dos_header = handle.read(64)
+            if len(dos_header) < 64 or dos_header[:2] != b"MZ":
+                return False
+            pe_offset = int.from_bytes(dos_header[0x3C:0x40], "little")
+            if pe_offset < 64 or pe_offset > MAX_INSTALLER_BYTES - 4:
+                return False
+            handle.seek(pe_offset)
+            return handle.read(4) == b"PE\0\0"
+    except (OSError, TypeError, ValueError, OverflowError):
+        return False
 
 
 def _version_key(value):
+    if not isinstance(value, str):
+        return (0, 0, 0, -1, 0)
     value = value.strip().lstrip("v")
     match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z]+)(?:\.(\d+))?)?$", value)
     if not match:
         return (0, 0, 0, -1, 0)
 
+    try:
+        major, minor, patch = (int(match.group(index)) for index in (1, 2, 3))
+        stage_number = int(match.group(5) or 0)
+    except (ValueError, OverflowError):
+        # Extremely long digit strings can exceed Python's safe integer parser
+        # limits. A malformed tag must not abort the rest of the update feed.
+        return (0, 0, 0, -1, 0)
+
     stage = (match.group(4) or "stable").lower()
     stage_rank = {"dev": 0, "alpha": 1, "beta": 2, "rc": 3, "stable": 4}.get(stage, -1)
-    return (
-        int(match.group(1)),
-        int(match.group(2)),
-        int(match.group(3)),
-        stage_rank,
-        int(match.group(5) or 0),
-    )
+    return (major, minor, patch, stage_rank, stage_number)
 
 
 def is_newer(remote_version, current_version):
@@ -86,8 +215,7 @@ class UpdateChecker(QThread):
                     url = asset.get("browser_download_url")
                     if not isinstance(name, str) or not isinstance(url, str) or not url.strip():
                         continue
-                    lowered_name = name.casefold()
-                    if lowered_name.endswith(".exe") and "setup" in lowered_name:
+                    if _is_setup_asset_name(name) and _is_trusted_release_asset_url(url):
                         installer = asset
                         break
 
@@ -115,26 +243,58 @@ class InstallerDownloader(QThread):
         self.asset_name = asset_name
 
     def run(self):
+        temp_path = None
         try:
-            if not self.asset_url:
-                raise ValueError("The update does not contain an installer download URL.")
+            # Defense in depth: do not let callers bypass the release-feed URL
+            # validation and execute a program downloaded from an arbitrary host.
+            if not _is_trusted_release_asset_url(self.asset_url):
+                raise ValueError("The installer URL is not a trusted NekoTrack GitHub release asset.")
+            if not _is_setup_asset_name(self.asset_name):
+                raise ValueError("The update asset is not a NekoTrack Setup executable.")
 
-            suffix = Path(self.asset_name or "NekoTrack-Setup.exe").suffix or ".exe"
-            temp_path = Path(tempfile.gettempdir()) / f"NekoTrack-update{suffix}"
+            byte_count = 0
+            with _open_trusted_download(self.asset_url) as response:
 
-            with requests.get(
-                self.asset_url,
-                headers={"Accept": "application/octet-stream"},
-                stream=True,
-                timeout=30,
-            ) as response:
-                response.raise_for_status()
-                with temp_path.open("wb") as handle:
+                headers = getattr(response, "headers", None) or {}
+                raw_length = headers.get("Content-Length")
+                if raw_length not in (None, ""):
+                    try:
+                        declared_length = int(raw_length)
+                    except (TypeError, ValueError, OverflowError):
+                        raise ValueError("The installer server returned an invalid content length.")
+                    if declared_length < 0:
+                        raise ValueError("The installer server returned an invalid content length.")
+                    if declared_length > MAX_INSTALLER_BYTES:
+                        raise ValueError("The installer is larger than the allowed 512 MiB limit.")
+
+                with tempfile.NamedTemporaryFile(
+                    prefix="NekoTrack-update-",
+                    suffix=".exe",
+                    dir=tempfile.gettempdir(),
+                    delete=False,
+                ) as handle:
+                    temp_path = Path(handle.name)
                     for chunk in response.iter_content(chunk_size=1024 * 256):
-                        if chunk:
-                            handle.write(chunk)
+                        if not chunk:
+                            continue
+                        byte_count += len(chunk)
+                        if byte_count > MAX_INSTALLER_BYTES:
+                            raise ValueError("The installer exceeded the allowed 512 MiB download limit.")
+                        handle.write(chunk)
+
+            if byte_count == 0:
+                raise ValueError("The installer download was empty.")
+            if not _is_windows_pe_installer(temp_path):
+                raise ValueError(
+                    "The downloaded Setup file does not contain a valid Windows executable header."
+                )
 
             subprocess.Popen([str(temp_path)], close_fds=True)
             self.finished.emit(str(temp_path))
         except Exception as exc:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             self.failed.emit(str(exc))

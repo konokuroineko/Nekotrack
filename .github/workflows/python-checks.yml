@@ -49,4 +49,5 @@ jobs:
       - name: Run regression and deterministic stress tests
         run: python -m unittest discover -s tests -v
       - name: Smoke-test the timed adversarial soak harness
+        if: runner.os == 'Linux'
         run: python stress_test.py --seconds 1 --seed 17 --report "${{ runner.temp }}/nekotrack-stress-smoke.json"
