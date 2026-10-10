@@ -11,7 +11,7 @@ from unittest.mock import patch
 import api
 import stress_test
 import database
-import mangabaka_api as mb
+import api as mb
 import series
 
 def _fuzz_seed(base):
@@ -1352,11 +1352,11 @@ class MangaBakaShapeStressTests(unittest.TestCase):
             {"year": "9" * 5000},
             {"year": 10**100},
         )
-        with patch("mangabaka_api.search_series") as search_series, \
-             patch("mangabaka_api.get_series_mix") as series_mix:
+        with patch("api.search_mangabaka_series") as search_series, \
+             patch("api.get_mangabaka_series_mix") as series_mix:
             for filters in hostile_filters:
                 with self.subTest(filter_name=next(iter(filters))):
-                    result = mb.search_media("", filters=filters)
+                    result = mb.search_mangabaka_media("", filters=filters)
                     self.assertEqual(result["media"], [])
                     self.assertFalse(result["pageInfo"]["hasNextPage"])
             search_series.assert_not_called()
@@ -1385,8 +1385,8 @@ class MangaBakaShapeStressTests(unittest.TestCase):
                 "next": "https://api.mangabaka.org/v2/series?page=overflow",
             },
         }
-        with patch("mangabaka_api.get_series_mix", return_value=payload) as request:
-            result = mb.search_media("", page=10**100)
+        with patch("api.get_mangabaka_series_mix", return_value=payload) as request:
+            result = mb.search_mangabaka_media("", page=10**100)
 
         request.assert_called_once()
         self.assertEqual(request.call_args.kwargs["page"], mb.MAX_PROVIDER_PAGES)
@@ -1396,7 +1396,7 @@ class MangaBakaShapeStressTests(unittest.TestCase):
         self.assertEqual(len(result["media"]), 1)
 
     def test_public_mangabaka_endpoints_reject_bad_ids_and_clamp_paging(self):
-        with patch("mangabaka_api._request", return_value={"ok": True}) as request:
+        with patch("api._request", return_value={"ok": True}) as request:
             for invalid_id in (
                 True,
                 0,
@@ -1408,23 +1408,23 @@ class MangaBakaShapeStressTests(unittest.TestCase):
             ):
                 with self.subTest(invalid_id=repr(invalid_id)[:50]):
                     for endpoint in (
-                        mb.get_series,
-                        mb.get_work,
-                        mb.get_related_series,
-                        mb.get_publisher,
-                        mb.get_publisher_stats,
+                        mb.get_mangabaka_series,
+                        mb.get_mangabaka_work,
+                        mb.get_mangabaka_related_series,
+                        mb.get_mangabaka_publisher,
+                        mb.get_mangabaka_publisher_stats,
                     ):
                         with self.assertRaises(ValueError):
                             endpoint(invalid_id)
             request.assert_not_called()
 
-            mb.search_series("test", page=float("inf"), limit=10**100)
+            mb.search_mangabaka_series("test", page=float("inf"), limit=10**100)
             kwargs = request.call_args.kwargs
             self.assertEqual(kwargs["params"]["page"], 1)
             self.assertEqual(kwargs["params"]["limit"], 50)
             request.reset_mock()
 
-            mb.get_series_collections(
+            mb.get_mangabaka_series_collections(
                 42,
                 page=10**100,
                 limit=10**100,
@@ -1446,8 +1446,8 @@ class MangaBakaShapeStressTests(unittest.TestCase):
         )
         for value in invalid_values:
             with self.subTest(value=repr(value)[:50]):
-                with patch("mangabaka_api._request", return_value={"ok": True}) as request:
-                    mb.search_series("query", page=value, limit=value)
+                with patch("api._request", return_value={"ok": True}) as request:
+                    mb.search_mangabaka_series("query", page=value, limit=value)
                 params = request.call_args.kwargs["params"]
                 self.assertGreaterEqual(params["page"], 1)
                 self.assertLessEqual(params["page"], mb.MAX_PROVIDER_PAGES)
@@ -1495,10 +1495,10 @@ class MangaBakaShapeStressTests(unittest.TestCase):
             "pagination": {"next": None},
         }
         with patch(
-            "mangabaka_api.get_series_collections",
+            "api.get_mangabaka_series_collections",
             return_value=oversized_collection,
-        ) as collections, patch("mangabaka_api.get_collection_works") as works:
-            self.assertEqual(mb.get_volume_records(7), [])
+        ) as collections, patch("api.get_mangabaka_collection_works") as works:
+            self.assertEqual(mb.get_mangabaka_volume_records(7), [])
         collections.assert_called_once()
         works.assert_not_called()
 
@@ -1523,17 +1523,17 @@ class MangaBakaShapeStressTests(unittest.TestCase):
             "pagination": {"next": None},
         }
         with patch(
-            "mangabaka_api.get_series_collections",
+            "api.get_mangabaka_series_collections",
             return_value=collections_payload,
         ), patch(
-            "mangabaka_api.get_collection_works",
+            "api.get_mangabaka_collection_works",
             return_value=works_payload,
         ):
-            volumes = mb.get_volume_records(7)
+            volumes = mb.get_mangabaka_volume_records(7)
 
         self.assertEqual([row["number"] for row in volumes], [1, 2])
         self.assertEqual([row["title"] for row in volumes], ["A", "B"])
-        self.assertFalse(mb.get_volume_records(10**100))
+        self.assertFalse(mb.get_mangabaka_volume_records(10**100))
 
     def test_invalid_dates_are_ignored_and_never_abort_normalization(self):
         rng = random.Random(_fuzz_seed(20261010))
@@ -1558,7 +1558,7 @@ class MangaBakaShapeStressTests(unittest.TestCase):
         )
         for index, value in enumerate(samples, start=1):
             with self.subTest(index=index, value=repr(value)):
-                result = mb.normalize_series({
+                result = mb.normalize_mangabaka_series({
                     "id": index,
                     "title": f"Fuzz title {index}",
                     "published": {"start": value},
@@ -1581,7 +1581,7 @@ class MangaBakaShapeStressTests(unittest.TestCase):
         for value in (None, True, False, 0, -1, "0", "-23", "not-an-id"):
             with self.subTest(value=repr(value)):
                 with self.assertRaises(ValueError):
-                    mb.normalize_series({"id": value, "title": "Invalid ID"})
+                    mb.normalize_mangabaka_series({"id": value, "title": "Invalid ID"})
 
     def test_mangabaka_ids_and_external_ids_are_bounded_before_conversion(self):
         invalid_series_ids = (
@@ -1594,15 +1594,15 @@ class MangaBakaShapeStressTests(unittest.TestCase):
         for value in invalid_series_ids:
             with self.subTest(series_id=repr(value)[:60]):
                 with self.assertRaises(ValueError):
-                    mb.normalize_series({"id": value, "title": "Invalid series ID"})
+                    mb.normalize_mangabaka_series({"id": value, "title": "Invalid series ID"})
 
         with self.assertRaises(ValueError):
-            mb.normalize_series(
+            mb.normalize_mangabaka_series(
                 {"id": 7, "title": "Local work"},
                 preferred_id=1 << 31,
             )
 
-        normalized = mb.normalize_series({
+        normalized = mb.normalize_mangabaka_series({
             "id": 7,
             "title": "Local work",
             "external_ids": {
@@ -1611,17 +1611,17 @@ class MangaBakaShapeStressTests(unittest.TestCase):
         })
         self.assertEqual(normalized["id"], -7)
         self.assertEqual(normalized["_mangabaka_id"], 7)
-        self.assertIsNone(mb.extract_external_id(
+        self.assertIsNone(mb.get_mangabaka_external_id(
             {"anilist_id": "9" * 5000},
             "anilist",
         ))
-        self.assertIsNone(mb.extract_external_id(
+        self.assertIsNone(mb.get_mangabaka_external_id(
             {"anilist_id": str((1 << 31) + 1)},
             "anilist",
         ))
         mal_id = (1 << 31) + 17
         self.assertEqual(
-            mb.extract_external_id({"myanimelist_id": str(mal_id)}, "myanimelist"),
+            mb.get_mangabaka_external_id({"myanimelist_id": str(mal_id)}, "myanimelist"),
             mal_id,
         )
 
@@ -1663,7 +1663,7 @@ class MangaBakaShapeStressTests(unittest.TestCase):
                 "content_rating": rng.choice(["safe", "suggestive", "adult", None]),
                 "secondary_titles": rng.choice([None, {}, [], ["Alias"], {"en": ["Alias"]}]),
             }
-            normalized = mb.normalize_series(record)
+            normalized = mb.normalize_mangabaka_series(record)
             self.assertEqual(normalized["_mangabaka_id"], index + 1)
             filters = {
                 "status": rng.choice(["FINISHED", "RELEASING", "HIATUS", None]),
