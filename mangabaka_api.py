@@ -15,6 +15,7 @@ import requests
 MANGABAKA_BASE_URL = "https://api.mangabaka.org/v2/"
 REQUEST_TIMEOUT = 18
 MAX_RETRIES = 3
+MAX_PROVIDER_PAGES = 10000
 _CACHE_TTL = 300
 _CACHE_LIMIT = 160
 _cache = {}
@@ -863,7 +864,7 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
     except (TypeError, ValueError):
         filters = {}
     try:
-        page = max(1, int(page or 1))
+        page = min(MAX_PROVIDER_PAGES, max(1, int(page or 1)))
     except (TypeError, ValueError, OverflowError):
         page = 1
     try:
@@ -965,15 +966,24 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
             return fallback
         return parsed if parsed >= minimum else fallback
 
-    current_page = safe_int(pagination.get("page"), page, minimum=1)
+    current_page = min(
+        MAX_PROVIDER_PAGES,
+        safe_int(pagination.get("page"), page, minimum=1),
+    )
     limit_value = safe_int(pagination.get("limit"), limit, minimum=1)
     total = safe_int(pagination.get("count"), len(normalized), minimum=0)
-    last_page = max(current_page, (total + limit_value - 1) // limit_value)
+    last_page = min(
+        MAX_PROVIDER_PAGES,
+        max(current_page, (total + limit_value - 1) // limit_value),
+    )
+    has_next = bool(
+        pagination.get("next") or (total and current_page < last_page)
+    )
     return {
         "pageInfo": {
             "currentPage": current_page,
             "lastPage": last_page,
-            "hasNextPage": bool(pagination.get("next") or (total and current_page < last_page)),
+            "hasNextPage": has_next and current_page < last_page,
         },
         "media": normalized,
         "_catalog": "MangaBaka",
