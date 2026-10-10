@@ -307,7 +307,10 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
                 query, page, media_type, media_format, mb_filters, limit=PAGE_SIZE
             )
             data = data if isinstance(data, dict) else {}
-            mangabaka_items = [item for item in (data.get("media") or []) if isinstance(item, dict)]
+            mangabaka_items = [
+                item for item in (data.get("media") or [])
+                if isinstance(item, dict) and _media_id(item) is not None
+            ]
             mangabaka_page = _page_info(data, page)
         except Exception as error:
             mangabaka_error = str(error)
