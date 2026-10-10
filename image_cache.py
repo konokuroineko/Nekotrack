@@ -62,6 +62,11 @@ def _safe_image_url(value):
         address = ipaddress.ip_address(host)
     except ValueError:
         address = None
+    if address is None and "." not in host:
+        # Single-label names may be resolved through OS search domains or
+        # local host files (for example "router" or "metadata"), even though
+        # they are not literal private IPs or "localhost".
+        raise ValueError("Cover images must use a fully qualified public hostname.")
     if address is not None and not address.is_global:
         raise ValueError("Cover images cannot use private or local IP addresses.")
     return value.strip()
