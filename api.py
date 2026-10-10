@@ -50,6 +50,7 @@ __all__ = [
     "get_media_details",
     "get_tmdb_episode_data",
     "get_tmdb_episode_sample",
+    "test_tmdb_connection",
     "cache_tmdb_episode_image",
     "enrich_anilist_media",
     "enrich_anilist_results",
@@ -1182,6 +1183,27 @@ MAX_TMDB_IMAGE_REDIRECTS = 5
 
 def _tmdb_token():
     return str(get("tmdb_api_token") or "").strip()
+
+
+def test_tmdb_connection(token):
+    """Validate a TMDB API token through the same shared API module as lookups."""
+    token = str(token or "").strip()
+    if not token:
+        raise ValueError("TMDB API token is required.")
+
+    response = requests.get(
+        f"{TMDB_BASE_URL}/configuration",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json",
+        },
+        timeout=10,
+    )
+    try:
+        response.raise_for_status()
+    finally:
+        response.close()
+    return True
 
 
 def _tmdb_get(path, params=None):
