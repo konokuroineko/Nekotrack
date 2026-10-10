@@ -791,6 +791,35 @@ def get_media_details(media_id):
             record = record[0] if record else None
         if not isinstance(record, dict):
             raise RuntimeError("MangaBaka returned no details for this series.")
+
+        # Never attach a response for a different provider series to this local
+        # ID. A mismatch here would poison both the cached work row and all of
+        # the relation edges derived from it.
+        raw_record_id = record.get("id")
+        if isinstance(raw_record_id, bool):
+            raise RuntimeError("MangaBaka returned a malformed series ID.")
+        if isinstance(raw_record_id, float):
+            if not math.isfinite(raw_record_id) or not raw_record_id.is_integer():
+                raise RuntimeError("MangaBaka returned a malformed series ID.")
+        elif isinstance(raw_record_id, str):
+            text_record_id = raw_record_id.strip()
+            if (
+                not text_record_id
+                or len(text_record_id) > 19
+                or not text_record_id.isascii()
+                or not text_record_id.isdigit()
+            ):
+                raise RuntimeError("MangaBaka returned a malformed series ID.")
+            raw_record_id = text_record_id
+        elif not isinstance(raw_record_id, int):
+            raise RuntimeError("MangaBaka returned a malformed series ID.")
+        try:
+            returned_id = int(raw_record_id)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise RuntimeError("MangaBaka returned a malformed series ID.") from error
+        if returned_id != abs(numeric_id):
+            raise RuntimeError("MangaBaka returned details for a different series ID.")
+
         media = normalize_mangabaka_series(record, preferred_id=numeric_id)
         # Bring in the provider's native relationship graph where it exists.
         try:
