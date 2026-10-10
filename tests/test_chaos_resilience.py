@@ -1361,6 +1361,66 @@ class AniListRelationsChaosTests(unittest.TestCase):
         self.assertEqual(media["airingSchedule"]["nodes"], [])
 
 
+    def test_mangabaka_only_relations_persist_between_negative_local_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                source_id, target_id = -901, -902
+                database.save_anime({
+                    "id": source_id,
+                    "type": "MANGA",
+                    "format": "MANGA",
+                    "title": {
+                        "english": "Local manga source",
+                        "romaji": "Local manga source",
+                        "native": None,
+                    },
+                    "relations": {
+                        "edges": [{
+                            "relationType": "SEQUEL",
+                            "node": {
+                                "id": target_id,
+                                "type": "MANGA",
+                                "format": "NOVEL",
+                                "title": {
+                                    "english": "Local manga sequel",
+                                    "romaji": "Local manga sequel",
+                                    "native": None,
+                                },
+                                "coverImage": {"large": None},
+                                "startDate": {"year": 2021, "month": 1, "day": 1},
+                            },
+                        }]
+                    },
+                })
+
+                connection = database.get_connection()
+                try:
+                    relation = connection.execute(
+                        "SELECT source_id, target_id, relation_type "
+                        "FROM work_relations WHERE source_id = ?",
+                        (source_id,),
+                    ).fetchone()
+                    target = connection.execute(
+                        "SELECT id, title, format FROM works WHERE id = ?",
+                        (target_id,),
+                    ).fetchone()
+                finally:
+                    connection.close()
+
+                self.assertIsNotNone(relation)
+                self.assertEqual(
+                    (relation["source_id"], relation["target_id"], relation["relation_type"]),
+                    (source_id, target_id, "SEQUEL"),
+                )
+                self.assertIsNotNone(target)
+                self.assertEqual(target["title"], "Local manga sequel")
+                self.assertEqual(target["format"], "NOVEL")
+            finally:
+                os.chdir(old_cwd)
+
     def test_invalid_ids_do_not_crash_batch_relation_fetch(self):
         with patch.object(nt_api, "anilist_request") as request:
             result = nt_api.get_media_relations_batch([None, "bad-id", -7, 0])
