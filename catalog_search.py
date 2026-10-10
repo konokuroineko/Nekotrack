@@ -10,6 +10,7 @@ from mangabaka_api import enrich_anilist_results, search_media as search_mangaba
 ANIME_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL", "MUSIC"}
 PROVIDER_ONLY_FILTERS = ("publisher_id", "is_licensed")
 PAGE_SIZE = 20
+MAX_CATALOG_PAGES = 10000
 MAX_PROVIDER_ID = (1 << 63) - 1
 
 
@@ -196,7 +197,7 @@ def _page_info(data, page):
     info = data.get("pageInfo") if isinstance(data, dict) else {}
     info = info if isinstance(info, dict) else {}
     try:
-        current_page = max(1, int(page or 1))
+        current_page = min(MAX_CATALOG_PAGES, max(1, int(page or 1)))
     except (TypeError, ValueError, OverflowError):
         current_page = 1
 
@@ -206,7 +207,7 @@ def _page_info(data, page):
         last_page = 1
     # Guard against corrupt pagination values making infinite scrolling believe
     # the catalogue has millions of pages.
-    last_page = min(last_page, 10000)
+    last_page = min(last_page, MAX_CATALOG_PAGES)
 
     raw_next = info.get("hasNextPage", False)
     if isinstance(raw_next, str):
@@ -231,7 +232,7 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
     """Return a single de-duplicated page shaped for the existing result UI."""
     query = str(search_text or "").strip()
     try:
-        page = max(1, int(page or 1))
+        page = min(MAX_CATALOG_PAGES, max(1, int(page or 1)))
     except (TypeError, ValueError, OverflowError):
         page = 1
     try:
