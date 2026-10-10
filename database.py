@@ -851,7 +851,7 @@ def save_anime(anime):
                 or not isinstance(relation_type, str)
                 or not relation_type.strip()
                 or (isinstance(target_id, float) and not target_id.is_integer())
-                or (isinstance(target_id, str) and not re.fullmatch(r"\\s*-?[0-9]+\\s*", target_id))
+                or (isinstance(target_id, str) and not re.fullmatch(r"\s*-?[0-9]+\s*", target_id))
             ):
                 complete_snapshot = False
                 break
