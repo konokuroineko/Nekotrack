@@ -137,6 +137,15 @@ def offline_network_guard(attempted_requests):
     def block_socket_connect_ex(_socket, address):
         record_attempt("socket.connect_ex", address)
 
+    def block_getaddrinfo(host, port, *args, **kwargs):
+        record_attempt("socket.getaddrinfo", (host, port))
+
+    def block_socket_send(_socket, data, *args, **kwargs):
+        record_attempt("socket.send", "<connected socket>")
+
+    def block_socket_sendall(_socket, data, *args, **kwargs):
+        record_attempt("socket.sendall", "<connected socket>")
+
     def block_socket_sendto(_socket, *args, **kwargs):
         destination = kwargs.get("address")
         if destination is None:
@@ -153,6 +162,9 @@ def offline_network_guard(attempted_requests):
         stack.enter_context(patch.object(socket, "create_connection", new=block_create_connection))
         stack.enter_context(patch.object(socket.socket, "connect", new=block_socket_connect))
         stack.enter_context(patch.object(socket.socket, "connect_ex", new=block_socket_connect_ex))
+        stack.enter_context(patch.object(socket, "getaddrinfo", new=block_getaddrinfo))
+        stack.enter_context(patch.object(socket.socket, "send", new=block_socket_send))
+        stack.enter_context(patch.object(socket.socket, "sendall", new=block_socket_sendall))
         stack.enter_context(patch.object(socket.socket, "sendto", new=block_socket_sendto))
         yield
 
