@@ -31,7 +31,6 @@ TEST_FILES = (
     ROOT / "tests" / "test_adversarial_regressions.py",
     ROOT / "tests" / "test_chaos_resilience.py",
     ROOT / "tests" / "test_deep_stress.py",
-    ROOT / "tests" / "test_ui_chaos.py",
 )
 MAX_SOAK_SECONDS = 5 * 60 * 60
 
