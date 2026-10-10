@@ -177,7 +177,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # --------------------------------
-# AniTrack-specific files
+# NekoTrack-specific files
 # --------------------------------
 
 # Local database
@@ -193,5 +193,7 @@ data/
 # Generated from assets/nekotrack-logo.svg during the Windows build
 assets/NekoTrack.ico
 
-# Generated local fuzz/soak report
+# Developer diagnostic reports (never part of the application data)
+nekotrack_diagnostics.json
 nekotrack_stress_report.json
+bundle_tv_debug.json
