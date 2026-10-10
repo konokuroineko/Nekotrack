@@ -1385,6 +1385,48 @@ class AniListRelationsChaosTests(unittest.TestCase):
         self.assertEqual(result[12]["title"]["romaji"], "Valid")
         self.assertEqual(request.call_args.args[1]["ids"], [12])
 
+    def test_relation_batch_rejects_non_integral_bool_and_out_of_range_ids(self):
+        with patch.object(nt_api, "anilist_request") as request:
+            result = nt_api.get_media_relations_batch([
+                True,
+                12.5,
+                "12.5",
+                0,
+                -1,
+                1 << 31,
+                "2147483648",
+            ])
+        self.assertEqual(result, {})
+        request.assert_not_called()
+
+    def test_relation_batch_splits_large_libraries_into_supported_pages(self):
+        requested_ids = list(range(1, 52))
+
+        def response_for_batch(_query, variables):
+            return {
+                "Page": {
+                    "media": [
+                        {"id": media_id, "title": {"romaji": f"Work {media_id}"}}
+                        for media_id in variables["ids"]
+                    ]
+                }
+            }
+
+        with patch.object(
+            nt_api,
+            "anilist_request",
+            side_effect=response_for_batch,
+        ) as request:
+            result = nt_api.get_media_relations_batch(requested_ids)
+
+        self.assertEqual(set(result), set(requested_ids))
+        self.assertEqual(request.call_count, 2)
+        batches = [call.args[1] for call in request.call_args_list]
+        self.assertEqual([len(batch["ids"]) for batch in batches], [50, 1])
+        self.assertEqual([batch["perPage"] for batch in batches], [50, 1])
+        self.assertEqual(batches[0]["ids"], requested_ids[:50])
+        self.assertEqual(batches[1]["ids"], requested_ids[50:])
+
     def test_optional_artwork_lookup_errors_do_not_discard_episode_data(self):
         with patch.object(nt_api, "_tmdb_get", side_effect=RuntimeError("invalid images JSON")):
             self.assertEqual(
