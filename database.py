@@ -697,88 +697,89 @@ def get_characters(work_id):
     except (TypeError, ValueError, OverflowError):
         return []
     connection = get_connection()
-    results = connection.execute("""
-        SELECT
-            characters.id,
-            characters.name AS character_name,
-            characters.image_path AS character_image_path,
-            characters.image_url AS character_image_url,
-            work_characters.role AS character_role,
-            (
-                SELECT people.id
-                FROM character_voice_actors
-                JOIN people ON people.id = character_voice_actors.person_id
-                WHERE character_voice_actors.character_id = characters.id
-                ORDER BY
-                    CASE
-                        WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
-                             ('japanese', 'ja', 'jpn') THEN 0
-                        ELSE 1
-                    END,
-                    character_voice_actors.language,
-                    people.name
-                LIMIT 1
-            ) AS person_id,
-            (
-                SELECT people.name
-                FROM character_voice_actors
-                JOIN people ON people.id = character_voice_actors.person_id
-                WHERE character_voice_actors.character_id = characters.id
-                ORDER BY
-                    CASE
-                        WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
-                             ('japanese', 'ja', 'jpn') THEN 0
-                        ELSE 1
-                    END,
-                    character_voice_actors.language,
-                    people.name
-                LIMIT 1
-            ) AS person_name,
-            (
-                SELECT people.image_path
-                FROM character_voice_actors
-                JOIN people ON people.id = character_voice_actors.person_id
-                WHERE character_voice_actors.character_id = characters.id
-                ORDER BY
-                    CASE
-                        WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
-                             ('japanese', 'ja', 'jpn') THEN 0
-                        ELSE 1
-                    END,
-                    character_voice_actors.language,
-                    people.name
-                LIMIT 1
-            ) AS person_image_path,
-            (
-                SELECT people.image_url
-                FROM character_voice_actors
-                JOIN people ON people.id = character_voice_actors.person_id
-                WHERE character_voice_actors.character_id = characters.id
-                ORDER BY
-                    CASE
-                        WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
-                             ('japanese', 'ja', 'jpn') THEN 0
-                        ELSE 1
-                    END,
-                    character_voice_actors.language,
-                    people.name
-                LIMIT 1
-            ) AS person_image_url
-        FROM work_characters
-        JOIN characters ON characters.id = work_characters.character_id
-        WHERE work_characters.work_id = ?
-        ORDER BY
-            CASE UPPER(COALESCE(work_characters.role, 'UNKNOWN'))
-                WHEN 'MAIN' THEN 0
-                WHEN 'SUPPORTING' THEN 1
-                WHEN 'BACKGROUND' THEN 2
-                ELSE 3
-            END,
-            characters.name
-    """, (safe_work_id,)).fetchall()
-    connection.close()
-    return results
-
+    try:
+        results = connection.execute("""
+            SELECT
+                characters.id,
+                characters.name AS character_name,
+                characters.image_path AS character_image_path,
+                characters.image_url AS character_image_url,
+                work_characters.role AS character_role,
+                (
+                    SELECT people.id
+                    FROM character_voice_actors
+                    JOIN people ON people.id = character_voice_actors.person_id
+                    WHERE character_voice_actors.character_id = characters.id
+                    ORDER BY
+                        CASE
+                            WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
+                                 ('japanese', 'ja', 'jpn') THEN 0
+                            ELSE 1
+                        END,
+                        character_voice_actors.language,
+                        people.name
+                    LIMIT 1
+                ) AS person_id,
+                (
+                    SELECT people.name
+                    FROM character_voice_actors
+                    JOIN people ON people.id = character_voice_actors.person_id
+                    WHERE character_voice_actors.character_id = characters.id
+                    ORDER BY
+                        CASE
+                            WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
+                                 ('japanese', 'ja', 'jpn') THEN 0
+                            ELSE 1
+                        END,
+                        character_voice_actors.language,
+                        people.name
+                    LIMIT 1
+                ) AS person_name,
+                (
+                    SELECT people.image_path
+                    FROM character_voice_actors
+                    JOIN people ON people.id = character_voice_actors.person_id
+                    WHERE character_voice_actors.character_id = characters.id
+                    ORDER BY
+                        CASE
+                            WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
+                                 ('japanese', 'ja', 'jpn') THEN 0
+                            ELSE 1
+                        END,
+                        character_voice_actors.language,
+                        people.name
+                    LIMIT 1
+                ) AS person_image_path,
+                (
+                    SELECT people.image_url
+                    FROM character_voice_actors
+                    JOIN people ON people.id = character_voice_actors.person_id
+                    WHERE character_voice_actors.character_id = characters.id
+                    ORDER BY
+                        CASE
+                            WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
+                                 ('japanese', 'ja', 'jpn') THEN 0
+                            ELSE 1
+                        END,
+                        character_voice_actors.language,
+                        people.name
+                    LIMIT 1
+                ) AS person_image_url
+            FROM work_characters
+            JOIN characters ON characters.id = work_characters.character_id
+            WHERE work_characters.work_id = ?
+            ORDER BY
+                CASE UPPER(COALESCE(work_characters.role, 'UNKNOWN'))
+                    WHEN 'MAIN' THEN 0
+                    WHEN 'SUPPORTING' THEN 1
+                    WHEN 'BACKGROUND' THEN 2
+                    ELSE 3
+                END,
+                characters.name
+        """, (safe_work_id,)).fetchall()
+        return results
+    finally:
+        connection.close()
 
 def save_staff(work_id, staff_edges):
     """Save staff edges and reconcile stale links only for complete snapshots."""
@@ -890,32 +891,33 @@ def get_staff(work_id):
     except (TypeError, ValueError, OverflowError):
         return []
     connection = get_connection()
-    results = connection.execute("""
-        SELECT
-            people.id AS person_id,
-            people.name,
-            people.image_path,
-            people.image_url,
-            (
-                SELECT group_concat(role, char(10))
-                FROM (
-                    SELECT DISTINCT role
-                    FROM work_staff AS ws
-                    WHERE ws.work_id = ? AND ws.person_id = people.id
-                    ORDER BY role
-                )
-            ) AS role
-        FROM people
-        WHERE EXISTS (
-            SELECT 1
-            FROM work_staff AS ws
-            WHERE ws.work_id = ? AND ws.person_id = people.id
-        )
-        ORDER BY people.name
-    """, (safe_work_id, safe_work_id)).fetchall()
-    connection.close()
-    return results
-
+    try:
+        results = connection.execute("""
+            SELECT
+                people.id AS person_id,
+                people.name,
+                people.image_path,
+                people.image_url,
+                (
+                    SELECT group_concat(role, char(10))
+                    FROM (
+                        SELECT DISTINCT role
+                        FROM work_staff AS ws
+                        WHERE ws.work_id = ? AND ws.person_id = people.id
+                        ORDER BY role
+                    )
+                ) AS role
+            FROM people
+            WHERE EXISTS (
+                SELECT 1
+                FROM work_staff AS ws
+                WHERE ws.work_id = ? AND ws.person_id = people.id
+            )
+            ORDER BY people.name
+        """, (safe_work_id, safe_work_id)).fetchall()
+        return results
+    finally:
+        connection.close()
 
 def save_episodes(work_id, episode_data):
     """Upsert episode metadata without erasing useful cached/user-owned fields."""
