@@ -2095,6 +2095,7 @@ def get_tmdb_episode_sample(
 # ---------------------------------------------------------------------------
 
 MANGABAKA_BASE_URL = "https://api.mangabaka.org/v2/"
+MANGABAKA_NOVEL_TYPES = frozenset({"novel", "light_novel"})
 REQUEST_TIMEOUT = 18
 MANGABAKA_MAX_RETRIES = 3
 MAX_PROVIDER_PAGES = 10000
@@ -2386,10 +2387,17 @@ def _matches_local_filters(record, picked_format, filters):
     """Enforce requested filters locally when the provider ignores/falls back on them."""
     if not isinstance(record, dict):
         return False
-    raw_type = str(record.get("type") or "manga").strip().casefold()
-    if picked_format == "NOVEL" and raw_type != "novel":
+    raw_type = (
+        str(record.get("type") or "manga")
+        .strip()
+        .casefold()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+    is_novel = raw_type in MANGABAKA_NOVEL_TYPES
+    if picked_format == "NOVEL" and not is_novel:
         return False
-    if picked_format == "MANGA" and raw_type == "novel":
+    if picked_format == "MANGA" and is_novel:
         return False
 
     status_map = {
@@ -2904,8 +2912,14 @@ def normalize_mangabaka_series(series, preferred_id=None):
     local_id = anilist_id if anilist_id else -mb_id
     mal_id = get_mangabaka_external_id(series, "myanimelist") or get_mangabaka_external_id(series, "mal")
 
-    raw_type = str(series.get("type") or "manga").strip().lower()
-    media_format = "NOVEL" if raw_type == "novel" else "MANGA"
+    raw_type = (
+        str(series.get("type") or "manga")
+        .strip()
+        .casefold()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+    media_format = "NOVEL" if raw_type in MANGABAKA_NOVEL_TYPES else "MANGA"
     rating = series.get("rating")
     try:
         rating = float(rating) if rating is not None else None
@@ -3122,7 +3136,9 @@ def search_mangabaka_media(query="", page=1, media_type=None, media_format=None,
     query_filters = {}
     picked_format = filters.get("format_filter") or media_format
     if picked_format == "NOVEL":
-        query_filters["type"] = ["novel"]
+        # MangaBaka data can label light novels as either "novel" or
+        # "light_novel". Local filtering below normalizes both to NOVEL.
+        query_filters["type"] = sorted(MANGABAKA_NOVEL_TYPES)
     elif picked_format == "MANGA":
         query_filters["type"] = ["manga", "manhwa", "manhua", "oel", "other"]
 
