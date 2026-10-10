@@ -54,7 +54,7 @@ jobs:
           python -m pip install -r requirements.txt
       - name: Run adversarial stress test
         env:
-          STRESS_MINUTES: ${{ inputs.minutes || '1' }}
+          STRESS_MINUTES: ${{ inputs.minutes || '10' }}
           STRESS_SEED: ${{ inputs.seed || github.run_number }}
         run: python stress_test.py --minutes "$STRESS_MINUTES" --seed "$STRESS_SEED"
       - name: Upload stress report
