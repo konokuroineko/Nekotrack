@@ -10,6 +10,28 @@ from mangabaka_api import enrich_anilist_results, search_media as search_mangaba
 ANIME_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL", "MUSIC"}
 PROVIDER_ONLY_FILTERS = ("publisher_id", "is_licensed")
 PAGE_SIZE = 20
+MAX_PROVIDER_ID = (1 << 63) - 1
+
+
+def _positive_provider_id(value):
+    """Parse bounded positive publisher IDs without trusting provider/user input."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 0 < value <= MAX_PROVIDER_ID else None
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    # Real provider IDs are small numeric identifiers; bound parsing work and
+    # reject abusive digit strings before calling int() (which can raise for
+    # extremely long values on modern Python).
+    if not stripped or len(stripped) > 19 or not stripped.isascii() or not stripped.isdigit():
+        return None
+    try:
+        number = int(stripped)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if 0 < number <= MAX_PROVIDER_ID else None
 
 
 def _filter_bool(value):
@@ -29,14 +51,9 @@ def _filter_bool(value):
 def _collect_publisher_ids(value):
     if value is None or isinstance(value, bool):
         return set()
-    if isinstance(value, int):
-        return {value} if value > 0 else set()
-    if isinstance(value, str):
-        stripped = value.strip()
-        if not re.fullmatch(r"[0-9]+", stripped):
-            return set()
-        number = int(stripped)
-        return {number} if number > 0 else set()
+    if isinstance(value, (int, str)):
+        number = _positive_provider_id(value)
+        return {number} if number is not None else set()
     if isinstance(value, (list, tuple, set)):
         result = set()
         for item in value:
@@ -61,9 +78,9 @@ def _matches_provider_only_filters(item, filters):
 
     wanted_publisher = filters.get("publisher_id")
     if wanted_publisher not in (None, ""):
-        if isinstance(wanted_publisher, bool) or not str(wanted_publisher).strip().isdigit():
+        wanted_id = _positive_provider_id(wanted_publisher)
+        if wanted_id is None:
             return False
-        wanted_id = int(wanted_publisher)
         known_ids = set()
         for key in ("publisher_id", "publisherId", "publisher_ids", "publisher", "publishers"):
             known_ids.update(_collect_publisher_ids(raw.get(key)))
