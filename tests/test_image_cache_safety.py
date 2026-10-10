@@ -70,7 +70,10 @@ class CoverCacheInputSafetyTests(unittest.TestCase):
                     image_cache._safe_work_id(work_id)
 
     def test_cover_url_requires_an_unambiguous_https_url(self):
-        self.assertEqual(image_cache._safe_image_url(" https://images.example.invalid/a.png "), VALID_URL.replace("covers/work", "a").replace(".png ", ".png") if False else "https://images.example.invalid/a.png")
+        self.assertEqual(
+            image_cache._safe_image_url(" https://images.example.invalid/a.png "),
+            "https://images.example.invalid/a.png",
+        )
 
         invalid_urls = [
             None,
@@ -84,6 +87,10 @@ class CoverCacheInputSafetyTests(unittest.TestCase):
             "https://images.example.invalid/a.png#fragment",
             "https:///missing-host/a.png",
             "https://[invalid-ipv6/a.png",
+            "https://127.0.0.1/a.png",
+            "https://10.1.2.3/a.png",
+            "https://[::1]/a.png",
+            "https://metadata.google.internal/metadata",
         ]
         for url in invalid_urls:
             with self.subTest(url=repr(url)):
@@ -104,6 +111,41 @@ class CoverCacheInputSafetyTests(unittest.TestCase):
             request.assert_not_called()
             self.assertEqual(list(Path(directory).rglob("*")), [])
 
+    def test_redirect_to_a_private_host_is_rejected_before_following(self):
+        redirect = Mock()
+        redirect.status_code = 302
+        redirect.headers = {"Location": "https://127.0.0.1/private.png"}
+        redirect.close.return_value = None
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            image_cache, "IMAGE_DIRECTORY", Path(directory) / "works"
+        ), patch.object(image_cache.requests, "get", return_value=redirect) as request:
+            with self.assertRaisesRegex(ValueError, "private or local"):
+                image_cache.download_cover(12, VALID_URL)
+
+        request.assert_called_once_with(VALID_URL, timeout=15, stream=True, allow_redirects=False)
+        redirect.close.assert_called_once()
+        self.assertEqual(list(Path(directory).rglob("*")), [])
+
+    def test_redirect_to_a_public_https_cdn_is_followed(self):
+        payload = png_bytes(16, 24)
+        final_url = "https://cdn.example.com/covers/work.png"
+        redirect = Mock()
+        redirect.status_code = 302
+        redirect.headers = {"Location": final_url}
+        redirect.close.return_value = None
+        response = response_for(payload, len(payload), url=final_url)
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            image_cache, "IMAGE_DIRECTORY", Path(directory) / "works"
+        ), patch.object(image_cache.requests, "get", side_effect=[redirect, response]) as request:
+            saved = Path(image_cache.download_cover(12, VALID_URL))
+
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(request.call_args_list[0].args[0], VALID_URL)
+        self.assertEqual(request.call_args_list[1].args[0], final_url)
+        self.assertTrue(all(call.kwargs["allow_redirects"] is False for call in request.call_args_list))
+        self.assertTrue(saved.is_file())
+
     def test_valid_cover_is_streamed_resized_and_saved_inside_cache(self):
         payload = png_bytes(32, 48)
         response = response_for(payload, len(payload))
@@ -114,7 +156,7 @@ class CoverCacheInputSafetyTests(unittest.TestCase):
             ) as request:
                 saved = Path(image_cache.download_cover(-42, VALID_URL))
 
-            request.assert_called_once_with(VALID_URL, timeout=15, stream=True)
+            request.assert_called_once_with(VALID_URL, timeout=15, stream=True, allow_redirects=False)
             self.assertEqual(saved, image_directory / "-42.jpg")
             self.assertTrue(saved.is_file())
             image = QImage(str(saved))
