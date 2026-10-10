@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-import mangabaka_api as mb
+import api as mb
 
 
 def sample_series(series_id, title, status, rating=85):
@@ -24,14 +24,14 @@ def sample_series(series_id, title, status, rating=85):
 
 
 class MangaBakaFilterMappingTests(unittest.TestCase):
-    @patch.object(mb, "search_series")
+    @patch.object(mb, "search_mangabaka_series")
     def test_provider_filter_parameters_are_mapped(self, search):
         search.return_value = {
             "status": 200,
             "data": [],
             "pagination": {"page": 1, "limit": 7, "count": 0, "next": None},
         }
-        result = mb.search_media(
+        result = mb.search_mangabaka_media(
             "Example", page=1, media_type="MANGA", media_format=None,
             filters={
                 "format_filter": "MANGA", "status": "FINISHED", "min_score": 80,
@@ -56,7 +56,7 @@ class MangaBakaFilterMappingTests(unittest.TestCase):
         self.assertIs(kwargs["is_licensed"], True)
         self.assertEqual(kwargs["sort_by"], "rating_desc")
 
-    @patch.object(mb, "search_series")
+    @patch.object(mb, "search_mangabaka_series")
     def test_status_filter_locally_removes_releasing_records(self, search):
         search.return_value = {
             "status": 200,
@@ -66,13 +66,13 @@ class MangaBakaFilterMappingTests(unittest.TestCase):
             ],
             "pagination": {"page": 1, "limit": 20, "count": 2, "next": None},
         }
-        result = mb.search_media(
+        result = mb.search_mangabaka_media(
             "Example", media_type="MANGA",
             filters={"format_filter": "MANGA", "status": "FINISHED"},
         )
         self.assertEqual([item["title"]["english"] for item in result["media"]], ["Completed example"])
 
-    @patch.object(mb, "search_series")
+    @patch.object(mb, "search_mangabaka_series")
     def test_local_filtering_enforces_score_year_genre_tag_publisher_and_license(self, search):
         matching = sample_series(1, "Matching", "completed", rating=85)
         wrong_publisher = sample_series(2, "Wrong publisher", "completed", rating=90)
@@ -93,7 +93,7 @@ class MangaBakaFilterMappingTests(unittest.TestCase):
             "data": [matching, wrong_publisher, wrong_license, low_score, wrong_year, wrong_genre, wrong_tag],
             "pagination": {"page": 1, "limit": 20, "count": 7, "next": None},
         }
-        result = mb.search_media(
+        result = mb.search_mangabaka_media(
             "Example", media_type="MANGA",
             filters={
                 "format_filter": "MANGA", "status": "FINISHED", "min_score": 80,
