@@ -1301,31 +1301,6 @@ class AniListRelationsChaosTests(unittest.TestCase):
         self.assertEqual(media["airingSchedule"]["nodes"], [])
 
 
-        payload = {
-            "Media": {
-                "id": 616,
-                "type": "ANIME",
-                "title": {"english": "Malformed connections", "romaji": "Malformed connections"},
-                "characters": "not-an-object",
-                "airingSchedule": ["not", "an", "object"],
-                "staff": "not-an-object",
-                "studios": ["malformed"],
-                "relations": "not-an-object",
-            }
-        }
-        with patch.object(nt_api, "anilist_request", return_value=payload) as request:
-            media = nt_api.get_media_details(616)
-
-        request.assert_called_once()
-        for name in ("characters", "staff", "studios", "relations"):
-            self.assertIsInstance(media[name], dict)
-            self.assertIsInstance(media[name].get("edges"), list)
-            self.assertEqual(media[name]["edges"], [])
-        self.assertIsInstance(media["airingSchedule"], dict)
-        self.assertEqual(media["airingSchedule"]["nodes"], [])
-
-
-
     def test_invalid_ids_do_not_crash_batch_relation_fetch(self):
         with patch.object(nt_api, "anilist_request") as request:
             result = nt_api.get_media_relations_batch([None, "bad-id", -7, 0])
