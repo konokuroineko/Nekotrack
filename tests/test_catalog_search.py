@@ -266,7 +266,7 @@ class CombinedCatalogSearchTests(unittest.TestCase):
             "type": second["type"],
             "format": second["format"],
             "title": second["title"],
-            "coverImage": second["coverImage"],
+            "coverImage": second.get("coverImage") or {"large": None},
         }
         first_details = {
             **first,
