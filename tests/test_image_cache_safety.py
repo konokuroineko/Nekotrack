@@ -91,6 +91,8 @@ class CoverCacheInputSafetyTests(unittest.TestCase):
             "https://10.1.2.3/a.png",
             "https://[::1]/a.png",
             "https://metadata.google.internal/metadata",
+            "https://router/a.png",
+            "https://metadata/metadata",
         ]
         for url in invalid_urls:
             with self.subTest(url=repr(url)):
