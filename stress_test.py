@@ -2,7 +2,7 @@
 
 Run from any directory:
     python stress_test.py --minutes 10
-    python stress_test.py --minutes 20 --seed 20261009
+    python stress_test.py --minutes 120 --seed 20261009
     python stress_test.py --seconds 30 --seed 7
 
 The harness makes no live API requests and never opens the user's application
@@ -26,8 +26,12 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parent
-TEST_FILE = ROOT / "tests" / "test_adversarial_regressions.py"
-MAX_SOAK_SECONDS = 30 * 60
+TEST_FILES = (
+    ROOT / "tests" / "test_adversarial_regressions.py",
+    ROOT / "tests" / "test_chaos_resilience.py",
+    ROOT / "tests" / "test_deep_stress.py",
+)
+MAX_SOAK_SECONDS = 5 * 60 * 60
 
 
 def _resolve_duration(minutes, seconds=None):
@@ -36,18 +40,26 @@ def _resolve_duration(minutes, seconds=None):
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError("The soak duration must be a finite number greater than zero.")
     if duration > MAX_SOAK_SECONDS:
-        raise ValueError("The soak duration cannot exceed 30 minutes.")
+        raise ValueError("The soak duration cannot exceed 300 minutes (5 hours).")
     return duration
 
 
 def load_adversarial_tests():
+    """Load all seeded fuzz/chaos suites used in each soak iteration."""
     sys.path.insert(0, str(ROOT))
-    spec = importlib.util.spec_from_file_location("nekotrack_adversarial_tests", TEST_FILE)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load adversarial test module: {TEST_FILE}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    modules = []
+    for test_file in TEST_FILES:
+        if not test_file.is_file():
+            raise RuntimeError(f"Cannot load adversarial test module: {test_file}")
+        module_name = f"nekotrack_stress_{test_file.stem}"
+        spec = importlib.util.spec_from_file_location(module_name, test_file)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Cannot load adversarial test module: {test_file}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        modules.append(module)
+    return modules
 
 
 def run_full_regression_suite():
@@ -96,7 +108,10 @@ def main():
         "starting_seed": args.seed,
         "network_requests_enabled": False,
         "real_application_database_touched": False,
+        "fuzz_modules": [path.relative_to(ROOT).as_posix() for path in TEST_FILES],
+        "max_soak_seconds": MAX_SOAK_SECONDS,
         "results": [],
+        "stress_tests_run": 0,
         "stress_iterations": 0,
         "stress_passes": 0,
         "stress_failures": 0,
@@ -106,7 +121,8 @@ def main():
 
     print("NekoTrack adversarial stress test")
     print("=================================")
-    print(f"Requested soak: {duration:g} seconds")
+    print(f"Requested soak: {duration:g} seconds ({duration / 60:g} minutes)")
+    print("Fuzz suites: " + ", ".join(path.name for path in TEST_FILES))
     print(f"Starting seed: {args.seed}")
     print("Live API access: disabled")
     print("Application database: never accessed")
@@ -127,14 +143,14 @@ def main():
         print(baseline["output"])
 
     try:
-        module = load_adversarial_tests()
+        modules = load_adversarial_tests()
     except Exception:
         report["results"].append({
             "name": "Load adversarial tests",
             "status": "FAIL",
             "output": traceback.format_exc(),
         })
-        module = None
+        modules = None
 
     original_seed = os.environ.get("NEKOTRACK_FUZZ_SEED")
     rng = random.Random(args.seed)
@@ -143,18 +159,27 @@ def main():
     next_progress = started + 10
     iteration = 0
     try:
-        if module is not None:
+        if modules:
             while time.monotonic() < deadline:
                 seed = rng.randrange(1, 2**31 - 1)
                 os.environ["NEKOTRACK_FUZZ_SEED"] = str(seed)
                 output = io.StringIO()
+                iteration_started = time.monotonic()
                 try:
-                    suite = unittest.defaultTestLoader.loadTestsFromModule(module)
+                    suite = unittest.TestSuite()
+                    for stress_module in modules:
+                        suite.addTests(
+                            unittest.defaultTestLoader.loadTestsFromModule(stress_module)
+                        )
                     result = unittest.TextTestRunner(
                         stream=output, verbosity=0, failfast=False
                     ).run(suite)
+                    if result.testsRun == 0:
+                        raise RuntimeError("No fuzz tests were loaded for this iteration.")
                     iteration += 1
                     report["stress_iterations"] = iteration
+                    report["stress_tests_run"] += result.testsRun
+                    iteration_elapsed = round(time.monotonic() - iteration_started, 3)
                     if result.wasSuccessful():
                         report["stress_passes"] += 1
                     else:
@@ -163,6 +188,8 @@ def main():
                         sample = {
                             "iteration": iteration,
                             "seed": seed,
+                            "tests_run": result.testsRun,
+                            "elapsed_seconds": iteration_elapsed,
                             "failures": len(result.failures),
                             "errors": len(result.errors),
                             "output": detail[-8000:],
@@ -177,6 +204,7 @@ def main():
                         report["failure_samples"].append({
                             "iteration": iteration,
                             "seed": seed,
+                            "elapsed_seconds": round(time.monotonic() - iteration_started, 3),
                             "failures": 0,
                             "errors": 1,
                             "output": traceback.format_exc()[-8000:],
@@ -207,6 +235,7 @@ def main():
         "stress_iterations": report["stress_iterations"],
         "stress_passes": report["stress_passes"],
         "stress_failures": report["stress_failures"],
+        "stress_tests_run": report["stress_tests_run"],
         "interrupted": report["interrupted"],
     }
 
@@ -230,7 +259,7 @@ def main():
         f"{report['stress_failures']:,} failed; "
         f"{report['duration_actual_seconds']:,.1f}s elapsed."
     )
-    if baseline.get("status") != "PASS" or report["stress_failures"]:
+    if any(item.get("status") == "FAIL" for item in report["results"]) or report["stress_failures"]:
         return 1
     return 0
 
