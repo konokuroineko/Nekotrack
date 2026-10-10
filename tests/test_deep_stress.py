@@ -482,7 +482,7 @@ class DatabaseCastReconciliationStressTests(unittest.TestCase):
 
                 first_snapshot = [
                     character(1, "Character One", [actor(100, "Old Actor")]),
-                    character(2, "Character Two", []),
+                    character(2, "Character Two", [actor(200, "Second Actor")]),
                 ]
                 database.save_characters(work_id, first_snapshot)
                 self.assertTrue(database.characters_are_loaded(work_id))
@@ -543,6 +543,20 @@ class DatabaseCastReconciliationStressTests(unittest.TestCase):
                     connection.close()
                 self.assertEqual(final_characters, [1])
                 self.assertEqual(final_actors, [101])
+                connection = database.get_connection()
+                try:
+                    orphan_character = connection.execute(
+                        "SELECT 1 FROM characters WHERE id = ?",
+                        (2,),
+                    ).fetchone()
+                    orphan_voice_actors = connection.execute(
+                        "SELECT COUNT(*) FROM character_voice_actors WHERE character_id = ?",
+                        (2,),
+                    ).fetchone()[0]
+                finally:
+                    connection.close()
+                self.assertIsNone(orphan_character)
+                self.assertEqual(orphan_voice_actors, 0)
             finally:
                 os.chdir(old_cwd)
 
