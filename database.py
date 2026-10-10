@@ -854,7 +854,7 @@ def save_anime(anime):
             if (
                 isinstance(studio_id, bool)
                 or isinstance(studio_id, float) and not studio_id.is_integer()
-                or isinstance(studio_id, str) and not re.fullmatch(r"\\s*[0-9]+\\s*", studio_id)
+                or isinstance(studio_id, str) and not re.fullmatch(r"\s*[0-9]+\s*", studio_id)
                 or not isinstance(studio_name, str)
                 or not studio_name.strip()
             ):
@@ -990,7 +990,7 @@ def save_anime(anime):
         if (
             isinstance(studio_id, bool)
             or isinstance(studio_id, float) and not studio_id.is_integer()
-            or isinstance(studio_id, str) and not re.fullmatch(r"\\s*[0-9]+\\s*", studio_id)
+            or isinstance(studio_id, str) and not re.fullmatch(r"\s*[0-9]+\s*", studio_id)
             or not isinstance(studio_name, str)
             or not studio_name.strip()
         ):
