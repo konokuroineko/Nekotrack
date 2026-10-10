@@ -1483,6 +1483,58 @@ class MangaBakaShapeStressTests(unittest.TestCase):
         self.assertEqual(hash(first), hash(second))
         self.assertEqual(first, second)
 
+    def test_volume_lookup_rejects_bad_collection_ids_and_boundedly_parses_numbers(self):
+        oversized_collection = {
+            "data": {
+                "items": [{
+                    "id": 10**100,
+                    "type": "volume",
+                    "name": "Volume collection",
+                }]
+            },
+            "pagination": {"next": None},
+        }
+        with patch(
+            "mangabaka_api.get_series_collections",
+            return_value=oversized_collection,
+        ) as collections, patch("mangabaka_api.get_collection_works") as works:
+            self.assertEqual(mb.get_volume_records(7), [])
+        collections.assert_called_once()
+        works.assert_not_called()
+
+        collections_payload = {
+            "data": {
+                "items": [{
+                    "id": 12,
+                    "type": "volume",
+                    "name": "Volume collection",
+                    "count": 2,
+                }]
+            },
+            "pagination": {"next": None},
+        }
+        works_payload = {
+            "data": {
+                "items": [
+                    {"id": 1001, "volume_number": "9" * 5000, "title": "A"},
+                    {"id": 1002, "volume_number": "2", "title": "B"},
+                ]
+            },
+            "pagination": {"next": None},
+        }
+        with patch(
+            "mangabaka_api.get_series_collections",
+            return_value=collections_payload,
+        ), patch(
+            "mangabaka_api.get_collection_works",
+            return_value=works_payload,
+        ):
+            volumes = mb.get_volume_records(7)
+
+        self.assertEqual([row["number"] for row in volumes], [1, 2])
+        self.assertEqual([row["title"] for row in volumes], ["A", "B"])
+        self.assertFalse(mb.get_volume_records(10**100))
+
     def test_invalid_dates_are_ignored_and_never_abort_normalization(self):
         rng = random.Random(_fuzz_seed(20261010))
         samples = [
