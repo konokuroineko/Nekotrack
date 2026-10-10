@@ -207,6 +207,14 @@ class OfflineNetworkGuardStressTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
                 socket.getaddrinfo("example.invalid", 443)
             with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
+                socket.gethostbyname("example.invalid")
+            with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
+                socket.gethostbyname_ex("example.invalid")
+            with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
+                socket.gethostbyaddr("203.0.113.5")
+            with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
+                socket.getnameinfo(("203.0.113.5", 443), 0)
+            with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
                 socket.create_connection(("example.invalid", 443))
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
                 with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
@@ -225,10 +233,14 @@ class OfflineNetworkGuardStressTests(unittest.TestCase):
                     client.sendto(b"offline", ("example.invalid", 53))
 
         methods = [attempt["method"] for attempt in attempted]
-        self.assertEqual(len(methods), 9)
+        self.assertEqual(len(methods), 13)
         self.assertIn("GET", methods)
         self.assertIn("urllib.request.urlopen", methods)
         self.assertIn("socket.getaddrinfo", methods)
+        self.assertIn("socket.gethostbyname", methods)
+        self.assertIn("socket.gethostbyname_ex", methods)
+        self.assertIn("socket.gethostbyaddr", methods)
+        self.assertIn("socket.getnameinfo", methods)
         self.assertIn("socket.create_connection", methods)
         self.assertIn("socket.connect", methods)
         self.assertIn("socket.connect_ex", methods)
