@@ -138,5 +138,90 @@ class BundleOptionTests(unittest.TestCase):
         self.assertEqual(groups[0]["_series_count"], 1)
 
 
+    def test_generic_other_relation_can_bundle_a_named_ova_when_enabled(self):
+        tv = media(101, "Re:Zero - Starting Life in Another World", "TV", relations=[
+            edge("OTHER", {
+                "id": 102, "type": "ANIME", "format": "OVA",
+                "title": {
+                    "english": "Re:Zero - Starting Life in Another World: Memory Snow",
+                    "romaji": "Re:Zero kara Hajimeru Isekai Seikatsu - Memory Snow",
+                    "native": None,
+                },
+                "coverImage": {"large": None},
+                "startDate": {"year": 2018, "month": 1, "day": 1},
+            })
+        ])
+        ova = media(
+            102,
+            "Re:Zero - Starting Life in Another World: Memory Snow",
+            "OVA",
+        )
+
+        with patch("series.get_manual_bundle_links", return_value=[]), \\
+             patch("series.get_bundle_exclusions", return_value=[]), \\
+             patch("series.get", side_effect=lambda key: key == "bundle_include_ovas"):
+            groups = series.group_media_results([tv, ova], enrich=False)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(
+            {member["id"] for member in groups[0]["_series_members"]},
+            {101, 102},
+        )
+
+    def test_generic_mangabaka_related_type_can_bundle_matching_novel_entries(self):
+        first = media(
+            -501,
+            "Re:Zero - Starting Life in Another World - Light Novel",
+            "NOVEL",
+            "MANGA",
+            relations=[edge("RELATED", {
+                "id": -502,
+                "type": "MANGA",
+                "format": "NOVEL",
+                "title": {
+                    "english": "Re:Zero - Starting Life in Another World - Volume 2",
+                    "romaji": "Re:Zero kara Hajimeru Isekai Seikatsu Volume 2",
+                    "native": None,
+                },
+                "coverImage": {"large": None},
+                "startDate": {"year": 2015, "month": 1, "day": 1},
+            })],
+        )
+        second = media(
+            -502,
+            "Re:Zero - Starting Life in Another World - Volume 2",
+            "NOVEL",
+            "MANGA",
+        )
+
+        with patch("series.get_manual_bundle_links", return_value=[]), \\
+             patch("series.get_bundle_exclusions", return_value=[]), \\
+             patch("series.get", side_effect=lambda key: key == "bundle_include_novels"):
+            groups = series.group_media_results([first, second], enrich=False)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(
+            {member["id"] for member in groups[0]["_series_members"]},
+            {-501, -502},
+        )
+
+    def test_generic_relationship_does_not_bundle_an_unrelated_series(self):
+        first = media(201, "Re:Zero - Starting Life in Another World", "TV", relations=[
+            edge("OTHER", {
+                "id": 202, "type": "ANIME", "format": "OVA",
+                "title": {"english": "Overlord: Ple Ple Pleiades", "romaji": "Overlord Ple Ple Pleiades"},
+                "coverImage": {"large": None},
+                "startDate": {"year": 2015, "month": 1, "day": 1},
+            })
+        ])
+        second = media(202, "Overlord: Ple Ple Pleiades", "OVA")
+        with patch("series.get_manual_bundle_links", return_value=[]), \\
+             patch("series.get_bundle_exclusions", return_value=[]), \\
+             patch("series.get", side_effect=lambda key: key == "bundle_include_ovas"):
+            groups = series.group_media_results([first, second], enrich=False)
+
+        self.assertEqual(len(groups), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
