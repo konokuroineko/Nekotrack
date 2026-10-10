@@ -10,6 +10,9 @@ from ui.preferences import get
 SERIES_RELATIONS = {
     "PREQUEL", "SEQUEL", "PARENT", "SIDE_STORY", "SUMMARY",
     "FULL_STORY", "SPIN_OFF", "ALTERNATIVE", "COMPILATION", "CONTAINS",
+    # Generic relationship labels from AniList/MangaBaka are only accepted
+    # when the title-family check confirms these works belong together.
+    "OTHER", "RELATED",
 }
 # These relations describe the actual season/continuation chain. Traversal is
 # intentionally restricted to them so a TV-catalog search cannot spend its
@@ -20,6 +23,7 @@ SEASON_CHAIN_RELATIONS = {"PREQUEL", "SEQUEL", "PARENT", "SUMMARY", "SIDE_STORY"
 # the same series family, preventing unrelated spin-offs from being absorbed.
 RELATED_TRAVERSAL_RELATIONS = {
     "SPIN_OFF", "ALTERNATIVE", "COMPILATION", "FULL_STORY", "CONTAINS",
+    "OTHER", "RELATED",
 }
 ANIME_BUNDLE_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL"}
 RELATION_BATCH_SIZE = 10
