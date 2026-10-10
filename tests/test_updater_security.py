@@ -2,13 +2,13 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import updater
 
 
 def _response(chunks, headers=None):
-    response = Mock()
+    response = MagicMock()
     response.__enter__.return_value = response
     response.__exit__.return_value = False
     response.raise_for_status.return_value = None
