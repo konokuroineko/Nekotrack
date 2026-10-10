@@ -194,7 +194,7 @@ class StressRunnerDiscoveryStressTests(unittest.TestCase):
 
 
 class OfflineNetworkGuardStressTests(unittest.TestCase):
-    def test_offline_guard_blocks_http_urllib_and_raw_socket_paths(self):
+    def test_offline_guard_blocks_http_dns_and_raw_socket_paths(self):
         import socket
         import urllib.request
 
@@ -205,6 +205,8 @@ class OfflineNetworkGuardStressTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
                 urllib.request.urlopen("https://example.invalid/test")
             with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
+                socket.getaddrinfo("example.invalid", 443)
+            with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
                 socket.create_connection(("example.invalid", 443))
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
                 with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
@@ -212,17 +214,26 @@ class OfflineNetworkGuardStressTests(unittest.TestCase):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
                 with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
                     client.connect_ex(("example.invalid", 443))
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
+                    client.send(b"offline")
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
+                    client.sendall(b"offline")
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
                 with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
                     client.sendto(b"offline", ("example.invalid", 53))
 
         methods = [attempt["method"] for attempt in attempted]
-        self.assertEqual(len(methods), 6)
+        self.assertEqual(len(methods), 9)
         self.assertIn("GET", methods)
         self.assertIn("urllib.request.urlopen", methods)
+        self.assertIn("socket.getaddrinfo", methods)
         self.assertIn("socket.create_connection", methods)
         self.assertIn("socket.connect", methods)
         self.assertIn("socket.connect_ex", methods)
+        self.assertIn("socket.send", methods)
+        self.assertIn("socket.sendall", methods)
         self.assertIn("socket.sendto", methods)
 
 
