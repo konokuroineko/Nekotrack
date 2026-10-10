@@ -126,6 +126,29 @@ class CoverCacheInputSafetyTests(unittest.TestCase):
         redirect.close.assert_called_once()
         self.assertEqual(list(Path(directory).rglob("*")), [])
 
+    def test_http_error_response_is_closed_before_status_exception_escapes(self):
+        response = Mock()
+        response.status_code = 503
+        response.raise_for_status.side_effect = image_cache.requests.HTTPError(
+            "temporary upstream failure"
+        )
+        response.close.return_value = None
+        with patch.object(image_cache.requests, "get", return_value=response):
+            with self.assertRaises(image_cache.requests.HTTPError):
+                image_cache._open_cover_response(VALID_URL)
+        response.close.assert_called_once()
+
+    def test_unknown_image_dimensions_are_rejected_before_decode(self):
+        dimensions = Mock()
+        dimensions.isValid.return_value = False
+        reader = Mock()
+        reader.size.return_value = dimensions
+        with patch.object(image_cache, "QImageReader", return_value=reader):
+            with self.assertRaisesRegex(ValueError, "dimensions are invalid"):
+                image_cache._decode_cover(png_bytes())
+        reader.read.assert_not_called()
+
+
     def test_redirect_to_a_public_https_cdn_is_followed(self):
         payload = png_bytes(16, 24)
         final_url = "https://cdn.example.com/covers/work.png"
