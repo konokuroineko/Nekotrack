@@ -280,10 +280,12 @@ class CombinedCatalogSearchTests(unittest.TestCase):
             -12: second_details,
         }
 
-        with patch.dict(series._relation_cache, {}, clear=True), \\
-             patch("series.get_manual_bundle_links", return_value=[]), \\
-             patch("series.get_bundle_exclusions", return_value=[]), \\
-             patch("series.get", side_effect=lambda key: key == "bundle_include_manga"):
+        with (
+            patch.dict(series._relation_cache, {}, clear=True),
+            patch("series.get_manual_bundle_links", return_value=[]),
+            patch("series.get_bundle_exclusions", return_value=[]),
+            patch("series.get", side_effect=lambda key: key == "bundle_include_manga"),
+        ):
             groups = series.group_media_results(
                 result["media"], enrich=True, delay=0
             )
