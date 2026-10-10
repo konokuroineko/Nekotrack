@@ -16,6 +16,7 @@ MANGABAKA_BASE_URL = "https://api.mangabaka.org/v2/"
 REQUEST_TIMEOUT = 18
 MAX_RETRIES = 3
 MAX_PROVIDER_PAGES = 10000
+_MAX_ANILIST_MEDIA_ID = (1 << 31) - 1
 _CACHE_TTL = 300
 _CACHE_LIMIT = 160
 _cache = {}
@@ -481,9 +482,36 @@ def get_publisher_stats(publisher_id):
 
 
 def extract_external_id(series, provider):
-    """Find an upstream provider ID in MangaBaka source/response structures."""
+    """Find a bounded upstream provider ID in MangaBaka source/response structures."""
     provider_key = str(provider or "").lower().replace("-", "").replace("_", "")
     candidates = []
+
+    def parse_candidate(value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            number = value
+        elif isinstance(value, str):
+            text = value.strip()
+            if (
+                not text
+                or len(text) > 10
+                or not text.isascii()
+                or not text.isdigit()
+            ):
+                return None
+            try:
+                number = int(text)
+            except (TypeError, ValueError, OverflowError):
+                return None
+        else:
+            return None
+        return number if 1 <= number <= _MAX_ANILIST_MEDIA_ID else None
+
+    def add_candidate(value):
+        candidate = parse_candidate(value)
+        if candidate is not None:
+            candidates.append(candidate)
 
     def walk(value, path=""):
         if isinstance(value, dict):
@@ -492,20 +520,19 @@ def extract_external_id(series, provider):
                 new_path = f"{path}.{key_text}".lower()
                 normalized_path = new_path.replace("-", "").replace("_", "")
                 if provider_key in normalized_path and "id" in key_text.lower():
-                    if isinstance(child, (str, int)) and str(child).isdigit():
-                        candidates.append(int(child))
+                    add_candidate(child)
                 # Upstream source objects often use a plain ID field.
                 if provider_key in normalized_path and key_text.lower() in {
                     "id", "idmal", "media_id", "series_id", "mal_id"
-                } and isinstance(child, (str, int)) and str(child).isdigit():
-                    candidates.append(int(child))
+                }:
+                    add_candidate(child)
                 walk(child, new_path)
         elif isinstance(value, list):
             for item in value:
                 walk(item, path)
 
     walk(series)
-    return next((candidate for candidate in candidates if candidate > 0), None)
+    return candidates[0] if candidates else None
 
 
 def _title_records(series):
@@ -640,16 +667,28 @@ def normalize_series(series, preferred_id=None):
     raw_id = series.get("id")
     if isinstance(raw_id, bool):
         raise ValueError("MangaBaka response did not include a positive numeric series ID.")
-    if isinstance(raw_id, float) and not raw_id.is_integer():
+    if isinstance(raw_id, float) and (
+        not math.isfinite(raw_id) or not raw_id.is_integer()
+    ):
         raise ValueError("MangaBaka response did not include a positive numeric series ID.")
-    if isinstance(raw_id, str) and not re.fullmatch(r"\s*[0-9]+\s*", raw_id):
+    if isinstance(raw_id, str):
+        text_id = raw_id.strip()
+        if (
+            not text_id
+            or len(text_id) > 19
+            or not text_id.isascii()
+            or not text_id.isdigit()
+        ):
+            raise ValueError("MangaBaka response did not include a positive numeric series ID.")
+        raw_id = text_id
+    elif not isinstance(raw_id, (int, float)):
         raise ValueError("MangaBaka response did not include a positive numeric series ID.")
     try:
         mb_id = int(raw_id)
     except (TypeError, ValueError, OverflowError):
         raise ValueError("MangaBaka response did not include a positive numeric series ID.")
-    if mb_id <= 0:
-        raise ValueError("MangaBaka series IDs must be positive.")
+    if not 1 <= mb_id <= _MAX_PROVIDER_FILTER_ID:
+        raise ValueError("MangaBaka series ID is outside the supported numeric range.")
 
     titles = _title_records(series)
     english = _first_text(_pick_title(titles, "en"), series.get("title"), series.get("english_title"))
@@ -657,7 +696,38 @@ def normalize_series(series, preferred_id=None):
                             _pick_title(titles, "ja-ro"))
     native = _first_text(_pick_title(titles, "ja"), series.get("native_title"))
     primary = english or romanized or native or f"Untitled MangaBaka series {mb_id}"
-    anilist_id = int(preferred_id) if preferred_id else extract_external_id(series, "anilist")
+    if preferred_id is None:
+        anilist_id = extract_external_id(series, "anilist")
+    else:
+        if isinstance(preferred_id, bool):
+            raise ValueError("Preferred media ID must be a valid AniList or local MangaBaka ID.")
+        if isinstance(preferred_id, float) and (
+            not math.isfinite(preferred_id) or not preferred_id.is_integer()
+        ):
+            raise ValueError("Preferred media ID must be a valid AniList or local MangaBaka ID.")
+        if isinstance(preferred_id, str):
+            text_preferred_id = preferred_id.strip()
+            if (
+                not text_preferred_id
+                or len(text_preferred_id) > 20
+                or not text_preferred_id.isascii()
+                or not re.fullmatch(r"[+-]?[0-9]+", text_preferred_id)
+            ):
+                raise ValueError("Preferred media ID must be a valid AniList or local MangaBaka ID.")
+            preferred_id = text_preferred_id
+        elif not isinstance(preferred_id, (int, float)):
+            raise ValueError("Preferred media ID must be a valid AniList or local MangaBaka ID.")
+        try:
+            preferred_id = int(preferred_id)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("Preferred media ID must be a valid AniList or local MangaBaka ID.") from error
+        if (
+            preferred_id == 0
+            or preferred_id > _MAX_ANILIST_MEDIA_ID
+            or preferred_id < -_MAX_PROVIDER_FILTER_ID
+        ):
+            raise ValueError("Preferred media ID is outside the supported numeric range.")
+        anilist_id = preferred_id
     local_id = anilist_id if anilist_id else -mb_id
     mal_id = extract_external_id(series, "myanimelist") or extract_external_id(series, "mal")
 
