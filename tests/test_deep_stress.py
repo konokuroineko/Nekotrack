@@ -1541,6 +1541,43 @@ class DatabaseIdentifierHelperStressTests(unittest.TestCase):
                 # After every malformed input, a normal transaction still works.
                 database.add_to_library(work_id, "Planning")
                 self.assertTrue(database.remove_from_library(work_id))
+
+                second_id = 81
+                database.save_anime({
+                    "id": second_id,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "title": {"english": "Bundle helper test", "romaji": "Bundle helper test"},
+                })
+                self.assertTrue(database.add_manual_bundle_link(work_id, second_id))
+                self.assertEqual(len(database.get_manual_bundle_links([work_id])), 1)
+                self.assertEqual(database.get_manual_bundle_links([True]), [])
+                self.assertEqual(database.get_bundle_exclusions([1.5]), [])
+                self.assertIsNone(database.get_bundle_override([True]))
+                self.assertFalse(database.remove_manual_bundle_link(True, second_id))
+                self.assertFalse(database.add_bundle_exclusion(True, second_id))
+                self.assertFalse(database.remove_bundle_member(work_id, second_id, [True]))
+
+                self.assertTrue(database.save_bundle_override(
+                    [work_id, second_id],
+                    work_id,
+                    custom_title="Custom bundle title",
+                    cover_work_id=second_id,
+                    custom_cover_path=Path("cover.jpg"),
+                ))
+                saved_override = database.get_bundle_override([work_id, second_id])
+                self.assertIsNotNone(saved_override)
+                self.assertEqual(saved_override["custom_title"], "Custom bundle title")
+                self.assertFalse(database.save_bundle_override(
+                    [work_id, second_id],
+                    work_id,
+                    custom_title="x" * 501,
+                ))
+                self.assertFalse(database.clear_bundle_override([10**100]))
+                self.assertEqual(
+                    database.get_bundle_override([work_id, second_id])["custom_title"],
+                    "Custom bundle title",
+                )
             finally:
                 os.chdir(old_cwd)
 
