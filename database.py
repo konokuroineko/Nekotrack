@@ -914,7 +914,9 @@ def ensure_reading_placeholders(work_id, item_type, total_count, offset=0, limit
     safe_offset = _safe_optional_integer(offset, 0, _MAX_TRACKED_EPISODE_NUMBER)
     if safe_offset is None:
         return []
-    parsed_limit = _safe_optional_integer(limit, 0, _MAX_TRACKED_EPISODE_NUMBER)
+    # Accept large-but-valid page-size requests and clamp the actual page;
+    # the input limit should not be constrained by the maximum item number.
+    parsed_limit = _safe_optional_integer(limit, 0, _MAX_SQLITE_INTEGER)
     if parsed_limit is None:
         return []
     page_size = min(100, max(1, parsed_limit))
@@ -963,7 +965,7 @@ def get_reading_items(work_id, item_type, limit=24, offset=0):
     except (TypeError, ValueError, OverflowError):
         return []
 
-    parsed_limit = _safe_optional_integer(limit, 0, _MAX_TRACKED_EPISODE_NUMBER)
+    parsed_limit = _safe_optional_integer(limit, 0, _MAX_SQLITE_INTEGER)
     parsed_offset = _safe_optional_integer(offset, 0, _MAX_TRACKED_EPISODE_NUMBER)
     if parsed_limit is None or parsed_offset is None:
         return []
