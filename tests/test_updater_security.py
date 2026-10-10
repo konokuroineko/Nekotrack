@@ -57,6 +57,8 @@ class UpdateUrlValidationTests(unittest.TestCase):
         for url in (
             "http://release-assets.githubusercontent.com/assets/installer.exe",
             "https://githubusercontent.com.evil.invalid/assets/installer.exe",
+            "https://raw.githubusercontent.com/attacker/repo/main/payload.exe",
+            "https://user-images.githubusercontent.com/123/installer.exe",
             "https://attacker.invalid/NekoTrack-Setup.exe",
             "https://github.com/attacker/repo/releases/download/v2/NekoTrack-Setup.exe",
             "https://user@release-assets.githubusercontent.com/assets/installer.exe",
