@@ -123,7 +123,7 @@ def offline_network_guard(attempted_requests):
         )
 
     def block_requests(_session, method, url, *args, **kwargs):
-        record_attempt(method, url)
+        record_attempt(str(method).upper(), url)
 
     def block_urlopen(url, *args, **kwargs):
         record_attempt("urllib.request.urlopen", url)
