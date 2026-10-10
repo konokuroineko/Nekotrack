@@ -526,12 +526,9 @@ def get_media_relations(media_id):
     return data["Media"]
 
 def get_media_relations_batch(media_ids):
-    """Fetch lightweight AniList relation data in valid GraphQL-sized batches."""
-    # AniList uses GraphQL's signed 32-bit Int scalar and caps Page.perPage.
-    # Reject bools/fractional/oversized IDs rather than silently truncating them
-    # or making one invalid variable abort the complete relation lookup.
-    max_anilist_id = (1 << 31) - 1
+    """Fetch relation details for positive AniList IDs and negative MangaBaka IDs."""
     valid_ids = set()
+    local_ids = set()
     for media_id in media_ids or []:
         if isinstance(media_id, bool):
             continue
@@ -545,9 +542,9 @@ def get_media_relations_batch(media_ids):
             text_id = media_id.strip()
             if (
                 not text_id
-                or len(text_id) > 10
+                or len(text_id) > 20
                 or not text_id.isascii()
-                or not text_id.isdigit()
+                or not re.fullmatch(r"[+-]?[0-9]+", text_id)
             ):
                 continue
             try:
@@ -556,86 +553,110 @@ def get_media_relations_batch(media_ids):
                 continue
         else:
             continue
-        if 1 <= numeric_id <= max_anilist_id:
+
+        if 1 <= numeric_id <= MAX_ANILIST_MEDIA_ID:
             valid_ids.add(numeric_id)
+        elif MIN_LOCAL_MEDIA_ID <= numeric_id < 0:
+            # Local MangaBaka IDs are negative in SQLite. Resolve them through
+            # the provider-aware detail path rather than passing them to AniList.
+            local_ids.add(numeric_id)
 
     ids = sorted(valid_ids)
-    if not ids:
+    if not ids and not local_ids:
         return {}
 
-    # id_in is a Media filter exposed on Page.media. Keep each request at
-    # AniList's supported page size, even if a large local library asks for
-    # relation data for hundreds or thousands of entries at once.
-    query = """
-    query ($ids: [Int], $perPage: Int) {
-        Page(page: 1, perPage: $perPage) {
-            media(id_in: $ids) {
-                id
-                type
-                format
-                title { romaji english native }
-                coverImage { large }
-                episodes
-                startDate { year month day }
-                relations {
-                    edges {
-                        relationType
-                        node {
-                            id
-                            type
-                            format
-                            title { romaji english native }
-                            coverImage { large }
-                            episodes
-                            startDate { year month day }
+    result = {}
+    if ids:
+        # id_in is a Media filter exposed on Page.media. Keep each request at
+        # AniList's supported page size, even if a large local library asks for
+        # relation data for hundreds or thousands of entries at once.
+        query = """
+        query ($ids: [Int], $perPage: Int) {
+            Page(page: 1, perPage: $perPage) {
+                media(id_in: $ids) {
+                    id
+                    type
+                    format
+                    title { romaji english native }
+                    coverImage { large }
+                    episodes
+                    startDate { year month day }
+                    relations {
+                        edges {
+                            relationType
+                            node {
+                                id
+                                type
+                                format
+                                title { romaji english native }
+                                coverImage { large }
+                                episodes
+                                startDate { year month day }
+                            }
                         }
                     }
                 }
             }
         }
-    }
-    """
+        """
 
-    result = {}
-    batch_size = 50
-    for start_index in range(0, len(ids), batch_size):
-        batch_ids = ids[start_index:start_index + batch_size]
-        data = anilist_request(
-            query,
-            {"ids": batch_ids, "perPage": len(batch_ids)},
-        )
-        page_data = data.get("Page") if isinstance(data, dict) else None
-        if not isinstance(page_data, dict):
-            raise RuntimeError("AniList returned malformed relation-batch page data.")
-        media = page_data.get("media")
-        if isinstance(media, dict):
-            media = [media]
-        if not isinstance(media, list):
-            raise RuntimeError("AniList returned malformed relation-batch media data.")
+        batch_size = 50
+        for start_index in range(0, len(ids), batch_size):
+            batch_ids = ids[start_index:start_index + batch_size]
+            data = anilist_request(
+                query,
+                {"ids": batch_ids, "perPage": len(batch_ids)},
+            )
+            page_data = data.get("Page") if isinstance(data, dict) else None
+            if not isinstance(page_data, dict):
+                raise RuntimeError("AniList returned malformed relation-batch page data.")
+            media = page_data.get("media")
+            if isinstance(media, dict):
+                media = [media]
+            if not isinstance(media, list):
+                raise RuntimeError("AniList returned malformed relation-batch media data.")
 
-        requested_ids = set(batch_ids)
-        for item in media:
-            if not isinstance(item, dict):
-                continue
-            item_id = item.get("id")
-            if isinstance(item_id, bool):
-                continue
-            if isinstance(item_id, float):
-                if not math.isfinite(item_id) or not item_id.is_integer():
+            requested_ids = set(batch_ids)
+            for item in media:
+                if not isinstance(item, dict):
                     continue
-                item_id = int(item_id)
-            elif isinstance(item_id, str):
-                text_id = item_id.strip()
-                if not text_id or len(text_id) > 10 or not text_id.isascii() or not text_id.isdigit():
+                item_id = item.get("id")
+                if isinstance(item_id, bool):
                     continue
-                try:
-                    item_id = int(text_id)
-                except (TypeError, ValueError, OverflowError):
+                if isinstance(item_id, float):
+                    if not math.isfinite(item_id) or not item_id.is_integer():
+                        continue
+                    item_id = int(item_id)
+                elif isinstance(item_id, str):
+                    text_id = item_id.strip()
+                    if (
+                        not text_id
+                        or len(text_id) > 10
+                        or not text_id.isascii()
+                        or not text_id.isdigit()
+                    ):
+                        continue
+                    try:
+                        item_id = int(text_id)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                elif not isinstance(item_id, int):
                     continue
-            elif not isinstance(item_id, int):
-                continue
-            if item_id in requested_ids:
-                result[item_id] = item
+                if item_id in requested_ids:
+                    result[item_id] = item
+
+    # MangaBaka-only works are not visible to AniList's id_in query. Resolve
+    # each such local ID using get_media_relations(), which fetches its native
+    # relation graph from MangaBaka. One failed record must not discard valid
+    # AniList batch results or prevent other MangaBaka IDs from being resolved.
+    for local_id in sorted(local_ids):
+        try:
+            details = get_media_relations(local_id)
+        except Exception as error:
+            print(f"MangaBaka relation lookup skipped for {local_id}: {error}")
+            continue
+        if isinstance(details, dict) and details.get("id") == local_id:
+            result[local_id] = details
 
     return result
 
