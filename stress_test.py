@@ -78,7 +78,7 @@ def run_full_regression_suite():
         env=env,
     )
     output = (completed.stdout + "\n" + completed.stderr).strip()
-    summary = re.search(r"(?m)^\\s*Ran\\s+(\\d+)\\s+tests?\\s+in\\s+[0-9.]+s\\s*$", output)
+    summary = re.search(r"(?m)^\s*Ran\s+(\d+)\s+tests?\s+in\s+[0-9.]+s\s*$", output)
     tests_run = int(summary.group(1)) if summary else 0
 
     # A zero exit code alone is not enough: unittest discovery can succeed
@@ -88,7 +88,7 @@ def run_full_regression_suite():
     summary_valid = summary is not None and tests_run > 0
     if not summary_valid:
         output += (
-            "\\nRegression test discovery did not report a positive test count; "
+            "\nRegression test discovery did not report a positive test count; "
             "treating the baseline as failed."
         )
 
