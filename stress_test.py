@@ -124,12 +124,12 @@ def run_iteration_worker(seed):
         })
         if attempted_requests:
             payload["output"] += (
-                "\\nBlocked network requests: "
+                "\nBlocked network requests: "
                 + json.dumps(attempted_requests, ensure_ascii=False)
             )
     except BaseException:
         payload["network_attempts"] = attempted_requests
-        payload["output"] = (output.getvalue() + "\\n" + traceback.format_exc())[-8000:]
+        payload["output"] = (output.getvalue() + "\n" + traceback.format_exc())[-8000:]
 
     print("NEKOTRACK_ITERATION_RESULT=" + json.dumps(payload, ensure_ascii=False), flush=True)
     return 0 if payload["status"] == "PASS" else 1
@@ -228,7 +228,7 @@ def main():
                     timeout=180,
                     env=worker_env,
                 )
-                combined_output = (completed.stdout or "") + "\\n" + (completed.stderr or "")
+                combined_output = (completed.stdout or "") + "\n" + (completed.stderr or "")
                 marker = "NEKOTRACK_ITERATION_RESULT="
                 payload = None
                 for line in reversed(combined_output.splitlines()):
@@ -254,6 +254,15 @@ def main():
                         report["stress_passes"] += 1
                     else:
                         report["stress_failures"] += 1
+                        if report["stress_failures"] <= 5:
+                            print(
+                                f"FAILED fuzz worker: iteration={iteration}, seed={seed}, "
+                                f"exit={completed.returncode}, status={payload.get('status')}"
+                            )
+                            if network_attempts:
+                                print("Blocked network attempts: " + json.dumps(network_attempts, ensure_ascii=False))
+                            print(str(payload.get("output") or "")[-4000:])
+                            print("Worker output: " + combined_output[-4000:])
                         if len(report["failure_samples"]) < 40:
                             report["failure_samples"].append({
                                 "iteration": iteration,
@@ -266,7 +275,7 @@ def main():
                                 "network_attempts": network_attempts,
                                 "output": (
                                     str(payload.get("output") or "")
-                                    + "\\nWorker stdout/stderr:\\n"
+                                    + "\nWorker stdout/stderr:\n"
                                     + combined_output[-6000:]
                                 )[-8000:],
                             })
@@ -280,7 +289,7 @@ def main():
                             "return_code": completed.returncode,
                             "failures": 0,
                             "errors": 1,
-                            "output": ("Worker produced no valid result marker.\\n" + combined_output)[-8000:],
+                            "output": ("Worker produced no valid result marker.\n" + combined_output)[-8000:],
                         })
             except subprocess.TimeoutExpired as error:
                 iteration += 1
@@ -300,7 +309,7 @@ def main():
                         "elapsed_seconds": round(time.monotonic() - iteration_started, 3),
                         "failures": 0,
                         "errors": 1,
-                        "output": ("Fuzz worker exceeded 180 seconds.\\n" + stdout + "\\n" + stderr)[-8000:],
+                        "output": ("Fuzz worker exceeded 180 seconds.\n" + stdout + "\n" + stderr)[-8000:],
                     })
 
             now = time.monotonic()
@@ -314,7 +323,7 @@ def main():
                 next_progress = now + 10
     except KeyboardInterrupt:
         report["interrupted"] = True
-        print("\\nInterrupted by user; writing the partial report.")
+        print("\nInterrupted by user; writing the partial report.")
     report["duration_actual_seconds"] = round(time.monotonic() - started, 2)
     report["finished_at"] = datetime.now(timezone.utc).isoformat()
     report["summary"] = {
