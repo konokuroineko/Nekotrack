@@ -51,6 +51,7 @@ class MediaDetailIdentifierStressTests(unittest.TestCase):
             float("nan"),
             1 << 100,
             1 << 31,
+            -(1 << 63),
             -(1 << 63) - 1,
             1e300,
             "not-an-id",
@@ -64,6 +65,29 @@ class MediaDetailIdentifierStressTests(unittest.TestCase):
                         api.get_media_details(value)
             anilist.assert_not_called()
             mangabaka.assert_not_called()
+
+    def test_episode_and_relation_helpers_reject_bad_ids_before_network_calls(self):
+        invalid_ids = (
+            True,
+            1.5,
+            float("inf"),
+            float("nan"),
+            0,
+            1 << 31,
+            -(1 << 63),
+            "bad-id",
+        )
+        with patch("api.anilist_request") as anilist, \
+             patch("api.get_mangabaka_series") as mangabaka, \
+             patch("api.get_media_details") as details:
+            for media_id in invalid_ids:
+                with self.subTest(media_id=repr(media_id)):
+                    self.assertEqual(api.get_media_episodes(media_id), [])
+                    with self.assertRaises(ValueError):
+                        api.get_media_relations(media_id)
+            anilist.assert_not_called()
+            mangabaka.assert_not_called()
+            details.assert_not_called()
 
     def test_numeric_string_media_id_is_normalized_before_graphql_request(self):
         payload = {
