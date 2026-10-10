@@ -692,6 +692,10 @@ def get_media_details(media_id):
         raise ValueError("Media ID must be a non-zero integer.") from error
     if numeric_id == 0:
         raise ValueError("Media ID must be a non-zero integer.")
+    # AniList's GraphQL Int scalar is signed 32-bit. Negative IDs are
+    # app-local MangaBaka IDs and are stored in SQLite's signed 64-bit range.
+    if numeric_id > (1 << 31) - 1 or numeric_id < -(1 << 63):
+        raise ValueError("Media ID is outside the supported provider ID range.")
     media_id = numeric_id
 
     # Negative local IDs represent MangaBaka-only series. Never send them to
