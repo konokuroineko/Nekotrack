@@ -339,6 +339,29 @@ class DatabasePartialMetadataStressTests(unittest.TestCase):
                 self.assertEqual(row["source"], "MANGA")
                 self.assertEqual(row["end_year"], 2020)
                 self.assertEqual(row["duration"], 40)
+
+                # If the provider now supplies only a different year, do not
+                # combine it with the old record's month/day into a date that
+                # no provider ever returned.
+                newer_partial_date = dict(partial)
+                newer_partial_date["startDate"] = {
+                    "year": 2024,
+                    "month": None,
+                    "day": None,
+                }
+                database.save_anime(newer_partial_date)
+                connection = database.get_connection()
+                try:
+                    updated_date = connection.execute(
+                        "SELECT start_year, start_month, start_day FROM works WHERE id = ?",
+                        (work_id,),
+                    ).fetchone()
+                finally:
+                    connection.close()
+                self.assertEqual(
+                    tuple(updated_date),
+                    (2024, None, None),
+                )
             finally:
                 os.chdir(old_cwd)
 
