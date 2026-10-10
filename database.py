@@ -699,16 +699,25 @@ def get_characters(work_id):
 
 
 def save_staff(work_id, staff_edges):
-    """Save usable staff entries without letting malformed edges break the import."""
+    """Save staff edges and reconcile stale links only for complete snapshots."""
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return
     if not isinstance(staff_edges, (list, tuple)):
+        # Missing/malformed connection shapes are not proof the work has no
+        # staff. Leave existing links intact and let a later detail fetch retry.
         return
 
     normalized = []
+    snapshot_valid = True
     for edge in staff_edges:
         if not isinstance(edge, dict):
+            snapshot_valid = False
             continue
         person = edge.get("node")
         if not isinstance(person, dict):
+            snapshot_valid = False
             continue
         person_id = _cast_provider_id(person.get("id"))
         name_data = person.get("name")
@@ -721,15 +730,37 @@ def save_staff(work_id, staff_edges):
             or not isinstance(role, str)
             or not role.strip()
         ):
+            snapshot_valid = False
             continue
+
         image_data = person.get("image")
+        if image_data is not None and not isinstance(image_data, dict):
+            snapshot_valid = False
+            image_data = {}
         image_url = image_data.get("large") if isinstance(image_data, dict) else None
         if image_url is not None and not isinstance(image_url, str):
+            snapshot_valid = False
             image_url = None
         normalized.append((person_id, person_name.strip(), image_url, role.strip()))
 
     connection = get_connection()
     try:
+        old_person_ids = set()
+        if snapshot_valid:
+            old_person_ids = {
+                row["person_id"]
+                for row in connection.execute(
+                    "SELECT person_id FROM work_staff WHERE work_id = ?",
+                    (safe_work_id,),
+                ).fetchall()
+            }
+            # Only a well-formed complete edge list may remove stale roles.
+            # A valid empty list is authoritative and clears the old snapshot.
+            connection.execute(
+                "DELETE FROM work_staff WHERE work_id = ?",
+                (safe_work_id,),
+            )
+
         for person_id, person_name, image_url, role in normalized:
             connection.execute(
                 """
@@ -746,9 +777,27 @@ def save_staff(work_id, staff_edges):
             )
             connection.execute(
                 "INSERT OR IGNORE INTO work_staff (work_id, person_id, role) VALUES (?, ?, ?)",
-                (work_id, person_id, role),
+                (safe_work_id, person_id, role),
             )
+
+        if snapshot_valid:
+            for person_id in old_person_ids:
+                still_referenced = connection.execute(
+                    """
+                    SELECT 1 FROM work_staff WHERE person_id = ?
+                    UNION ALL
+                    SELECT 1 FROM character_voice_actors WHERE person_id = ?
+                    LIMIT 1
+                    """,
+                    (person_id, person_id),
+                ).fetchone()
+                if still_referenced is None:
+                    connection.execute("DELETE FROM people WHERE id = ?", (person_id,))
+
         connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
 
