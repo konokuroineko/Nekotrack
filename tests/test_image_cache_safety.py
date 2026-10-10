@@ -2,7 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from PySide6.QtCore import QBuffer, QIODevice
 from PySide6.QtGui import QImage
@@ -27,7 +27,7 @@ def png_bytes(width=16, height=24):
 
 
 def response_for(payload, content_length=None, url=VALID_URL):
-    response = Mock()
+    response = MagicMock()
     response.__enter__.return_value = response
     response.__exit__.return_value = False
     response.raise_for_status.return_value = None
