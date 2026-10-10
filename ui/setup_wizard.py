@@ -1,5 +1,6 @@
-import requests
+from requests.exceptions import RequestException
 
+from api import test_tmdb_connection
 from PySide6.QtCore import QObject, QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
@@ -78,17 +79,9 @@ class TMDBTestWorker(QObject):
 
     def run(self):
         try:
-            response = requests.get(
-                "https://api.themoviedb.org/3/configuration",
-                headers={
-                    "Authorization": f"Bearer {self.token}",
-                    "accept": "application/json",
-                },
-                timeout=10,
-            )
-            response.raise_for_status()
+            test_tmdb_connection(self.token)
             self.finished.emit(True, "TMDB connection successful.")
-        except requests.RequestException as error:
+        except (RequestException, ValueError) as error:
             detail = str(error).strip() or "The request failed."
             self.finished.emit(False, f"TMDB connection failed: {detail}")
 
