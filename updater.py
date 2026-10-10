@@ -2,6 +2,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import requests
 from PySide6.QtCore import QThread, Signal
@@ -9,9 +10,70 @@ from PySide6.QtCore import QThread, Signal
 
 REPO_API_URL = "https://api.github.com/repos/konokuroineko/Nekotrack/releases"
 REQUEST_TIMEOUT = 8
+MAX_INSTALLER_BYTES = 512 * 1024 * 1024
+RELEASE_OWNER = "konokuroineko"
+RELEASE_REPO = "Nekotrack"
+
+
+def _https_url_parts(value):
+    """Parse an HTTPS URL while rejecting credentials and unusual ports."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = urlsplit(value.strip())
+        port = parsed.port
+    except (TypeError, ValueError):
+        return None
+    if (
+        parsed.scheme.casefold() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+    ):
+        return None
+    return parsed
+
+
+def _is_setup_asset_name(value):
+    if not isinstance(value, str):
+        return False
+    name = value.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    return "setup" in name and name.endswith(".exe")
+
+
+def _is_trusted_release_asset_url(value):
+    """Accept only installer assets published in this repository's releases."""
+    parsed = _https_url_parts(value)
+    if parsed is None or parsed.hostname.casefold() != "github.com" or parsed.fragment:
+        return False
+
+    parts = parsed.path.split("/")
+    return (
+        len(parts) == 7
+        and parts[0] == ""
+        and parts[1].casefold() == RELEASE_OWNER.casefold()
+        and parts[2].casefold() == RELEASE_REPO.casefold()
+        and parts[3:5] == ["releases", "download"]
+        and bool(parts[5])
+        and _is_setup_asset_name(parts[6])
+    )
+
+
+def _is_trusted_download_location(value):
+    """Validate the final URL after GitHub redirects a release asset download."""
+    parsed = _https_url_parts(value)
+    if parsed is None or parsed.fragment:
+        return False
+    host = parsed.hostname.casefold()
+    if host == "github.com":
+        return _is_trusted_release_asset_url(value)
+    return host == "githubusercontent.com" or host.endswith(".githubusercontent.com")
 
 
 def _version_key(value):
+    if not isinstance(value, str):
+        return (0, 0, 0, -1, 0)
     value = value.strip().lstrip("v")
     match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z]+)(?:\.(\d+))?)?$", value)
     if not match:
@@ -86,8 +148,7 @@ class UpdateChecker(QThread):
                     url = asset.get("browser_download_url")
                     if not isinstance(name, str) or not isinstance(url, str) or not url.strip():
                         continue
-                    lowered_name = name.casefold()
-                    if lowered_name.endswith(".exe") and "setup" in lowered_name:
+                    if _is_setup_asset_name(name) and _is_trusted_release_asset_url(url):
                         installer = asset
                         break
 
@@ -115,13 +176,16 @@ class InstallerDownloader(QThread):
         self.asset_name = asset_name
 
     def run(self):
+        temp_path = None
         try:
-            if not self.asset_url:
-                raise ValueError("The update does not contain an installer download URL.")
+            # Defense in depth: do not let callers bypass the release-feed URL
+            # validation and execute a program downloaded from an arbitrary host.
+            if not _is_trusted_release_asset_url(self.asset_url):
+                raise ValueError("The installer URL is not a trusted NekoTrack GitHub release asset.")
+            if not _is_setup_asset_name(self.asset_name):
+                raise ValueError("The update asset is not a NekoTrack Setup executable.")
 
-            suffix = Path(self.asset_name or "NekoTrack-Setup.exe").suffix or ".exe"
-            temp_path = Path(tempfile.gettempdir()) / f"NekoTrack-update{suffix}"
-
+            byte_count = 0
             with requests.get(
                 self.asset_url,
                 headers={"Accept": "application/octet-stream"},
@@ -129,12 +193,47 @@ class InstallerDownloader(QThread):
                 timeout=30,
             ) as response:
                 response.raise_for_status()
-                with temp_path.open("wb") as handle:
+
+                final_url = getattr(response, "url", None) or self.asset_url
+                if not _is_trusted_download_location(final_url):
+                    raise ValueError("GitHub redirected the installer download to an untrusted host.")
+
+                headers = getattr(response, "headers", None) or {}
+                raw_length = headers.get("Content-Length")
+                if raw_length not in (None, ""):
+                    try:
+                        declared_length = int(raw_length)
+                    except (TypeError, ValueError, OverflowError):
+                        raise ValueError("The installer server returned an invalid content length.")
+                    if declared_length < 0:
+                        raise ValueError("The installer server returned an invalid content length.")
+                    if declared_length > MAX_INSTALLER_BYTES:
+                        raise ValueError("The installer is larger than the allowed 512 MiB limit.")
+
+                with tempfile.NamedTemporaryFile(
+                    prefix="NekoTrack-update-",
+                    suffix=".exe",
+                    dir=tempfile.gettempdir(),
+                    delete=False,
+                ) as handle:
+                    temp_path = Path(handle.name)
                     for chunk in response.iter_content(chunk_size=1024 * 256):
-                        if chunk:
-                            handle.write(chunk)
+                        if not chunk:
+                            continue
+                        byte_count += len(chunk)
+                        if byte_count > MAX_INSTALLER_BYTES:
+                            raise ValueError("The installer exceeded the allowed 512 MiB download limit.")
+                        handle.write(chunk)
+
+            if byte_count == 0:
+                raise ValueError("The installer download was empty.")
 
             subprocess.Popen([str(temp_path)], close_fds=True)
             self.finished.emit(str(temp_path))
         except Exception as exc:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             self.failed.emit(str(exc))
