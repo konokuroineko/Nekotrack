@@ -2377,7 +2377,7 @@ def delete_work_data(work_id):
     """Permanently delete one exact work ID and verify all work-owned rows are gone."""
     from pathlib import Path
 
-    work_id = int(work_id)
+    work_id = _validated_work_id(work_id)
     connection = get_connection()
 
     try:
