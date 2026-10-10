@@ -32,7 +32,7 @@ No external provider can guarantee complete chapter or volume records for every 
 
 ## Code organization
 
-`api.py` is the single entry point for media-provider calls from application and diagnostic code: AniList, TMDB, and MangaBaka. It exposes MangaBaka operations under clear `get_mangabaka_*` / `search_mangabaka_*` names. `mangabaka_api.py` stays as the internal MangaBaka-specific HTTP client and response normalizer; normal UI/search code should call it through `api.py`, not import it directly. `catalog_search.py` combines and deduplicates catalog results, while `series.py` handles relationship traversal and bundling. `image_cache.py` owns safe cover downloads, and `updater.py` owns GitHub release checks and installer downloads because those have separate caching and security requirements.
+`api.py` is the single implementation and entry point for media-provider calls: AniList, TMDB, and MangaBaka. The MangaBaka request/cache/retry layer, response normalization, title matching, enrichment, search, discovery, publisher, relationship, and volume-record operations are implemented directly in `api.py` and exposed through the `get_mangabaka_*` / `search_mangabaka_*` names. There is no separate MangaBaka API module. `catalog_search.py` combines and deduplicates catalog results, while `series.py` handles relationship traversal and bundling. `image_cache.py` owns safe cover downloads, and `updater.py` owns GitHub release checks and installer downloads because those have separate caching and security requirements.
 
 ## Known limitations
 
