@@ -142,6 +142,70 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
             popen.assert_not_called()
             self.assertEqual(list(Path(directory).iterdir()), [])
 
+    def test_untrusted_redirect_is_rejected_before_the_destination_is_contacted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            redirect = Mock()
+            redirect.status_code = 302
+            redirect.headers = {"Location": "https://attacker.invalid/payload.exe"}
+            redirect.close.return_value = None
+            failures = []
+            downloader = updater.InstallerDownloader(VALID_URL, "NekoTrack-Setup.exe")
+            downloader.failed.connect(failures.append)
+
+            with patch.object(updater.tempfile, "gettempdir", return_value=directory), patch.object(
+                updater.requests, "get", return_value=redirect
+            ) as request, patch.object(updater.subprocess, "Popen") as popen:
+                downloader.run()
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("untrusted host", failures[0])
+            request.assert_called_once_with(
+                VALID_URL,
+                headers={"Accept": "application/octet-stream"},
+                stream=True,
+                timeout=30,
+                allow_redirects=False,
+            )
+            redirect.close.assert_called_once()
+            popen.assert_not_called()
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_github_release_redirect_to_trusted_cdn_is_followed_safely(self):
+        with tempfile.TemporaryDirectory() as directory:
+            redirect = Mock()
+            redirect.status_code = 302
+            redirect.headers = {"Location": VALID_CDN_URL}
+            redirect.close.return_value = None
+
+            response = Mock()
+            response.status_code = 200
+            response.__enter__.return_value = response
+            response.__exit__.return_value = False
+            response.url = VALID_CDN_URL
+            response.headers = {"Content-Length": "4"}
+            response.iter_content.return_value = [b"safe"]
+
+            finished = []
+            failures = []
+            downloader = updater.InstallerDownloader(VALID_URL, "NekoTrack-Setup.exe")
+            downloader.finished.connect(finished.append)
+            downloader.failed.connect(failures.append)
+
+            with patch.object(updater.tempfile, "gettempdir", return_value=directory), patch.object(
+                updater.requests, "get", side_effect=[redirect, response]
+            ) as request, patch.object(updater.subprocess, "Popen") as popen:
+                downloader.run()
+
+            self.assertEqual(failures, [])
+            self.assertEqual(len(finished), 1)
+            self.assertEqual(request.call_count, 2)
+            self.assertEqual(request.call_args_list[0].kwargs["allow_redirects"], False)
+            self.assertEqual(request.call_args_list[1].args[0], VALID_CDN_URL)
+            self.assertEqual(request.call_args_list[1].kwargs["allow_redirects"], False)
+            installer_path = Path(finished[0])
+            self.assertEqual(installer_path.read_bytes(), b"safe")
+            popen.assert_called_once_with([str(installer_path)], close_fds=True)
+
     def test_valid_download_is_bounded_written_to_a_unique_exe_and_launched(self):
         with tempfile.TemporaryDirectory() as directory:
             response = Mock()
@@ -166,6 +230,7 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
                 headers={"Accept": "application/octet-stream"},
                 stream=True,
                 timeout=30,
+                allow_redirects=False,
             )
             self.assertEqual(failures, [])
             self.assertEqual(len(finished), 1)
