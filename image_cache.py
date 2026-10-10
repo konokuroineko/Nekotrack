@@ -1,6 +1,7 @@
 """Bounded and path-safe cover-image downloads for NekoTrack."""
 from pathlib import Path
 import ipaddress
+import tempfile
 import re
 from urllib.parse import urljoin, urlsplit
 
@@ -169,8 +170,28 @@ def download_cover(work_id, image_url):
 
     IMAGE_DIRECTORY.mkdir(parents=True, exist_ok=True)
     image_path = IMAGE_DIRECTORY / f"{safe_id}.jpg"
+    temporary_path = None
+    try:
+        # Write to a separate file and atomically replace the cache entry only
+        # after Qt has completed the JPEG successfully. This prevents a failed
+        # write or simultaneous downloads from leaving a truncated cache hit.
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{safe_id}-",
+            suffix=".jpg",
+            dir=IMAGE_DIRECTORY,
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
 
-    if not image.save(str(image_path), "JPG", 85):
-        raise OSError("Could not save cover image")
+        if not image.save(str(temporary_path), "JPG", 85):
+            raise OSError("Could not save cover image")
 
-    return str(image_path)
+        temporary_path.replace(image_path)
+        return str(image_path)
+    except Exception:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
