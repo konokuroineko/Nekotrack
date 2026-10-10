@@ -1300,6 +1300,65 @@ class MangaBakaShapeStressTests(unittest.TestCase):
         self.assertFalse(result["pageInfo"]["hasNextPage"])
         self.assertEqual(len(result["media"]), 1)
 
+    def test_public_mangabaka_endpoints_reject_bad_ids_and_clamp_paging(self):
+        with patch("mangabaka_api._request", return_value={"ok": True}) as request:
+            for invalid_id in (
+                True,
+                0,
+                -1,
+                1.5,
+                float("inf"),
+                "9" * 5000,
+                1 << 100,
+            ):
+                with self.subTest(invalid_id=repr(invalid_id)[:50]):
+                    for endpoint in (
+                        mb.get_series,
+                        mb.get_work,
+                        mb.get_related_series,
+                        mb.get_publisher,
+                        mb.get_publisher_stats,
+                    ):
+                        with self.assertRaises(ValueError):
+                            endpoint(invalid_id)
+            request.assert_not_called()
+
+            mb.search_series("test", page=float("inf"), limit=10**100)
+            kwargs = request.call_args.kwargs
+            self.assertEqual(kwargs["params"]["page"], 1)
+            self.assertEqual(kwargs["params"]["limit"], 50)
+            request.reset_mock()
+
+            mb.get_series_collections(
+                42,
+                page=10**100,
+                limit=10**100,
+            )
+            params = request.call_args.kwargs["params"]
+            self.assertEqual(params["page"], mb.MAX_PROVIDER_PAGES)
+            self.assertEqual(params["limit"], 100)
+
+    def test_malformed_paging_values_never_raise_during_request_parameter_building(self):
+        invalid_values = (
+            None,
+            True,
+            1.5,
+            float("nan"),
+            float("inf"),
+            "9" * 5000,
+            10**100,
+            {"bad": "page"},
+        )
+        for value in invalid_values:
+            with self.subTest(value=repr(value)[:50]):
+                with patch("mangabaka_api._request", return_value={"ok": True}) as request:
+                    mb.search_series("query", page=value, limit=value)
+                params = request.call_args.kwargs["params"]
+                self.assertGreaterEqual(params["page"], 1)
+                self.assertLessEqual(params["page"], mb.MAX_PROVIDER_PAGES)
+                self.assertGreaterEqual(params["limit"], 1)
+                self.assertLessEqual(params["limit"], 50)
+
     def test_provider_envelopes_never_leak_non_dictionary_pagination(self):
         payloads = [
             None, [], 5, "text", {},
