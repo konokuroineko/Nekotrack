@@ -53,14 +53,24 @@ def anilist_request(query, variables=None):
             if response.status_code == 429:
                 if attempt < MAX_RETRIES - 1:
                     retry_after = response.headers.get("Retry-After")
+                    fallback_wait = RETRY_DELAY * (2 ** attempt)
                     try:
-                        wait_time = (
-                            max(1.0, float(retry_after))
+                        requested_wait = (
+                            float(retry_after)
                             if retry_after is not None
-                            else RETRY_DELAY * (2 ** attempt)
+                            else fallback_wait
+                        )
+                        # Retry-After is provider-controlled. Values such as
+                        # "1e309" become infinity, while huge finite values can
+                        # effectively hang a worker. Keep all waits finite and
+                        # bounded, with exponential backoff for malformed input.
+                        wait_time = (
+                            min(60.0, max(1.0, requested_wait))
+                            if math.isfinite(requested_wait)
+                            else fallback_wait
                         )
                     except (TypeError, ValueError, OverflowError):
-                        wait_time = RETRY_DELAY * (2 ** attempt)
+                        wait_time = fallback_wait
                     print(
                         f"AniList rate limited the request (attempt {attempt + 1}/{MAX_RETRIES}). "
                         f"Retrying in {wait_time:g}s..."
