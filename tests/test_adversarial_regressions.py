@@ -63,10 +63,10 @@ class StressHarnessArgumentTests(unittest.TestCase):
             (-float("inf"), None),
             (0, None),
             (-1, None),
-            (31, None),
+            (301, None),
             (0, float("nan")),
             (0, float("inf")),
-            (0, 30 * 60 + 0.1),
+            (0, 5 * 60 * 60 + 0.1),
         ]
         for minutes, seconds in invalid:
             with self.subTest(minutes=minutes, seconds=seconds):
@@ -77,6 +77,8 @@ class StressHarnessArgumentTests(unittest.TestCase):
         self.assertEqual(stress_test._resolve_duration(10, seconds=15), 15)
         self.assertEqual(stress_test._resolve_duration(0, seconds=0.25), 0.25)
         self.assertEqual(stress_test._resolve_duration(30, seconds=None), 1800)
+        self.assertEqual(stress_test._resolve_duration(31, seconds=None), 1860)
+        self.assertEqual(stress_test._resolve_duration(300, seconds=None), 18000)
 
 
 class AniListURLAdversarialTests(unittest.TestCase):
