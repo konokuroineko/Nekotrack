@@ -18,12 +18,21 @@ import api as nt_api
 from datetime import date
 from pathlib import Path
 
+def _fuzz_seed(base):
+    """Keep tests reproducible while allowing each soak iteration to vary inputs."""
+    try:
+        offset = int(os.environ.get("NEKOTRACK_FUZZ_SEED", "0"))
+    except (TypeError, ValueError, OverflowError):
+        offset = 0
+    return (int(base) + offset) % (2**32)
+
+
 
 class ProviderPayloadChaosTests(unittest.TestCase):
     SEED = 0x4E454B4F
 
     def test_normalizer_survives_malformed_optional_provider_fields(self):
-        rng = random.Random(self.SEED)
+        rng = random.Random(_fuzz_seed(self.SEED))
         title_fields = [
             None,
             "unexpected title shape",
@@ -121,7 +130,7 @@ class ProviderPayloadChaosTests(unittest.TestCase):
         self.assertIsInstance(result["pageInfo"]["hasNextPage"], bool)
 
     def test_local_filter_never_admits_malformed_or_nonmatching_rows(self):
-        rng = random.Random(self.SEED + 1)
+        rng = random.Random(_fuzz_seed(self.SEED + 1))
         rows = []
         for item_id in range(1, 151):
             status = rng.choice(["completed", "releasing", "upcoming", None, 42])
@@ -172,7 +181,7 @@ class BundlingGraphChaosTests(unittest.TestCase):
     ]
 
     def test_random_cyclic_relation_graphs_preserve_each_search_result_once(self):
-        rng = random.Random(self.SEED)
+        rng = random.Random(_fuzz_seed(self.SEED))
         preference_keys = {
             "bundle_include_movies", "bundle_include_ovas", "bundle_include_onas",
             "bundle_include_specials", "bundle_include_manga", "bundle_include_novels",
@@ -467,7 +476,7 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         self.assertFalse(shared_cover.exists())
 
     def test_900_random_database_operations_keep_relations_and_progress_consistent(self):
-        rng = random.Random(self.SEED)
+        rng = random.Random(_fuzz_seed(self.SEED))
         active = set(range(1, 41))
         for work_id in sorted(active):
             if work_id % 3 == 0:
