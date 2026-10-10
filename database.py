@@ -572,6 +572,8 @@ def get_tmdb_mapping(work_id):
         safe_work_id = _validated_work_id(work_id)
     except (TypeError, ValueError, OverflowError):
         return None, None
+    if safe_work_id <= 0:
+        return None, None
     connection = get_connection()
     try:
         row = connection.execute(
@@ -592,6 +594,8 @@ def save_tmdb_mapping(work_id, tmdb_id, tmdb_season_number):
     except (TypeError, ValueError, OverflowError):
         return False
 
+    if safe_work_id <= 0:
+        return False
     safe_tmdb_id = (
         _safe_optional_integer(tmdb_id, 1, (1 << 31) - 1)
         if tmdb_id is not None else None
@@ -1212,6 +1216,8 @@ def save_episode_thumbnail_path(work_id, episode_number, thumbnail_path):
     try:
         safe_work_id = _validated_work_id(work_id)
     except (TypeError, ValueError, OverflowError):
+        return False
+    if safe_work_id <= 0:
         return False
     safe_episode_number = _safe_optional_integer(
         episode_number, 1, _MAX_TRACKED_EPISODE_NUMBER
