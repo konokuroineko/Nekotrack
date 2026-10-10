@@ -40,6 +40,23 @@ def _validated_work_id(value):
     return parsed
 
 
+def _validated_work_ids(values):
+    """Normalize an optional collection of work IDs; return None if any are malformed."""
+    if values is None:
+        return []
+    if not isinstance(values, (list, tuple, set, frozenset)):
+        return None
+    ids = set()
+    for value in values:
+        if value is None:
+            continue
+        try:
+            ids.add(_validated_work_id(value))
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return sorted(ids)
+
+
 def _safe_optional_integer(value, minimum=0, maximum=_MAX_SQLITE_INTEGER):
     """Normalize optional integer metadata while rejecting malformed provider values."""
     if value is None or isinstance(value, bool):
