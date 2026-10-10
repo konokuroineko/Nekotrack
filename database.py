@@ -465,6 +465,14 @@ def save_characters(work_id, characters):
                 "UPDATE works SET characters_loaded = 1 WHERE id = ?",
                 (work_id,),
             )
+        else:
+            # A previously complete cache is no longer authoritative if the
+            # provider response is partial or malformed. Keep its rows intact,
+            # but allow the next detail view to retry the cast fetch.
+            connection.execute(
+                "UPDATE works SET characters_loaded = 0 WHERE id = ?",
+                (work_id,),
+            )
         connection.commit()
     finally:
         connection.close()
