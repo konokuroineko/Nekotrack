@@ -306,6 +306,8 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             html = b"<!doctype html><html><body>temporary error</body></html>"
             response = MagicMock()
+            response.__enter__.return_value = response
+            response.__exit__.return_value = False
             response.status_code = 200
             response.url = VALID_CDN_URL
             response.headers = {"Content-Length": str(len(html))}
