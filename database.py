@@ -400,6 +400,20 @@ def save_characters(work_id, characters):
         })
 
     connection = get_connection()
+
+    def remove_person_if_orphaned(person_id):
+        references = connection.execute(
+            """
+            SELECT 1 FROM character_voice_actors WHERE person_id = ?
+            UNION ALL
+            SELECT 1 FROM work_staff WHERE person_id = ?
+            LIMIT 1
+            """,
+            (person_id, person_id),
+        ).fetchone()
+        if references is None:
+            connection.execute("DELETE FROM people WHERE id = ?", (person_id,))
+
     try:
         for character in normalized:
             connection.execute(
@@ -448,10 +462,16 @@ def save_characters(work_id, characters):
                         # Character and voice-actor rows are globally keyed.
                         # Remove them only after the character is no longer used
                         # by any work, preserving shared cast entities.
+                        old_actor_rows = connection.execute(
+                            "SELECT person_id FROM character_voice_actors WHERE character_id = ?",
+                            (old_character_id,),
+                        ).fetchall()
                         connection.execute(
                             "DELETE FROM character_voice_actors WHERE character_id = ?",
                             (old_character_id,),
                         )
+                        for old_actor_row in old_actor_rows:
+                            remove_person_if_orphaned(old_actor_row["person_id"])
                         connection.execute(
                             "DELETE FROM characters WHERE id = ?",
                             (old_character_id,),
@@ -476,6 +496,7 @@ def save_characters(work_id, characters):
                             """,
                             (character["id"], old_actor_id),
                         )
+                        remove_person_if_orphaned(old_actor_id)
 
             connection.execute(
                 "UPDATE works SET characters_loaded = 1 WHERE id = ?",
