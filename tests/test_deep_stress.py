@@ -267,6 +267,70 @@ class DatabasePartialMetadataStressTests(unittest.TestCase):
                 os.chdir(old_cwd)
 
 
+    def test_studio_refresh_removes_stale_links_but_partial_payload_preserves_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                work_id = 613
+
+                def work(studio_edges_marker=None):
+                    item = {
+                        "id": work_id,
+                        "type": "ANIME",
+                        "format": "TV",
+                        "title": {
+                            "english": "Studio refresh test",
+                            "romaji": "Studio refresh test",
+                            "native": None,
+                        },
+                    }
+                    if studio_edges_marker is not None:
+                        item["studios"] = {"edges": studio_edges_marker}
+                    return item
+
+                def studio_edge(studio_id):
+                    return {
+                        "isMain": studio_id == 10,
+                        "node": {"id": studio_id, "name": f"Studio {studio_id}"},
+                    }
+
+                def saved_studios():
+                    connection = database.get_connection()
+                    try:
+                        return [
+                            row["studio_id"]
+                            for row in connection.execute(
+                                "SELECT studio_id FROM work_studios "
+                                "WHERE work_id = ? ORDER BY studio_id",
+                                (work_id,),
+                            ).fetchall()
+                        ]
+                    finally:
+                        connection.close()
+
+                database.save_anime(work([studio_edge(10), studio_edge(11)]))
+                self.assertEqual(saved_studios(), [10, 11])
+
+                # Lightweight records omit studios and must leave the cache alone.
+                database.save_anime(work())
+                self.assertEqual(saved_studios(), [10, 11])
+
+                # A malformed list is not authoritative enough to delete old links.
+                database.save_anime(work([studio_edge(10), None]))
+                self.assertEqual(saved_studios(), [10, 11])
+
+                # A complete refresh replaces stale associations, and empty is
+                # meaningful when the provider confirms that no studios remain.
+                database.save_anime(work([studio_edge(10)]))
+                self.assertEqual(saved_studios(), [10])
+                database.save_anime(work([]))
+                self.assertEqual(saved_studios(), [])
+            finally:
+                os.chdir(old_cwd)
+
+
 class MangaBakaShapeStressTests(unittest.TestCase):
     def test_provider_envelopes_never_leak_non_dictionary_pagination(self):
         payloads = [
