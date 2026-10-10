@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import api
 
@@ -60,6 +60,43 @@ class AniListFilterTests(unittest.TestCase):
         query = request.call_args.args[0]
         for field in ("status", "season", "seasonYear", "genres", "tags { name }"):
             self.assertIn(field, query)
+
+
+    @patch("api.requests.get")
+    def test_tmdb_connection_uses_bearer_auth_and_closes_response(self, request):
+        response = Mock()
+        request.return_value = response
+
+        self.assertTrue(api.test_tmdb_connection("  example-token  "))
+
+        request.assert_called_once_with(
+            "https://api.themoviedb.org/3/configuration",
+            headers={
+                "Authorization": "Bearer example-token",
+                "accept": "application/json",
+            },
+            timeout=10,
+        )
+        response.raise_for_status.assert_called_once_with()
+        response.close.assert_called_once_with()
+
+    @patch("api.requests.get")
+    def test_tmdb_connection_closes_error_response(self, request):
+        response = Mock()
+        response.raise_for_status.side_effect = api.requests.HTTPError("unauthorized")
+        request.return_value = response
+
+        with self.assertRaises(api.requests.HTTPError):
+            api.test_tmdb_connection("invalid-token")
+
+        response.close.assert_called_once_with()
+
+    def test_tmdb_connection_rejects_an_empty_token_without_network_access(self):
+        with patch("api.requests.get") as request:
+            with self.assertRaisesRegex(ValueError, "token is required"):
+                api.test_tmdb_connection("  ")
+        request.assert_not_called()
+
 
 
 if __name__ == "__main__":
