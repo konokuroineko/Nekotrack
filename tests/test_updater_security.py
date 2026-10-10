@@ -18,6 +18,15 @@ VALID_URL = (
 VALID_CDN_URL = "https://release-assets.githubusercontent.com/assets/123/installer.exe"
 
 
+def minimal_pe_payload(body=b"installer test payload"):
+    """Return a tiny PE-shaped fixture; tests never execute this payload."""
+    dos_header = bytearray(64)
+    dos_header[:2] = b"MZ"
+    pe_offset = 0x80
+    dos_header[0x3C:0x40] = pe_offset.to_bytes(4, "little")
+    return bytes(dos_header) + bytes(pe_offset - len(dos_header)) + b"PE\0\0" + body
+
+
 class UpdateUrlValidationTests(unittest.TestCase):
     def test_release_assets_are_limited_to_this_repository_setup_executables(self):
         self.assertTrue(updater._is_trusted_release_asset_url(VALID_URL))
@@ -184,8 +193,9 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
             response.__enter__.return_value = response
             response.__exit__.return_value = False
             response.url = VALID_CDN_URL
-            response.headers = {"Content-Length": "4"}
-            response.iter_content.return_value = [b"safe"]
+            payload = minimal_pe_payload(b"safe")
+            response.headers = {"Content-Length": str(len(payload))}
+            response.iter_content.return_value = [payload]
 
             finished = []
             failures = []
@@ -205,7 +215,7 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
             self.assertEqual(request.call_args_list[1].args[0], VALID_CDN_URL)
             self.assertEqual(request.call_args_list[1].kwargs["allow_redirects"], False)
             installer_path = Path(finished[0])
-            self.assertEqual(installer_path.read_bytes(), b"safe")
+            self.assertEqual(installer_path.read_bytes(), payload)
             popen.assert_called_once_with([str(installer_path)], close_fds=True)
 
     def test_valid_download_is_bounded_written_to_a_unique_exe_and_launched(self):
@@ -214,8 +224,9 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
             response.__enter__.return_value = response
             response.__exit__.return_value = False
             response.url = VALID_CDN_URL
-            response.headers = {"Content-Length": "7"}
-            response.iter_content.return_value = [b"nek", b"otrack"]
+            payload = minimal_pe_payload(b"nekotrack")
+            response.headers = {"Content-Length": str(len(payload))}
+            response.iter_content.return_value = [payload[:3], payload[3:]]
             finished = []
             failures = []
             downloader = updater.InstallerDownloader(VALID_URL, "NekoTrack-Setup.exe")
@@ -239,7 +250,7 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
             installer_path = Path(finished[0])
             self.assertTrue(installer_path.exists())
             self.assertEqual(installer_path.suffix, ".exe")
-            self.assertEqual(installer_path.read_bytes(), b"nekotrack")
+            self.assertEqual(installer_path.read_bytes(), payload)
             popen.assert_called_once_with([str(installer_path)], close_fds=True)
 
     def test_declared_oversize_installer_is_rejected_before_creating_file(self):
@@ -288,6 +299,28 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
 
             self.assertEqual(len(failures), 1)
             self.assertIn("exceeded", failures[0])
+            popen.assert_not_called()
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_html_error_page_is_removed_and_never_executed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            html = b"<!doctype html><html><body>temporary error</body></html>"
+            response = MagicMock()
+            response.status_code = 200
+            response.url = VALID_CDN_URL
+            response.headers = {"Content-Length": str(len(html))}
+            response.iter_content.return_value = [html]
+            failures = []
+            downloader = updater.InstallerDownloader(VALID_URL, "NekoTrack-Setup.exe")
+            downloader.failed.connect(failures.append)
+
+            with patch.object(updater.tempfile, "gettempdir", return_value=directory), patch.object(
+                updater.requests, "get", return_value=response
+            ), patch.object(updater.subprocess, "Popen") as popen:
+                downloader.run()
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("valid Windows executable header", failures[0])
             popen.assert_not_called()
             self.assertEqual(list(Path(directory).iterdir()), [])
 
