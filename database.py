@@ -240,38 +240,151 @@ def initialize_database():
     connection.close()
 
 
+def _cast_provider_id(value):
+    """Return a positive provider ID safe for SQLite, or None for malformed input."""
+    try:
+        numeric_id = _validated_work_id(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return numeric_id if numeric_id > 0 else None
+
+
 def save_characters(work_id, characters):
-    connection = get_connection()
-    for edge in characters or []:
-        character = edge.get("node") or {}
-        character_id = character.get("id")
-        name = (character.get("name") or {}).get("full")
-        if not character_id or not name:
+    """Persist a character snapshot, keeping incomplete payloads retryable."""
+    if not isinstance(characters, (list, tuple)):
+        return
+
+    normalized = []
+    snapshot_valid = True
+    for edge in characters:
+        if not isinstance(edge, dict):
+            snapshot_valid = False
             continue
-        connection.execute("INSERT OR REPLACE INTO characters (id, name, image_url) VALUES (?, ?, ?)",
-                           (character_id, name, (character.get("image") or {}).get("large")))
-        connection.execute("""
-            INSERT INTO work_characters (work_id, character_id, role)
-            VALUES (?, ?, ?)
-            ON CONFLICT(work_id, character_id) DO UPDATE SET role = excluded.role
-        """, (work_id, character_id, edge.get("role") or "UNKNOWN"))
-        for actor in edge.get("voiceActors") or []:
-            person_id = actor.get("id")
-            person_name = actor.get("name") or {}
-            if not person_id or not person_name.get("full"):
+        character = edge.get("node")
+        if not isinstance(character, dict):
+            snapshot_valid = False
+            continue
+        character_id = _cast_provider_id(character.get("id"))
+        name_data = character.get("name")
+        name = name_data.get("full") if isinstance(name_data, dict) else None
+        if character_id is None or not isinstance(name, str) or not name.strip():
+            snapshot_valid = False
+            continue
+
+        image_data = character.get("image")
+        if image_data is not None and not isinstance(image_data, dict):
+            snapshot_valid = False
+            image_data = {}
+        image_url = image_data.get("large") if isinstance(image_data, dict) else None
+        if image_url is not None and not isinstance(image_url, str):
+            snapshot_valid = False
+            image_url = None
+
+        raw_role = edge.get("role")
+        if raw_role is None or raw_role == "":
+            role = "UNKNOWN"
+        elif isinstance(raw_role, str):
+            role = raw_role.strip() or "UNKNOWN"
+        else:
+            snapshot_valid = False
+            role = "UNKNOWN"
+
+        if "voiceActors" not in edge:
+            snapshot_valid = False
+            raw_actors = []
+        else:
+            raw_actors = edge.get("voiceActors")
+            if raw_actors is None:
+                snapshot_valid = False
+                raw_actors = []
+            elif not isinstance(raw_actors, list):
+                snapshot_valid = False
+                raw_actors = []
+
+        actors = []
+        for actor in raw_actors:
+            if not isinstance(actor, dict):
+                snapshot_valid = False
                 continue
-            connection.execute("INSERT OR REPLACE INTO people (id, name, image_url) VALUES (?, ?, ?)",
-                               (person_id, person_name["full"], (actor.get("image") or {}).get("large")))
-            connection.execute("""
-                INSERT OR REPLACE INTO character_voice_actors (character_id, person_id, language)
+            person_id = _cast_provider_id(actor.get("id"))
+            person_name_data = actor.get("name")
+            person_name = (
+                person_name_data.get("full")
+                if isinstance(person_name_data, dict)
+                else None
+            )
+            if person_id is None or not isinstance(person_name, str) or not person_name.strip():
+                snapshot_valid = False
+                continue
+
+            actor_image_data = actor.get("image")
+            if actor_image_data is not None and not isinstance(actor_image_data, dict):
+                snapshot_valid = False
+                actor_image_data = {}
+            actor_image_url = (
+                actor_image_data.get("large")
+                if isinstance(actor_image_data, dict)
+                else None
+            )
+            if actor_image_url is not None and not isinstance(actor_image_url, str):
+                snapshot_valid = False
+                actor_image_url = None
+
+            language = actor.get("language")
+            if language is not None and not isinstance(language, str):
+                snapshot_valid = False
+                language = None
+            actors.append({
+                "id": person_id,
+                "name": person_name.strip(),
+                "image_url": actor_image_url,
+                "language": language,
+            })
+
+        normalized.append({
+            "id": character_id,
+            "name": name.strip(),
+            "image_url": image_url,
+            "role": role,
+            "actors": actors,
+        })
+
+    connection = get_connection()
+    try:
+        for character in normalized:
+            connection.execute(
+                "INSERT OR REPLACE INTO characters (id, name, image_url) VALUES (?, ?, ?)",
+                (character["id"], character["name"], character["image_url"]),
+            )
+            connection.execute(
+                """
+                INSERT INTO work_characters (work_id, character_id, role)
                 VALUES (?, ?, ?)
-            """, (character_id, person_id, actor.get("language")))
-    connection.execute(
-        "UPDATE works SET characters_loaded = 1 WHERE id = ?",
-        (work_id,),
-    )
-    connection.commit()
-    connection.close()
+                ON CONFLICT(work_id, character_id) DO UPDATE SET role = excluded.role
+                """,
+                (work_id, character["id"], character["role"]),
+            )
+            for actor in character["actors"]:
+                connection.execute(
+                    "INSERT OR REPLACE INTO people (id, name, image_url) VALUES (?, ?, ?)",
+                    (actor["id"], actor["name"], actor["image_url"]),
+                )
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO character_voice_actors (character_id, person_id, language)
+                    VALUES (?, ?, ?)
+                    """,
+                    (character["id"], actor["id"], actor["language"]),
+                )
+
+        if snapshot_valid:
+            connection.execute(
+                "UPDATE works SET characters_loaded = 1 WHERE id = ?",
+                (work_id,),
+            )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def characters_are_loaded(work_id):
@@ -438,20 +551,49 @@ def get_characters(work_id):
 
 
 def save_staff(work_id, staff_edges):
-    connection = get_connection()
-    for edge in staff_edges or []:
-        person = edge.get("node") or {}
-        person_id = person.get("id")
-        person_name = (person.get("name") or {}).get("full")
-        role = edge.get("role")
-        if not person_id or not person_name or not role:
+    """Save usable staff entries without letting malformed edges break the import."""
+    if not isinstance(staff_edges, (list, tuple)):
+        return
+
+    normalized = []
+    for edge in staff_edges:
+        if not isinstance(edge, dict):
             continue
-        connection.execute("INSERT OR REPLACE INTO people (id, name, image_url) VALUES (?, ?, ?)",
-                           (person_id, person_name, (person.get("image") or {}).get("large")))
-        connection.execute("INSERT OR IGNORE INTO work_staff (work_id, person_id, role) VALUES (?, ?, ?)",
-                           (work_id, person_id, role))
-    connection.commit()
-    connection.close()
+        person = edge.get("node")
+        if not isinstance(person, dict):
+            continue
+        person_id = _cast_provider_id(person.get("id"))
+        name_data = person.get("name")
+        person_name = name_data.get("full") if isinstance(name_data, dict) else None
+        role = edge.get("role")
+        if (
+            person_id is None
+            or not isinstance(person_name, str)
+            or not person_name.strip()
+            or not isinstance(role, str)
+            or not role.strip()
+        ):
+            continue
+        image_data = person.get("image")
+        image_url = image_data.get("large") if isinstance(image_data, dict) else None
+        if image_url is not None and not isinstance(image_url, str):
+            image_url = None
+        normalized.append((person_id, person_name.strip(), image_url, role.strip()))
+
+    connection = get_connection()
+    try:
+        for person_id, person_name, image_url, role in normalized:
+            connection.execute(
+                "INSERT OR REPLACE INTO people (id, name, image_url) VALUES (?, ?, ?)",
+                (person_id, person_name, image_url),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO work_staff (work_id, person_id, role) VALUES (?, ?, ?)",
+                (work_id, person_id, role),
+            )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def get_staff(work_id):
