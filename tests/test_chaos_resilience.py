@@ -1435,10 +1435,30 @@ class AniListRelationsChaosTests(unittest.TestCase):
                 os.chdir(old_cwd)
 
     def test_invalid_ids_do_not_crash_batch_relation_fetch(self):
-        with patch.object(nt_api, "anilist_request") as request:
-            result = nt_api.get_media_relations_batch([None, "bad-id", -7, 0])
+        with patch.object(nt_api, "anilist_request") as request, \
+             patch.object(nt_api, "get_media_relations") as local_lookup:
+            result = nt_api.get_media_relations_batch([
+                None, "bad-id", True, 12.5, 0, 1 << 31, "9" * 5000,
+            ])
         self.assertEqual(result, {})
         request.assert_not_called()
+        local_lookup.assert_not_called()
+
+    def test_negative_local_ids_use_mangabaka_relation_provider(self):
+        local_detail = {
+            "id": -7,
+            "type": "MANGA",
+            "format": "MANGA",
+            "title": {"english": "Local title", "romaji": "Local title"},
+            "relations": {"edges": []},
+        }
+        with patch.object(nt_api, "anilist_request") as anilist, \
+             patch.object(nt_api, "get_media_relations", return_value=local_detail) as local_lookup:
+            result = nt_api.get_media_relations_batch([-7])
+
+        self.assertEqual(result, {-7: local_detail})
+        anilist.assert_not_called()
+        local_lookup.assert_called_once_with(-7)
 
     def test_relation_batch_skips_invalid_returned_media_rows(self):
         payload = {
