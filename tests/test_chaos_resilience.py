@@ -374,6 +374,52 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
             connection.close()
         self.assertEqual([(row["item_number"], row["title"]) for row in rows], [(1, "Chapter One")])
 
+    def test_reading_progress_apis_bound_ids_offsets_and_item_numbers(self):
+        work_id = 620
+        database.save_anime(self.work(work_id, "MANGA", "MANGA"))
+
+        with patch.object(database, "get_connection") as get_connection:
+            self.assertEqual(
+                database.ensure_reading_placeholders(1 << 100, "chapter", 10),
+                [],
+            )
+            self.assertEqual(
+                database.ensure_reading_placeholders(work_id, "chapter", 10**100),
+                [],
+            )
+            self.assertEqual(
+                database.ensure_reading_placeholders(
+                    work_id, "chapter", 10, offset=10**100
+                ),
+                [],
+            )
+            self.assertEqual(
+                database.get_reading_items(1 << 100, "chapter"),
+                [],
+            )
+            self.assertEqual(
+                database.get_reading_items(work_id, "chapter", offset=10**100),
+                [],
+            )
+            self.assertEqual(database.get_reading_progress(1 << 100, "chapter"), (0, 0))
+            with self.assertRaises(ValueError):
+                database.set_reading_item_read(work_id, "chapter", 10**100, True)
+            get_connection.assert_not_called()
+
+        placeholders = database.ensure_reading_placeholders(
+            work_id, "chapter", total_count=4, offset=0, limit=2
+        )
+        self.assertEqual([row["item_number"] for row in placeholders], [1, 2])
+        self.assertEqual(
+            [row["item_number"] for row in database.get_reading_items(work_id, "chapter")],
+            [1, 2],
+        )
+        read_count, total_count = database.set_reading_item_read(
+            work_id, "chapter", 1, True
+        )
+        self.assertEqual((read_count, total_count), (1, 2))
+
+
     def test_save_anime_rolls_back_and_closes_when_sql_write_fails(self):
         work = self.work(619, "ANIME", "TV")
         connection = Mock()
