@@ -280,6 +280,75 @@ class TmdbImageCacheResourceStressTests(unittest.TestCase):
             self.assertFalse(cached.exists())
 
 
+class DatabaseEpisodeMetadataStressTests(unittest.TestCase):
+    def test_partial_episode_refresh_preserves_metadata_and_skips_invalid_numbers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                database.save_anime({
+                    "id": 79,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "title": {"english": "Episode metadata test", "romaji": "Episode metadata test"},
+                })
+                database.save_episodes(79, [{
+                    "episodeNumber": 1,
+                    "title": "Episode One",
+                    "description": "Previously downloaded description",
+                    "airdate": "2020-01-02",
+                    "thumbnail": "https://images.example.invalid/episode-one.jpg",
+                }])
+
+                # Malformed entries must be ignored; missing detail fields must
+                # not erase values already cached for the same episode.
+                database.save_episodes(79, [
+                    {"episodeNumber": 10**100, "title": "Impossible episode"},
+                    {"episodeNumber": 1.5, "title": "Fractional episode"},
+                    {"episodeNumber": True, "title": "Boolean episode"},
+                    {"episodeNumber": "9" * 5000, "title": "Huge numeric text"},
+                    {
+                        "episodeNumber": 1,
+                        "title": None,
+                        "description": {"unexpected": "object"},
+                        "airdate": None,
+                        "thumbnail": ["malformed"],
+                    },
+                    {
+                        "episodeNumber": 2,
+                        "title": "Episode Two",
+                        "description": None,
+                        "airdate": None,
+                        "thumbnail": None,
+                    },
+                ])
+
+                connection = database.get_connection()
+                try:
+                    rows = connection.execute(
+                        """
+                        SELECT episode_number, title, description, air_date, thumbnail_url
+                        FROM episodes WHERE work_id = ? ORDER BY episode_number
+                        """,
+                        (79,),
+                    ).fetchall()
+                finally:
+                    connection.close()
+
+                self.assertEqual([row["episode_number"] for row in rows], [1, 2])
+                self.assertEqual(rows[0]["title"], "Episode One")
+                self.assertEqual(rows[0]["description"], "Previously downloaded description")
+                self.assertEqual(rows[0]["air_date"], "2020-01-02")
+                self.assertEqual(
+                    rows[0]["thumbnail_url"],
+                    "https://images.example.invalid/episode-one.jpg",
+                )
+                self.assertEqual(rows[1]["title"], "Episode Two")
+            finally:
+                os.chdir(old_cwd)
+
+
 class DatabaseCastPayloadStressTests(unittest.TestCase):
     def test_malformed_character_edges_do_not_crash_or_mark_partial_cast_loaded(self):
         with tempfile.TemporaryDirectory() as directory:
