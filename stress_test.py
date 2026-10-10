@@ -84,6 +84,57 @@ def run_full_regression_suite():
     }
 
 
+def run_iteration_worker(seed):
+    """Run one fuzz iteration in a fresh process and emit a machine-readable result."""
+    os.environ["NEKOTRACK_FUZZ_SEED"] = str(seed)
+    attempted_requests = []
+    output = io.StringIO()
+    payload = {
+        "status": "FAIL", "seed": seed, "tests_run": 0,
+        "failures": 0, "errors": 0, "network_attempts": [], "output": "",
+    }
+
+    def block_network_request(_session, method, url, *args, **kwargs):
+        attempted_requests.append({"method": str(method), "url": str(url)})
+        raise AssertionError(
+            f"Unexpected network request blocked during offline fuzzing: {method} {url}"
+        )
+
+    try:
+        modules = load_adversarial_tests()
+        suite = unittest.TestSuite()
+        for stress_module in modules:
+            suite.addTests(unittest.defaultTestLoader.loadTestsFromModule(stress_module))
+        if suite.countTestCases() == 0:
+            raise RuntimeError("No fuzz tests were loaded for this iteration.")
+
+        with patch("requests.sessions.Session.request", new=block_network_request):
+            result = unittest.TextTestRunner(
+                stream=output, verbosity=0, failfast=False
+            ).run(suite)
+
+        passed = result.wasSuccessful() and not attempted_requests
+        payload.update({
+            "status": "PASS" if passed else "FAIL",
+            "tests_run": result.testsRun,
+            "failures": len(result.failures) + int(bool(attempted_requests)),
+            "errors": len(result.errors),
+            "network_attempts": attempted_requests,
+            "output": output.getvalue()[-8000:],
+        })
+        if attempted_requests:
+            payload["output"] += (
+                "\\nBlocked network requests: "
+                + json.dumps(attempted_requests, ensure_ascii=False)
+            )
+    except BaseException:
+        payload["network_attempts"] = attempted_requests
+        payload["output"] = (output.getvalue() + "\\n" + traceback.format_exc())[-8000:]
+
+    print("NEKOTRACK_ITERATION_RESULT=" + json.dumps(payload, ensure_ascii=False), flush=True)
+    return 0 if payload["status"] == "PASS" else 1
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run the full NekoTrack regression suite, then fuzz adversarial cases."
@@ -96,7 +147,11 @@ def main():
                         help="Starting seed. Each soak iteration gets a different seed.")
     parser.add_argument("--report", default="nekotrack_stress_report.json",
                         help="JSON report path (written under the repository if relative).")
+    parser.add_argument("--iteration-worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    if args.iteration_worker:
+        return run_iteration_worker(args.seed)
 
     try:
         duration = _resolve_duration(args.minutes, args.seconds)
@@ -110,6 +165,8 @@ def main():
         "starting_seed": args.seed,
         "network_requests_enabled": False,
         "network_guard_enabled": True,
+        "worker_process_isolation": True,
+        "worker_processes": 0,
         "blocked_network_attempts": 0,
         "real_application_database_touched": False,
         "fuzz_modules": [path.relative_to(ROOT).as_posix() for path in TEST_FILES],
@@ -128,6 +185,7 @@ def main():
     print(f"Requested soak: {duration:g} seconds ({duration / 60:g} minutes)")
     print("Fuzz suites: " + ", ".join(path.name for path in TEST_FILES))
     print("Live-network guard: enabled; any unmocked request fails the iteration")
+    print("Iteration isolation: fresh Python process per fuzz round")
     print(f"Starting seed: {args.seed}")
     print("Live API access: disabled")
     print("Application database: never accessed")
@@ -147,114 +205,116 @@ def main():
         report["results"].append({"name": "Full regression suite", **baseline})
         print(baseline["output"])
 
-    try:
-        modules = load_adversarial_tests()
-    except Exception:
-        report["results"].append({
-            "name": "Load adversarial tests",
-            "status": "FAIL",
-            "output": traceback.format_exc(),
-        })
-        modules = None
-
-    original_seed = os.environ.get("NEKOTRACK_FUZZ_SEED")
     rng = random.Random(args.seed)
     started = time.monotonic()
     deadline = started + duration
     next_progress = started + 10
     iteration = 0
     try:
-        if modules:
-            while time.monotonic() < deadline:
-                seed = rng.randrange(1, 2**31 - 1)
-                os.environ["NEKOTRACK_FUZZ_SEED"] = str(seed)
-                output = io.StringIO()
-                iteration_started = time.monotonic()
-                network_attempts = []
+        while time.monotonic() < deadline:
+            seed = rng.randrange(1, 2**31 - 1)
+            iteration_started = time.monotonic()
+            worker_env = os.environ.copy()
+            worker_env["NEKOTRACK_FUZZ_SEED"] = str(seed)
+            try:
+                completed = subprocess.run(
+                    [
+                        sys.executable, str(Path(__file__).resolve()),
+                        "--iteration-worker", "--seed", str(seed),
+                    ],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    timeout=180,
+                    env=worker_env,
+                )
+                combined_output = (completed.stdout or "") + "\\n" + (completed.stderr or "")
+                marker = "NEKOTRACK_ITERATION_RESULT="
+                payload = None
+                for line in reversed(combined_output.splitlines()):
+                    if marker not in line:
+                        continue
+                    try:
+                        payload = json.loads(line.split(marker, 1)[1])
+                    except json.JSONDecodeError:
+                        payload = None
+                    break
 
-                def block_network_request(_session, method, url, *args, **kwargs):
-                    network_attempts.append({"method": str(method), "url": str(url)})
-                    raise AssertionError(
-                        f"Unexpected network request blocked during offline fuzzing: "
-                        f"{method} {url}"
-                    )
-
-                try:
-                    suite = unittest.TestSuite()
-                    for stress_module in modules:
-                        suite.addTests(
-                            unittest.defaultTestLoader.loadTestsFromModule(stress_module)
-                        )
-                    with patch(
-                        "requests.sessions.Session.request",
-                        new=block_network_request,
-                    ):
-                        result = unittest.TextTestRunner(
-                            stream=output, verbosity=0, failfast=False
-                        ).run(suite)
-                    if result.testsRun == 0:
-                        raise RuntimeError("No fuzz tests were loaded for this iteration.")
-
-                    iteration += 1
-                    report["stress_iterations"] = iteration
-                    report["stress_tests_run"] += result.testsRun
+                iteration += 1
+                report["stress_iterations"] = iteration
+                report["worker_processes"] += 1
+                iteration_elapsed = round(time.monotonic() - iteration_started, 3)
+                if payload is not None:
+                    tests_run = int(payload.get("tests_run") or 0)
+                    report["stress_tests_run"] += tests_run
+                    network_attempts = payload.get("network_attempts") or []
                     report["blocked_network_attempts"] += len(network_attempts)
-                    iteration_elapsed = round(time.monotonic() - iteration_started, 3)
-                    detail = output.getvalue()
-                    passed = result.wasSuccessful() and not network_attempts
+                    passed = completed.returncode == 0 and payload.get("status") == "PASS"
                     if passed:
                         report["stress_passes"] += 1
                     else:
                         report["stress_failures"] += 1
-                        if network_attempts:
-                            detail += (
-                                "\\nBlocked network requests detected: "
-                                + json.dumps(network_attempts, ensure_ascii=False)
-                            )
-                        sample = {
-                            "iteration": iteration,
-                            "seed": seed,
-                            "tests_run": result.testsRun,
-                            "elapsed_seconds": iteration_elapsed,
-                            "failures": len(result.failures) + bool(network_attempts),
-                            "errors": len(result.errors),
-                            "network_attempts": network_attempts,
-                            "output": detail[-8000:],
-                        }
                         if len(report["failure_samples"]) < 40:
-                            report["failure_samples"].append(sample)
-                except Exception:
-                    iteration += 1
-                    report["stress_iterations"] = iteration
+                            report["failure_samples"].append({
+                                "iteration": iteration,
+                                "seed": seed,
+                                "tests_run": tests_run,
+                                "elapsed_seconds": iteration_elapsed,
+                                "return_code": completed.returncode,
+                                "failures": payload.get("failures", 0),
+                                "errors": payload.get("errors", 0),
+                                "network_attempts": network_attempts,
+                                "output": (
+                                    str(payload.get("output") or "")
+                                    + "\\nWorker stdout/stderr:\\n"
+                                    + combined_output[-6000:]
+                                )[-8000:],
+                            })
+                else:
                     report["stress_failures"] += 1
                     if len(report["failure_samples"]) < 40:
                         report["failure_samples"].append({
                             "iteration": iteration,
                             "seed": seed,
-                            "elapsed_seconds": round(time.monotonic() - iteration_started, 3),
+                            "elapsed_seconds": iteration_elapsed,
+                            "return_code": completed.returncode,
                             "failures": 0,
                             "errors": 1,
-                            "output": traceback.format_exc()[-8000:],
+                            "output": ("Worker produced no valid result marker.\\n" + combined_output)[-8000:],
                         })
+            except subprocess.TimeoutExpired as error:
+                iteration += 1
+                report["stress_iterations"] = iteration
+                report["worker_processes"] += 1
+                report["stress_failures"] += 1
+                if len(report["failure_samples"]) < 40:
+                    stdout = error.stdout or ""
+                    stderr = error.stderr or ""
+                    if isinstance(stdout, bytes):
+                        stdout = stdout.decode("utf-8", errors="replace")
+                    if isinstance(stderr, bytes):
+                        stderr = stderr.decode("utf-8", errors="replace")
+                    report["failure_samples"].append({
+                        "iteration": iteration,
+                        "seed": seed,
+                        "elapsed_seconds": round(time.monotonic() - iteration_started, 3),
+                        "failures": 0,
+                        "errors": 1,
+                        "output": ("Fuzz worker exceeded 180 seconds.\\n" + stdout + "\\n" + stderr)[-8000:],
+                    })
 
-                now = time.monotonic()
-                if now >= next_progress:
-                    elapsed = now - started
-                    print(
-                        f"[{elapsed:,.0f}s] iterations={report['stress_iterations']:,}, "
-                        f"passed={report['stress_passes']:,}, "
-                        f"failed={report['stress_failures']:,}, seed={seed}"
-                    )
-                    next_progress = now + 10
+            now = time.monotonic()
+            if now >= next_progress:
+                elapsed = now - started
+                print(
+                    f"[{elapsed:,.0f}s] iterations={report['stress_iterations']:,}, "
+                    f"passed={report['stress_passes']:,}, "
+                    f"failed={report['stress_failures']:,}, seed={seed}"
+                )
+                next_progress = now + 10
     except KeyboardInterrupt:
         report["interrupted"] = True
-        print("\nInterrupted by user; writing the partial report.")
-    finally:
-        if original_seed is None:
-            os.environ.pop("NEKOTRACK_FUZZ_SEED", None)
-        else:
-            os.environ["NEKOTRACK_FUZZ_SEED"] = original_seed
-
+        print("\\nInterrupted by user; writing the partial report.")
     report["duration_actual_seconds"] = round(time.monotonic() - started, 2)
     report["finished_at"] = datetime.now(timezone.utc).isoformat()
     report["summary"] = {
@@ -264,6 +324,7 @@ def main():
         "stress_failures": report["stress_failures"],
         "stress_tests_run": report["stress_tests_run"],
         "blocked_network_attempts": report["blocked_network_attempts"],
+        "worker_processes": report["worker_processes"],
         "interrupted": report["interrupted"],
     }
 
