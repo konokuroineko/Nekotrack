@@ -446,6 +446,107 @@ class DatabaseCastPayloadStressTests(unittest.TestCase):
                 os.chdir(old_cwd)
 
 
+class DatabaseCastReconciliationStressTests(unittest.TestCase):
+    def test_complete_cast_refresh_removes_stale_characters_and_voice_actors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                work_id = 81
+                database.save_anime({
+                    "id": work_id,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "title": {"english": "Cast reconciliation", "romaji": "Cast reconciliation"},
+                })
+
+                def character(character_id, name, actors):
+                    return {
+                        "node": {
+                            "id": character_id,
+                            "name": {"full": name},
+                            "image": {"large": None},
+                        },
+                        "role": "MAIN",
+                        "voiceActors": actors,
+                    }
+
+                def actor(person_id, name):
+                    return {
+                        "id": person_id,
+                        "name": {"full": name},
+                        "image": {"large": None},
+                        "language": "Japanese",
+                    }
+
+                first_snapshot = [
+                    character(1, "Character One", [actor(100, "Old Actor")]),
+                    character(2, "Character Two", []),
+                ]
+                database.save_characters(work_id, first_snapshot)
+                self.assertTrue(database.characters_are_loaded(work_id))
+
+                # A malformed snapshot must not remove any existing cast links.
+                partial_snapshot = [
+                    character(1, "Character One", [actor(101, "New Actor")]),
+                    None,
+                ]
+                database.save_characters(work_id, partial_snapshot)
+                self.assertFalse(database.characters_are_loaded(work_id))
+
+                connection = database.get_connection()
+                try:
+                    after_partial_characters = [
+                        row["character_id"]
+                        for row in connection.execute(
+                            "SELECT character_id FROM work_characters WHERE work_id = ? ORDER BY character_id",
+                            (work_id,),
+                        ).fetchall()
+                    ]
+                    after_partial_actors = [
+                        row["person_id"]
+                        for row in connection.execute(
+                            "SELECT person_id FROM character_voice_actors WHERE character_id = ? ORDER BY person_id",
+                            (1,),
+                        ).fetchall()
+                    ]
+                finally:
+                    connection.close()
+                self.assertEqual(after_partial_characters, [1, 2])
+                self.assertEqual(after_partial_actors, [100, 101])
+
+                # A complete snapshot is authoritative: Character Two and the
+                # voice actor no longer reported for Character One are removed.
+                database.save_characters(
+                    work_id,
+                    [character(1, "Character One", [actor(101, "New Actor")])],
+                )
+                self.assertTrue(database.characters_are_loaded(work_id))
+                connection = database.get_connection()
+                try:
+                    final_characters = [
+                        row["character_id"]
+                        for row in connection.execute(
+                            "SELECT character_id FROM work_characters WHERE work_id = ? ORDER BY character_id",
+                            (work_id,),
+                        ).fetchall()
+                    ]
+                    final_actors = [
+                        row["person_id"]
+                        for row in connection.execute(
+                            "SELECT person_id FROM character_voice_actors WHERE character_id = ? ORDER BY person_id",
+                            (1,),
+                        ).fetchall()
+                    ]
+                finally:
+                    connection.close()
+                self.assertEqual(final_characters, [1])
+                self.assertEqual(final_actors, [101])
+            finally:
+                os.chdir(old_cwd)
+
+
 class DatabaseDeletionSafetyStressTests(unittest.TestCase):
     def test_deleting_work_keeps_external_custom_cover_and_removes_owned_cache(self):
         with tempfile.TemporaryDirectory() as directory:
