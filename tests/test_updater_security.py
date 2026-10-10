@@ -6,7 +6,7 @@ download or execute a real installer.
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import updater
 
@@ -121,7 +121,7 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
 
     def test_rejects_a_redirect_to_an_untrusted_host_before_reading_body(self):
         with tempfile.TemporaryDirectory() as directory:
-            response = Mock()
+            response = MagicMock()
             response.__enter__.return_value = response
             response.__exit__.return_value = False
             response.url = "https://attacker.invalid/payload.exe"
@@ -177,7 +177,7 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
             redirect.headers = {"Location": VALID_CDN_URL}
             redirect.close.return_value = None
 
-            response = Mock()
+            response = MagicMock()
             response.status_code = 200
             response.__enter__.return_value = response
             response.__exit__.return_value = False
@@ -208,7 +208,7 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
 
     def test_valid_download_is_bounded_written_to_a_unique_exe_and_launched(self):
         with tempfile.TemporaryDirectory() as directory:
-            response = Mock()
+            response = MagicMock()
             response.__enter__.return_value = response
             response.__exit__.return_value = False
             response.url = VALID_CDN_URL
@@ -242,7 +242,7 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
 
     def test_declared_oversize_installer_is_rejected_before_creating_file(self):
         with tempfile.TemporaryDirectory() as directory:
-            response = Mock()
+            response = MagicMock()
             response.__enter__.return_value = response
             response.__exit__.return_value = False
             response.url = VALID_CDN_URL
@@ -267,7 +267,7 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
 
     def test_streamed_oversize_download_is_removed_and_never_executed(self):
         with tempfile.TemporaryDirectory() as directory:
-            response = Mock()
+            response = MagicMock()
             response.__enter__.return_value = response
             response.__exit__.return_value = False
             response.url = VALID_CDN_URL
@@ -291,7 +291,7 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
 
     def test_empty_installer_is_removed_and_never_executed(self):
         with tempfile.TemporaryDirectory() as directory:
-            response = Mock()
+            response = MagicMock()
             response.__enter__.return_value = response
             response.__exit__.return_value = False
             response.url = VALID_CDN_URL
