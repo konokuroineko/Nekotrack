@@ -1704,6 +1704,10 @@ def save_anime(anime):
                 ),
                 None,
             )
+            if not target_title:
+                # Do not cache dangling graph edges when the provider omitted
+                # the referenced work's identifying title fields.
+                continue
             if target_title:
                 target_start_date = node.get("startDate")
                 if not isinstance(target_start_date, dict):
