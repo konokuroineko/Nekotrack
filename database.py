@@ -1091,74 +1091,87 @@ def save_provider_metadata(work_id, provider, payload, provider_id=None):
 
 
 def save_reading_item_metadata(work_id, item_type, items):
-    """Merge real provider volume/chapter titles into local reading progress rows."""
-    kind = str(item_type or "").lower()
+    """Merge bounded provider reading-item metadata without disturbing progress."""
+    safe_work_id = _validated_work_id(work_id)
+    kind = str(item_type or "").strip().lower()
     if kind not in {"chapter", "volume"}:
         raise ValueError("item_type must be chapter or volume")
-    connection = get_connection()
-    saved = 0
-    for index, item in enumerate(items or [], start=1):
-        if not isinstance(item, dict):
-            continue
-        raw_number = None
-        has_explicit_number = False
-        for key in ("number", "item_number", "volume_number", "chapter_number"):
-            candidate = item.get(key)
-            if candidate not in (None, ""):
-                raw_number = candidate
-                has_explicit_number = True
-                break
+    if not isinstance(items, (list, tuple)):
+        return 0
 
-        if not has_explicit_number:
-            number = index
+    def parse_item_number(raw_number):
+        if isinstance(raw_number, bool):
+            return None
+        if isinstance(raw_number, (int, float)):
+            try:
+                numeric = float(raw_number)
+                if not math.isfinite(numeric) or not numeric.is_integer() or numeric < 1:
+                    return None
+                number = int(numeric)
+            except (TypeError, ValueError, OverflowError):
+                return None
         else:
-            if isinstance(raw_number, bool):
-                continue
-            if isinstance(raw_number, (int, float)):
+            if not isinstance(raw_number, str):
+                return None
+            raw_text = raw_number.strip()
+            if re.fullmatch(r"[0-9]+(?:\\.[0-9]+)?", raw_text):
                 try:
-                    numeric = float(raw_number)
-                    if not numeric.is_integer() or numeric < 1:
-                        continue
+                    numeric = float(raw_text)
+                    if not math.isfinite(numeric) or not numeric.is_integer() or numeric < 1:
+                        return None
                     number = int(numeric)
                 except (TypeError, ValueError, OverflowError):
-                    continue
+                    return None
             else:
-                raw_text = str(raw_number).strip()
-                # Strict numeric strings must be positive integers; descriptive
-                # strings such as "Volume 3" can still be normalized safely.
-                if re.fullmatch(r"-?\d+(?:\.\d+)?", raw_text):
-                    try:
-                        numeric = float(raw_text)
-                        if not numeric.is_integer() or numeric < 1:
-                            continue
-                        number = int(numeric)
-                    except (TypeError, ValueError, OverflowError):
-                        continue
-                else:
-                    match = re.search(r"(?<![-0-9])\d+", raw_text)
-                    if not match:
-                        continue
-                    try:
-                        number = int(match.group(0))
-                    except (TypeError, ValueError, OverflowError):
-                        continue
+                match = re.search(r"(?<![-0-9])\\d+", raw_text)
+                if not match:
+                    return None
+                try:
+                    number = int(match.group(0))
+                except (TypeError, ValueError, OverflowError):
+                    return None
+        return number if 1 <= number <= _MAX_TRACKED_EPISODE_NUMBER else None
 
-        if number < 1:
-            continue
-        title_value = item.get("title") or item.get("name")
-        title_value = str(title_value).strip() if title_value is not None else ""
-        connection.execute("""
-            INSERT INTO reading_items (work_id, item_type, item_number, title, is_read)
-            VALUES (?, ?, ?, ?, 0)
-            ON CONFLICT(work_id, item_type, item_number) DO UPDATE SET
-                title = CASE
-                    WHEN excluded.title IS NOT NULL AND TRIM(excluded.title) != ''
-                    THEN excluded.title ELSE reading_items.title END
-        """, (int(work_id), kind, number, title_value or None))
-        saved += 1
-    connection.commit()
-    connection.close()
+    connection = get_connection()
+    saved = 0
+    try:
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+            raw_number = None
+            has_explicit_number = False
+            for key in ("number", "item_number", "volume_number", "chapter_number"):
+                candidate = item.get(key)
+                if candidate not in (None, ""):
+                    raw_number = candidate
+                    has_explicit_number = True
+                    break
+
+            number = index if not has_explicit_number else parse_item_number(raw_number)
+            if number is None or not 1 <= number <= _MAX_TRACKED_EPISODE_NUMBER:
+                continue
+
+            title_value = item.get("title")
+            if not isinstance(title_value, str) or not title_value.strip():
+                title_value = item.get("name")
+            title = title_value.strip() if isinstance(title_value, str) else None
+            connection.execute("""
+                INSERT INTO reading_items (work_id, item_type, item_number, title, is_read)
+                VALUES (?, ?, ?, ?, 0)
+                ON CONFLICT(work_id, item_type, item_number) DO UPDATE SET
+                    title = CASE
+                        WHEN excluded.title IS NOT NULL AND TRIM(excluded.title) != ''
+                        THEN excluded.title ELSE reading_items.title END
+            """, (safe_work_id, kind, number, title or None))
+            saved += 1
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
     return saved
+
 
 
 def save_anime(anime):
