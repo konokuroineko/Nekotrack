@@ -5,6 +5,37 @@ from pathlib import Path
 
 DATABASE_NAME = "anime_tracker.db"
 _MAX_SQLITE_INTEGER = (1 << 63) - 1
+_MIN_SQLITE_INTEGER = -(1 << 63)
+
+
+def _validated_work_id(value):
+    """Normalize a provider media ID into SQLite's signed 64-bit integer range."""
+    if isinstance(value, bool):
+        raise ValueError("A work ID must be a non-zero integer.")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise ValueError("A work ID must be a non-zero integer.")
+        parsed = int(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text or len(text) > 20 or not re.fullmatch(r"[+-]?[0-9]+", text):
+            raise ValueError("A work ID must be a non-zero integer.")
+        try:
+            parsed = int(text)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("A work ID must be a non-zero integer.") from error
+    else:
+        raise ValueError("A work ID must be a non-zero integer.")
+
+    if (
+        parsed == 0
+        or parsed < _MIN_SQLITE_INTEGER
+        or parsed > _MAX_SQLITE_INTEGER
+    ):
+        raise ValueError("A work ID is outside SQLite's supported integer range.")
+    return parsed
 
 
 def get_connection():
@@ -831,6 +862,7 @@ def save_reading_item_metadata(work_id, item_type, items):
 
 
 def save_anime(anime):
+    work_id = _validated_work_id(anime.get("id") if isinstance(anime, dict) else None)
     # Reconcile outgoing relations only when a complete, well-formed edge list
     # is present. Search/partial records may omit relations entirely, and a
     # malformed response must not erase previously cached relationships.
@@ -947,7 +979,7 @@ def save_anime(anime):
             duration=COALESCE(excluded.duration, works.duration),
             mal_id=COALESCE(excluded.mal_id, works.mal_id)
     """, (
-        anime["id"], title, anime.get("type") or "ANIME", anime.get("description"),
+        work_id, title, anime.get("type") or "ANIME", anime.get("description"),
         anime.get("episodes"), anime.get("averageScore"),
         start_year, start_month, start_day, cover_image.get("large"),
         anime.get("format"), anime.get("chapters"), anime.get("volumes"),
@@ -956,7 +988,7 @@ def save_anime(anime):
     ))
     for synonym in anime.get("synonyms") or []:
         connection.execute("INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
-                           (anime["id"], synonym, None))
+                           (work_id, synonym, None))
 
     # Preserve provider-native metadata instead of flattening it into AniList fields.
     mangabaka_data = anime.get("_mangabaka")
@@ -971,7 +1003,7 @@ def save_anime(anime):
                 payload_json = excluded.payload_json,
                 updated_at = CURRENT_TIMESTAMP
         """, (
-            anime["id"],
+            work_id,
             str(mangabaka_id) if mangabaka_id is not None else None,
             json.dumps(mangabaka_data, ensure_ascii=False),
         ))
@@ -984,12 +1016,12 @@ def save_anime(anime):
                 continue
             connection.execute(
                 "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
-                (anime["id"], alt_title, title_record.get("language")),
+                (work_id, alt_title, title_record.get("language")),
             )
     if studio_snapshot_valid is True:
         connection.execute(
             "DELETE FROM work_studios WHERE work_id = ?",
-            (anime["id"],),
+            (work_id,),
         )
 
     for edge in studio_edges if isinstance(studio_edges, list) else []:
@@ -1020,7 +1052,7 @@ def save_anime(anime):
         )
         connection.execute(
             "INSERT OR IGNORE INTO work_studios (work_id, studio_id) VALUES (?, ?)",
-            (anime["id"], studio_id),
+            (work_id, studio_id),
         )
     if relation_snapshot is not None:
         # Relation details are a cached snapshot, not an append-only history.
@@ -1028,7 +1060,7 @@ def save_anime(anime):
         # the current list. A valid empty list intentionally clears all edges.
         connection.execute(
             "DELETE FROM work_relations WHERE source_id = ?",
-            (anime["id"],),
+            (work_id,),
         )
 
     for edge in relation_edges if isinstance(relation_edges, list) else []:
@@ -1104,7 +1136,7 @@ def save_anime(anime):
             ))
         connection.execute(
             "INSERT OR REPLACE INTO work_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)",
-            (anime["id"], target_id, relation_type),
+            (work_id, target_id, relation_type),
         )
     connection.commit()
     connection.close()
