@@ -553,10 +553,25 @@ class DatabaseCastReconciliationStressTests(unittest.TestCase):
                         "SELECT COUNT(*) FROM character_voice_actors WHERE character_id = ?",
                         (2,),
                     ).fetchone()[0]
+                    orphan_old_actor = connection.execute(
+                        "SELECT 1 FROM people WHERE id = ?",
+                        (100,),
+                    ).fetchone()
+                    orphan_second_actor = connection.execute(
+                        "SELECT 1 FROM people WHERE id = ?",
+                        (200,),
+                    ).fetchone()
+                    current_actor = connection.execute(
+                        "SELECT 1 FROM people WHERE id = ?",
+                        (101,),
+                    ).fetchone()
                 finally:
                     connection.close()
                 self.assertIsNone(orphan_character)
                 self.assertEqual(orphan_voice_actors, 0)
+                self.assertIsNone(orphan_old_actor)
+                self.assertIsNone(orphan_second_actor)
+                self.assertIsNotNone(current_actor)
             finally:
                 os.chdir(old_cwd)
 
