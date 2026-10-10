@@ -3,9 +3,10 @@ import hashlib
 import math
 import re
 import requests
+import tempfile
 import time
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from ui.preferences import get
 from mangabaka_api import (
     enrich_anilist_media,
@@ -934,6 +935,11 @@ def get_media_details(media_id):
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w780"
 TMDB_EPISODE_CACHE_DIRECTORY = Path("data") / "images" / "episodes"
+MAX_TMDB_EPISODE_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_TMDB_EPISODE_IMAGE_WIDTH = 8192
+MAX_TMDB_EPISODE_IMAGE_HEIGHT = 8192
+MAX_TMDB_EPISODE_IMAGE_PIXELS = 32_000_000
+MAX_TMDB_IMAGE_REDIRECTS = 5
 
 
 def _tmdb_token():
@@ -1377,34 +1383,167 @@ def _tmdb_search_movies(query, target_date):
     return candidates
 
 def _valid_image_data(data):
-    """Validate downloaded/cache bytes before retaining them as artwork."""
+    """Decode bounded image bytes, rejecting pathological dimensions before full decode."""
     if not isinstance(data, (bytes, bytearray, memoryview)) or not data:
         return False
+    if len(data) > MAX_TMDB_EPISODE_IMAGE_BYTES:
+        return False
+
     raw = bytes(data)
     try:
-        from PySide6.QtGui import QImage
-        return not QImage.fromData(raw).isNull()
+        from PySide6.QtCore import QByteArray, QBuffer, QIODevice
+        from PySide6.QtGui import QImageReader
     except Exception:
-        # If Qt's image reader is unavailable, accept only recognizable file
-        # signatures rather than caching an HTML/error response as a picture.
+        # The application normally has Qt available. Keep a conservative
+        # signature-only fallback for test/tooling environments without Qt.
         return (
-            raw.startswith(b"\xFF\xD8\xFF")
-            or raw.startswith(b"\x89PNG\r\n\x1a\n")
+            raw.startswith(b"\\xFF\\xD8\\xFF")
+            or raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n")
             or (len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP")
         )
 
+    buffer = QBuffer()
+    try:
+        buffer.setData(QByteArray(raw))
+        if not buffer.open(QIODevice.ReadOnly):
+            return False
+        reader = QImageReader(buffer)
+        reader.setDecideFormatFromContent(True)
+        dimensions = reader.size()
+        if not dimensions.isValid():
+            return False
+
+        width = dimensions.width()
+        height = dimensions.height()
+        if (
+            width < 1
+            or height < 1
+            or width > MAX_TMDB_EPISODE_IMAGE_WIDTH
+            or height > MAX_TMDB_EPISODE_IMAGE_HEIGHT
+            or width * height > MAX_TMDB_EPISODE_IMAGE_PIXELS
+        ):
+            return False
+
+        image = reader.read()
+        return not image.isNull()
+    except Exception:
+        return False
+    finally:
+        buffer.close()
+
+
+def _is_safe_tmdb_episode_image_url(value):
+    """Only allow HTTPS artwork URLs served by TMDB's dedicated image host."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        parsed = urlparse(value.strip())
+        hostname = (parsed.hostname or "").lower()
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.lower() == "https"
+        and hostname == "image.tmdb.org"
+        and port in (None, 443)
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path.startswith("/t/p/")
+        and not parsed.fragment
+    )
+
+
+def _get_tmdb_episode_image_response(url):
+    """Follow a small number of redirects, revalidating every destination."""
+    current_url = url
+    for redirect_count in range(MAX_TMDB_IMAGE_REDIRECTS + 1):
+        if not _is_safe_tmdb_episode_image_url(current_url):
+            raise ValueError("Only HTTPS TMDB image URLs are allowed.")
+
+        response = requests.get(
+            current_url,
+            timeout=20,
+            stream=True,
+            allow_redirects=False,
+        )
+        status_code = getattr(response, "status_code", 200)
+        if status_code in {301, 302, 303, 307, 308}:
+            headers = getattr(response, "headers", {}) or {}
+            location = headers.get("Location") or headers.get("location")
+            response.close()
+            if not isinstance(location, str) or not location.strip():
+                raise ValueError("TMDB image redirect did not include a destination.")
+            destination = urljoin(current_url, location.strip())
+            if not _is_safe_tmdb_episode_image_url(destination):
+                raise ValueError("TMDB image redirect destination is not trusted.")
+            if redirect_count >= MAX_TMDB_IMAGE_REDIRECTS:
+                raise ValueError("TMDB image exceeded the redirect limit.")
+            current_url = destination
+            continue
+
+        final_url = getattr(response, "url", None)
+        if isinstance(final_url, str) and final_url.strip():
+            if not _is_safe_tmdb_episode_image_url(final_url):
+                response.close()
+                raise ValueError("TMDB image response ended at an untrusted URL.")
+        try:
+            response.raise_for_status()
+        except Exception:
+            response.close()
+            raise
+        return response
+
+    raise ValueError("TMDB image exceeded the redirect limit.")
+
+
+def _read_bounded_tmdb_image_response(response):
+    headers = getattr(response, "headers", {}) or {}
+    declared_length = headers.get("Content-Length") or headers.get("content-length")
+    if declared_length not in (None, ""):
+        try:
+            parsed_length = int(declared_length)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("TMDB image has an invalid Content-Length header.") from error
+        if parsed_length < 0:
+            raise ValueError("TMDB image has an invalid Content-Length header.")
+        if parsed_length > MAX_TMDB_EPISODE_IMAGE_BYTES:
+            raise ValueError("TMDB episode image exceeds the download size limit.")
+
+    chunks = []
+    total_bytes = 0
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        total_bytes += len(chunk)
+        if total_bytes > MAX_TMDB_EPISODE_IMAGE_BYTES:
+            raise ValueError("TMDB episode image exceeds the download size limit.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 def cache_tmdb_episode_image(url, work_id, episode_number):
-    """Download one TMDB episode image into NekoTrack's persistent cache."""
+    """Download one bounded, validated TMDB episode image into the persistent cache."""
     if not url:
         return None
 
     url = str(url).strip()
     if not url:
         return None
+    if not _is_safe_tmdb_episode_image_url(url):
+        raise ValueError("Only HTTPS TMDB image URLs are allowed.")
+
+    if isinstance(work_id, bool) or isinstance(episode_number, bool):
+        raise ValueError("Work and episode IDs must be integers.")
+    try:
+        work_number = int(work_id)
+        episode_number = int(episode_number)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Work and episode IDs must be integers.") from error
+    if work_number <= 0 or episode_number <= 0:
+        raise ValueError("Work and episode IDs must be positive.")
 
     digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
-    directory = TMDB_EPISODE_CACHE_DIRECTORY / str(int(work_id))
+    directory = TMDB_EPISODE_CACHE_DIRECTORY / str(work_number)
     directory.mkdir(parents=True, exist_ok=True)
 
     parsed_path = Path(urlparse(url).path)
@@ -1412,7 +1551,7 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
     if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
         suffix = ".jpg"
 
-    path = directory / f"{int(episode_number)}_{digest}{suffix}"
+    path = directory / f"{episode_number}_{digest}{suffix}"
     if path.is_file() and path.stat().st_size > 0:
         try:
             cached_data = path.read_bytes()
@@ -1425,16 +1564,37 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
         except OSError:
             pass
 
-    response = requests.get(url, timeout=20)
-    response.raise_for_status()
-    data = response.content
+    response = _get_tmdb_episode_image_response(url)
+    try:
+        data = _read_bounded_tmdb_image_response(response)
+    finally:
+        response.close()
+
     if not _valid_image_data(data):
         return None
 
-    path.write_bytes(data)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{path.stem}.",
+            suffix=".tmp",
+            dir=str(directory),
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(data)
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     if not path.is_file() or path.stat().st_size == 0:
         return None
     return str(path)
+
 
 def _pick_best_movie_image(movie_id, movie):
     if not isinstance(movie, dict):
