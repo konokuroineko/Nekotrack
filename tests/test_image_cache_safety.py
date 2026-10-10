@@ -190,6 +190,32 @@ class CoverCacheInputSafetyTests(unittest.TestCase):
 
         self.assertEqual(list(Path(directory).rglob("*")), [])
 
+    def test_failed_atomic_save_preserves_existing_cover_and_cleans_temporary_file(self):
+        class FailingImage:
+            def scaled(self, *args, **kwargs):
+                return self
+
+            def save(self, *args, **kwargs):
+                return False
+
+        payload = png_bytes(16, 24)
+        response = response_for(payload, len(payload))
+        with tempfile.TemporaryDirectory() as directory:
+            image_directory = Path(directory) / "works"
+            image_directory.mkdir()
+            existing = image_directory / "12.jpg"
+            original_bytes = b"previous valid cover"
+            existing.write_bytes(original_bytes)
+
+            with patch.object(image_cache, "IMAGE_DIRECTORY", image_directory), patch.object(
+                image_cache, "_decode_cover", return_value=FailingImage()
+            ), patch.object(image_cache.requests, "get", return_value=response):
+                with self.assertRaisesRegex(OSError, "Could not save cover image"):
+                    image_cache.download_cover(12, VALID_URL)
+
+            self.assertEqual(existing.read_bytes(), original_bytes)
+            self.assertEqual(list(image_directory.iterdir()), [existing])
+
     def test_corrupt_image_is_not_saved(self):
         response = response_for(b"not an image")
         with tempfile.TemporaryDirectory() as directory, patch.object(
