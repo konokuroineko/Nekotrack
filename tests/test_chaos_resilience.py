@@ -307,6 +307,33 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         connection.rollback.assert_called_once()
         connection.close.assert_called_once()
 
+    def test_non_list_character_payload_marks_cache_retryable_without_deleting_rows(self):
+        work_id = 617
+        database.save_anime(self.work(work_id, "ANIME", "TV"))
+        complete_edge = {
+            "node": {
+                "id": 620,
+                "name": {"full": "Cached Character"},
+                "image": {"large": None},
+            },
+            "role": "MAIN",
+            "voiceActors": [],
+        }
+        database.save_characters(work_id, [complete_edge])
+        self.assertTrue(database.characters_are_loaded(work_id))
+
+        database.save_characters(work_id, None)
+        self.assertFalse(database.characters_are_loaded(work_id))
+        connection = database.get_connection()
+        try:
+            rows = connection.execute(
+                "SELECT character_id FROM work_characters WHERE work_id = ?",
+                (work_id,),
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertEqual([row["character_id"] for row in rows], [620])
+
     def assert_database_invariants(self):
         connection = database.get_connection()
         self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
