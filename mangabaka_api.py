@@ -15,6 +15,8 @@ import requests
 MANGABAKA_BASE_URL = "https://api.mangabaka.org/v2/"
 REQUEST_TIMEOUT = 18
 MAX_RETRIES = 3
+MAX_PROVIDER_PAGES = 10000
+_MAX_ANILIST_MEDIA_ID = (1 << 31) - 1
 _CACHE_TTL = 300
 _CACHE_LIMIT = 160
 _cache = {}
@@ -166,6 +168,50 @@ def _safe_int(value, default=0):
         return int(value)
     except (TypeError, ValueError, OverflowError):
         return default
+
+
+_MAX_PROVIDER_FILTER_ID = (1 << 63) - 1
+
+
+def _bounded_positive_filter_int(value, maximum=_MAX_PROVIDER_FILTER_ID):
+    """Parse a bounded user/provider filter integer without unbounded digit conversion."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text or len(text) > 19 or not text.isascii() or not text.isdigit():
+            return None
+        try:
+            number = int(text)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    else:
+        return None
+    return number if 1 <= number <= maximum else None
+
+
+def _safe_page_parameter(value, default=1, maximum=MAX_PROVIDER_PAGES):
+    """Clamp page/limit inputs before any provider request is built."""
+    if isinstance(value, bool):
+        number = default
+    elif isinstance(value, int):
+        number = value
+    elif isinstance(value, float):
+        number = int(value) if math.isfinite(value) and value.is_integer() else default
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text or len(text) > 20 or not text.isascii() or not text.isdigit():
+            number = default
+        else:
+            try:
+                number = int(text)
+            except (TypeError, ValueError, OverflowError):
+                number = default
+    else:
+        number = default
+    return min(maximum, max(1, number))
 
 
 def _filter_values(values):
@@ -356,8 +402,8 @@ def search_series(query="", page=1, limit=20, **filters):
     """Search series with filters. Basic title search survives filter-schema changes."""
     params = {
         "q": (query or "").strip(),
-        "page": max(1, int(page)),
-        "limit": min(50, max(1, int(limit))),
+        "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+        "limit": _safe_page_parameter(limit, 20, 50),
         "content_rating": ["safe", "suggestive"],
     }
     valid_filters = {
@@ -379,17 +425,17 @@ def search_series(query="", page=1, limit=20, **filters):
             raise
         basic = {
             "q": (query or "").strip(),
-            "page": max(1, int(page)),
-            "limit": min(50, max(1, int(limit))),
+            "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+            "limit": _safe_page_parameter(limit, 20, 50),
             "content_rating": ["safe", "suggestive"],
         }
         return _request("series/search", params=basic)
 
 
 def get_series(series_id, full=False):
-    series_id = int(series_id)
-    if series_id <= 0:
-        raise ValueError("MangaBaka series IDs must be positive.")
+    series_id = _bounded_positive_filter_int(series_id)
+    if series_id is None:
+        raise ValueError("MangaBaka series IDs must be positive bounded integers.")
     # MangaBaka selects the expanded schema with ?schema=full; /full is not
     # a separate endpoint. The fallback keeps the core record usable if this
     # optional query parameter changes in a future API revision.
@@ -402,65 +448,153 @@ def get_series(series_id, full=False):
 
 
 def get_series_collections(series_id, page=1, limit=50):
-    return _request(f"series/{int(series_id)}/collections",
-                    params={"page": max(1, int(page)), "limit": min(100, max(1, int(limit)))})
+    series_id = _bounded_positive_filter_int(series_id)
+    if series_id is None:
+        raise ValueError("MangaBaka series IDs must be positive bounded integers.")
+    return _request(
+        f"series/{series_id}/collections",
+        params={
+            "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+            "limit": _safe_page_parameter(limit, 50, 100),
+        },
+    )
 
 
 def get_collection_works(collection_id, page=1, limit=50):
-    return _request(f"collections/{int(collection_id)}/works",
-                    params={"page": max(1, int(page)), "limit": min(100, max(1, int(limit)))})
+    collection_id = _bounded_positive_filter_int(collection_id)
+    if collection_id is None:
+        raise ValueError("Collection IDs must be positive bounded integers.")
+    return _request(
+        f"collections/{collection_id}/works",
+        params={
+            "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+            "limit": _safe_page_parameter(limit, 50, 100),
+        },
+    )
 
 
 def get_work(work_id):
-    return _request(f"works/{int(work_id)}")
+    work_id = _bounded_positive_filter_int(work_id)
+    if work_id is None:
+        raise ValueError("MangaBaka work IDs must be positive bounded integers.")
+    return _request(f"works/{work_id}")
 
 
 def get_related_series(series_id):
-    return _request(f"series/{int(series_id)}/related")
+    series_id = _bounded_positive_filter_int(series_id)
+    if series_id is None:
+        raise ValueError("MangaBaka series IDs must be positive bounded integers.")
+    return _request(f"series/{series_id}/related")
 
 
 def get_series_news(series_id, page=1, limit=20):
-    return _request(f"series/{int(series_id)}/news",
-                    params={"page": max(1, int(page)), "limit": min(50, max(1, int(limit)))})
+    series_id = _bounded_positive_filter_int(series_id)
+    if series_id is None:
+        raise ValueError("MangaBaka series IDs must be positive bounded integers.")
+    return _request(
+        f"series/{series_id}/news",
+        params={
+            "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+            "limit": _safe_page_parameter(limit, 20, 50),
+        },
+    )
 
 
 def get_series_mix(page=1, limit=20, **filters):
-    params = {"page": max(1, int(page)), "limit": min(50, max(1, int(limit))),
-              "content_rating": ["safe", "suggestive"]}
+    params = {
+        "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+        "limit": _safe_page_parameter(limit, 20, 50),
+        "content_rating": ["safe", "suggestive"],
+    }
     params.update({key: value for key, value in filters.items() if value not in (None, "")})
     return _request("series/mix", params=params)
 
 
 def get_hidden_gems(page=1, limit=20, **filters):
-    params = {"page": max(1, int(page)), "limit": min(50, max(1, int(limit))),
-              "content_rating": ["safe", "suggestive"]}
+    params = {
+        "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+        "limit": _safe_page_parameter(limit, 20, 50),
+        "content_rating": ["safe", "suggestive"],
+    }
     params.update({key: value for key, value in filters.items() if value not in (None, "")})
     return _request("series/discover/hidden-gems", params=params)
 
 
 def get_publishers(page=1, limit=20, **filters):
-    params = {"page": max(1, int(page)), "limit": min(100, max(1, int(limit)))}
+    params = {
+        "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+        "limit": _safe_page_parameter(limit, 20, 100),
+    }
     params.update({key: value for key, value in filters.items() if value not in (None, "")})
     return _request("publishers", params=params)
 
 
 def get_publisher(publisher_id):
-    return _request(f"publishers/{int(publisher_id)}")
+    publisher_id = _bounded_positive_filter_int(publisher_id)
+    if publisher_id is None:
+        raise ValueError("Publisher IDs must be positive bounded integers.")
+    return _request(f"publishers/{publisher_id}")
 
 
 def get_similar_publishers(publisher_id, page=1, limit=20):
-    return _request(f"publishers/{int(publisher_id)}/similar",
-                    params={"page": max(1, int(page)), "limit": min(50, max(1, int(limit)))})
+    publisher_id = _bounded_positive_filter_int(publisher_id)
+    if publisher_id is None:
+        raise ValueError("Publisher IDs must be positive bounded integers.")
+    return _request(
+        f"publishers/{publisher_id}/similar",
+        params={
+            "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+            "limit": _safe_page_parameter(limit, 20, 50),
+        },
+    )
 
 
 def get_publisher_stats(publisher_id):
-    return _request(f"publishers/{int(publisher_id)}/stats")
+    publisher_id = _bounded_positive_filter_int(publisher_id)
+    if publisher_id is None:
+        raise ValueError("Publisher IDs must be positive bounded integers.")
+    return _request(f"publishers/{publisher_id}/stats")
 
 
 def extract_external_id(series, provider):
-    """Find an upstream provider ID in MangaBaka source/response structures."""
+    """Find a bounded upstream provider ID in MangaBaka source/response structures."""
     provider_key = str(provider or "").lower().replace("-", "").replace("_", "")
+    # AniList IDs become GraphQL Int variables and must fit signed 32-bit.
+    # Other external catalogues can use their own larger numeric namespaces,
+    # but all stored provider IDs still need to fit SQLite's signed integer.
+    max_provider_id = (
+        _MAX_ANILIST_MEDIA_ID
+        if provider_key == "anilist"
+        else _MAX_PROVIDER_FILTER_ID
+    )
     candidates = []
+
+    def parse_candidate(value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            number = value
+        elif isinstance(value, str):
+            text = value.strip()
+            if (
+                not text
+                or len(text) > 10
+                or not text.isascii()
+                or not text.isdigit()
+            ):
+                return None
+            try:
+                number = int(text)
+            except (TypeError, ValueError, OverflowError):
+                return None
+        else:
+            return None
+        return number if 1 <= number <= max_provider_id else None
+
+    def add_candidate(value):
+        candidate = parse_candidate(value)
+        if candidate is not None:
+            candidates.append(candidate)
 
     def walk(value, path=""):
         if isinstance(value, dict):
@@ -469,20 +603,19 @@ def extract_external_id(series, provider):
                 new_path = f"{path}.{key_text}".lower()
                 normalized_path = new_path.replace("-", "").replace("_", "")
                 if provider_key in normalized_path and "id" in key_text.lower():
-                    if isinstance(child, (str, int)) and str(child).isdigit():
-                        candidates.append(int(child))
+                    add_candidate(child)
                 # Upstream source objects often use a plain ID field.
                 if provider_key in normalized_path and key_text.lower() in {
                     "id", "idmal", "media_id", "series_id", "mal_id"
-                } and isinstance(child, (str, int)) and str(child).isdigit():
-                    candidates.append(int(child))
+                }:
+                    add_candidate(child)
                 walk(child, new_path)
         elif isinstance(value, list):
             for item in value:
                 walk(item, path)
 
     walk(series)
-    return next((candidate for candidate in candidates if candidate > 0), None)
+    return candidates[0] if candidates else None
 
 
 def _title_records(series):
@@ -586,17 +719,22 @@ def _date_parts(series):
     return {"year": None, "month": None, "day": None}
 
 def _count_or_none(value):
-    """Normalize positive whole-number chapter/volume counts, rejecting negatives."""
+    """Normalize positive whole-number counts bounded to the supported local range."""
     if value in (None, "") or isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
-        try:
-            numeric = float(value)
-            if not math.isfinite(numeric) or numeric <= 0 or not numeric.is_integer():
-                return None
-            return int(numeric)
-        except (TypeError, ValueError, OverflowError):
+    maximum = _MAX_PROVIDER_FILTER_ID
+    if isinstance(value, int):
+        return value if 1 <= value <= maximum else None
+    if isinstance(value, float):
+        if (
+            not math.isfinite(value)
+            or value <= 0
+            or not value.is_integer()
+            or value > maximum
+        ):
             return None
+        return int(value)
+
     raw = str(value).strip()
     if not raw:
         return None
@@ -604,11 +742,14 @@ def _count_or_none(value):
     match = re.search(r"(?<![-0-9])[0-9]+", raw)
     if not match:
         return None
+    digits = match.group(0)
+    if len(digits) > 19:
+        return None
     try:
-        number = int(match.group(0))
+        number = int(digits)
     except (TypeError, ValueError, OverflowError):
         return None
-    return number if number > 0 else None
+    return number if 1 <= number <= maximum else None
 
 def normalize_series(series, preferred_id=None):
     """Convert a MangaBaka series record to NekoTrack's AniList-like media shape."""
@@ -617,16 +758,28 @@ def normalize_series(series, preferred_id=None):
     raw_id = series.get("id")
     if isinstance(raw_id, bool):
         raise ValueError("MangaBaka response did not include a positive numeric series ID.")
-    if isinstance(raw_id, float) and not raw_id.is_integer():
+    if isinstance(raw_id, float) and (
+        not math.isfinite(raw_id) or not raw_id.is_integer()
+    ):
         raise ValueError("MangaBaka response did not include a positive numeric series ID.")
-    if isinstance(raw_id, str) and not re.fullmatch(r"\s*[0-9]+\s*", raw_id):
+    if isinstance(raw_id, str):
+        text_id = raw_id.strip()
+        if (
+            not text_id
+            or len(text_id) > 19
+            or not text_id.isascii()
+            or not text_id.isdigit()
+        ):
+            raise ValueError("MangaBaka response did not include a positive numeric series ID.")
+        raw_id = text_id
+    elif not isinstance(raw_id, (int, float)):
         raise ValueError("MangaBaka response did not include a positive numeric series ID.")
     try:
         mb_id = int(raw_id)
     except (TypeError, ValueError, OverflowError):
         raise ValueError("MangaBaka response did not include a positive numeric series ID.")
-    if mb_id <= 0:
-        raise ValueError("MangaBaka series IDs must be positive.")
+    if not 1 <= mb_id <= _MAX_PROVIDER_FILTER_ID:
+        raise ValueError("MangaBaka series ID is outside the supported numeric range.")
 
     titles = _title_records(series)
     english = _first_text(_pick_title(titles, "en"), series.get("title"), series.get("english_title"))
@@ -634,7 +787,38 @@ def normalize_series(series, preferred_id=None):
                             _pick_title(titles, "ja-ro"))
     native = _first_text(_pick_title(titles, "ja"), series.get("native_title"))
     primary = english or romanized or native or f"Untitled MangaBaka series {mb_id}"
-    anilist_id = int(preferred_id) if preferred_id else extract_external_id(series, "anilist")
+    if preferred_id is None:
+        anilist_id = extract_external_id(series, "anilist")
+    else:
+        if isinstance(preferred_id, bool):
+            raise ValueError("Preferred media ID must be a valid AniList or local MangaBaka ID.")
+        if isinstance(preferred_id, float) and (
+            not math.isfinite(preferred_id) or not preferred_id.is_integer()
+        ):
+            raise ValueError("Preferred media ID must be a valid AniList or local MangaBaka ID.")
+        if isinstance(preferred_id, str):
+            text_preferred_id = preferred_id.strip()
+            if (
+                not text_preferred_id
+                or len(text_preferred_id) > 20
+                or not text_preferred_id.isascii()
+                or not re.fullmatch(r"[+-]?[0-9]+", text_preferred_id)
+            ):
+                raise ValueError("Preferred media ID must be a valid AniList or local MangaBaka ID.")
+            preferred_id = text_preferred_id
+        elif not isinstance(preferred_id, (int, float)):
+            raise ValueError("Preferred media ID must be a valid AniList or local MangaBaka ID.")
+        try:
+            preferred_id = int(preferred_id)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("Preferred media ID must be a valid AniList or local MangaBaka ID.") from error
+        if (
+            preferred_id == 0
+            or preferred_id > _MAX_ANILIST_MEDIA_ID
+            or preferred_id < -_MAX_PROVIDER_FILTER_ID
+        ):
+            raise ValueError("Preferred media ID is outside the supported numeric range.")
+        anilist_id = preferred_id
     local_id = anilist_id if anilist_id else -mb_id
     mal_id = extract_external_id(series, "myanimelist") or extract_external_id(series, "mal")
 
@@ -841,7 +1025,7 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
     except (TypeError, ValueError):
         filters = {}
     try:
-        page = max(1, int(page or 1))
+        page = min(MAX_PROVIDER_PAGES, max(1, int(page or 1)))
     except (TypeError, ValueError, OverflowError):
         page = 1
     try:
@@ -872,16 +1056,30 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
         except (TypeError, ValueError, OverflowError):
             pass
     year = filters.get("year")
-    if year and str(year).isdigit():
-        query_filters["start_year"] = int(year)
-        query_filters["end_year"] = int(year)
+    if year:
+        parsed_year = _bounded_positive_filter_int(year, maximum=9999)
+        if parsed_year is None:
+            return {
+                "pageInfo": {"currentPage": page, "lastPage": 1, "hasNextPage": False},
+                "media": [],
+                "_catalog": "MangaBaka",
+            }
+        query_filters["start_year"] = parsed_year
+        query_filters["end_year"] = parsed_year
     for key in ("genre", "tag"):
         value = filters.get(key)
         if value:
             query_filters[key] = [part.strip() for part in str(value).split(",") if part.strip()]
     publisher_id = filters.get("publisher_id")
-    if publisher_id and str(publisher_id).isdigit():
-        query_filters["publisher_id"] = int(publisher_id)
+    if publisher_id:
+        parsed_publisher_id = _bounded_positive_filter_int(publisher_id)
+        if parsed_publisher_id is None:
+            return {
+                "pageInfo": {"currentPage": page, "lastPage": 1, "hasNextPage": False},
+                "media": [],
+                "_catalog": "MangaBaka",
+            }
+        query_filters["publisher_id"] = parsed_publisher_id
     if filters.get("is_licensed") is not None:
         licensed_filter = _as_bool(filters.get("is_licensed"))
         if licensed_filter is not None:
@@ -929,15 +1127,24 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
             return fallback
         return parsed if parsed >= minimum else fallback
 
-    current_page = safe_int(pagination.get("page"), page, minimum=1)
+    current_page = min(
+        MAX_PROVIDER_PAGES,
+        safe_int(pagination.get("page"), page, minimum=1),
+    )
     limit_value = safe_int(pagination.get("limit"), limit, minimum=1)
     total = safe_int(pagination.get("count"), len(normalized), minimum=0)
-    last_page = max(current_page, (total + limit_value - 1) // limit_value)
+    last_page = min(
+        MAX_PROVIDER_PAGES,
+        max(current_page, (total + limit_value - 1) // limit_value),
+    )
+    has_next = bool(
+        pagination.get("next") or (total and current_page < last_page)
+    )
     return {
         "pageInfo": {
             "currentPage": current_page,
             "lastPage": last_page,
-            "hasNextPage": bool(pagination.get("next") or (total and current_page < last_page)),
+            "hasNextPage": has_next and current_page < last_page,
         },
         "media": normalized,
         "_catalog": "MangaBaka",
@@ -946,18 +1153,24 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
 
 def get_volume_records(series_id, max_pages=4, limit=50):
     """Resolve published volume records when a MangaBaka series has volume collections."""
+    safe_series_id = _bounded_positive_filter_int(series_id)
+    if safe_series_id is None:
+        return []
+
     collections = []
-    page_count = min(20, max(1, _safe_int(max_pages, 4)))
-    safe_limit = min(100, max(1, _safe_int(limit, 50)))
+    page_count = _safe_page_parameter(max_pages, 4, 20)
+    safe_limit = _safe_page_parameter(limit, 50, 100)
     for page in range(1, page_count + 1):
-        payload = get_series_collections(series_id, page=page, limit=safe_limit)
+        payload = get_series_collections(safe_series_id, page=page, limit=safe_limit)
         records = _records(payload)
         collections.extend(records)
         if not records or not _pagination(payload).get("next"):
             break
 
-    volume_collections = [item for item in collections
-                          if "volume" in str(item.get("type") or item.get("name") or "").lower()]
+    volume_collections = [
+        item for item in collections
+        if "volume" in str(item.get("type") or item.get("name") or "").lower()
+    ]
     if not volume_collections:
         return []
     volume_collections.sort(key=lambda item: (
@@ -965,8 +1178,8 @@ def get_volume_records(series_id, max_pages=4, limit=50):
         -_safe_int(item.get("count") or item.get("works_count") or 0, 0),
     ))
     for collection in volume_collections:
-        collection_id = collection.get("id")
-        if not collection_id:
+        collection_id = _bounded_positive_filter_int(collection.get("id"))
+        if collection_id is None:
             continue
         works = []
         for page in range(1, 5):
@@ -979,12 +1192,26 @@ def get_volume_records(series_id, max_pages=4, limit=50):
             continue
         normalized = []
         for index, work in enumerate(works, start=1):
-            raw_number = (work.get("volume_number") or work.get("volume") or
-                          work.get("number") or work.get("position") or index)
-            match = re.search(r"\d+", str(raw_number))
-            number = int(match.group(0)) if match else index
-            title = _first_text(work.get("title"), work.get("name"), work.get("title_en"),
-                                work.get("title_english"), work.get("title_native"))
+            raw_number = (
+                work.get("volume_number") or work.get("volume")
+                or work.get("number") or work.get("position") or index
+            )
+            number = index
+            number_match = re.search(r"\d+", str(raw_number))
+            if number_match:
+                digits = number_match.group(0)
+                # Never convert an arbitrarily long provider-supplied numeral.
+                if len(digits) <= 7:
+                    try:
+                        candidate_number = int(digits)
+                    except (TypeError, ValueError, OverflowError):
+                        candidate_number = index
+                    if 1 <= candidate_number <= 1_000_000:
+                        number = candidate_number
+            title = _first_text(
+                work.get("title"), work.get("name"), work.get("title_en"),
+                work.get("title_english"), work.get("title_native"),
+            )
             if not title or re.match(r"^(?:vol(?:ume)?\.?\s*)?\d+$", title, re.I):
                 title = f"Volume {number}"
             normalized.append({

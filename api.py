@@ -3,9 +3,10 @@ import hashlib
 import math
 import re
 import requests
+import tempfile
 import time
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from ui.preferences import get
 from mangabaka_api import (
     enrich_anilist_media,
@@ -19,6 +20,37 @@ ANILIST_URL = "https://graphql.anilist.co"
 
 MAX_RETRIES = 5
 RETRY_DELAY = 1
+MAX_ANILIST_MEDIA_ID = (1 << 31) - 1
+MIN_LOCAL_MEDIA_ID = -((1 << 63) - 1)
+
+
+def _validated_media_id(value):
+    """Normalize a local/AniList media ID without truncation or scalar overflow."""
+    if isinstance(value, bool):
+        raise ValueError("Media ID must be a non-zero integer.")
+    if isinstance(value, str):
+        text_id = value.strip()
+        if not text_id or len(text_id) > 20 or not re.fullmatch(r"[+-]?[0-9]+", text_id):
+            raise ValueError("Media ID must be a non-zero integer.")
+        value = text_id
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise ValueError("Media ID must be a non-zero integer.")
+    elif not isinstance(value, int):
+        raise ValueError("Media ID must be a non-zero integer.")
+
+    try:
+        numeric_id = int(value)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Media ID must be a non-zero integer.") from error
+    if numeric_id == 0:
+        raise ValueError("Media ID must be a non-zero integer.")
+    # Positive IDs go to AniList's signed 32-bit GraphQL Int. Negative IDs are
+    # local MangaBaka references stored in signed 64-bit SQLite keys. Reject
+    # the signed-64 minimum too, because abs(min_int64) cannot be represented.
+    if numeric_id > MAX_ANILIST_MEDIA_ID or numeric_id < MIN_LOCAL_MEDIA_ID:
+        raise ValueError("Media ID is outside the supported provider ID range.")
+    return numeric_id
 
 
 def anilist_request(query, variables=None):
@@ -53,14 +85,24 @@ def anilist_request(query, variables=None):
             if response.status_code == 429:
                 if attempt < MAX_RETRIES - 1:
                     retry_after = response.headers.get("Retry-After")
+                    fallback_wait = RETRY_DELAY * (2 ** attempt)
                     try:
-                        wait_time = (
-                            max(1.0, float(retry_after))
+                        requested_wait = (
+                            float(retry_after)
                             if retry_after is not None
-                            else RETRY_DELAY * (2 ** attempt)
+                            else fallback_wait
+                        )
+                        # Retry-After is provider-controlled. Values such as
+                        # "1e309" become infinity, while huge finite values can
+                        # effectively hang a worker. Keep all waits finite and
+                        # bounded, with exponential backoff for malformed input.
+                        wait_time = (
+                            min(60.0, max(1.0, requested_wait))
+                            if math.isfinite(requested_wait)
+                            else fallback_wait
                         )
                     except (TypeError, ValueError, OverflowError):
-                        wait_time = RETRY_DELAY * (2 ** attempt)
+                        wait_time = fallback_wait
                     print(
                         f"AniList rate limited the request (attempt {attempt + 1}/{MAX_RETRIES}). "
                         f"Retrying in {wait_time:g}s..."
@@ -263,13 +305,16 @@ def parse_anilist_url(value):
     parts = [part for part in parsed.path.split("/") if part]
     if len(parts) < 2 or parts[0].lower() not in {"anime", "manga"}:
         return None
-    if not re.fullmatch(r"[0-9]+", parts[1]):
+    id_text = parts[1]
+    # AniList's GraphQL Int is signed 32-bit. Reject oversized strings before
+    # converting them, so malformed URLs cannot trigger expensive integer parsing.
+    if not id_text.isascii() or len(id_text) > 10 or not re.fullmatch(r"[0-9]+", id_text):
         return None
     try:
-        media_id = int(parts[1])
+        media_id = int(id_text)
     except (TypeError, ValueError, OverflowError):
         return None
-    return media_id if media_id > 0 else None
+    return media_id if 1 <= media_id <= MAX_ANILIST_MEDIA_ID else None
 
 def get_media_by_anilist_url(url, include_relations=False):
     """Fetch the exact AniList media entry referenced by an AniList URL."""
@@ -448,10 +493,11 @@ def search_anime(
 
 def get_media_relations(media_id):
     """Fetch only the lightweight relation data used by series grouping."""
-    if int(media_id) < 0:
+    media_id = _validated_media_id(media_id)
+    if media_id < 0:
         details = get_media_details(media_id)
         return details or {
-            "id": int(media_id), "type": "MANGA", "format": "MANGA",
+            "id": media_id, "type": "MANGA", "format": "MANGA",
             "title": {"english": "MangaBaka entry"}, "relations": {"edges": []},
         }
     query = """
@@ -483,81 +529,152 @@ def get_media_relations(media_id):
     return data["Media"]
 
 def get_media_relations_batch(media_ids):
-    """Fetch lightweight relation data for multiple media IDs in one request."""
-    # MangaBaka-only works use negative local IDs and are deliberately
-    # excluded from AniList relation queries. Ignore malformed IDs instead of
-    # letting one bad cached record invalidate the entire batch.
+    """Fetch relation details for positive AniList IDs and negative MangaBaka IDs."""
+    if not isinstance(media_ids, (list, tuple, set, frozenset)):
+        return {}
     valid_ids = set()
+    local_ids = set()
     for media_id in media_ids or []:
-        try:
-            numeric_id = int(media_id)
-        except (TypeError, ValueError, OverflowError):
+        if isinstance(media_id, bool):
             continue
-        if numeric_id > 0:
+        if isinstance(media_id, int):
+            numeric_id = media_id
+        elif isinstance(media_id, float):
+            if not math.isfinite(media_id) or not media_id.is_integer():
+                continue
+            numeric_id = int(media_id)
+        elif isinstance(media_id, str):
+            text_id = media_id.strip()
+            if (
+                not text_id
+                or len(text_id) > 20
+                or not text_id.isascii()
+                or not re.fullmatch(r"[+-]?[0-9]+", text_id)
+            ):
+                continue
+            try:
+                numeric_id = int(text_id)
+            except (TypeError, ValueError, OverflowError):
+                continue
+        else:
+            continue
+
+        if 1 <= numeric_id <= MAX_ANILIST_MEDIA_ID:
             valid_ids.add(numeric_id)
+        elif MIN_LOCAL_MEDIA_ID <= numeric_id < 0:
+            # Local MangaBaka IDs are negative in SQLite. Resolve them through
+            # the provider-aware detail path rather than passing them to AniList.
+            local_ids.add(numeric_id)
+
     ids = sorted(valid_ids)
-    if not ids:
+    if not ids and not local_ids:
         return {}
 
-    # `id_in` is a Media filter exposed on the Page.media field. The top-level
-    # Media query returns one Media object, not a list, so using
-    # `Media(id_in: ...)` here made the batch enrichment iterate over the
-    # object's dictionary keys and crash. Keep this request batched through
-    # Page.media so the result is always a list of media records.
-    query = """
-    query ($ids: [Int], $perPage: Int) {
-        Page(page: 1, perPage: $perPage) {
-            media(id_in: $ids) {
-                id
-                type
-                format
-                title { romaji english native }
-                coverImage { large }
-                episodes
-                startDate { year month day }
-                relations {
-                    edges {
-                        relationType
-                        node {
-                            id
-                            type
-                            format
-                            title { romaji english native }
-                            coverImage { large }
-                            episodes
-                            startDate { year month day }
+    result = {}
+    if ids:
+        # id_in is a Media filter exposed on Page.media. Keep each request at
+        # AniList's supported page size, even if a large local library asks for
+        # relation data for hundreds or thousands of entries at once.
+        query = """
+        query ($ids: [Int], $perPage: Int) {
+            Page(page: 1, perPage: $perPage) {
+                media(id_in: $ids) {
+                    id
+                    type
+                    format
+                    title { romaji english native }
+                    coverImage { large }
+                    episodes
+                    startDate { year month day }
+                    relations {
+                        edges {
+                            relationType
+                            node {
+                                id
+                                type
+                                format
+                                title { romaji english native }
+                                coverImage { large }
+                                episodes
+                                startDate { year month day }
+                            }
                         }
                     }
                 }
             }
         }
-    }
-    """
-    data = anilist_request(query, {"ids": ids, "perPage": len(ids)})
-    page_data = data.get("Page") if isinstance(data, dict) else None
-    if not isinstance(page_data, dict):
-        return {}
-    media = page_data.get("media")
-    if isinstance(media, dict):
-        media = [media]
-    if not isinstance(media, list):
-        return {}
+        """
 
-    result = {}
-    for item in media:
-        if not isinstance(item, dict):
-            continue
+        batch_size = 50
+        for start_index in range(0, len(ids), batch_size):
+            batch_ids = ids[start_index:start_index + batch_size]
+            data = anilist_request(
+                query,
+                {"ids": batch_ids, "perPage": len(batch_ids)},
+            )
+            page_data = data.get("Page") if isinstance(data, dict) else None
+            if not isinstance(page_data, dict):
+                raise RuntimeError("AniList returned malformed relation-batch page data.")
+            media = page_data.get("media")
+            if isinstance(media, dict):
+                media = [media]
+            if not isinstance(media, list):
+                raise RuntimeError("AniList returned malformed relation-batch media data.")
+
+            requested_ids = set(batch_ids)
+            for item in media:
+                if not isinstance(item, dict):
+                    continue
+                item_id = item.get("id")
+                if isinstance(item_id, bool):
+                    continue
+                if isinstance(item_id, float):
+                    if not math.isfinite(item_id) or not item_id.is_integer():
+                        continue
+                    item_id = int(item_id)
+                elif isinstance(item_id, str):
+                    text_id = item_id.strip()
+                    if (
+                        not text_id
+                        or len(text_id) > 10
+                        or not text_id.isascii()
+                        or not text_id.isdigit()
+                    ):
+                        continue
+                    try:
+                        item_id = int(text_id)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                elif not isinstance(item_id, int):
+                    continue
+                if item_id in requested_ids:
+                    result[item_id] = item
+
+    # MangaBaka-only works are not visible to AniList's id_in query. Resolve
+    # each such local ID using get_media_relations(), which fetches its native
+    # relation graph from MangaBaka. One failed record must not discard valid
+    # AniList batch results or prevent other MangaBaka IDs from being resolved.
+    for local_id in sorted(local_ids):
         try:
-            item_id = int(item.get("id"))
-        except (TypeError, ValueError, OverflowError):
+            details = get_media_relations(local_id)
+        except Exception as error:
+            print(f"MangaBaka relation lookup skipped for {local_id}: {error}")
             continue
-        if item_id > 0:
-            result[item_id] = item
+        if isinstance(details, dict) and details.get("id") == local_id:
+            result[local_id] = details
+
     return result
 
 
 def get_media_episodes(media_id):
     """Fetch all available AniList airing-schedule pages as local episode rows."""
+    try:
+        media_id = _validated_media_id(media_id)
+    except ValueError:
+        return []
+    if media_id < 1:
+        return []
+
     query = """
     query ($id: Int, $page: Int) {
         Media(id: $id) {
@@ -662,10 +779,8 @@ def get_media_episodes(media_id):
 
 def get_media_details(media_id):
     """Fetch the complete provider-aware media record used by detail/import workflows."""
-    try:
-        numeric_id = int(media_id)
-    except (TypeError, ValueError):
-        numeric_id = 0
+    numeric_id = _validated_media_id(media_id)
+    media_id = numeric_id
 
     # Negative local IDs represent MangaBaka-only series. Never send them to
     # AniList's GraphQL Media(id:) query as if they were AniList IDs.
@@ -676,6 +791,35 @@ def get_media_details(media_id):
             record = record[0] if record else None
         if not isinstance(record, dict):
             raise RuntimeError("MangaBaka returned no details for this series.")
+
+        # Never attach a response for a different provider series to this local
+        # ID. A mismatch here would poison both the cached work row and all of
+        # the relation edges derived from it.
+        raw_record_id = record.get("id")
+        if isinstance(raw_record_id, bool):
+            raise RuntimeError("MangaBaka returned a malformed series ID.")
+        if isinstance(raw_record_id, float):
+            if not math.isfinite(raw_record_id) or not raw_record_id.is_integer():
+                raise RuntimeError("MangaBaka returned a malformed series ID.")
+        elif isinstance(raw_record_id, str):
+            text_record_id = raw_record_id.strip()
+            if (
+                not text_record_id
+                or len(text_record_id) > 19
+                or not text_record_id.isascii()
+                or not text_record_id.isdigit()
+            ):
+                raise RuntimeError("MangaBaka returned a malformed series ID.")
+            raw_record_id = text_record_id
+        elif not isinstance(raw_record_id, int):
+            raise RuntimeError("MangaBaka returned a malformed series ID.")
+        try:
+            returned_id = int(raw_record_id)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise RuntimeError("MangaBaka returned a malformed series ID.") from error
+        if returned_id != abs(numeric_id):
+            raise RuntimeError("MangaBaka returned details for a different series ID.")
+
         media = normalize_mangabaka_series(record, preferred_id=numeric_id)
         # Bring in the provider's native relationship graph where it exists.
         try:
@@ -771,14 +915,30 @@ def get_media_details(media_id):
     def _page_limit(page_info):
         return min(_safe_page(page_info.get("lastPage"), MAX_DETAIL_PAGES), MAX_DETAIL_PAGES)
 
-    characters_connection = media.get("characters")
-    if not isinstance(characters_connection, dict):
-        characters_connection = {}
+    raw_characters_connection = media.get("characters")
+    characters_snapshot_valid = isinstance(raw_characters_connection, dict)
+    characters_connection = (
+        raw_characters_connection if isinstance(raw_characters_connection, dict) else {}
+    )
+    raw_character_edges = characters_connection.get("edges")
+    if not isinstance(raw_character_edges, list):
+        characters_snapshot_valid = False
+        raw_character_edges = []
+    elif any(not isinstance(edge, dict) for edge in raw_character_edges):
+        # Deduplication intentionally drops non-dictionary entries; remember
+        # that doing so made this response incomplete, not an authoritative
+        # empty/smaller cast snapshot.
+        characters_snapshot_valid = False
+
     page_info = characters_connection.get("pageInfo")
     if not isinstance(page_info, dict):
+        characters_snapshot_valid = False
         page_info = {}
+    elif not isinstance(page_info.get("hasNextPage"), bool):
+        characters_snapshot_valid = False
+
     all_character_edges = _append_unique_records(
-        [], characters_connection.get("edges"), _character_key
+        [], raw_character_edges, _character_key
     )
     page = _safe_page(page_info.get("currentPage"))
     characters_query = """
@@ -816,20 +976,35 @@ def get_media_details(media_id):
         page_media = page_data.get("Media") if isinstance(page_data, dict) else None
         connection = page_media.get("characters") if isinstance(page_media, dict) else None
         if not isinstance(connection, dict):
+            characters_snapshot_valid = False
             break
         incoming_edges = connection.get("edges")
+        if not isinstance(incoming_edges, list):
+            characters_snapshot_valid = False
+            incoming_edges = []
+        elif any(not isinstance(edge, dict) for edge in incoming_edges):
+            characters_snapshot_valid = False
         previous_count = len(all_character_edges)
         all_character_edges = _append_unique_records(
             all_character_edges, incoming_edges, _character_key
         )
         page_info = connection.get("pageInfo")
         if not isinstance(page_info, dict):
+            characters_snapshot_valid = False
             page_info = {}
+        elif not isinstance(page_info.get("hasNextPage"), bool):
+            characters_snapshot_valid = False
         page = requested_page
         # A repeated/empty page despite hasNextPage=True is a broken provider
         # response. Stop instead of repeatedly downloading the same page.
         if len(all_character_edges) == previous_count:
+            if page_info.get("hasNextPage") is True:
+                characters_snapshot_valid = False
             break
+
+    if page_info.get("hasNextPage") is True and page >= _page_limit(page_info):
+        # The page cap is a safety stop, not proof that every page was fetched.
+        characters_snapshot_valid = False
 
     media["characters"] = {
         **characters_connection,
@@ -840,6 +1015,7 @@ def get_media_details(media_id):
             "hasNextPage": False,
         },
     }
+    media["_characters_snapshot_valid"] = characters_snapshot_valid
 
     # The schedule data is used by detail/import views; write the complete
     # deduplicated node list back onto the returned media object.
@@ -909,6 +1085,22 @@ def get_media_details(media_id):
         },
     }
 
+    # Normalize the remaining connection containers without converting
+    # missing/malformed data into an authoritative empty snapshot. Preserve
+    # edge members as received; database persistence validates each edge and
+    # will only reconcile stale links for a complete, well-formed list.
+    for connection_name in ("staff", "studios", "relations"):
+        raw_connection = media.get(connection_name)
+        if not isinstance(raw_connection, dict):
+            media[connection_name] = {"edges": None}
+            continue
+
+        raw_edges = raw_connection.get("edges")
+        media[connection_name] = {
+            **raw_connection,
+            "edges": raw_edges if isinstance(raw_edges, list) else None,
+        }
+
     # Add MangaBaka's complete series payload for reading-media details. The
     # lookup is best-effort and the AniList record remains the canonical one.
     if str(media.get("type") or "").upper() == "MANGA":
@@ -924,6 +1116,11 @@ def get_media_details(media_id):
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w780"
 TMDB_EPISODE_CACHE_DIRECTORY = Path("data") / "images" / "episodes"
+MAX_TMDB_EPISODE_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_TMDB_EPISODE_IMAGE_WIDTH = 8192
+MAX_TMDB_EPISODE_IMAGE_HEIGHT = 8192
+MAX_TMDB_EPISODE_IMAGE_PIXELS = 32_000_000
+MAX_TMDB_IMAGE_REDIRECTS = 5
 
 
 def _tmdb_token():
@@ -1367,34 +1564,177 @@ def _tmdb_search_movies(query, target_date):
     return candidates
 
 def _valid_image_data(data):
-    """Validate downloaded/cache bytes before retaining them as artwork."""
+    """Decode bounded image bytes, rejecting pathological dimensions before full decode."""
     if not isinstance(data, (bytes, bytearray, memoryview)) or not data:
         return False
+    if len(data) > MAX_TMDB_EPISODE_IMAGE_BYTES:
+        return False
+
     raw = bytes(data)
     try:
-        from PySide6.QtGui import QImage
-        return not QImage.fromData(raw).isNull()
+        from PySide6.QtCore import QByteArray, QBuffer, QIODevice
+        from PySide6.QtGui import QImageReader
     except Exception:
-        # If Qt's image reader is unavailable, accept only recognizable file
-        # signatures rather than caching an HTML/error response as a picture.
+        # The application normally has Qt available. Keep a conservative
+        # signature-only fallback for test/tooling environments without Qt.
         return (
             raw.startswith(b"\xFF\xD8\xFF")
             or raw.startswith(b"\x89PNG\r\n\x1a\n")
             or (len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP")
         )
 
+    buffer = QBuffer()
+    try:
+        buffer.setData(QByteArray(raw))
+        if not buffer.open(QIODevice.ReadOnly):
+            return False
+        reader = QImageReader(buffer)
+        reader.setDecideFormatFromContent(True)
+        dimensions = reader.size()
+        if not dimensions.isValid():
+            return False
+
+        width = dimensions.width()
+        height = dimensions.height()
+        if (
+            width < 1
+            or height < 1
+            or width > MAX_TMDB_EPISODE_IMAGE_WIDTH
+            or height > MAX_TMDB_EPISODE_IMAGE_HEIGHT
+            or width * height > MAX_TMDB_EPISODE_IMAGE_PIXELS
+        ):
+            return False
+
+        image = reader.read()
+        return not image.isNull()
+    except Exception:
+        return False
+    finally:
+        buffer.close()
+
+
+def _is_safe_tmdb_episode_image_url(value):
+    """Only allow HTTPS artwork URLs served by TMDB's dedicated image host."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        parsed = urlparse(value.strip())
+        hostname = (parsed.hostname or "").lower()
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.lower() == "https"
+        and hostname == "image.tmdb.org"
+        and port in (None, 443)
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path.startswith("/t/p/")
+        and not parsed.fragment
+    )
+
+
+def _get_tmdb_episode_image_response(url):
+    """Follow a small number of redirects, revalidating every destination."""
+    current_url = url
+    for redirect_count in range(MAX_TMDB_IMAGE_REDIRECTS + 1):
+        if not _is_safe_tmdb_episode_image_url(current_url):
+            raise ValueError("Only HTTPS TMDB image URLs are allowed.")
+
+        response = requests.get(
+            current_url,
+            timeout=20,
+            stream=True,
+            allow_redirects=False,
+        )
+        status_code = getattr(response, "status_code", 200)
+        if status_code in {301, 302, 303, 307, 308}:
+            headers = getattr(response, "headers", {}) or {}
+            location = headers.get("Location") or headers.get("location")
+            response.close()
+            if not isinstance(location, str) or not location.strip():
+                raise ValueError("TMDB image redirect did not include a destination.")
+            destination = urljoin(current_url, location.strip())
+            if not _is_safe_tmdb_episode_image_url(destination):
+                raise ValueError("TMDB image redirect destination is not trusted.")
+            if redirect_count >= MAX_TMDB_IMAGE_REDIRECTS:
+                raise ValueError("TMDB image exceeded the redirect limit.")
+            current_url = destination
+            continue
+
+        final_url = getattr(response, "url", None)
+        if isinstance(final_url, str) and final_url.strip():
+            if not _is_safe_tmdb_episode_image_url(final_url):
+                response.close()
+                raise ValueError("TMDB image response ended at an untrusted URL.")
+        try:
+            response.raise_for_status()
+        except Exception:
+            response.close()
+            raise
+        return response
+
+    raise ValueError("TMDB image exceeded the redirect limit.")
+
+
+def _read_bounded_tmdb_image_response(response):
+    headers = getattr(response, "headers", {}) or {}
+    declared_length = headers.get("Content-Length") or headers.get("content-length")
+    if declared_length not in (None, ""):
+        try:
+            parsed_length = int(declared_length)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("TMDB image has an invalid Content-Length header.") from error
+        if parsed_length < 0:
+            raise ValueError("TMDB image has an invalid Content-Length header.")
+        if parsed_length > MAX_TMDB_EPISODE_IMAGE_BYTES:
+            raise ValueError("TMDB episode image exceeds the download size limit.")
+
+    chunks = []
+    total_bytes = 0
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        total_bytes += len(chunk)
+        if total_bytes > MAX_TMDB_EPISODE_IMAGE_BYTES:
+            raise ValueError("TMDB episode image exceeds the download size limit.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 def cache_tmdb_episode_image(url, work_id, episode_number):
-    """Download one TMDB episode image into NekoTrack's persistent cache."""
+    """Download one bounded, validated TMDB episode image into the persistent cache."""
     if not url:
         return None
 
     url = str(url).strip()
     if not url:
         return None
+    if not _is_safe_tmdb_episode_image_url(url):
+        raise ValueError("Only HTTPS TMDB image URLs are allowed.")
+
+    def positive_integer(value, label):
+        if isinstance(value, bool):
+            raise ValueError(f"{label} must be an integer.")
+        if isinstance(value, float) and (
+            not math.isfinite(value) or not value.is_integer()
+        ):
+            raise ValueError(f"{label} must be an integer.")
+        if isinstance(value, str) and not re.fullmatch(r"\s*\+?[0-9]+\s*", value):
+            raise ValueError(f"{label} must be an integer.")
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError(f"{label} must be an integer.") from error
+        if parsed <= 0:
+            raise ValueError(f"{label} must be positive.")
+        return parsed
+
+    work_number = positive_integer(work_id, "Work ID")
+    episode_number = positive_integer(episode_number, "Episode number")
 
     digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
-    directory = TMDB_EPISODE_CACHE_DIRECTORY / str(int(work_id))
+    directory = TMDB_EPISODE_CACHE_DIRECTORY / str(work_number)
     directory.mkdir(parents=True, exist_ok=True)
 
     parsed_path = Path(urlparse(url).path)
@@ -1402,29 +1742,57 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
     if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
         suffix = ".jpg"
 
-    path = directory / f"{int(episode_number)}_{digest}{suffix}"
-    if path.is_file() and path.stat().st_size > 0:
+    path = directory / f"{episode_number}_{digest}{suffix}"
+    if path.is_file():
         try:
-            cached_data = path.read_bytes()
+            cached_size = path.stat().st_size
+            # Do not read an untrusted/corrupt cache file into memory unless
+            # its size is already within the same limit as fresh downloads.
+            cached_data = (
+                path.read_bytes()
+                if 0 < cached_size <= MAX_TMDB_EPISODE_IMAGE_BYTES
+                else b""
+            )
         except OSError:
             cached_data = b""
-        if _valid_image_data(cached_data):
+        if cached_data and _valid_image_data(cached_data):
             return str(path)
         try:
             path.unlink()
         except OSError:
             pass
 
-    response = requests.get(url, timeout=20)
-    response.raise_for_status()
-    data = response.content
+    response = _get_tmdb_episode_image_response(url)
+    try:
+        data = _read_bounded_tmdb_image_response(response)
+    finally:
+        response.close()
+
     if not _valid_image_data(data):
         return None
 
-    path.write_bytes(data)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{path.stem}.",
+            suffix=".tmp",
+            dir=str(directory),
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(data)
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     if not path.is_file() or path.stat().st_size == 0:
         return None
     return str(path)
+
 
 def _pick_best_movie_image(movie_id, movie):
     if not isinstance(movie, dict):

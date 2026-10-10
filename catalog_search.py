@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date as _date
+import math
 import re
 
 from api import search_anime
@@ -10,6 +11,29 @@ from mangabaka_api import enrich_anilist_results, search_media as search_mangaba
 ANIME_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL", "MUSIC"}
 PROVIDER_ONLY_FILTERS = ("publisher_id", "is_licensed")
 PAGE_SIZE = 20
+MAX_CATALOG_PAGES = 10000
+MAX_PROVIDER_ID = (1 << 63) - 1
+
+
+def _positive_provider_id(value):
+    """Parse bounded positive publisher IDs without trusting provider/user input."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 0 < value <= MAX_PROVIDER_ID else None
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    # Real provider IDs are small numeric identifiers; bound parsing work and
+    # reject abusive digit strings before calling int() (which can raise for
+    # extremely long values on modern Python).
+    if not stripped or len(stripped) > 19 or not stripped.isascii() or not stripped.isdigit():
+        return None
+    try:
+        number = int(stripped)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if 0 < number <= MAX_PROVIDER_ID else None
 
 
 def _filter_bool(value):
@@ -29,14 +53,9 @@ def _filter_bool(value):
 def _collect_publisher_ids(value):
     if value is None or isinstance(value, bool):
         return set()
-    if isinstance(value, int):
-        return {value} if value > 0 else set()
-    if isinstance(value, str):
-        stripped = value.strip()
-        if not re.fullmatch(r"[0-9]+", stripped):
-            return set()
-        number = int(stripped)
-        return {number} if number > 0 else set()
+    if isinstance(value, (int, str)):
+        number = _positive_provider_id(value)
+        return {number} if number is not None else set()
     if isinstance(value, (list, tuple, set)):
         result = set()
         for item in value:
@@ -61,9 +80,9 @@ def _matches_provider_only_filters(item, filters):
 
     wanted_publisher = filters.get("publisher_id")
     if wanted_publisher not in (None, ""):
-        if isinstance(wanted_publisher, bool) or not str(wanted_publisher).strip().isdigit():
+        wanted_id = _positive_provider_id(wanted_publisher)
+        if wanted_id is None:
             return False
-        wanted_id = int(wanted_publisher)
         known_ids = set()
         for key in ("publisher_id", "publisherId", "publisher_ids", "publisher", "publishers"):
             known_ids.update(_collect_publisher_ids(raw.get(key)))
@@ -93,29 +112,45 @@ def _provider_id(item):
     if value is None:
         raw = item.get("_mangabaka")
         value = raw.get("id") if isinstance(raw, dict) else None
-    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
-        return None
-    if isinstance(value, str) and not re.fullmatch(r"\s*[0-9]+\s*", value):
-        return None
-    try:
-        provider_id = int(value) if value is not None else None
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return provider_id if provider_id is not None and provider_id > 0 else None
+    return _positive_provider_id(value)
 
 
 def _media_id(item):
+    """Parse an AniList or local MangaBaka ID within supported SQLite/API bounds."""
     if not isinstance(item, dict):
         return None
     value = item.get("id")
-    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+    if isinstance(value, bool):
         return None
-    if isinstance(value, str) and not re.fullmatch(r"\s*-?[0-9]+\s*", value):
+    if isinstance(value, int):
+        media_id = value
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        media_id = int(value)
+    elif isinstance(value, str):
+        text_id = value.strip()
+        if (
+            not text_id
+            or len(text_id) > 20
+            or not text_id.isascii()
+            or not re.fullmatch(r"[+-]?[0-9]+", text_id)
+        ):
+            return None
+        try:
+            media_id = int(text_id)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    else:
         return None
-    try:
-        return int(value)
-    except (TypeError, ValueError, OverflowError):
+
+    if media_id == 0:
         return None
+    # Positive IDs are passed to AniList's signed 32-bit GraphQL Int; negative
+    # IDs are app-local MangaBaka identifiers, bounded by SQLite's signed range.
+    if media_id > (1 << 31) - 1 or media_id < -((1 << 63) - 1):
+        return None
+    return media_id
 
 
 def _title(item):
@@ -179,7 +214,7 @@ def _page_info(data, page):
     info = data.get("pageInfo") if isinstance(data, dict) else {}
     info = info if isinstance(info, dict) else {}
     try:
-        current_page = max(1, int(page or 1))
+        current_page = min(MAX_CATALOG_PAGES, max(1, int(page or 1)))
     except (TypeError, ValueError, OverflowError):
         current_page = 1
 
@@ -189,7 +224,7 @@ def _page_info(data, page):
         last_page = 1
     # Guard against corrupt pagination values making infinite scrolling believe
     # the catalogue has millions of pages.
-    last_page = min(last_page, 10000)
+    last_page = min(last_page, MAX_CATALOG_PAGES)
 
     raw_next = info.get("hasNextPage", False)
     if isinstance(raw_next, str):
@@ -202,10 +237,11 @@ def _page_info(data, page):
     else:
         has_next = False
 
+    last_page = max(current_page, last_page)
     return {
         "currentPage": current_page,
-        "lastPage": max(current_page, last_page),
-        "hasNextPage": has_next,
+        "lastPage": last_page,
+        "hasNextPage": has_next and current_page < last_page,
     }
 
 
@@ -214,7 +250,7 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
     """Return a single de-duplicated page shaped for the existing result UI."""
     query = str(search_text or "").strip()
     try:
-        page = max(1, int(page or 1))
+        page = min(MAX_CATALOG_PAGES, max(1, int(page or 1)))
     except (TypeError, ValueError, OverflowError):
         page = 1
     try:
@@ -271,7 +307,14 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
                 query, page, media_type, media_format, mb_filters, limit=PAGE_SIZE
             )
             data = data if isinstance(data, dict) else {}
-            mangabaka_items = [item for item in (data.get("media") or []) if isinstance(item, dict)]
+            mangabaka_items = [
+                item for item in (data.get("media") or [])
+                if (
+                    isinstance(item, dict)
+                    and _media_id(item) is not None
+                    and _provider_id(item) is not None
+                )
+            ]
             mangabaka_page = _page_info(data, page)
         except Exception as error:
             mangabaka_error = str(error)
@@ -291,10 +334,13 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
     unique_anilist_items = []
     for item in anilist_items:
         media_id = _media_id(item)
-        if media_id is not None:
-            if media_id in seen_anilist_ids:
-                continue
-            seen_anilist_ids.add(media_id)
+        # AniList's search must only expose positive, GraphQL-safe media IDs.
+        # Do not keep malformed rows just because deduplication could not key them.
+        if media_id is None or media_id < 1:
+            continue
+        if media_id in seen_anilist_ids:
+            continue
+        seen_anilist_ids.add(media_id)
         unique_anilist_items.append(item)
     anilist_items = unique_anilist_items
 
@@ -333,6 +379,8 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
     for item in mangabaka_items:
         provider_id = _provider_id(item)
         media_id = _media_id(item)
+        if media_id is None:
+            continue
         if provider_id is not None and provider_id in attached_provider_ids:
             continue
         if media_id is not None and media_id > 0 and media_id in anilist_ids:

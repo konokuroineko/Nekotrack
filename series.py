@@ -43,18 +43,25 @@ def _get(item, key, default=None):
 
 
 def _valid_relation_id(value):
-    """Return a non-zero integer relation ID, or None for malformed IDs."""
+    """Return a provider/local ID in range, or None for malformed IDs."""
     if isinstance(value, bool):
         return None
-    if isinstance(value, float) and not value.is_integer():
-        return None
-    if isinstance(value, str) and not re.fullmatch(r"\s*-?[0-9]+\s*", value):
+    if isinstance(value, float):
+        if not value.is_integer():
+            return None
+    if isinstance(value, str) and (
+        len(value.strip()) > 20
+        or not value.strip().isascii()
+        or not re.fullmatch(r"[+-]?[0-9]+", value.strip())
+    ):
         return None
     try:
         media_id = int(value)
     except (TypeError, ValueError, OverflowError):
         return None
-    return media_id if media_id != 0 else None
+    if media_id == 0 or media_id > (1 << 31) - 1 or media_id < -((1 << 63) - 1):
+        return None
+    return media_id
 
 
 def _title_text(item):

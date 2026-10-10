@@ -86,6 +86,81 @@ class CombinedCatalogSearchTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in result["media"]], [100])
         search_mb.assert_not_called()
 
+    def test_extremely_long_publisher_ids_are_rejected_without_crashing(self):
+        abusive_id = "9" * 5000
+
+        self.assertEqual(catalog_search._collect_publisher_ids(abusive_id), set())
+        self.assertEqual(catalog_search._collect_publisher_ids(10**200), set())
+        self.assertIsNone(catalog_search._positive_provider_id(abusive_id))
+        self.assertFalse(
+            catalog_search._matches_provider_only_filters(
+                {"_mangabaka": {"publisher_id": 5}},
+                {"publisher_id": abusive_id},
+            )
+        )
+        self.assertFalse(
+            catalog_search._matches_provider_only_filters(
+                {"_mangabaka": {"publisher_id": 5}},
+                {"publisher_id": 10**200},
+            )
+        )
+
+    def test_media_and_provider_ids_are_bounded_and_strict(self):
+        valid = {
+            "id": 123,
+        }
+        self.assertEqual(catalog_search._media_id(valid), 123)
+        self.assertEqual(catalog_search._media_id({"id": -42}), -42)
+        for value in (
+            True,
+            False,
+            0,
+            1.5,
+            float("inf"),
+            float("nan"),
+            1 << 31,
+            -(1 << 63),
+            -(1 << 63) - 1,
+            "bad-id",
+            "9" * 5000,
+        ):
+            with self.subTest(media_id=repr(value)[:60]):
+                self.assertIsNone(catalog_search._media_id({"id": value}))
+
+        self.assertEqual(catalog_search._provider_id({"_mangabaka_id": 15}), 15)
+        self.assertIsNone(catalog_search._provider_id({"_mangabaka_id": 10**200}))
+        self.assertIsNone(catalog_search._provider_id({"_mangabaka_id": "9" * 5000}))
+
+    @patch("catalog_search.enrich_anilist_results")
+    @patch("catalog_search.search_mangabaka_media")
+    @patch("catalog_search.search_anime")
+    def test_malformed_catalog_ids_are_removed_before_enrichment(
+        self, search_anilist, search_mb, enrich
+    ):
+        search_anilist.return_value = {
+            "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+            "media": [
+                anime_item(100, "Valid AniList Work"),
+                anime_item(1 << 31, "Out-of-range AniList ID"),
+                anime_item("9" * 5000, "Malformed AniList ID"),
+                anime_item(True, "Boolean AniList ID"),
+            ],
+        }
+        invalid_local_id = mb_item(10, "Out-of-range local ID", local_id=1 << 100)
+        invalid_provider_id = mb_item(10**200, "Out-of-range provider ID", local_id=-12)
+        valid_local = mb_item(11, "Valid MangaBaka Only", local_id=-11)
+        search_mb.return_value = {
+            "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+            "media": [invalid_local_id, invalid_provider_id, valid_local],
+        }
+
+        result = catalog_search.search_combined_media("", 1, None, None, {"sort": "SEARCH_MATCH"})
+
+        self.assertEqual({row["id"] for row in result["media"]}, {100, -11})
+        enrich.assert_called_once()
+        candidates = enrich.call_args.kwargs["candidates"]
+        self.assertEqual([candidate["id"] for candidate in candidates], [11])
+
     @patch("catalog_search.enrich_anilist_results")
     @patch("catalog_search.search_mangabaka_media")
     @patch("catalog_search.search_anime")
@@ -123,6 +198,26 @@ class CombinedCatalogSearchTests(unittest.TestCase):
         )
         self.assertEqual(result["pageInfo"]["currentPage"], 1)
         self.assertEqual(result["pageInfo"]["lastPage"], 1)
+        self.assertFalse(result["pageInfo"]["hasNextPage"])
+
+    @patch("catalog_search.search_anime")
+    def test_extreme_page_numbers_are_clamped_and_cannot_request_page_10001(self, search_anilist):
+        search_anilist.return_value = {
+            "pageInfo": {
+                "currentPage": 10**100,
+                "lastPage": 10**100,
+                "hasNextPage": True,
+            },
+            "media": [],
+        }
+
+        result = catalog_search.search_combined_media(
+            "", 10**100, "ANIME", None, {}
+        )
+
+        self.assertEqual(search_anilist.call_args.args[1], catalog_search.MAX_CATALOG_PAGES)
+        self.assertEqual(result["pageInfo"]["currentPage"], catalog_search.MAX_CATALOG_PAGES)
+        self.assertEqual(result["pageInfo"]["lastPage"], catalog_search.MAX_CATALOG_PAGES)
         self.assertFalse(result["pageInfo"]["hasNextPage"])
 
     @patch("catalog_search.search_mangabaka_media")

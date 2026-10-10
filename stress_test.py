@@ -17,10 +17,14 @@ import json
 import math
 import os
 import random
+import re
+import socket
 import subprocess
 import sys
 import time
 import traceback
+import urllib.request
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 import unittest
@@ -78,11 +82,107 @@ def run_full_regression_suite():
         env=env,
     )
     output = (completed.stdout + "\n" + completed.stderr).strip()
+    summary = re.search(r"(?m)^\s*Ran\s+(\d+)\s+tests?\s+in\s+[0-9.]+s\s*$", output)
+    tests_run = int(summary.group(1)) if summary else 0
+
+    # A zero exit code alone is not enough: unittest discovery can succeed
+    # while finding no tests (for example after a directory/package regression).
+    # Treat missing or zero-count summaries as failures so the harness cannot
+    # report a green baseline when it exercised nothing.
+    summary_valid = summary is not None and tests_run > 0
+    if not summary_valid:
+        output += (
+            "\nRegression test discovery did not report a positive test count; "
+            "treating the baseline as failed."
+        )
+
     return {
-        "status": "PASS" if completed.returncode == 0 else "FAIL",
+        "status": "PASS" if completed.returncode == 0 and summary_valid else "FAIL",
         "exit_code": completed.returncode,
+        "tests_run": tests_run,
         "output": output[-24000:],
     }
+
+
+@contextmanager
+def offline_network_guard(attempted_requests):
+    """Block common HTTP-client and raw-socket paths during offline tests.
+
+    Patching requests.Session.request alone leaves urllib and direct socket
+    clients invisible to the stress report. The lower-level guards are a
+    second safety boundary; all attempts are recorded before raising.
+    """
+    def record_attempt(method, destination):
+        attempted_requests.append({
+            "method": str(method),
+            "url": str(destination),
+        })
+        raise AssertionError(
+            f"Unexpected network request blocked during offline fuzzing: "
+            f"{method} {destination}"
+        )
+
+    def block_requests(_session, method, url, *args, **kwargs):
+        record_attempt(str(method).upper(), url)
+
+    def block_urlopen(url, *args, **kwargs):
+        record_attempt("urllib.request.urlopen", url)
+
+    def block_create_connection(address, *args, **kwargs):
+        record_attempt("socket.create_connection", address)
+
+    def block_socket_connect(_socket, address):
+        record_attempt("socket.connect", address)
+
+    def block_socket_connect_ex(_socket, address):
+        record_attempt("socket.connect_ex", address)
+
+    def block_getaddrinfo(host, port, *args, **kwargs):
+        record_attempt("socket.getaddrinfo", (host, port))
+
+    def block_gethostbyname(host):
+        record_attempt("socket.gethostbyname", host)
+
+    def block_gethostbyname_ex(host):
+        record_attempt("socket.gethostbyname_ex", host)
+
+    def block_gethostbyaddr(host):
+        record_attempt("socket.gethostbyaddr", host)
+
+    def block_getnameinfo(sockaddr, flags):
+        record_attempt("socket.getnameinfo", sockaddr)
+
+    def block_socket_send(_socket, data, *args, **kwargs):
+        record_attempt("socket.send", "<connected socket>")
+
+    def block_socket_sendall(_socket, data, *args, **kwargs):
+        record_attempt("socket.sendall", "<connected socket>")
+
+    def block_socket_sendto(_socket, *args, **kwargs):
+        destination = kwargs.get("address")
+        if destination is None:
+            # sendto(data, address) uses args[1]; a connected sendto(data)
+            # has no explicit destination but is still an attempted send.
+            destination = args[1] if len(args) >= 2 else "<connected socket>"
+        record_attempt("socket.sendto", destination)
+
+    with ExitStack() as stack:
+        stack.enter_context(patch(
+            "requests.sessions.Session.request", new=block_requests
+        ))
+        stack.enter_context(patch.object(urllib.request, "urlopen", new=block_urlopen))
+        stack.enter_context(patch.object(socket, "create_connection", new=block_create_connection))
+        stack.enter_context(patch.object(socket.socket, "connect", new=block_socket_connect))
+        stack.enter_context(patch.object(socket.socket, "connect_ex", new=block_socket_connect_ex))
+        stack.enter_context(patch.object(socket, "getaddrinfo", new=block_getaddrinfo))
+        stack.enter_context(patch.object(socket, "gethostbyname", new=block_gethostbyname))
+        stack.enter_context(patch.object(socket, "gethostbyname_ex", new=block_gethostbyname_ex))
+        stack.enter_context(patch.object(socket, "gethostbyaddr", new=block_gethostbyaddr))
+        stack.enter_context(patch.object(socket, "getnameinfo", new=block_getnameinfo))
+        stack.enter_context(patch.object(socket.socket, "send", new=block_socket_send))
+        stack.enter_context(patch.object(socket.socket, "sendall", new=block_socket_sendall))
+        stack.enter_context(patch.object(socket.socket, "sendto", new=block_socket_sendto))
+        yield
 
 
 def run_iteration_worker(seed):
@@ -95,12 +195,6 @@ def run_iteration_worker(seed):
         "failures": 0, "errors": 0, "network_attempts": [], "output": "",
     }
 
-    def block_network_request(_session, method, url, *args, **kwargs):
-        attempted_requests.append({"method": str(method), "url": str(url)})
-        raise AssertionError(
-            f"Unexpected network request blocked during offline fuzzing: {method} {url}"
-        )
-
     try:
         modules = load_adversarial_tests()
         suite = unittest.TestSuite()
@@ -109,7 +203,7 @@ def run_iteration_worker(seed):
         if suite.countTestCases() == 0:
             raise RuntimeError("No fuzz tests were loaded for this iteration.")
 
-        with patch("requests.sessions.Session.request", new=block_network_request):
+        with offline_network_guard(attempted_requests):
             result = unittest.TextTestRunner(
                 stream=output, verbosity=0, failfast=False
             ).run(suite)

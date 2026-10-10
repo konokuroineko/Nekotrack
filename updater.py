@@ -110,11 +110,16 @@ def _open_trusted_download(start_url):
             url = destination
             continue
 
-        response.raise_for_status()
-        final_url = getattr(response, "url", None) or url
-        if not _is_trusted_download_location(final_url):
+        try:
+            response.raise_for_status()
+            final_url = getattr(response, "url", None) or url
+            if not _is_trusted_download_location(final_url):
+                raise ValueError("The installer response came from an untrusted host.")
+        except Exception:
+            # The caller's context manager is entered only after this function
+            # returns. Close streaming responses here whenever validation fails.
             response.close()
-            raise ValueError("The installer response came from an untrusted host.")
+            raise
         return response
 
     raise ValueError("The installer download exceeded the redirect limit.")

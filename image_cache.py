@@ -62,6 +62,11 @@ def _safe_image_url(value):
         address = ipaddress.ip_address(host)
     except ValueError:
         address = None
+    if address is None and "." not in host:
+        # Single-label names may be resolved through OS search domains or
+        # local host files (for example "router" or "metadata"), even though
+        # they are not literal private IPs or "localhost".
+        raise ValueError("Cover images must use a fully qualified public hostname.")
     if address is not None and not address.is_global:
         raise ValueError("Cover images cannot use private or local IP addresses.")
     return value.strip()
@@ -88,9 +93,16 @@ def _open_cover_response(start_url):
             url = _safe_image_url(urljoin(url, location.strip()))
             continue
 
-        response.raise_for_status()
-        final_url = getattr(response, "url", None) or url
-        _safe_image_url(final_url)
+        try:
+            response.raise_for_status()
+            final_url = getattr(response, "url", None) or url
+            _safe_image_url(final_url)
+        except Exception:
+            # This function returns a live streamed response to its caller.
+            # If status or final-URL validation fails before that handoff, no
+            # caller context manager exists yet to close the socket.
+            response.close()
+            raise
         return response
 
     raise ValueError("The cover image download exceeded the redirect limit.")
@@ -133,10 +145,14 @@ def _decode_cover(payload):
     if not buffer.open(QIODevice.OpenModeFlag.ReadOnly):
         raise ValueError("Could not open the downloaded cover image.")
 
-    reader = QImageReader(buffer)
-    reader.setDecideFormatFromContent(True)
-    dimensions = reader.size()
-    if dimensions.isValid():
+    try:
+        reader = QImageReader(buffer)
+        reader.setDecideFormatFromContent(True)
+        dimensions = reader.size()
+        if not dimensions.isValid():
+            if not reader.canRead():
+                raise ValueError("Downloaded cover is not a supported image.")
+            raise ValueError("The cover image dimensions are invalid.")
         width, height = dimensions.width(), dimensions.height()
         if (
             width <= 0
@@ -145,10 +161,10 @@ def _decode_cover(payload):
             or height > MAX_COVER_HEIGHT
             or width * height > MAX_COVER_PIXELS
         ):
-            buffer.close()
             raise ValueError("The cover image dimensions are too large.")
-    image = reader.read()
-    buffer.close()
+        image = reader.read()
+    finally:
+        buffer.close()
     if image.isNull():
         raise ValueError("Downloaded cover is not a supported image.")
     return image

@@ -281,6 +281,158 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
             "startDate": {"year": 2020, "month": 1, "day": 1},
         }
 
+    def test_provider_metadata_payloads_are_validated_before_database_access(self):
+        with patch.object(database, "get_connection") as get_connection:
+            with self.assertRaisesRegex(ValueError, "valid JSON"):
+                database.save_provider_metadata(616, "mangabaka", {"nested": {1, 2}})
+            with self.assertRaisesRegex(ValueError, "valid JSON"):
+                database.save_provider_metadata(616, "mangabaka", {"score": float("nan")})
+            with self.assertRaises(ValueError):
+                database.save_provider_metadata(1 << 100, "mangabaka", {"id": 9})
+            self.assertIsNone(database.get_provider_metadata(1 << 100))
+            get_connection.assert_not_called()
+
+        database.save_anime(self.work(616, "MANGA", "MANGA"))
+        payload = {"id": 9, "titles": [{"language": "en", "title": "Provider title"}]}
+        database.save_provider_metadata(616, "MangaBaka", payload, provider_id=9)
+        self.assertEqual(database.get_provider_metadata(616), payload)
+
+        # Even a SQL error after connection acquisition must roll back and close
+        # the connection so later catalog imports do not inherit a leaked handle.
+        connection = Mock()
+        connection.execute.side_effect = RuntimeError("simulated SQL error")
+        with patch.object(database, "get_connection", return_value=connection):
+            with self.assertRaisesRegex(RuntimeError, "simulated SQL error"):
+                database.save_provider_metadata(616, "mangabaka", {"id": 10})
+        connection.rollback.assert_called_once()
+        connection.close.assert_called_once()
+
+    def test_non_list_character_payload_marks_cache_retryable_without_deleting_rows(self):
+        work_id = 617
+        database.save_anime(self.work(work_id, "ANIME", "TV"))
+        complete_edge = {
+            "node": {
+                "id": 620,
+                "name": {"full": "Cached Character"},
+                "image": {"large": None},
+            },
+            "role": "MAIN",
+            "voiceActors": [],
+        }
+        database.save_characters(work_id, [complete_edge])
+        self.assertTrue(database.characters_are_loaded(work_id))
+
+        database.save_characters(work_id, None)
+        self.assertFalse(database.characters_are_loaded(work_id))
+        connection = database.get_connection()
+        try:
+            rows = connection.execute(
+                "SELECT character_id FROM work_characters WHERE work_id = ?",
+                (work_id,),
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertEqual([row["character_id"] for row in rows], [620])
+
+    def test_reading_item_numbers_are_bounded_and_invalid_batches_do_not_lock_database(self):
+        work_id = 618
+        database.save_anime(self.work(work_id, "MANGA", "MANGA"))
+
+        invalid_items = [
+            {"number": 10**100, "title": "Too large"},
+            {"number": float("inf"), "title": "Infinite"},
+            {"number": float("nan"), "title": "NaN"},
+            {"number": 1_000_001, "title": "Past supported maximum"},
+            {"number": True, "title": "Boolean"},
+            {"number": 1.5, "title": "Fractional"},
+            {"number": "9" * 5000, "title": "Huge numeric text"},
+        ]
+        with patch.object(database, "get_connection") as get_connection:
+            with self.assertRaises(ValueError):
+                database.save_reading_item_metadata(1 << 100, "chapter", invalid_items)
+            get_connection.assert_not_called()
+
+        self.assertEqual(
+            database.save_reading_item_metadata(work_id, "chapter", invalid_items),
+            0,
+        )
+        self.assertEqual(
+            database.save_reading_item_metadata(
+                work_id,
+                "chapter",
+                [{"number": 1, "title": "Chapter One"}],
+            ),
+            1,
+        )
+        connection = database.get_connection()
+        try:
+            rows = connection.execute(
+                "SELECT item_number, title FROM reading_items WHERE work_id = ? AND item_type = 'chapter'",
+                (work_id,),
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertEqual([(row["item_number"], row["title"]) for row in rows], [(1, "Chapter One")])
+
+    def test_reading_progress_apis_bound_ids_offsets_and_item_numbers(self):
+        work_id = 620
+        database.save_anime(self.work(work_id, "MANGA", "MANGA"))
+
+        with patch.object(database, "get_connection") as get_connection:
+            self.assertEqual(
+                database.ensure_reading_placeholders(1 << 100, "chapter", 10),
+                [],
+            )
+            self.assertEqual(
+                database.ensure_reading_placeholders(work_id, "chapter", 10**100),
+                [],
+            )
+            self.assertEqual(
+                database.ensure_reading_placeholders(
+                    work_id, "chapter", 10, offset=10**100
+                ),
+                [],
+            )
+            self.assertEqual(
+                database.get_reading_items(1 << 100, "chapter"),
+                [],
+            )
+            self.assertEqual(
+                database.get_reading_items(work_id, "chapter", offset=10**100),
+                [],
+            )
+            self.assertEqual(database.get_reading_progress(1 << 100, "chapter"), (0, 0))
+            with self.assertRaises(ValueError):
+                database.set_reading_item_read(work_id, "chapter", 10**100, True)
+            get_connection.assert_not_called()
+
+        placeholders = database.ensure_reading_placeholders(
+            work_id, "chapter", total_count=4, offset=0, limit=2
+        )
+        self.assertEqual([row["item_number"] for row in placeholders], [1, 2])
+        self.assertEqual(
+            [row["item_number"] for row in database.get_reading_items(work_id, "chapter")],
+            [1, 2],
+        )
+        read_count, total_count = database.set_reading_item_read(
+            work_id, "chapter", 1, True
+        )
+        self.assertEqual((read_count, total_count), (1, 2))
+
+
+    def test_save_anime_rolls_back_and_closes_when_sql_write_fails(self):
+        work = self.work(619, "ANIME", "TV")
+        connection = Mock()
+        connection.execute.side_effect = RuntimeError("simulated metadata write failure")
+
+        with patch.object(database, "get_connection", return_value=connection):
+            with self.assertRaisesRegex(RuntimeError, "simulated metadata write failure"):
+                database.save_anime(work)
+
+        connection.rollback.assert_called_once()
+        connection.close.assert_called_once()
+
+
     def assert_database_invariants(self):
         connection = database.get_connection()
         self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
@@ -460,11 +612,101 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         connection.close()
         self.assertEqual(after, 0)
 
+    def test_relation_refresh_removes_stale_edges_but_partial_payloads_preserve_them(self):
+        source_id = 509
+
+        def edge(target_id):
+            return {
+                "relationType": "SEQUEL",
+                "node": {
+                    "id": target_id,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "title": {
+                        "english": f"Related Work {target_id}",
+                        "romaji": f"Related Work {target_id}",
+                        "native": None,
+                    },
+                    "coverImage": {"large": None},
+                    "startDate": {"year": 2022, "month": 1, "day": 1},
+                },
+            }
+
+        original = self.work(source_id, "ANIME", "TV")
+        original["relations"] = {"edges": [edge(510), edge(511)]}
+        database.save_anime(original)
+
+        def source_targets():
+            connection = database.get_connection()
+            try:
+                return [
+                    row["target_id"]
+                    for row in connection.execute(
+                        "SELECT target_id FROM work_relations "
+                        "WHERE source_id = ? ORDER BY target_id",
+                        (source_id,),
+                    ).fetchall()
+                ]
+            finally:
+                connection.close()
+
+        self.assertEqual(source_targets(), [510, 511])
+
+        # A search/partial record omits relations; it must not erase cached edges.
+        database.save_anime(self.work(source_id, "ANIME", "TV"))
+        self.assertEqual(source_targets(), [510, 511])
+
+        # A malformed edge list is not a complete snapshot; valid edges may be
+        # refreshed, but stale rows must not be removed based on partial data.
+        partial = self.work(source_id, "ANIME", "TV")
+        partial["relations"] = {"edges": [edge(510), None]}
+        database.save_anime(partial)
+        self.assertEqual(source_targets(), [510, 511])
+
+        # AniList relation IDs are positive; a negative/local-only catalog ID
+        # also makes this list incomplete and must not clear cached edges.
+        invalid_id = self.work(source_id, "ANIME", "TV")
+        invalid_id["relations"] = {"edges": [edge(510), edge(-42)]}
+        database.save_anime(invalid_id)
+        self.assertEqual(source_targets(), [510, 511])
+
+        oversized_id = self.work(source_id, "ANIME", "TV")
+        oversized_id["relations"] = {"edges": [edge(510), edge(10**100)]}
+        database.save_anime(oversized_id)
+        self.assertEqual(source_targets(), [510, 511])
+
+        # A referenced node with no usable title is also a partial snapshot;
+        # it must not delete old edges or create a dangling relation to node 512.
+        missing_title_edge = edge(512)
+        missing_title_edge["node"]["title"] = {
+            "english": None,
+            "romaji": {"unexpected": "object"},
+            "native": None,
+        }
+        malformed_title = self.work(source_id, "ANIME", "TV")
+        malformed_title["relations"] = {"edges": [edge(510), missing_title_edge]}
+        database.save_anime(malformed_title)
+        self.assertEqual(source_targets(), [510, 511])
+
+        # A fully valid refreshed graph removes the edge no longer returned.
+        refreshed = self.work(source_id, "ANIME", "TV")
+        refreshed["relations"] = {"edges": [edge(510)]}
+        database.save_anime(refreshed)
+        self.assertEqual(source_targets(), [510])
+
+        # A valid empty list is authoritative and clears cached outgoing edges.
+        empty = self.work(source_id, "ANIME", "TV")
+        empty["relations"] = {"edges": []}
+        database.save_anime(empty)
+        self.assertEqual(source_targets(), [])
+
+
     def test_deleting_a_work_does_not_remove_shared_cover_still_in_use(self):
         first_id, second_id = 507, 508
         database.save_anime(self.work(first_id, "ANIME", "TV"))
         database.save_anime(self.work(second_id, "ANIME", "TV"))
-        shared_cover = Path(self.temp_dir.name) / "shared-cover.jpg"
+        shared_cover = Path("data") / "images" / "works" / "shared-cover.jpg"
+        shared_cover.parent.mkdir(parents=True, exist_ok=True)
         shared_cover.write_bytes(b"dummy image file used only for path ownership")
         database.save_cover_path(first_id, str(shared_cover))
         database.save_cover_path(second_id, str(shared_cover))
@@ -780,6 +1022,9 @@ class TMDBPayloadChaosTests(unittest.TestCase):
         response = Mock()
         response.raise_for_status.return_value = None
         response.content = b"<html><body>temporary upstream error</body></html>"
+        response.url = url
+        response.headers = {}
+        response.iter_content.return_value = iter([response.content])
         with tempfile.TemporaryDirectory() as temp_dir, \
              patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
              patch.object(nt_api.requests, "get", return_value=response) as request:
@@ -796,6 +1041,9 @@ class TMDBPayloadChaosTests(unittest.TestCase):
         response = Mock()
         response.raise_for_status.return_value = None
         response.content = b"not a webp image"
+        response.url = url
+        response.headers = {}
+        response.iter_content.return_value = iter([response.content])
         with tempfile.TemporaryDirectory() as temp_dir, \
              patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
              patch.object(nt_api.requests, "get", return_value=response) as request:
@@ -809,6 +1057,107 @@ class TMDBPayloadChaosTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(request.call_count, 1)
         self.assertFalse(exists_after)
+
+    def test_tmdb_image_cache_rejects_fractional_and_boolean_identifiers(self):
+        url = "https://image.tmdb.org/t/p/w500/id-check.jpg"
+        invalid_pairs = (
+            (42.5, 3),
+            (42, 3.5),
+            (42, True),
+            (False, 3),
+            ("42.5", 3),
+            (42, "3.5"),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
+             patch.object(nt_api.requests, "get") as request:
+            for work_id, episode_number in invalid_pairs:
+                with self.subTest(work_id=work_id, episode_number=episode_number):
+                    with self.assertRaisesRegex(ValueError, "integer"):
+                        nt_api.cache_tmdb_episode_image(url, work_id, episode_number)
+            request.assert_not_called()
+            self.assertFalse(any(path.is_file() for path in Path(temp_dir).rglob("*")))
+
+    def test_tmdb_image_redirect_to_untrusted_host_is_rejected(self):
+        url = "https://image.tmdb.org/t/p/w500/redirect.jpg"
+        response = Mock()
+        response.status_code = 302
+        response.headers = {"Location": "https://127.0.0.1/private.png"}
+        response.url = url
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
+             patch.object(nt_api.requests, "get", return_value=response) as request:
+            with self.assertRaisesRegex(ValueError, "redirect destination is not trusted"):
+                nt_api.cache_tmdb_episode_image(url, 42, 3)
+        self.assertEqual(request.call_count, 1)
+        response.close.assert_called_once()
+
+    def test_tmdb_image_declared_oversize_is_rejected_before_reading_body(self):
+        url = "https://image.tmdb.org/t/p/w500/large.jpg"
+        response = Mock()
+        response.status_code = 200
+        response.headers = {"Content-Length": "17"}
+        response.url = url
+        response.raise_for_status.return_value = None
+        response.iter_content.return_value = iter([b"x" * 17])
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
+             patch.object(nt_api, "MAX_TMDB_EPISODE_IMAGE_BYTES", 16), \
+             patch.object(nt_api.requests, "get", return_value=response):
+            with self.assertRaisesRegex(ValueError, "download size limit"):
+                nt_api.cache_tmdb_episode_image(url, 42, 3)
+            files = [path for path in Path(temp_dir).rglob("*") if path.is_file()]
+        response.iter_content.assert_not_called()
+        self.assertEqual(files, [])
+
+    def test_tmdb_image_stream_cannot_exceed_size_limit_without_content_length(self):
+        url = "https://image.tmdb.org/t/p/w500/streamed.jpg"
+        response = Mock()
+        response.status_code = 200
+        response.headers = {}
+        response.url = url
+        response.raise_for_status.return_value = None
+        response.iter_content.return_value = iter([b"x" * 10, b"y" * 7])
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
+             patch.object(nt_api, "MAX_TMDB_EPISODE_IMAGE_BYTES", 16), \
+             patch.object(nt_api.requests, "get", return_value=response):
+            with self.assertRaisesRegex(ValueError, "download size limit"):
+                nt_api.cache_tmdb_episode_image(url, 42, 3)
+            files = [path for path in Path(temp_dir).rglob("*") if path.is_file()]
+        self.assertEqual(files, [])
+
+    def test_tmdb_image_download_is_validated_and_atomically_cached(self):
+        from PySide6.QtCore import QByteArray, QBuffer, QIODevice
+        from PySide6.QtGui import QImage
+
+        url = "https://image.tmdb.org/t/p/w500/valid.png"
+        image_bytes = QByteArray()
+        buffer = QBuffer(image_bytes)
+        self.assertTrue(buffer.open(QIODevice.WriteOnly))
+        image = QImage(12, 8, QImage.Format_ARGB32)
+        image.fill(0xFF336699)
+        self.assertTrue(image.save(buffer, "PNG"))
+        buffer.close()
+        data = bytes(image_bytes)
+
+        response = Mock()
+        response.status_code = 200
+        response.headers = {"Content-Length": str(len(data))}
+        response.url = url
+        response.raise_for_status.return_value = None
+        response.iter_content.return_value = iter([data[:len(data)//2], data[len(data)//2:]])
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
+             patch.object(nt_api.requests, "get", return_value=response) as request:
+            saved_path = nt_api.cache_tmdb_episode_image(url, 42, 3)
+            self.assertTrue(saved_path)
+            path = Path(saved_path)
+            self.assertEqual(path.read_bytes(), data)
+            self.assertFalse(any(path.parent.glob("*.tmp")))
+            cached_path = nt_api.cache_tmdb_episode_image(url, 42, 3)
+        self.assertEqual(cached_path, saved_path)
+        self.assertEqual(request.call_count, 1)
 
 class AniListPaginationChaosTests(unittest.TestCase):
     @staticmethod
@@ -992,11 +1341,130 @@ class AniListPaginationChaosTests(unittest.TestCase):
 
 
 class AniListRelationsChaosTests(unittest.TestCase):
+    def test_malformed_detail_connections_are_normalized_before_ui_or_db_access(self):
+        payload = {
+            "Media": {
+                "id": 616,
+                "type": "ANIME",
+                "title": {"english": "Malformed connections", "romaji": "Malformed connections"},
+                "characters": "not-an-object",
+                "airingSchedule": ["not", "an", "object"],
+                "staff": "not-an-object",
+                "studios": ["malformed"],
+                "relations": "not-an-object",
+            }
+        }
+        with patch.object(nt_api, "anilist_request", return_value=payload) as request:
+            media = nt_api.get_media_details(616)
+
+        request.assert_called_once()
+        for name in ("characters", "staff", "studios", "relations"):
+            self.assertIsInstance(media[name], dict)
+        self.assertIsInstance(media["characters"].get("edges"), list)
+        self.assertEqual(media["characters"]["edges"], [])
+        self.assertFalse(media["_characters_snapshot_valid"])
+        # Missing staff edges are non-authoritative too; [] would accidentally
+        # clear a previously cached staff list during detail re-import.
+        self.assertIsNone(media["staff"]["edges"])
+        # Missing/invalid relation and studio lists stay non-authoritative;
+        # replacing either with [] would erase previously cached connections.
+        self.assertIsNone(media["studios"]["edges"])
+        self.assertIsNone(media["relations"]["edges"])
+        self.assertIsInstance(media["airingSchedule"], dict)
+        self.assertEqual(media["airingSchedule"]["nodes"], [])
+
+
+    def test_mangabaka_only_relations_persist_between_negative_local_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                source_id, target_id = -901, -902
+                database.save_anime({
+                    "id": source_id,
+                    "type": "MANGA",
+                    "format": "MANGA",
+                    "title": {
+                        "english": "Local manga source",
+                        "romaji": "Local manga source",
+                        "native": None,
+                    },
+                    "relations": {
+                        "edges": [{
+                            "relationType": "SEQUEL",
+                            "node": {
+                                "id": target_id,
+                                "type": "MANGA",
+                                "format": "NOVEL",
+                                "title": {
+                                    "english": "Local manga sequel",
+                                    "romaji": "Local manga sequel",
+                                    "native": None,
+                                },
+                                "coverImage": {"large": None},
+                                "startDate": {"year": 2021, "month": 1, "day": 1},
+                            },
+                        }]
+                    },
+                })
+
+                connection = database.get_connection()
+                try:
+                    relation = connection.execute(
+                        "SELECT source_id, target_id, relation_type "
+                        "FROM work_relations WHERE source_id = ?",
+                        (source_id,),
+                    ).fetchone()
+                    target = connection.execute(
+                        "SELECT id, title, format FROM works WHERE id = ?",
+                        (target_id,),
+                    ).fetchone()
+                finally:
+                    connection.close()
+
+                self.assertIsNotNone(relation)
+                self.assertEqual(
+                    (relation["source_id"], relation["target_id"], relation["relation_type"]),
+                    (source_id, target_id, "SEQUEL"),
+                )
+                self.assertIsNotNone(target)
+                self.assertEqual(target["title"], "Local manga sequel")
+                self.assertEqual(target["format"], "NOVEL")
+            finally:
+                os.chdir(old_cwd)
+
     def test_invalid_ids_do_not_crash_batch_relation_fetch(self):
-        with patch.object(nt_api, "anilist_request") as request:
-            result = nt_api.get_media_relations_batch([None, "bad-id", -7, 0])
-        self.assertEqual(result, {})
+        with patch.object(nt_api, "anilist_request") as request, \
+             patch.object(nt_api, "get_media_relations") as local_lookup:
+            result = nt_api.get_media_relations_batch([
+                None, "bad-id", True, 12.5, 0, -(1 << 63), 1 << 31, "9" * 5000,
+            ])
+            self.assertEqual(result, {})
+            for malformed_container in (None, 123, True, "123", {"id": 1}):
+                with self.subTest(container=repr(malformed_container)):
+                    self.assertEqual(
+                        nt_api.get_media_relations_batch(malformed_container),
+                        {},
+                    )
         request.assert_not_called()
+        local_lookup.assert_not_called()
+
+    def test_negative_local_ids_use_mangabaka_relation_provider(self):
+        local_detail = {
+            "id": -7,
+            "type": "MANGA",
+            "format": "MANGA",
+            "title": {"english": "Local title", "romaji": "Local title"},
+            "relations": {"edges": []},
+        }
+        with patch.object(nt_api, "anilist_request") as anilist, \
+             patch.object(nt_api, "get_media_relations", return_value=local_detail) as local_lookup:
+            result = nt_api.get_media_relations_batch([-7])
+
+        self.assertEqual(result, {-7: local_detail})
+        anilist.assert_not_called()
+        local_lookup.assert_called_once_with(-7)
 
     def test_relation_batch_skips_invalid_returned_media_rows(self):
         payload = {
@@ -1011,10 +1479,54 @@ class AniListRelationsChaosTests(unittest.TestCase):
             }
         }
         with patch.object(nt_api, "anilist_request", return_value=payload) as request:
-            result = nt_api.get_media_relations_batch(["bad", None, 12, "12", -9])
+            result = nt_api.get_media_relations_batch(["bad", None, 12, "12"])
         self.assertEqual(set(result), {12})
         self.assertEqual(result[12]["title"]["romaji"], "Valid")
         self.assertEqual(request.call_args.args[1]["ids"], [12])
+
+    def test_relation_batch_rejects_non_integral_bool_and_out_of_range_ids(self):
+        with patch.object(nt_api, "anilist_request") as request, \
+             patch.object(nt_api, "get_media_relations") as local_lookup:
+            result = nt_api.get_media_relations_batch([
+                True,
+                12.5,
+                "12.5",
+                0,
+                -(1 << 63),
+                1 << 31,
+                "2147483648",
+            ])
+        self.assertEqual(result, {})
+        request.assert_not_called()
+        local_lookup.assert_not_called()
+
+    def test_relation_batch_splits_large_libraries_into_supported_pages(self):
+        requested_ids = list(range(1, 52))
+
+        def response_for_batch(_query, variables):
+            return {
+                "Page": {
+                    "media": [
+                        {"id": media_id, "title": {"romaji": f"Work {media_id}"}}
+                        for media_id in variables["ids"]
+                    ]
+                }
+            }
+
+        with patch.object(
+            nt_api,
+            "anilist_request",
+            side_effect=response_for_batch,
+        ) as request:
+            result = nt_api.get_media_relations_batch(requested_ids)
+
+        self.assertEqual(set(result), set(requested_ids))
+        self.assertEqual(request.call_count, 2)
+        batches = [call.args[1] for call in request.call_args_list]
+        self.assertEqual([len(batch["ids"]) for batch in batches], [50, 1])
+        self.assertEqual([batch["perPage"] for batch in batches], [50, 1])
+        self.assertEqual(batches[0]["ids"], requested_ids[:50])
+        self.assertEqual(batches[1]["ids"], requested_ids[50:])
 
     def test_optional_artwork_lookup_errors_do_not_discard_episode_data(self):
         with patch.object(nt_api, "_tmdb_get", side_effect=RuntimeError("invalid images JSON")):
