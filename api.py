@@ -494,27 +494,46 @@ def get_media_relations(media_id):
     return data["Media"]
 
 def get_media_relations_batch(media_ids):
-    """Fetch lightweight relation data for multiple media IDs in one request."""
-    # MangaBaka-only works use negative local IDs and are deliberately
-    # excluded from AniList relation queries. Ignore malformed IDs instead of
-    # letting one bad cached record invalidate the entire batch.
+    """Fetch lightweight AniList relation data in valid GraphQL-sized batches."""
+    # AniList uses GraphQL's signed 32-bit Int scalar and caps Page.perPage.
+    # Reject bools/fractional/oversized IDs rather than silently truncating them
+    # or making one invalid variable abort the complete relation lookup.
+    max_anilist_id = (1 << 31) - 1
     valid_ids = set()
     for media_id in media_ids or []:
-        try:
-            numeric_id = int(media_id)
-        except (TypeError, ValueError, OverflowError):
+        if isinstance(media_id, bool):
             continue
-        if numeric_id > 0:
+        if isinstance(media_id, int):
+            numeric_id = media_id
+        elif isinstance(media_id, float):
+            if not math.isfinite(media_id) or not media_id.is_integer():
+                continue
+            numeric_id = int(media_id)
+        elif isinstance(media_id, str):
+            text_id = media_id.strip()
+            if (
+                not text_id
+                or len(text_id) > 10
+                or not text_id.isascii()
+                or not text_id.isdigit()
+            ):
+                continue
+            try:
+                numeric_id = int(text_id)
+            except (TypeError, ValueError, OverflowError):
+                continue
+        else:
+            continue
+        if 1 <= numeric_id <= max_anilist_id:
             valid_ids.add(numeric_id)
+
     ids = sorted(valid_ids)
     if not ids:
         return {}
 
-    # `id_in` is a Media filter exposed on the Page.media field. The top-level
-    # Media query returns one Media object, not a list, so using
-    # `Media(id_in: ...)` here made the batch enrichment iterate over the
-    # object's dictionary keys and crash. Keep this request batched through
-    # Page.media so the result is always a list of media records.
+    # id_in is a Media filter exposed on Page.media. Keep each request at
+    # AniList's supported page size, even if a large local library asks for
+    # relation data for hundreds or thousands of entries at once.
     query = """
     query ($ids: [Int], $perPage: Int) {
         Page(page: 1, perPage: $perPage) {
@@ -544,26 +563,48 @@ def get_media_relations_batch(media_ids):
         }
     }
     """
-    data = anilist_request(query, {"ids": ids, "perPage": len(ids)})
-    page_data = data.get("Page") if isinstance(data, dict) else None
-    if not isinstance(page_data, dict):
-        return {}
-    media = page_data.get("media")
-    if isinstance(media, dict):
-        media = [media]
-    if not isinstance(media, list):
-        return {}
 
     result = {}
-    for item in media:
-        if not isinstance(item, dict):
-            continue
-        try:
-            item_id = int(item.get("id"))
-        except (TypeError, ValueError, OverflowError):
-            continue
-        if item_id > 0:
-            result[item_id] = item
+    batch_size = 50
+    for start_index in range(0, len(ids), batch_size):
+        batch_ids = ids[start_index:start_index + batch_size]
+        data = anilist_request(
+            query,
+            {"ids": batch_ids, "perPage": len(batch_ids)},
+        )
+        page_data = data.get("Page") if isinstance(data, dict) else None
+        if not isinstance(page_data, dict):
+            raise RuntimeError("AniList returned malformed relation-batch page data.")
+        media = page_data.get("media")
+        if isinstance(media, dict):
+            media = [media]
+        if not isinstance(media, list):
+            raise RuntimeError("AniList returned malformed relation-batch media data.")
+
+        requested_ids = set(batch_ids)
+        for item in media:
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id")
+            if isinstance(item_id, bool):
+                continue
+            if isinstance(item_id, float):
+                if not math.isfinite(item_id) or not item_id.is_integer():
+                    continue
+                item_id = int(item_id)
+            elif isinstance(item_id, str):
+                text_id = item_id.strip()
+                if not text_id or len(text_id) > 10 or not text_id.isascii() or not text_id.isdigit():
+                    continue
+                try:
+                    item_id = int(text_id)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+            elif not isinstance(item_id, int):
+                continue
+            if item_id in requested_ids:
+                result[item_id] = item
+
     return result
 
 
