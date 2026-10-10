@@ -1854,6 +1854,45 @@ def save_anime(anime):
                 cover_image = node.get("coverImage")
                 if not isinstance(cover_image, dict):
                     cover_image = {}
+
+                raw_target_type = node.get("type")
+                normalized_target_type = (
+                    raw_target_type.strip().upper()
+                    if isinstance(raw_target_type, str)
+                    else ""
+                )
+                target_type_is_valid = normalized_target_type in {"ANIME", "MANGA"}
+                target_type = normalized_target_type if target_type_is_valid else "ANIME"
+
+                valid_formats = {
+                    "TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC",
+                    "MANGA", "NOVEL", "ONE_SHOT",
+                }
+                raw_target_format = node.get("format")
+                normalized_target_format = (
+                    raw_target_format.strip().upper()
+                    if isinstance(raw_target_format, str)
+                    else ""
+                )
+                target_format = (
+                    normalized_target_format
+                    if normalized_target_format in valid_formats
+                    else None
+                )
+                target_start_year = _safe_optional_integer(target_start_date.get("year"), 1, 9999)
+                target_start_month = _safe_optional_integer(target_start_date.get("month"), 1, 12)
+                target_start_day = _safe_optional_integer(target_start_date.get("day"), 1, 31)
+                target_cover_url = cover_image.get("large")
+                if (
+                    not isinstance(target_cover_url, str)
+                    or not target_cover_url.strip()
+                    or len(target_cover_url) > 4096
+                ):
+                    target_cover_url = None
+                else:
+                    target_cover_url = target_cover_url.strip()
+                target_mal_id = _safe_optional_integer(node.get("idMal"), 1)
+
                 connection.execute("""
                     INSERT INTO works (
                         id, title, type, format, start_year, start_month, start_day,
