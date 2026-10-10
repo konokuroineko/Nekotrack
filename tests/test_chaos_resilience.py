@@ -675,6 +675,19 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         database.save_anime(oversized_id)
         self.assertEqual(source_targets(), [510, 511])
 
+        # A referenced node with no usable title is also a partial snapshot;
+        # it must not delete old edges or create a dangling relation to node 512.
+        missing_title_edge = edge(512)
+        missing_title_edge["node"]["title"] = {
+            "english": None,
+            "romaji": {"unexpected": "object"},
+            "native": None,
+        }
+        malformed_title = self.work(source_id, "ANIME", "TV")
+        malformed_title["relations"] = {"edges": [edge(510), missing_title_edge]}
+        database.save_anime(malformed_title)
+        self.assertEqual(source_targets(), [510, 511])
+
         # A fully valid refreshed graph removes the edge no longer returned.
         refreshed = self.work(source_id, "ANIME", "TV")
         refreshed["relations"] = {"edges": [edge(510)]}
