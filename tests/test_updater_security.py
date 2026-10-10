@@ -181,6 +181,22 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
             popen.assert_not_called()
             self.assertEqual(list(Path(directory).iterdir()), [])
 
+    def test_http_error_response_is_closed_before_download_raises(self):
+        response = Mock()
+        response.status_code = 503
+        response.url = VALID_CDN_URL
+        response.raise_for_status.side_effect = requests_error = updater.requests.HTTPError(
+            "temporary upstream failure"
+        )
+        response.close.return_value = None
+
+        with patch.object(updater.requests, "get", return_value=response):
+            with self.assertRaises(updater.requests.HTTPError) as raised:
+                updater._open_trusted_download(VALID_URL)
+
+        self.assertIs(raised.exception, requests_error)
+        response.close.assert_called_once()
+
     def test_github_release_redirect_to_trusted_cdn_is_followed_safely(self):
         with tempfile.TemporaryDirectory() as directory:
             redirect = Mock()
