@@ -1,6 +1,11 @@
 import threading
 
-from api import get_media_details, get_tmdb_episode_data
+from api import (
+    get_media_details,
+    get_tmdb_episode_data,
+    get_mangabaka_series_news,
+    get_mangabaka_volume_records,
+)
 from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer, QSize
 
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
