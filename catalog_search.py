@@ -220,10 +220,11 @@ def _page_info(data, page):
     else:
         has_next = False
 
+    last_page = max(current_page, last_page)
     return {
         "currentPage": current_page,
-        "lastPage": max(current_page, last_page),
-        "hasNextPage": has_next,
+        "lastPage": last_page,
+        "hasNextPage": has_next and current_page < last_page,
     }
 
 
