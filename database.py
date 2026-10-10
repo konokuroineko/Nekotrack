@@ -830,6 +830,43 @@ def save_reading_item_metadata(work_id, item_type, items):
 
 
 def save_anime(anime):
+    # Reconcile outgoing relations only when a complete, well-formed edge list
+    # is present. Search/partial records may omit relations entirely, and a
+    # malformed response must not erase previously cached relationships.
+    relation_snapshot = None
+    relations = anime.get("relations")
+    relation_edges = relations.get("edges") if isinstance(relations, dict) else None
+    if isinstance(relation_edges, list):
+        snapshot = set()
+        complete_snapshot = True
+        for edge in relation_edges:
+            if not isinstance(edge, dict):
+                complete_snapshot = False
+                break
+            node = edge.get("node")
+            target_id = node.get("id") if isinstance(node, dict) else None
+            relation_type = edge.get("relationType")
+            if (
+                isinstance(target_id, bool)
+                or not isinstance(relation_type, str)
+                or not relation_type.strip()
+                or (isinstance(target_id, float) and not target_id.is_integer())
+                or (isinstance(target_id, str) and not re.fullmatch(r"\\s*-?[0-9]+\\s*", target_id))
+            ):
+                complete_snapshot = False
+                break
+            try:
+                target_id = int(target_id)
+            except (TypeError, ValueError, OverflowError):
+                complete_snapshot = False
+                break
+            if target_id == 0:
+                complete_snapshot = False
+                break
+            snapshot.add((target_id, relation_type))
+        if complete_snapshot:
+            relation_snapshot = snapshot
+
     title_data = anime["title"]
     title = title_data.get("english") or title_data.get("romaji") or title_data.get("native")
     start_date = anime.get("startDate") or {}
@@ -898,6 +935,15 @@ def save_anime(anime):
                                (studio["id"], studio["name"], 1 if edge.get("isMain") else 0))
             connection.execute("INSERT OR IGNORE INTO work_studios (work_id, studio_id) VALUES (?, ?)",
                                (anime["id"], studio["id"]))
+    if relation_snapshot is not None:
+        # Relation details are a cached snapshot, not an append-only history.
+        # Delete stale outgoing edges within this transaction before writing
+        # the current list. A valid empty list intentionally clears all edges.
+        connection.execute(
+            "DELETE FROM work_relations WHERE source_id = ?",
+            (anime["id"],),
+        )
+
     for edge in (anime.get("relations") or {}).get("edges") or []:
         node = edge.get("node") or {}
         target_id = node.get("id")
