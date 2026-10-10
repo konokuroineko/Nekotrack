@@ -1397,8 +1397,8 @@ def _valid_image_data(data):
         # The application normally has Qt available. Keep a conservative
         # signature-only fallback for test/tooling environments without Qt.
         return (
-            raw.startswith(b"\\xFF\\xD8\\xFF")
-            or raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n")
+            raw.startswith(b"\xFF\xD8\xFF")
+            or raw.startswith(b"\x89PNG\r\n\x1a\n")
             or (len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP")
         )
 
