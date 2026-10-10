@@ -65,7 +65,6 @@ def run_live_checks(query):
     try:
         import api
         import catalog_search
-        import mangabaka_api as mb
         import series as series_module
         from ui.bundle_options import BUNDLE_OPTION_KEYS
         from ui.preferences import get
@@ -141,7 +140,7 @@ def run_live_checks(query):
             checks.append(result(name, "FAIL", str(error)))
 
     try:
-        payload = mb.search_media(
+        payload = api.search_mangabaka_media(
             query, page=1, media_type="MANGA", media_format="NOVEL",
             filters={"min_score": 70, "status": "FINISHED", "sort": "SCORE_DESC"},
             limit=8,
