@@ -484,6 +484,14 @@ def get_publisher_stats(publisher_id):
 def extract_external_id(series, provider):
     """Find a bounded upstream provider ID in MangaBaka source/response structures."""
     provider_key = str(provider or "").lower().replace("-", "").replace("_", "")
+    # AniList IDs become GraphQL Int variables and must fit signed 32-bit.
+    # Other external catalogues can use their own larger numeric namespaces,
+    # but all stored provider IDs still need to fit SQLite's signed integer.
+    max_provider_id = (
+        _MAX_ANILIST_MEDIA_ID
+        if provider_key == "anilist"
+        else _MAX_PROVIDER_FILTER_ID
+    )
     candidates = []
 
     def parse_candidate(value):
@@ -506,7 +514,7 @@ def extract_external_id(series, provider):
                 return None
         else:
             return None
-        return number if 1 <= number <= _MAX_ANILIST_MEDIA_ID else None
+        return number if 1 <= number <= max_provider_id else None
 
     def add_candidate(value):
         candidate = parse_candidate(value)
