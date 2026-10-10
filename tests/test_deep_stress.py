@@ -4,6 +4,7 @@ import os
 import random
 import subprocess
 import tempfile
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -146,6 +147,41 @@ class StressRunnerDiscoveryStressTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["tests_run"], 3)
+
+
+class DatabaseDeletionSafetyStressTests(unittest.TestCase):
+    def test_deleting_work_keeps_external_custom_cover_and_removes_owned_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                database.save_anime({
+                    "id": 1,
+                    "title": {"english": "Deletion safety", "romaji": "Deletion safety"},
+                    "type": "ANIME",
+                    "format": "TV",
+                })
+                database.add_to_library(1)
+
+                cached_cover = Path("data") / "images" / "works" / "1.jpg"
+                cached_cover.parent.mkdir(parents=True)
+                cached_cover.write_bytes(b"generated cache")
+
+                # This emulates the UI's fallback to the original selected
+                # image when it cannot copy that image into the bundle cache.
+                external_cover = Path(directory) / "user-original.png"
+                external_cover.write_bytes(b"user-owned source")
+                database.save_cover_path(1, str(cached_cover))
+                self.assertTrue(database.save_bundle_override(
+                    [1], 1, custom_cover_path=str(external_cover)
+                ))
+
+                self.assertTrue(database.delete_work_data(1))
+                self.assertFalse(cached_cover.exists())
+                self.assertEqual(external_cover.read_bytes(), b"user-owned source")
+            finally:
+                os.chdir(old_cwd)
 
 
 class MangaBakaShapeStressTests(unittest.TestCase):
