@@ -126,7 +126,7 @@ class StressRunnerDiscoveryStressTests(unittest.TestCase):
             args=["python", "-m", "unittest", "discover"],
             returncode=0,
             stdout="",
-            stderr="Ran 0 tests in 0.000s\\n\\nOK\\n",
+            stderr="Ran 0 tests in 0.000s\n\nOK\n",
         )
         with patch("stress_test.subprocess.run", return_value=completed):
             result = stress_test.run_full_regression_suite()
@@ -139,7 +139,7 @@ class StressRunnerDiscoveryStressTests(unittest.TestCase):
             args=["python", "-m", "unittest", "discover"],
             returncode=0,
             stdout="",
-            stderr="Ran 3 tests in 0.012s\\n\\nOK\\n",
+            stderr="Ran 3 tests in 0.012s\n\nOK\n",
         )
         with patch("stress_test.subprocess.run", return_value=completed):
             result = stress_test.run_full_regression_suite()
