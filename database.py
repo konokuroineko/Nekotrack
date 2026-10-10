@@ -882,12 +882,21 @@ def save_anime(anime):
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
-            title=excluded.title, type=excluded.type, description=excluded.description,
-            episodes=excluded.episodes, score=excluded.score, start_year=excluded.start_year,
-            start_month=excluded.start_month, start_day=excluded.start_day,
-            cover_url=excluded.cover_url, format=excluded.format, chapters=excluded.chapters,
-            volumes=excluded.volumes, source=excluded.source, end_year=excluded.end_year,
-            duration=excluded.duration, mal_id=COALESCE(excluded.mal_id, works.mal_id)
+            title=excluded.title, type=excluded.type,
+            description=COALESCE(excluded.description, works.description),
+            episodes=COALESCE(excluded.episodes, works.episodes),
+            score=COALESCE(excluded.score, works.score),
+            start_year=COALESCE(excluded.start_year, works.start_year),
+            start_month=COALESCE(excluded.start_month, works.start_month),
+            start_day=COALESCE(excluded.start_day, works.start_day),
+            cover_url=COALESCE(excluded.cover_url, works.cover_url),
+            format=COALESCE(excluded.format, works.format),
+            chapters=COALESCE(excluded.chapters, works.chapters),
+            volumes=COALESCE(excluded.volumes, works.volumes),
+            source=COALESCE(excluded.source, works.source),
+            end_year=COALESCE(excluded.end_year, works.end_year),
+            duration=COALESCE(excluded.duration, works.duration),
+            mal_id=COALESCE(excluded.mal_id, works.mal_id)
     """, (
         anime["id"], title, anime.get("type") or "ANIME", anime.get("description"),
         anime.get("episodes"), anime.get("averageScore"),
