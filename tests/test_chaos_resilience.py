@@ -460,6 +460,70 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         connection.close()
         self.assertEqual(after, 0)
 
+    def test_relation_refresh_removes_stale_edges_but_partial_payloads_preserve_them(self):
+        source_id = 509
+
+        def edge(target_id):
+            return {
+                "relationType": "SEQUEL",
+                "node": {
+                    "id": target_id,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "title": {
+                        "english": f"Related Work {target_id}",
+                        "romaji": f"Related Work {target_id}",
+                        "native": None,
+                    },
+                    "coverImage": {"large": None},
+                    "startDate": {"year": 2022, "month": 1, "day": 1},
+                },
+            }
+
+        original = self.work(source_id, "ANIME", "TV")
+        original["relations"] = {"edges": [edge(510), edge(511)]}
+        database.save_anime(original)
+
+        def source_targets():
+            connection = database.get_connection()
+            try:
+                return [
+                    row["target_id"]
+                    for row in connection.execute(
+                        "SELECT target_id FROM work_relations "
+                        "WHERE source_id = ? ORDER BY target_id",
+                        (source_id,),
+                    ).fetchall()
+                ]
+            finally:
+                connection.close()
+
+        self.assertEqual(source_targets(), [510, 511])
+
+        # A search/partial record omits relations; it must not erase cached edges.
+        database.save_anime(self.work(source_id, "ANIME", "TV"))
+        self.assertEqual(source_targets(), [510, 511])
+
+        # A malformed edge list is not a complete snapshot; valid edges may be
+        # refreshed, but stale rows must not be removed based on partial data.
+        partial = self.work(source_id, "ANIME", "TV")
+        partial["relations"] = {"edges": [edge(510), None]}
+        database.save_anime(partial)
+        self.assertEqual(source_targets(), [510, 511])
+
+        # A fully valid refreshed graph removes the edge no longer returned.
+        refreshed = self.work(source_id, "ANIME", "TV")
+        refreshed["relations"] = {"edges": [edge(510)]}
+        database.save_anime(refreshed)
+        self.assertEqual(source_targets(), [510])
+
+        # A valid empty list is authoritative and clears cached outgoing edges.
+        empty = self.work(source_id, "ANIME", "TV")
+        empty["relations"] = {"edges": []}
+        database.save_anime(empty)
+        self.assertEqual(source_targets(), [])
+
+
     def test_deleting_a_work_does_not_remove_shared_cover_still_in_use(self):
         first_id, second_id = 507, 508
         database.save_anime(self.work(first_id, "ANIME", "TV"))
