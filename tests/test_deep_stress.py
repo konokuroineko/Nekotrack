@@ -913,6 +913,62 @@ class DatabasePartialMetadataStressTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_unknown_media_type_and_format_do_not_overwrite_valid_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                database.save_anime({
+                    "id": 615,
+                    "type": "MANGA",
+                    "format": "NOVEL",
+                    "title": {
+                        "english": "Known novel",
+                        "romaji": "Known novel",
+                    },
+                })
+
+                database.save_anime({
+                    "id": 615,
+                    "type": "television",
+                    "format": "FEATURE_LENGTH_SPECIAL",
+                    "title": {
+                        "english": "Updated title",
+                        "romaji": "Updated title",
+                    },
+                })
+
+                connection = database.get_connection()
+                try:
+                    row = connection.execute(
+                        "SELECT title, type, format FROM works WHERE id = ?",
+                        (615,),
+                    ).fetchone()
+                finally:
+                    connection.close()
+
+                self.assertEqual(row["title"], "Updated title")
+                self.assertEqual(row["type"], "MANGA")
+                self.assertEqual(row["format"], "NOVEL")
+
+                # The same arbitrary values cannot be written on a fresh row.
+                database.save_anime({
+                    "id": 616,
+                    "type": "television",
+                    "format": "FEATURE_LENGTH_SPECIAL",
+                    "title": {
+                        "english": "Unknown taxonomy",
+                        "romaji": "Unknown taxonomy",
+                    },
+                })
+                fresh = database.get_work(616)
+                self.assertEqual(fresh["type"], "ANIME")
+                self.assertIsNone(fresh["format"])
+            finally:
+                os.chdir(old_cwd)
+
+
     def test_malformed_nested_metadata_is_sanitized_before_sqlite_upsert(self):
         with tempfile.TemporaryDirectory() as directory:
             old_cwd = os.getcwd()
