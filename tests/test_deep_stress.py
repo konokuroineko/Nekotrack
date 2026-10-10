@@ -1409,6 +1409,15 @@ class MangaBakaShapeStressTests(unittest.TestCase):
             {"anilist_id": "9" * 5000},
             "anilist",
         ))
+        self.assertIsNone(mb.extract_external_id(
+            {"anilist_id": str((1 << 31) + 1)},
+            "anilist",
+        ))
+        mal_id = (1 << 31) + 17
+        self.assertEqual(
+            mb.extract_external_id({"myanimelist_id": str(mal_id)}, "myanimelist"),
+            mal_id,
+        )
 
     def test_nonfinite_scores_never_pass_local_minimum_score_filters(self):
         for rating in (float("nan"), float("inf"), float("-inf"), None, "unknown", [], {}):
