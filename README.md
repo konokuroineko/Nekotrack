@@ -40,16 +40,22 @@ No external provider can guarantee complete chapter or volume records for every 
 
 ## Adversarial testing
 
-Run the full regression suite followed by a configurable, network-free fuzzing soak:
+Run the full regression suite, then a seeded fuzz/chaos soak across malformed provider payloads, AniList response handling, unified search, relationship-graph bundling, and randomized SQLite progress/state invariants:
 
 ```powershell
 python stress_test.py --minutes 10
 ```
 
-Use `--seconds 30 --seed 7` for a shorter reproducible run. The report is written to `nekotrack_stress_report.json`. The harness uses mocked APIs and temporary databases; it does not contact live providers or open the normal application database.
+Choose a duration from 1 to 300 minutes (5 hours) and a seed that can reproduce the run:
 
-For longer runs, open **Actions → Adversarial stress → Run workflow** and choose a duration of 1–30 minutes and a seed. The workflow uploads its JSON report as an artifact.
+```powershell
+python stress_test.py --minutes 120 --seed 20261010
+python stress_test.py --seconds 30 --seed 7
+```
 
+Every soak iteration runs all three randomized stress modules with a fresh seed; the report records failed seeds and test output in `nekotrack_stress_report.json`. The harness disables live network access and never opens the normal application database; database tests use temporary directories. This is a long-running local fuzz campaign, not a claim that every GUI workflow is automatically covered.
+
+For a hosted run, open **Actions → Adversarial stress → Run workflow** and choose a duration of 1–300 minutes. Pull requests use a short one-minute soak; use manual dispatch for longer campaigns. The workflow uploads the JSON report as an artifact.
 ## Data and privacy
 
 NekoTrack stores its local SQLite database as `anime_tracker.db`. Cover images are cached under `data/images/`. These generated/local files are intentionally ignored by Git.
