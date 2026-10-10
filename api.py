@@ -936,6 +936,29 @@ def get_media_details(media_id):
         },
     }
 
+    # Normalize the remaining connections too. UI/import callers access
+    # staff, studios, and relations as dictionaries of edge lists; a malformed
+    # provider shape must not crash those callers before DB-level guards run.
+    for connection_name in ("staff", "studios", "relations"):
+        raw_connection = media.get(connection_name)
+        if not isinstance(raw_connection, dict):
+            raw_connection = {}
+        raw_edges = raw_connection.get("edges")
+        clean_edges = []
+        if isinstance(raw_edges, list):
+            for edge in raw_edges:
+                if not isinstance(edge, dict) or not isinstance(edge.get("node"), dict):
+                    continue
+                if connection_name == "relations":
+                    relation_type = edge.get("relationType")
+                    if not isinstance(relation_type, str) or not relation_type.strip():
+                        continue
+                clean_edges.append(edge)
+        media[connection_name] = {
+            **raw_connection,
+            "edges": clean_edges,
+        }
+
     # Add MangaBaka's complete series payload for reading-media details. The
     # lookup is best-effort and the AniList record remains the canonical one.
     if str(media.get("type") or "").upper() == "MANGA":
