@@ -902,9 +902,15 @@ def ensure_reading_placeholders(work_id, item_type, total_count, offset=0, limit
     except (TypeError, ValueError, OverflowError):
         return []
 
-    total = _safe_optional_integer(total_count, 0, _MAX_TRACKED_EPISODE_NUMBER)
+    # The provider's declared total can be absurdly large (or stale).
+    # Clamp a valid non-negative hint to the largest trackable item number,
+    # while still allowing the requested visible page to be created. The page
+    # itself is independently capped below, so this never creates an enormous
+    # range or inserts more than 100 placeholders per call.
+    total = _safe_optional_integer(total_count, 0, _MAX_SQLITE_INTEGER)
     if total is None:
         return []
+    total = min(total, _MAX_TRACKED_EPISODE_NUMBER)
     safe_offset = _safe_optional_integer(offset, 0, _MAX_TRACKED_EPISODE_NUMBER)
     if safe_offset is None:
         return []
