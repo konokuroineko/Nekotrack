@@ -184,6 +184,89 @@ class DatabaseDeletionSafetyStressTests(unittest.TestCase):
                 os.chdir(old_cwd)
 
 
+class DatabasePartialMetadataStressTests(unittest.TestCase):
+    def test_partial_refresh_preserves_fields_from_previously_loaded_details(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                work_id = 612
+                full = {
+                    "id": work_id,
+                    "type": "MANGA",
+                    "format": "MANGA",
+                    "title": {
+                        "english": "Detailed title",
+                        "romaji": "Detailed title",
+                        "native": None,
+                    },
+                    "description": "Full description from an earlier import",
+                    "episodes": 24,
+                    "averageScore": 88,
+                    "startDate": {"year": 2018, "month": 3, "day": 4},
+                    "endDate": {"year": 2020, "month": 5, "day": 6},
+                    "coverImage": {"large": "https://example.test/cached-cover.jpg"},
+                    "chapters": 120,
+                    "volumes": 12,
+                    "source": "MANGA",
+                    "duration": 40,
+                }
+                database.save_anime(full)
+
+                # Search results intentionally omit detail-only fields. NekoTrack
+                # saves them immediately before background enrichment, so this
+                # refresh must not erase data if the later request fails.
+                partial = {
+                    "id": work_id,
+                    "type": "MANGA",
+                    "title": {
+                        "english": "Updated title",
+                        "romaji": "Updated title",
+                        "native": None,
+                    },
+                    "format": None,
+                    "episodes": None,
+                    "averageScore": None,
+                    "startDate": {"year": None, "month": None, "day": None},
+                    "endDate": {},
+                    "coverImage": {"large": None},
+                }
+                database.save_anime(partial)
+
+                connection = database.get_connection()
+                try:
+                    row = dict(connection.execute(
+                        """
+                        SELECT title, description, episodes, score, start_year,
+                               start_month, start_day, cover_url, format, chapters,
+                               volumes, source, end_year, duration
+                        FROM works WHERE id = ?
+                        """,
+                        (work_id,),
+                    ).fetchone())
+                finally:
+                    connection.close()
+
+                self.assertEqual(row["title"], "Updated title")
+                self.assertEqual(row["description"], full["description"])
+                self.assertEqual(row["episodes"], 24)
+                self.assertEqual(row["score"], 88)
+                self.assertEqual(
+                    (row["start_year"], row["start_month"], row["start_day"]),
+                    (2018, 3, 4),
+                )
+                self.assertEqual(row["cover_url"], full["coverImage"]["large"])
+                self.assertEqual(row["format"], "MANGA")
+                self.assertEqual(row["chapters"], 120)
+                self.assertEqual(row["volumes"], 12)
+                self.assertEqual(row["source"], "MANGA")
+                self.assertEqual(row["end_year"], 2020)
+                self.assertEqual(row["duration"], 40)
+            finally:
+                os.chdir(old_cwd)
+
+
 class MangaBakaShapeStressTests(unittest.TestCase):
     def test_provider_envelopes_never_leak_non_dictionary_pagination(self):
         payloads = [
