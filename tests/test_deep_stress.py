@@ -521,6 +521,27 @@ class DatabasePartialMetadataStressTests(unittest.TestCase):
 
 
 class MangaBakaShapeStressTests(unittest.TestCase):
+    def test_oversized_publisher_and_year_filters_fail_closed_without_requests(self):
+        hostile_filters = (
+            {"publisher_id": "9" * 5000},
+            {"publisher_id": 10**100},
+            {"year": "9" * 5000},
+            {"year": 10**100},
+        )
+        with patch("mangabaka_api.search_series") as search_series, \
+             patch("mangabaka_api.get_series_mix") as series_mix:
+            for filters in hostile_filters:
+                with self.subTest(filter_name=next(iter(filters))):
+                    result = mb.search_media("", filters=filters)
+                    self.assertEqual(result["media"], [])
+                    self.assertFalse(result["pageInfo"]["hasNextPage"])
+            search_series.assert_not_called()
+            series_mix.assert_not_called()
+
+        self.assertEqual(mb._bounded_positive_filter_int("123"), 123)
+        self.assertIsNone(mb._bounded_positive_filter_int("9" * 5000))
+        self.assertIsNone(mb._bounded_positive_filter_int(10**100))
+
     def test_provider_envelopes_never_leak_non_dictionary_pagination(self):
         payloads = [
             None, [], 5, "text", {},
