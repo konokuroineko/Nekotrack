@@ -464,7 +464,8 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         first_id, second_id = 507, 508
         database.save_anime(self.work(first_id, "ANIME", "TV"))
         database.save_anime(self.work(second_id, "ANIME", "TV"))
-        shared_cover = Path(self.temp_dir.name) / "shared-cover.jpg"
+        shared_cover = Path("data") / "images" / "works" / "shared-cover.jpg"
+        shared_cover.parent.mkdir(parents=True, exist_ok=True)
         shared_cover.write_bytes(b"dummy image file used only for path ownership")
         database.save_cover_path(first_id, str(shared_cover))
         database.save_cover_path(second_id, str(shared_cover))
