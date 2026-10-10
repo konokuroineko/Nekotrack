@@ -896,7 +896,7 @@ def save_anime(anime):
             except (TypeError, ValueError, OverflowError):
                 complete_snapshot = False
                 break
-            if target_id == 0:
+            if target_id <= 0:
                 complete_snapshot = False
                 break
             snapshot.add((target_id, relation_type))
@@ -1050,7 +1050,7 @@ def save_anime(anime):
             target_id = int(target_id)
         except (TypeError, ValueError, OverflowError):
             continue
-        if target_id == 0:
+        if target_id <= 0:
             continue
 
         target_title_data = node.get("title")
