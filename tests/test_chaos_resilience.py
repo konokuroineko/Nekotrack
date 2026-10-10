@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import database
-import mangabaka_api as mb
+import api as mb
 import series
 import updater
 import api as nt_api
@@ -80,7 +80,7 @@ class ProviderPayloadChaosTests(unittest.TestCase):
                 ]),
             }
             with self.subTest(case=case):
-                normalized = mb.normalize_series(record)
+                normalized = mb.normalize_mangabaka_series(record)
                 self.assertEqual(normalized["type"], "MANGA")
                 self.assertEqual(normalized["_mangabaka_id"], case + 1)
                 self.assertEqual(normalized["id"], -(case + 1))
@@ -122,8 +122,8 @@ class ProviderPayloadChaosTests(unittest.TestCase):
                 "next": True,
             },
         }
-        with patch.object(mb, "search_series", return_value=payload):
-            result = mb.search_media("chaos", page=1, media_type="MANGA", media_format="NOVEL")
+        with patch.object(mb, "search_mangabaka_series", return_value=payload):
+            result = mb.search_mangabaka_media("chaos", page=1, media_type="MANGA", media_format="NOVEL")
 
         self.assertEqual([item["_mangabaka_id"] for item in result["media"]], [31])
         self.assertEqual(result["pageInfo"]["currentPage"], 1)
@@ -147,8 +147,8 @@ class ProviderPayloadChaosTests(unittest.TestCase):
                 "titles": [{"language": "en", "title": f"Novel {item_id}"}],
             })
         payload = {"data": {"items": rows}, "pagination": {"page": 1, "limit": 200, "count": len(rows)}}
-        with patch.object(mb, "search_series", return_value=payload):
-            result = mb.search_media(
+        with patch.object(mb, "search_mangabaka_series", return_value=payload):
+            result = mb.search_mangabaka_media(
                 "novel", page=1, media_type="MANGA", media_format="NOVEL",
                 filters={"status": "FINISHED", "min_score": 70, "year": "2020", "genre": "Fantasy"},
                 limit=200,
