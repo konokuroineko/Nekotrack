@@ -20,6 +20,37 @@ ANILIST_URL = "https://graphql.anilist.co"
 
 MAX_RETRIES = 5
 RETRY_DELAY = 1
+MAX_ANILIST_MEDIA_ID = (1 << 31) - 1
+MIN_LOCAL_MEDIA_ID = -((1 << 63) - 1)
+
+
+def _validated_media_id(value):
+    """Normalize a local/AniList media ID without truncation or scalar overflow."""
+    if isinstance(value, bool):
+        raise ValueError("Media ID must be a non-zero integer.")
+    if isinstance(value, str):
+        text_id = value.strip()
+        if not text_id or len(text_id) > 20 or not re.fullmatch(r"[+-]?[0-9]+", text_id):
+            raise ValueError("Media ID must be a non-zero integer.")
+        value = text_id
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise ValueError("Media ID must be a non-zero integer.")
+    elif not isinstance(value, int):
+        raise ValueError("Media ID must be a non-zero integer.")
+
+    try:
+        numeric_id = int(value)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Media ID must be a non-zero integer.") from error
+    if numeric_id == 0:
+        raise ValueError("Media ID must be a non-zero integer.")
+    # Positive IDs go to AniList's signed 32-bit GraphQL Int. Negative IDs are
+    # local MangaBaka references stored in signed 64-bit SQLite keys. Reject
+    # the signed-64 minimum too, because abs(min_int64) cannot be represented.
+    if numeric_id > MAX_ANILIST_MEDIA_ID or numeric_id < MIN_LOCAL_MEDIA_ID:
+        raise ValueError("Media ID is outside the supported provider ID range.")
+    return numeric_id
 
 
 def anilist_request(query, variables=None):
@@ -459,10 +490,11 @@ def search_anime(
 
 def get_media_relations(media_id):
     """Fetch only the lightweight relation data used by series grouping."""
-    if int(media_id) < 0:
+    media_id = _validated_media_id(media_id)
+    if media_id < 0:
         details = get_media_details(media_id)
         return details or {
-            "id": int(media_id), "type": "MANGA", "format": "MANGA",
+            "id": media_id, "type": "MANGA", "format": "MANGA",
             "title": {"english": "MangaBaka entry"}, "relations": {"edges": []},
         }
     query = """
@@ -610,6 +642,13 @@ def get_media_relations_batch(media_ids):
 
 def get_media_episodes(media_id):
     """Fetch all available AniList airing-schedule pages as local episode rows."""
+    try:
+        media_id = _validated_media_id(media_id)
+    except ValueError:
+        return []
+    if media_id < 1:
+        return []
+
     query = """
     query ($id: Int, $page: Int) {
         Media(id: $id) {
@@ -714,29 +753,7 @@ def get_media_episodes(media_id):
 
 def get_media_details(media_id):
     """Fetch the complete provider-aware media record used by detail/import workflows."""
-    if isinstance(media_id, bool):
-        raise ValueError("Media ID must be a non-zero integer.")
-    if isinstance(media_id, str):
-        text_id = media_id.strip()
-        if not text_id or len(text_id) > 20 or not re.fullmatch(r"[+-]?[0-9]+", text_id):
-            raise ValueError("Media ID must be a non-zero integer.")
-        media_id = text_id
-    elif isinstance(media_id, float):
-        if not math.isfinite(media_id) or not media_id.is_integer():
-            raise ValueError("Media ID must be a non-zero integer.")
-    elif not isinstance(media_id, int):
-        raise ValueError("Media ID must be a non-zero integer.")
-
-    try:
-        numeric_id = int(media_id)
-    except (TypeError, ValueError, OverflowError) as error:
-        raise ValueError("Media ID must be a non-zero integer.") from error
-    if numeric_id == 0:
-        raise ValueError("Media ID must be a non-zero integer.")
-    # AniList's GraphQL Int scalar is signed 32-bit. Negative IDs are
-    # app-local MangaBaka IDs and are stored in SQLite's signed 64-bit range.
-    if numeric_id > (1 << 31) - 1 or numeric_id < -(1 << 63):
-        raise ValueError("Media ID is outside the supported provider ID range.")
+    numeric_id = _validated_media_id(media_id)
     media_id = numeric_id
 
     # Negative local IDs represent MangaBaka-only series. Never send them to
