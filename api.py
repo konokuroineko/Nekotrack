@@ -1539,7 +1539,7 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
             not math.isfinite(value) or not value.is_integer()
         ):
             raise ValueError(f"{label} must be an integer.")
-        if isinstance(value, str) and not re.fullmatch(r"\\s*\\+?[0-9]+\\s*", value):
+        if isinstance(value, str) and not re.fullmatch(r"\s*\+?[0-9]+\s*", value):
             raise ValueError(f"{label} must be an integer.")
         try:
             parsed = int(value)
