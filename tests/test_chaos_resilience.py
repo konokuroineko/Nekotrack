@@ -920,7 +920,7 @@ class UpdateFeedChaosTests(unittest.TestCase):
                 "assets": [
                     None,
                     {"name": 42, "browser_download_url": None},
-                    {"name": "NekoTrack-Setup.exe", "browser_download_url": "https://example.invalid/setup.exe"},
+                    {"name": "NekoTrack-Setup.exe", "browser_download_url": "https://github.com/konokuroineko/Nekotrack/releases/download/v2.0.0/NekoTrack-Setup.exe"},
                 ],
             },
         ]
