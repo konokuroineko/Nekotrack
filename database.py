@@ -671,6 +671,10 @@ def save_person_image_path(person_id, image_path):
 
 def get_characters(work_id):
     """Return one row per character, with the preferred Japanese voice actor when available."""
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return []
     connection = get_connection()
     results = connection.execute("""
         SELECT
@@ -750,7 +754,7 @@ def get_characters(work_id):
                 ELSE 3
             END,
             characters.name
-    """, (work_id,)).fetchall()
+    """, (safe_work_id,)).fetchall()
     connection.close()
     return results
 
@@ -860,6 +864,10 @@ def save_staff(work_id, staff_edges):
 
 
 def get_staff(work_id):
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return []
     connection = get_connection()
     results = connection.execute("""
         SELECT
@@ -883,7 +891,7 @@ def get_staff(work_id):
             WHERE ws.work_id = ? AND ws.person_id = people.id
         )
         ORDER BY people.name
-    """, (work_id, work_id)).fetchall()
+    """, (safe_work_id, safe_work_id)).fetchall()
     connection.close()
     return results
 
@@ -987,10 +995,18 @@ def save_episodes(work_id, episode_data):
 
 
 def get_episodes(work_id):
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return []
     connection = get_connection()
-    results = connection.execute("SELECT * FROM episodes WHERE work_id = ? ORDER BY episode_number", (work_id,)).fetchall()
-    connection.close()
-    return results
+    try:
+        return connection.execute(
+            "SELECT * FROM episodes WHERE work_id = ? ORDER BY episode_number",
+            (safe_work_id,),
+        ).fetchall()
+    finally:
+        connection.close()
 
 
 def _reading_item_type(value):
@@ -1193,17 +1209,42 @@ def set_reading_item_read(work_id, item_type, item_number, is_read):
 
 def save_episode_thumbnail_path(work_id, episode_number, thumbnail_path):
     """Persist the local cached image path for one episode."""
-    connection = get_connection()
-    connection.execute(
-        """
-        UPDATE episodes
-        SET thumbnail_url = ?
-        WHERE work_id = ? AND episode_number = ?
-        """,
-        (str(thumbnail_path) if thumbnail_path else None, int(work_id), int(episode_number)),
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    safe_episode_number = _safe_optional_integer(
+        episode_number, 1, _MAX_TRACKED_EPISODE_NUMBER
     )
-    connection.commit()
-    connection.close()
+    if safe_episode_number is None or isinstance(episode_number, bool):
+        return False
+
+    if thumbnail_path in (None, ""):
+        stored_path = None
+    elif isinstance(thumbnail_path, (str, Path)):
+        stored_path = str(thumbnail_path).strip() or None
+        if stored_path is not None and len(stored_path) > 4096:
+            return False
+    else:
+        return False
+
+    connection = get_connection()
+    try:
+        cursor = connection.execute(
+            """
+            UPDATE episodes
+            SET thumbnail_url = ?
+            WHERE work_id = ? AND episode_number = ?
+            """,
+            (stored_path, safe_work_id, safe_episode_number),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def set_episode_watched(work_id, episode_number, watched):
@@ -1810,10 +1851,32 @@ def save_anime(anime):
         connection.close()
 
 def save_cover_path(work_id, cover_path):
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if cover_path in (None, ""):
+        stored_path = None
+    elif isinstance(cover_path, (str, Path)):
+        stored_path = str(cover_path).strip() or None
+        if stored_path is not None and len(stored_path) > 4096:
+            return False
+    else:
+        return False
+
     connection = get_connection()
-    connection.execute("UPDATE works SET cover_path = ? WHERE id = ?", (cover_path, work_id))
-    connection.commit()
-    connection.close()
+    try:
+        cursor = connection.execute(
+            "UPDATE works SET cover_path = ? WHERE id = ?",
+            (stored_path, safe_work_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def get_saved_anime():
@@ -1825,43 +1888,59 @@ def get_saved_anime():
 
 def get_alternate_titles(work_id):
     """Return locally stored alternate titles for one work."""
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return []
     connection = get_connection()
-    rows = connection.execute(
-        """
-        SELECT title
-        FROM alternate_titles
-        WHERE work_id = ?
-        ORDER BY rowid
-        """,
-        (int(work_id),),
-    ).fetchall()
-    connection.close()
+    try:
+        rows = connection.execute(
+            """
+            SELECT title
+            FROM alternate_titles
+            WHERE work_id = ?
+            ORDER BY rowid
+            """,
+            (safe_work_id,),
+        ).fetchall()
+    finally:
+        connection.close()
     return [str(row["title"]) for row in rows if str(row["title"] or "").strip()]
 
 
 def get_work(work_id):
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return None
     connection = get_connection()
-    result = connection.execute("""
-        SELECT works.*, user_library.status, user_library.progress_episodes,
-               user_library.progress_chapters, user_library.progress_volumes,
-               user_library.rating, user_library.notes,
-               user_library.added_date, user_library.updated_date
-        FROM works LEFT JOIN user_library ON user_library.work_id = works.id
-        WHERE works.id = ?
-    """, (work_id,)).fetchone()
-    connection.close()
-    return result
+    try:
+        return connection.execute("""
+            SELECT works.*, user_library.status, user_library.progress_episodes,
+                   user_library.progress_chapters, user_library.progress_volumes,
+                   user_library.rating, user_library.notes,
+                   user_library.added_date, user_library.updated_date
+            FROM works LEFT JOIN user_library ON user_library.work_id = works.id
+            WHERE works.id = ?
+        """, (safe_work_id,)).fetchone()
+    finally:
+        connection.close()
 
 
 def get_relations(work_id):
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return []
     connection = get_connection()
-    results = connection.execute("""
-        SELECT work_relations.*, works.title, works.format, works.type, works.cover_url, works.cover_path
-        FROM work_relations LEFT JOIN works ON works.id = work_relations.target_id
-        WHERE work_relations.source_id = ? ORDER BY relation_type, title
-    """, (work_id,)).fetchall()
-    connection.close()
-    return results
+    try:
+        return connection.execute("""
+            SELECT work_relations.*, works.title, works.format, works.type, works.cover_url, works.cover_path
+            FROM work_relations LEFT JOIN works ON works.id = work_relations.target_id
+            WHERE work_relations.source_id = ? ORDER BY relation_type, title
+        """, (safe_work_id,)).fetchall()
+    finally:
+        connection.close()
 
 def get_bundle_characters(work_ids):
     """Return unique characters from every work represented by a bundle."""
