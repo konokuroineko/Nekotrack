@@ -69,7 +69,15 @@ def _is_trusted_download_location(value):
     host = parsed.hostname.casefold()
     if host == "github.com":
         return _is_trusted_release_asset_url(value)
-    return host == "githubusercontent.com" or host.endswith(".githubusercontent.com")
+
+    # Do not trust every githubusercontent.com subdomain: that includes places
+    # where arbitrary user-controlled files can be hosted. These are the exact
+    # documented/observed release-asset delivery hosts.
+    return host in {
+        "release-assets.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "github-production-release-asset-2e65be.s3.amazonaws.com",
+    }
 
 
 def _open_trusted_download(start_url):
