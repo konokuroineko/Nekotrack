@@ -5,8 +5,7 @@ from datetime import date as _date
 import math
 import re
 
-from api import search_anime
-from mangabaka_api import enrich_anilist_results, search_media as search_mangabaka_media
+from api import enrich_anilist_results, search_anime, search_mangabaka_media
 
 ANIME_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL", "MUSIC"}
 PROVIDER_ONLY_FILTERS = ("publisher_id", "is_licensed")
