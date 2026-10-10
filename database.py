@@ -1150,20 +1150,61 @@ def save_episode_thumbnail_path(work_id, episode_number, thumbnail_path):
 
 
 def set_episode_watched(work_id, episode_number, watched):
+    """Set one episode's watched state after validating the local IDs."""
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return 0, 0
+
+    safe_episode_number = _safe_optional_integer(
+        episode_number,
+        1,
+        _MAX_TRACKED_EPISODE_NUMBER,
+    )
+    if safe_episode_number is None or isinstance(episode_number, bool):
+        return 0, 0
+
     connection = get_connection()
-    connection.execute("UPDATE episodes SET watched = ? WHERE work_id = ? AND episode_number = ?",
-                       (1 if watched else 0, work_id, episode_number))
-    watched_count = connection.execute("SELECT COUNT(*) FROM episodes WHERE work_id = ? AND watched = 1", (work_id,)).fetchone()[0]
-    total = connection.execute("SELECT COUNT(*) FROM episodes WHERE work_id = ?", (work_id,)).fetchone()[0]
-    if connection.execute("SELECT 1 FROM user_library WHERE work_id = ?", (work_id,)).fetchone():
-        status = "Completed" if total and watched_count >= total else "Watching" if watched_count else "Planning"
-        connection.execute("""
-            UPDATE user_library SET progress_episodes = ?, status = ?, updated_date = CURRENT_TIMESTAMP
-            WHERE work_id = ?
-        """, (watched_count, status, work_id))
-    connection.commit()
-    connection.close()
-    return watched_count, total
+    try:
+        connection.execute(
+            """
+            UPDATE episodes SET watched = ?
+            WHERE work_id = ? AND episode_number = ?
+            """,
+            (1 if watched else 0, safe_work_id, safe_episode_number),
+        )
+        watched_count = connection.execute(
+            "SELECT COUNT(*) FROM episodes WHERE work_id = ? AND watched = 1",
+            (safe_work_id,),
+        ).fetchone()[0]
+        total = connection.execute(
+            "SELECT COUNT(*) FROM episodes WHERE work_id = ?",
+            (safe_work_id,),
+        ).fetchone()[0]
+        if connection.execute(
+            "SELECT 1 FROM user_library WHERE work_id = ?",
+            (safe_work_id,),
+        ).fetchone():
+            status = (
+                "Completed" if total and watched_count >= total
+                else "Watching" if watched_count
+                else "Planning"
+            )
+            connection.execute(
+                """
+                UPDATE user_library
+                SET progress_episodes = ?, status = ?, updated_date = CURRENT_TIMESTAMP
+                WHERE work_id = ?
+                """,
+                (watched_count, status, safe_work_id),
+            )
+        connection.commit()
+        return watched_count, total
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def get_provider_metadata(work_id, provider="mangabaka"):
