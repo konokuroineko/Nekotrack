@@ -120,6 +120,22 @@ def _open_trusted_download(start_url):
     raise ValueError("The installer download exceeded the redirect limit.")
 
 
+def _is_windows_pe_installer(path):
+    """Reject empty/error pages masquerading as .exe files before launching."""
+    try:
+        with Path(path).open("rb") as handle:
+            dos_header = handle.read(64)
+            if len(dos_header) < 64 or dos_header[:2] != b"MZ":
+                return False
+            pe_offset = int.from_bytes(dos_header[0x3C:0x40], "little")
+            if pe_offset < 64 or pe_offset > MAX_INSTALLER_BYTES - 4:
+                return False
+            handle.seek(pe_offset)
+            return handle.read(4) == b"PE\0\0"
+    except (OSError, TypeError, ValueError, OverflowError):
+        return False
+
+
 def _version_key(value):
     if not isinstance(value, str):
         return (0, 0, 0, -1, 0)
@@ -268,6 +284,10 @@ class InstallerDownloader(QThread):
 
             if byte_count == 0:
                 raise ValueError("The installer download was empty.")
+            if not _is_windows_pe_installer(temp_path):
+                raise ValueError(
+                    "The downloaded Setup file does not contain a valid Windows executable header."
+                )
 
             subprocess.Popen([str(temp_path)], close_fds=True)
             self.finished.emit(str(temp_path))
