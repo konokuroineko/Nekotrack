@@ -149,6 +149,48 @@ class StressRunnerDiscoveryStressTests(unittest.TestCase):
         self.assertEqual(result["tests_run"], 3)
 
 
+class TmdbImageCacheResourceStressTests(unittest.TestCase):
+    def test_oversized_cached_image_is_not_loaded_into_memory(self):
+        url = "https://image.tmdb.org/t/p/w500/oversized.jpg"
+
+        class StreamingResponse:
+            status_code = 200
+            headers = {"Content-Length": "3"}
+            url = url
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                return iter([b"bad"])
+
+            def close(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            cache_root = Path(directory)
+            work_dir = cache_root / "42"
+            work_dir.mkdir(parents=True)
+            digest = api.hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+            cached = work_dir / f"3_{digest}.jpg"
+            cached.write_bytes(b"this-cache-is-larger-than-16")
+            original_read_bytes = Path.read_bytes
+
+            def forbid_cached_read(candidate):
+                if candidate == cached:
+                    raise AssertionError("oversized cached image must not be read")
+                return original_read_bytes(candidate)
+
+            with patch.object(api, "TMDB_EPISODE_CACHE_DIRECTORY", cache_root), \
+                 patch.object(api, "MAX_TMDB_EPISODE_IMAGE_BYTES", 16), \
+                 patch.object(api.requests, "get", return_value=StreamingResponse()), \
+                 patch.object(Path, "read_bytes", forbid_cached_read):
+                result = api.cache_tmdb_episode_image(url, 42, 3)
+
+            self.assertIsNone(result)
+            self.assertFalse(cached.exists())
+
+
 class DatabaseDeletionSafetyStressTests(unittest.TestCase):
     def test_deleting_work_keeps_external_custom_cover_and_removes_owned_cache(self):
         with tempfile.TemporaryDirectory() as directory:
