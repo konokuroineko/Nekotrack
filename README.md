@@ -53,7 +53,7 @@ python stress_test.py --minutes 120 --seed 20261010
 python stress_test.py --seconds 30 --seed 7
 ```
 
-Every soak iteration runs all four randomized stress modules (provider/API shapes, search/bundling, SQLite state invariants, and PySide6 search-filter UI state) with a fresh seed. A live-network guard blocks and records unexpected HTTP attempts, and the report records failed seeds and test output in `nekotrack_stress_report.json`. The harness disables live network access and never opens the normal application database; database tests use temporary directories. This is a long-running local fuzz campaign, not a claim that every GUI workflow is automatically covered.
+Every soak iteration runs all four randomized fuzz modules (provider/API shapes, search/bundling, SQLite state invariants, and PySide6 search-filter UI state) with a fresh seed in an isolated Python process. Native-extension crashes are captured as failed seeds rather than terminating the whole campaign. A live-network guard blocks and records unexpected HTTP attempts, and the report records failed seeds and test output in `nekotrack_stress_report.json`. The harness disables live network access and never opens the normal application database; database tests use temporary directories. This is a long-running local fuzz campaign, not a claim that every GUI workflow is automatically covered.
 
 For a hosted run, open **Actions → Adversarial stress → Run workflow** and choose a duration of 1–300 minutes. Pull requests run a ten-minute soak to catch issues that only appear after sustained repetition; use manual dispatch for longer campaigns. The workflow uploads the JSON report as an artifact.
 ## Data and privacy
