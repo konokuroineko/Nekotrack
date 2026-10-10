@@ -66,6 +66,24 @@ class MediaDetailIdentifierStressTests(unittest.TestCase):
             anilist.assert_not_called()
             mangabaka.assert_not_called()
 
+    def test_mangabaka_detail_response_must_match_requested_local_id(self):
+        mismatched_payload = {
+            "data": {
+                "id": 8,
+                "type": "manga",
+                "titles": [{"language": "en", "title": "Wrong series"}],
+            }
+        }
+        with patch("api.get_mangabaka_series", return_value=mismatched_payload) as details, \
+             patch("api.get_mangabaka_related_series") as relations, \
+             patch("api.anilist_request") as anilist:
+            with self.assertRaisesRegex(RuntimeError, "different series ID"):
+                api.get_media_details(-7)
+
+        details.assert_called_once_with(7, full=True)
+        relations.assert_not_called()
+        anilist.assert_not_called()
+
     def test_episode_and_relation_helpers_reject_bad_ids_before_network_calls(self):
         invalid_ids = (
             True,
