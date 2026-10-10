@@ -2,11 +2,13 @@
 import math
 import os
 import random
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import api
+import stress_test
 import database
 import mangabaka_api as mb
 import series
@@ -88,10 +90,62 @@ class ApiResponseShapeStressTests(unittest.TestCase):
                 api.anilist_request("query { Page { pageInfo { currentPage } } }")
         self.assertEqual(post.call_count, api.MAX_RETRIES)
 
+    def test_untrusted_retry_after_values_never_produce_unbounded_sleep(self):
+        success = FakeResponse({"data": {"Page": {"media": []}}})
+        for retry_after in ("1e309", "1e300", "nan", "inf"):
+            with self.subTest(retry_after=retry_after):
+                limited = FakeResponse(
+                    None,
+                    status_code=429,
+                    reason="Too Many Requests",
+                    headers={"Retry-After": retry_after},
+                )
+                with patch.object(api, "MAX_RETRIES", 2), \
+                     patch("api.requests.post", side_effect=[limited, success]), \
+                     patch("api.time.sleep") as sleep:
+                    result = api.anilist_request(
+                        "query { Page { media { id } } }"
+                    )
+
+                self.assertEqual(result, {"Page": {"media": []}})
+                sleep.assert_called_once()
+                delay = sleep.call_args.args[0]
+                self.assertTrue(math.isfinite(delay), retry_after)
+                self.assertGreaterEqual(delay, 1.0)
+                self.assertLessEqual(delay, 60.0)
+
     def test_valid_graphql_envelope_is_unchanged(self):
         response = FakeResponse({"data": {"Page": {"media": []}}})
         with patch("api.requests.post", return_value=response):
             self.assertEqual(api.anilist_request("query { Page { media { id } } }"), {"Page": {"media": []}})
+
+
+class StressRunnerDiscoveryStressTests(unittest.TestCase):
+    def test_successful_zero_test_discovery_is_not_reported_as_pass(self):
+        completed = subprocess.CompletedProcess(
+            args=["python", "-m", "unittest", "discover"],
+            returncode=0,
+            stdout="",
+            stderr="Ran 0 tests in 0.000s\\n\\nOK\\n",
+        )
+        with patch("stress_test.subprocess.run", return_value=completed):
+            result = stress_test.run_full_regression_suite()
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["tests_run"], 0)
+
+    def test_real_nonzero_test_summary_can_be_reported_as_pass(self):
+        completed = subprocess.CompletedProcess(
+            args=["python", "-m", "unittest", "discover"],
+            returncode=0,
+            stdout="",
+            stderr="Ran 3 tests in 0.012s\\n\\nOK\\n",
+        )
+        with patch("stress_test.subprocess.run", return_value=completed):
+            result = stress_test.run_full_regression_suite()
+
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["tests_run"], 3)
 
 
 class MangaBakaShapeStressTests(unittest.TestCase):
