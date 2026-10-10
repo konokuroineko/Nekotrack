@@ -512,6 +512,102 @@ class DatabasePartialMetadataStressTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_malformed_nested_metadata_is_sanitized_before_sqlite_upsert(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                full = {
+                    "id": 614,
+                    "type": "MANGA",
+                    "format": "MANGA",
+                    "title": {"english": "Valid cached title", "romaji": "Valid cached title"},
+                    "description": "Known description",
+                    "episodes": 12,
+                    "averageScore": 80,
+                    "startDate": {"year": 2020, "month": 4, "day": 5},
+                    "endDate": {"year": 2021, "month": 6, "day": 7},
+                    "coverImage": {"large": "https://example.test/cover.jpg"},
+                    "chapters": 42,
+                    "volumes": 3,
+                    "source": "MANGA",
+                    "duration": 25,
+                    "idMal": 1234,
+                }
+                database.save_anime(full)
+
+                malformed = {
+                    "id": 614,
+                    "type": None,
+                    "format": [],
+                    "title": {"english": "  Updated safe title  ", "romaji": {"odd": "value"}},
+                    "description": {"unexpected": "object"},
+                    "episodes": {"count": 24},
+                    "averageScore": float("inf"),
+                    "startDate": "not-an-object",
+                    "endDate": [],
+                    "coverImage": ["bad"],
+                    "chapters": 10**100,
+                    "volumes": 1.5,
+                    "source": {"name": "bad"},
+                    "duration": True,
+                    "idMal": [],
+                    "synonyms": "not-a-list",
+                    "studios": {"edges": [None]},
+                    "relations": {"edges": [None]},
+                }
+                database.save_anime(malformed)
+
+                connection = database.get_connection()
+                try:
+                    row = dict(connection.execute(
+                        """
+                        SELECT title, type, description, episodes, score, start_year,
+                               start_month, start_day, cover_url, format, chapters,
+                               volumes, source, end_year, duration, mal_id
+                        FROM works WHERE id = ?
+                        """,
+                        (614,),
+                    ).fetchone())
+                    synonym_count = connection.execute(
+                        "SELECT COUNT(*) FROM alternate_titles WHERE work_id = ?",
+                        (614,),
+                    ).fetchone()[0]
+                    studio_count = connection.execute(
+                        "SELECT COUNT(*) FROM work_studios WHERE work_id = ?",
+                        (614,),
+                    ).fetchone()[0]
+                    relation_count = connection.execute(
+                        "SELECT COUNT(*) FROM work_relations WHERE source_id = ?",
+                        (614,),
+                    ).fetchone()[0]
+                finally:
+                    connection.close()
+
+                self.assertEqual(row["title"], "Updated safe title")
+                self.assertEqual(row["type"], "MANGA")
+                self.assertEqual(row["description"], "Known description")
+                self.assertEqual(row["episodes"], 12)
+                self.assertEqual(row["score"], 80)
+                self.assertEqual(
+                    (row["start_year"], row["start_month"], row["start_day"]),
+                    (2020, 4, 5),
+                )
+                self.assertEqual(row["cover_url"], "https://example.test/cover.jpg")
+                self.assertEqual(row["format"], "MANGA")
+                self.assertEqual(row["chapters"], 42)
+                self.assertEqual(row["volumes"], 3)
+                self.assertEqual(row["source"], "MANGA")
+                self.assertEqual(row["end_year"], 2021)
+                self.assertEqual(row["duration"], 25)
+                self.assertEqual(row["mal_id"], 1234)
+                self.assertEqual(synonym_count, 0)
+                self.assertEqual(studio_count, 0)
+                self.assertEqual(relation_count, 0)
+            finally:
+                os.chdir(old_cwd)
+
     def test_partial_refresh_preserves_fields_from_previously_loaded_details(self):
         with tempfile.TemporaryDirectory() as directory:
             old_cwd = os.getcwd()
