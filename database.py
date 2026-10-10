@@ -1528,25 +1528,55 @@ def delete_work_data(work_id):
         if path
     }
     if candidate_paths:
+        # Only remove files in directories owned by NekoTrack's generated
+        # artwork cache. Custom covers can fall back to the user's original
+        # selected file when copying fails; deleting a work must never unlink
+        # that original file merely because its path was stored in the database.
+        managed_image_roots = (
+            (Path("data") / "images" / "works").resolve(),
+            (Path("data") / "images" / "bundles").resolve(),
+        )
         connection = get_connection()
         try:
-            for stored_path in candidate_paths:
-                still_referenced = connection.execute(
-                    """
-                    SELECT 1
-                    FROM works
-                    WHERE cover_path = ?
-                    UNION ALL
-                    SELECT 1
-                    FROM bundle_overrides
-                    WHERE custom_cover_path = ?
-                    LIMIT 1
-                    """,
-                    (stored_path, stored_path),
-                ).fetchone()
-                if still_referenced is not None:
+            references = connection.execute(
+                """
+                SELECT cover_path AS stored_path
+                FROM works
+                WHERE cover_path IS NOT NULL
+                UNION ALL
+                SELECT custom_cover_path AS stored_path
+                FROM bundle_overrides
+                WHERE custom_cover_path IS NOT NULL
+                """
+            ).fetchall()
+
+            referenced_paths = set()
+            for reference in references:
+                try:
+                    referenced_paths.add(Path(reference["stored_path"]).resolve())
+                except (OSError, RuntimeError, TypeError, ValueError):
                     continue
-                path = Path(stored_path)
+
+            for stored_path in candidate_paths:
+                try:
+                    path = Path(stored_path).resolve()
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    continue
+
+                # resolve() prevents a symlink under the cache from redirecting
+                # deletion to an arbitrary path outside an app-owned directory.
+                managed = False
+                for root in managed_image_roots:
+                    try:
+                        path.relative_to(root)
+                    except ValueError:
+                        continue
+                    if path != root:
+                        managed = True
+                    break
+                if not managed or path in referenced_paths:
+                    continue
+
                 try:
                     if path.is_file():
                         path.unlink()
