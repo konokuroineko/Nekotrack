@@ -280,6 +280,103 @@ class TmdbImageCacheResourceStressTests(unittest.TestCase):
             self.assertFalse(cached.exists())
 
 
+class DatabaseCastPayloadStressTests(unittest.TestCase):
+    def test_malformed_character_edges_do_not_crash_or_mark_partial_cast_loaded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                database.save_anime({
+                    "id": 77,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "title": {"english": "Cast payload test", "romaji": "Cast payload test"},
+                })
+
+                database.save_characters(77, [
+                    None,
+                    {
+                        "node": {
+                            "id": 10**100,
+                            "name": {"full": "Out-of-range character"},
+                            "image": {"large": None},
+                        },
+                        "role": "MAIN",
+                        "voiceActors": [],
+                    },
+                    {
+                        "node": {
+                            "id": 11,
+                            "name": {"full": "Partial character"},
+                            "image": {"large": None},
+                        },
+                        "role": "MAIN",
+                        "voiceActors": "malformed-not-a-list",
+                    },
+                ])
+
+                self.assertFalse(database.characters_are_loaded(77))
+                connection = database.get_connection()
+                try:
+                    ids = [
+                        row["character_id"]
+                        for row in connection.execute(
+                            "SELECT character_id FROM work_characters WHERE work_id = ?",
+                            (77,),
+                        ).fetchall()
+                    ]
+                finally:
+                    connection.close()
+                self.assertEqual(ids, [11])
+
+                database.save_characters(77, [{
+                    "node": {
+                        "id": 12,
+                        "name": {"full": "Complete character"},
+                        "image": {"large": None},
+                    },
+                    "role": "MAIN",
+                    "voiceActors": [],
+                }])
+                self.assertTrue(database.characters_are_loaded(77))
+            finally:
+                os.chdir(old_cwd)
+
+    def test_malformed_staff_edges_are_skipped_without_aborting_valid_entries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                database.save_anime({
+                    "id": 78,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "title": {"english": "Staff payload test", "romaji": "Staff payload test"},
+                })
+
+                database.save_staff(78, [
+                    None,
+                    {"node": {
+                        "id": 10**100,
+                        "name": {"full": "Out-of-range staff"},
+                    }, "role": "Writer"},
+                    {"node": {
+                        "id": 90,
+                        "name": {"full": "Valid staff"},
+                        "image": {"large": None},
+                    }, "role": "Writer"},
+                ])
+
+                staff = database.get_staff(78)
+                self.assertEqual(len(staff), 1)
+                self.assertEqual(staff[0]["person_id"], 90)
+                self.assertEqual(staff[0]["role"], "Writer")
+            finally:
+                os.chdir(old_cwd)
+
+
 class DatabaseDeletionSafetyStressTests(unittest.TestCase):
     def test_deleting_work_keeps_external_custom_cover_and_removes_owned_cache(self):
         with tempfile.TemporaryDirectory() as directory:
