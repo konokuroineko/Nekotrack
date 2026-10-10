@@ -132,6 +132,8 @@ class ApiResponseShapeStressTests(unittest.TestCase):
             "https://anilist.co:invalid/anime/1",
             "https://anilist.co/anime/0",
             "https://anilist.co/anime/-1",
+            "https://anilist.co/anime/2147483648",
+            "https://anilist.co/anime/" + ("9" * 5000),
             "https://anilist.co/anime/not-a-number",
             "https://anilist.co/character/1",
             "https://anilist.co/",
