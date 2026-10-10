@@ -518,6 +518,11 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         database.save_anime(invalid_id)
         self.assertEqual(source_targets(), [510, 511])
 
+        oversized_id = self.work(source_id, "ANIME", "TV")
+        oversized_id["relations"] = {"edges": [edge(510), edge(10**100)]}
+        database.save_anime(oversized_id)
+        self.assertEqual(source_targets(), [510, 511])
+
         # A fully valid refreshed graph removes the edge no longer returned.
         refreshed = self.work(source_id, "ANIME", "TV")
         refreshed["relations"] = {"edges": [edge(510)]}
