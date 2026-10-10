@@ -937,27 +937,31 @@ def get_media_details(media_id):
     }
 
     # Normalize the remaining connections too. UI/import callers access
-    # staff, studios, and relations as dictionaries of edge lists; a malformed
-    # provider shape must not crash those callers before DB-level guards run.
+    # staff, studios, and relations as dictionaries with edge lists; malformed
+    # outer shapes must not crash those callers before DB-level guards run.
+    # For relations/studios, retain a supplied list exactly as received: removing
+    # bad members here would make a partial snapshot look complete and could
+    # cause the database to delete still-valid cached links.
     for connection_name in ("staff", "studios", "relations"):
         raw_connection = media.get(connection_name)
         if not isinstance(raw_connection, dict):
-            raw_connection = {}
+            media[connection_name] = {"edges": [] if connection_name == "staff" else None}
+            continue
+
         raw_edges = raw_connection.get("edges")
-        clean_edges = []
-        if isinstance(raw_edges, list):
-            for edge in raw_edges:
-                if not isinstance(edge, dict) or not isinstance(edge.get("node"), dict):
-                    continue
-                if connection_name == "relations":
-                    relation_type = edge.get("relationType")
-                    if not isinstance(relation_type, str) or not relation_type.strip():
-                        continue
-                clean_edges.append(edge)
-        media[connection_name] = {
-            **raw_connection,
-            "edges": clean_edges,
-        }
+        if connection_name == "staff":
+            clean_edges = []
+            if isinstance(raw_edges, list):
+                clean_edges = [
+                    edge for edge in raw_edges
+                    if isinstance(edge, dict) and isinstance(edge.get("node"), dict)
+                ]
+            media[connection_name] = {**raw_connection, "edges": clean_edges}
+        else:
+            media[connection_name] = {
+                **raw_connection,
+                "edges": raw_edges if isinstance(raw_edges, list) else None,
+            }
 
     # Add MangaBaka's complete series payload for reading-media details. The
     # lookup is best-effort and the AniList record remains the canonical one.
