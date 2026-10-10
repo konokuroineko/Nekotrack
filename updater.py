@@ -2,7 +2,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import requests
 from PySide6.QtCore import QThread, Signal
@@ -11,6 +11,7 @@ from PySide6.QtCore import QThread, Signal
 REPO_API_URL = "https://api.github.com/repos/konokuroineko/Nekotrack/releases"
 REQUEST_TIMEOUT = 8
 MAX_INSTALLER_BYTES = 512 * 1024 * 1024
+MAX_INSTALLER_REDIRECTS = 5
 RELEASE_OWNER = "konokuroineko"
 RELEASE_REPO = "Nekotrack"
 
@@ -69,6 +70,46 @@ def _is_trusted_download_location(value):
     if host == "github.com":
         return _is_trusted_release_asset_url(value)
     return host == "githubusercontent.com" or host.endswith(".githubusercontent.com")
+
+
+def _open_trusted_download(start_url):
+    """Follow only HTTPS redirects to GitHub's own release-asset infrastructure.
+
+    Requests' automatic redirect handling contacts a redirect destination before
+    the caller can inspect it. Disable that behavior so an unexpected redirect
+    is rejected before any request is made to the destination.
+    """
+    url = start_url
+    redirect_codes = {301, 302, 303, 307, 308}
+    for _ in range(MAX_INSTALLER_REDIRECTS + 1):
+        response = requests.get(
+            url,
+            headers={"Accept": "application/octet-stream"},
+            stream=True,
+            timeout=30,
+            allow_redirects=False,
+        )
+        status_code = getattr(response, "status_code", None)
+        if status_code in redirect_codes:
+            headers = getattr(response, "headers", None) or {}
+            location = headers.get("Location")
+            response.close()
+            if not isinstance(location, str) or not location.strip():
+                raise ValueError("GitHub returned a redirect without a location.")
+            destination = urljoin(url, location.strip())
+            if not _is_trusted_download_location(destination):
+                raise ValueError("GitHub redirected the installer download to an untrusted host.")
+            url = destination
+            continue
+
+        response.raise_for_status()
+        final_url = getattr(response, "url", None) or url
+        if not _is_trusted_download_location(final_url):
+            response.close()
+            raise ValueError("The installer response came from an untrusted host.")
+        return response
+
+    raise ValueError("The installer download exceeded the redirect limit.")
 
 
 def _version_key(value):
@@ -188,17 +229,7 @@ class InstallerDownloader(QThread):
                 raise ValueError("The update asset is not a NekoTrack Setup executable.")
 
             byte_count = 0
-            with requests.get(
-                self.asset_url,
-                headers={"Accept": "application/octet-stream"},
-                stream=True,
-                timeout=30,
-            ) as response:
-                response.raise_for_status()
-
-                final_url = getattr(response, "url", None) or self.asset_url
-                if not _is_trusted_download_location(final_url):
-                    raise ValueError("GitHub redirected the installer download to an untrusted host.")
+            with _open_trusted_download(self.asset_url) as response:
 
                 headers = getattr(response, "headers", None) or {}
                 raw_length = headers.get("Content-Length")
