@@ -1222,6 +1222,34 @@ class AniListRelationsChaosTests(unittest.TestCase):
         for name in ("characters", "staff", "studios", "relations"):
             self.assertIsInstance(media[name], dict)
             self.assertIsInstance(media[name].get("edges"), list)
+        self.assertEqual(media["characters"]["edges"], [])
+        self.assertFalse(media["_characters_snapshot_valid"])
+        self.assertEqual(media["staff"]["edges"], [])
+        self.assertEqual(media["studios"]["edges"], [])
+        self.assertIsNone(media["relations"]["edges"])
+        self.assertIsInstance(media["airingSchedule"], dict)
+        self.assertEqual(media["airingSchedule"]["nodes"], [])
+
+
+        payload = {
+            "Media": {
+                "id": 616,
+                "type": "ANIME",
+                "title": {"english": "Malformed connections", "romaji": "Malformed connections"},
+                "characters": "not-an-object",
+                "airingSchedule": ["not", "an", "object"],
+                "staff": "not-an-object",
+                "studios": ["malformed"],
+                "relations": "not-an-object",
+            }
+        }
+        with patch.object(nt_api, "anilist_request", return_value=payload) as request:
+            media = nt_api.get_media_details(616)
+
+        request.assert_called_once()
+        for name in ("characters", "staff", "studios", "relations"):
+            self.assertIsInstance(media[name], dict)
+            self.assertIsInstance(media[name].get("edges"), list)
             self.assertEqual(media[name]["edges"], [])
         self.assertIsInstance(media["airingSchedule"], dict)
         self.assertEqual(media["airingSchedule"]["nodes"], [])
