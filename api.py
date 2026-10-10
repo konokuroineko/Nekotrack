@@ -305,13 +305,16 @@ def parse_anilist_url(value):
     parts = [part for part in parsed.path.split("/") if part]
     if len(parts) < 2 or parts[0].lower() not in {"anime", "manga"}:
         return None
-    if not re.fullmatch(r"[0-9]+", parts[1]):
+    id_text = parts[1]
+    # AniList's GraphQL Int is signed 32-bit. Reject oversized strings before
+    # converting them, so malformed URLs cannot trigger expensive integer parsing.
+    if not id_text.isascii() or len(id_text) > 10 or not re.fullmatch(r"[0-9]+", id_text):
         return None
     try:
-        media_id = int(parts[1])
+        media_id = int(id_text)
     except (TypeError, ValueError, OverflowError):
         return None
-    return media_id if media_id > 0 else None
+    return media_id if 1 <= media_id <= MAX_ANILIST_MEDIA_ID else None
 
 def get_media_by_anilist_url(url, include_relations=False):
     """Fetch the exact AniList media entry referenced by an AniList URL."""
