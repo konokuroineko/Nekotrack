@@ -30,6 +30,10 @@ MangaBaka-only results use separate local identifiers so they are not accidental
 
 No external provider can guarantee complete chapter or volume records for every title. NekoTrack keeps local progress as the source of truth and falls back to placeholders when actual item records are unavailable.
 
+## Code organization
+
+`api.py` is the single API entry point for application code. It exposes the AniList/TMDB operations and the MangaBaka operations under clear `get_mangabaka_*` / `search_mangabaka_*` names. `mangabaka_api.py` remains the internal MangaBaka-specific client and response normalizer; UI and search modules should use its functions through `api.py`, not import the provider module directly. `catalog_search.py` combines and deduplicates results from the catalogs, while `series.py` handles relationship traversal and bundling.
+
 ## Known limitations
 
 - Online search and metadata enrichment require network access to the selected catalog.
