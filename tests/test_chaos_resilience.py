@@ -511,6 +511,13 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         database.save_anime(partial)
         self.assertEqual(source_targets(), [510, 511])
 
+        # AniList relation IDs are positive; a negative/local-only catalog ID
+        # also makes this list incomplete and must not clear cached edges.
+        invalid_id = self.work(source_id, "ANIME", "TV")
+        invalid_id["relations"] = {"edges": [edge(510), edge(-42)]}
+        database.save_anime(invalid_id)
+        self.assertEqual(source_targets(), [510, 511])
+
         # A fully valid refreshed graph removes the edge no longer returned.
         refreshed = self.work(source_id, "ANIME", "TV")
         refreshed["relations"] = {"edges": [edge(510)]}
