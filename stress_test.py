@@ -149,11 +149,11 @@ def offline_network_guard(attempted_requests):
         stack.enter_context(patch(
             "requests.sessions.Session.request", new=block_requests
         ))
-        stack.enter_context(patch("urllib.request.urlopen", new=block_urlopen))
-        stack.enter_context(patch("socket.create_connection", new=block_create_connection))
-        stack.enter_context(patch("socket.socket.connect", new=block_socket_connect))
-        stack.enter_context(patch("socket.socket.connect_ex", new=block_socket_connect_ex))
-        stack.enter_context(patch("socket.socket.sendto", new=block_socket_sendto))
+        stack.enter_context(patch.object(urllib.request, "urlopen", new=block_urlopen))
+        stack.enter_context(patch.object(socket, "create_connection", new=block_create_connection))
+        stack.enter_context(patch.object(socket.socket, "connect", new=block_socket_connect))
+        stack.enter_context(patch.object(socket.socket, "connect_ex", new=block_socket_connect_ex))
+        stack.enter_context(patch.object(socket.socket, "sendto", new=block_socket_sendto))
         yield
 
 
