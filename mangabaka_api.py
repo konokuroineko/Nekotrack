@@ -719,17 +719,22 @@ def _date_parts(series):
     return {"year": None, "month": None, "day": None}
 
 def _count_or_none(value):
-    """Normalize positive whole-number chapter/volume counts, rejecting negatives."""
+    """Normalize positive whole-number counts bounded to the supported local range."""
     if value in (None, "") or isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
-        try:
-            numeric = float(value)
-            if not math.isfinite(numeric) or numeric <= 0 or not numeric.is_integer():
-                return None
-            return int(numeric)
-        except (TypeError, ValueError, OverflowError):
+    maximum = _MAX_PROVIDER_FILTER_ID
+    if isinstance(value, int):
+        return value if 1 <= value <= maximum else None
+    if isinstance(value, float):
+        if (
+            not math.isfinite(value)
+            or value <= 0
+            or not value.is_integer()
+            or value > maximum
+        ):
             return None
+        return int(value)
+
     raw = str(value).strip()
     if not raw:
         return None
@@ -737,11 +742,14 @@ def _count_or_none(value):
     match = re.search(r"(?<![-0-9])[0-9]+", raw)
     if not match:
         return None
+    digits = match.group(0)
+    if len(digits) > 19:
+        return None
     try:
-        number = int(match.group(0))
+        number = int(digits)
     except (TypeError, ValueError, OverflowError):
         return None
-    return number if number > 0 else None
+    return number if 1 <= number <= maximum else None
 
 def normalize_series(series, preferred_id=None):
     """Convert a MangaBaka series record to NekoTrack's AniList-like media shape."""
