@@ -1192,6 +1192,21 @@ def save_anime(anime):
     duration = _safe_optional_integer(anime.get("duration"))
     mal_id = _safe_optional_integer(anime.get("idMal"), 1)
 
+    # Provider-native JSON is useful when it is valid, but it is optional.
+    # Non-JSON objects, circular references, non-finite floats, or deeply
+    # nested payloads must not abort otherwise usable metadata persistence.
+    mangabaka_data = anime.get("_mangabaka")
+    mangabaka_payload_json = None
+    if isinstance(mangabaka_data, dict):
+        try:
+            mangabaka_payload_json = json.dumps(
+                mangabaka_data,
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+        except (TypeError, ValueError, OverflowError, RecursionError):
+            mangabaka_data = None
+
     connection = get_connection()
     connection.execute("""
         INSERT INTO works (
@@ -1247,9 +1262,7 @@ def save_anime(anime):
             )
 
     # Preserve provider-native metadata instead of flattening it into AniList fields.
-    mangabaka_data = anime.get("_mangabaka")
-    if isinstance(mangabaka_data, dict):
-        import json
+    if isinstance(mangabaka_data, dict) and mangabaka_payload_json is not None:
         mangabaka_id = anime.get("_mangabaka_id") or mangabaka_data.get("id")
         connection.execute("""
             INSERT INTO work_provider_metadata (work_id, provider, provider_id, payload_json, updated_at)
@@ -1261,7 +1274,7 @@ def save_anime(anime):
         """, (
             work_id,
             str(mangabaka_id) if mangabaka_id is not None else None,
-            json.dumps(mangabaka_data, ensure_ascii=False),
+            mangabaka_payload_json,
         ))
         title_records = mangabaka_data.get("titles") or []
         for title_record in title_records:
