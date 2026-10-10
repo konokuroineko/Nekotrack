@@ -2205,7 +2205,7 @@ def get_bundle_exclusions(work_ids=None):
 
 def get_manual_bundle_partners(work_id):
     """Return the works explicitly manually linked to one work."""
-    work_id = int(work_id)
+    work_id = _validated_work_id(work_id)
     connection = get_connection()
     rows = connection.execute(
         """
@@ -2314,6 +2314,10 @@ def add_to_library(work_id, status="Planning"):
     library membership is newly created (including re-adding a removed work).
     On conflict, existing counters, ratings, notes, and added_date are retained.
     """
+    safe_work_id = _validated_work_id(work_id)
+    if not isinstance(status, str) or not status.strip():
+        raise ValueError("Library status must be a non-empty string.")
+    status = status.strip()
     connection = get_connection()
     try:
         connection.execute("""
@@ -2333,22 +2337,34 @@ def add_to_library(work_id, status="Planning"):
             ON CONFLICT(work_id) DO UPDATE SET
                 status = excluded.status,
                 updated_date = CURRENT_TIMESTAMP
-        """, (int(work_id), status, int(work_id), int(work_id), int(work_id)))
+        """, (safe_work_id, status, safe_work_id, safe_work_id, safe_work_id))
         connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
 
 
 def remove_from_library(work_id):
     """Remove a work from the user's Library while keeping its cached work data."""
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return False
     connection = get_connection()
-    cursor = connection.execute(
-        "DELETE FROM user_library WHERE work_id = ?",
-        (int(work_id),),
-    )
-    connection.commit()
-    connection.close()
-    return cursor.rowcount > 0
+    try:
+        cursor = connection.execute(
+            "DELETE FROM user_library WHERE work_id = ?",
+            (safe_work_id,),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def delete_work_data(work_id):
