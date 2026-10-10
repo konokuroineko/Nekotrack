@@ -35,6 +35,44 @@ from mangabaka_api import (
 )
 
 
+# Explicit public API surface. Application modules should import provider
+# operations here rather than depending on a provider adapter directly.
+__all__ = [
+    "ANILIST_URL",
+    "MangaBakaAPIError",
+    "anilist_request",
+    "parse_anilist_url",
+    "get_media_by_anilist_url",
+    "search_anime",
+    "get_media_relations",
+    "get_media_relations_batch",
+    "get_media_episodes",
+    "get_media_details",
+    "get_tmdb_episode_data",
+    "get_tmdb_episode_sample",
+    "cache_tmdb_episode_image",
+    "enrich_anilist_media",
+    "enrich_anilist_results",
+    "get_mangabaka_external_id",
+    "get_mangabaka_collection_works",
+    "get_mangabaka_public_data",
+    "get_mangabaka_publisher",
+    "get_mangabaka_publisher_stats",
+    "get_mangabaka_related_series",
+    "get_mangabaka_series",
+    "get_mangabaka_series_collections",
+    "get_mangabaka_series_mix",
+    "get_mangabaka_series_news",
+    "get_mangabaka_similar_publishers",
+    "get_mangabaka_volume_records",
+    "get_mangabaka_hidden_gems",
+    "get_mangabaka_work",
+    "get_mangabaka_publishers",
+    "normalize_mangabaka_series",
+    "search_mangabaka_media",
+    "search_mangabaka_series",
+]
+
 ANILIST_URL = "https://graphql.anilist.co"
 
 MAX_RETRIES = 5
