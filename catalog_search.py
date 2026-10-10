@@ -393,9 +393,9 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
             seen_mb.add(provider_id)
         if media_id is not None:
             seen_mb_media_ids.add(media_id)
-        # MangaBaka-only entries have no AniList relation graph to fetch.
-        if media_id is not None and media_id < 0:
-            item["_relations_loaded"] = True
+        # Negative IDs are MangaBaka-local works. Their native relationship
+        # graph is loaded by series enrichment through the provider-aware API
+        # path; marking them loaded here would silently disable that lookup.
         unique_mb.append(item)
 
     results = _sort_combined(anilist_items, unique_mb, filters.get("sort") or "SEARCH_MATCH")
