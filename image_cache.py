@@ -6,7 +6,7 @@ from urllib.parse import urljoin, urlsplit
 
 import requests
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt
-from PySide6.QtGui import QImage, QImageReader
+from PySide6.QtGui import QImageReader
 
 
 IMAGE_DIRECTORY = Path("data") / "images" / "works"
