@@ -845,6 +845,9 @@ class TMDBPayloadChaosTests(unittest.TestCase):
         response = Mock()
         response.raise_for_status.return_value = None
         response.content = b"<html><body>temporary upstream error</body></html>"
+        response.url = url
+        response.headers = {}
+        response.iter_content.return_value = iter([response.content])
         with tempfile.TemporaryDirectory() as temp_dir, \
              patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
              patch.object(nt_api.requests, "get", return_value=response) as request:
@@ -861,6 +864,9 @@ class TMDBPayloadChaosTests(unittest.TestCase):
         response = Mock()
         response.raise_for_status.return_value = None
         response.content = b"not a webp image"
+        response.url = url
+        response.headers = {}
+        response.iter_content.return_value = iter([response.content])
         with tempfile.TemporaryDirectory() as temp_dir, \
              patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
              patch.object(nt_api.requests, "get", return_value=response) as request:
@@ -874,6 +880,87 @@ class TMDBPayloadChaosTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(request.call_count, 1)
         self.assertFalse(exists_after)
+
+    def test_tmdb_image_redirect_to_untrusted_host_is_rejected(self):
+        url = "https://image.tmdb.org/t/p/w500/redirect.jpg"
+        response = Mock()
+        response.status_code = 302
+        response.headers = {"Location": "https://127.0.0.1/private.png"}
+        response.url = url
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
+             patch.object(nt_api.requests, "get", return_value=response) as request:
+            with self.assertRaisesRegex(ValueError, "redirect destination is not trusted"):
+                nt_api.cache_tmdb_episode_image(url, 42, 3)
+        self.assertEqual(request.call_count, 1)
+        response.close.assert_called_once()
+
+    def test_tmdb_image_declared_oversize_is_rejected_before_reading_body(self):
+        url = "https://image.tmdb.org/t/p/w500/large.jpg"
+        response = Mock()
+        response.status_code = 200
+        response.headers = {"Content-Length": "17"}
+        response.url = url
+        response.raise_for_status.return_value = None
+        response.iter_content.return_value = iter([b"x" * 17])
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
+             patch.object(nt_api, "MAX_TMDB_EPISODE_IMAGE_BYTES", 16), \
+             patch.object(nt_api.requests, "get", return_value=response):
+            with self.assertRaisesRegex(ValueError, "download size limit"):
+                nt_api.cache_tmdb_episode_image(url, 42, 3)
+            files = [path for path in Path(temp_dir).rglob("*") if path.is_file()]
+        response.iter_content.assert_not_called()
+        self.assertEqual(files, [])
+
+    def test_tmdb_image_stream_cannot_exceed_size_limit_without_content_length(self):
+        url = "https://image.tmdb.org/t/p/w500/streamed.jpg"
+        response = Mock()
+        response.status_code = 200
+        response.headers = {}
+        response.url = url
+        response.raise_for_status.return_value = None
+        response.iter_content.return_value = iter([b"x" * 10, b"y" * 7])
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
+             patch.object(nt_api, "MAX_TMDB_EPISODE_IMAGE_BYTES", 16), \
+             patch.object(nt_api.requests, "get", return_value=response):
+            with self.assertRaisesRegex(ValueError, "download size limit"):
+                nt_api.cache_tmdb_episode_image(url, 42, 3)
+            files = [path for path in Path(temp_dir).rglob("*") if path.is_file()]
+        self.assertEqual(files, [])
+
+    def test_tmdb_image_download_is_validated_and_atomically_cached(self):
+        from PySide6.QtCore import QByteArray, QBuffer, QIODevice
+        from PySide6.QtGui import QImage
+
+        url = "https://image.tmdb.org/t/p/w500/valid.png"
+        image_bytes = QByteArray()
+        buffer = QBuffer(image_bytes)
+        self.assertTrue(buffer.open(QIODevice.WriteOnly))
+        image = QImage(12, 8, QImage.Format_ARGB32)
+        image.fill(0xFF336699)
+        self.assertTrue(image.save(buffer, "PNG"))
+        buffer.close()
+        data = bytes(image_bytes)
+
+        response = Mock()
+        response.status_code = 200
+        response.headers = {"Content-Length": str(len(data))}
+        response.url = url
+        response.raise_for_status.return_value = None
+        response.iter_content.return_value = iter([data[:len(data)//2], data[len(data)//2:]])
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
+             patch.object(nt_api.requests, "get", return_value=response) as request:
+            saved_path = nt_api.cache_tmdb_episode_image(url, 42, 3)
+            self.assertTrue(saved_path)
+            path = Path(saved_path)
+            self.assertEqual(path.read_bytes(), data)
+            self.assertFalse(any(path.parent.glob("*.tmp")))
+            cached_path = nt_api.cache_tmdb_episode_image(url, 42, 3)
+        self.assertEqual(cached_path, saved_path)
+        self.assertEqual(request.call_count, 1)
 
 class AniListPaginationChaosTests(unittest.TestCase):
     @staticmethod
