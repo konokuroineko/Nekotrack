@@ -140,24 +140,24 @@ def _decode_cover(payload):
     if not buffer.open(QIODevice.OpenModeFlag.ReadOnly):
         raise ValueError("Could not open the downloaded cover image.")
 
-    reader = QImageReader(buffer)
-    reader.setDecideFormatFromContent(True)
-    dimensions = reader.size()
-    if not dimensions.isValid():
+    try:
+        reader = QImageReader(buffer)
+        reader.setDecideFormatFromContent(True)
+        dimensions = reader.size()
+        if not dimensions.isValid():
+            raise ValueError("The cover image dimensions are invalid.")
+        width, height = dimensions.width(), dimensions.height()
+        if (
+            width <= 0
+            or height <= 0
+            or width > MAX_COVER_WIDTH
+            or height > MAX_COVER_HEIGHT
+            or width * height > MAX_COVER_PIXELS
+        ):
+            raise ValueError("The cover image dimensions are too large.")
+        image = reader.read()
+    finally:
         buffer.close()
-        raise ValueError("The cover image dimensions are invalid.")
-    width, height = dimensions.width(), dimensions.height()
-    if (
-        width <= 0
-        or height <= 0
-        or width > MAX_COVER_WIDTH
-        or height > MAX_COVER_HEIGHT
-        or width * height > MAX_COVER_PIXELS
-    ):
-        buffer.close()
-        raise ValueError("The cover image dimensions are too large.")
-    image = reader.read()
-    buffer.close()
     if image.isNull():
         raise ValueError("Downloaded cover is not a supported image.")
     return image
