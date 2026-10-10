@@ -1453,6 +1453,98 @@ class SeriesBundlingStressTests(unittest.TestCase):
                 self.assertEqual(len(flattened), len(set(flattened)))
 
 
+class DatabaseIdentifierHelperStressTests(unittest.TestCase):
+    def test_episode_artwork_tmdb_and_library_helpers_reject_bad_ids_safely(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                work_id = 80
+                database.save_anime({
+                    "id": work_id,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "title": {"english": "Database helper test", "romaji": "Database helper test"},
+                })
+                database.save_episodes(work_id, [{
+                    "episodeNumber": 1,
+                    "title": "Episode One",
+                    "thumbnail": "https://images.example.invalid/remote.jpg",
+                }])
+
+                for invalid_id in (True, 1.5, 10**100, "9" * 5000):
+                    with self.subTest(invalid_id=repr(invalid_id)[:50]):
+                        self.assertEqual(database.get_tmdb_mapping(invalid_id), (None, None))
+                        self.assertFalse(database.save_tmdb_mapping(invalid_id, 120, 1))
+                        self.assertFalse(
+                            database.save_episode_thumbnail_path(invalid_id, 1, "local.jpg")
+                        )
+                        self.assertFalse(database.save_cover_path(invalid_id, "cover.jpg"))
+                        self.assertIsNone(database.get_work(invalid_id))
+                        self.assertEqual(database.get_episodes(invalid_id), [])
+                        self.assertEqual(database.get_alternate_titles(invalid_id), [])
+                        self.assertEqual(database.get_relations(invalid_id), [])
+                        self.assertEqual(database.get_characters(invalid_id), [])
+                        self.assertEqual(database.get_staff(invalid_id), [])
+
+                self.assertEqual(database.get_tmdb_mapping(-901), (None, None))
+                self.assertFalse(database.save_tmdb_mapping(-901, 120, 1))
+                self.assertFalse(database.save_episode_thumbnail_path(-901, 1, "local.jpg"))
+
+                self.assertTrue(database.save_tmdb_mapping(work_id, 120, 0))
+                self.assertEqual(database.get_tmdb_mapping(work_id), (120, 0))
+                for tmdb_id, season in (
+                    (1.5, 1),
+                    (True, 1),
+                    (10**100, 1),
+                    (121, 1.5),
+                    (121, True),
+                    (121, 10**100),
+                ):
+                    with self.subTest(tmdb_id=tmdb_id, season=season):
+                        self.assertFalse(database.save_tmdb_mapping(work_id, tmdb_id, season))
+                        self.assertEqual(database.get_tmdb_mapping(work_id), (120, 0))
+
+                for invalid_number in (True, 1.5, 10**100, "not-an-episode"):
+                    with self.subTest(episode_number=repr(invalid_number)):
+                        self.assertFalse(
+                            database.save_episode_thumbnail_path(
+                                work_id, invalid_number, "data/images/episodes/80/1.jpg"
+                            )
+                        )
+
+                episodes = database.get_episodes(work_id)
+                self.assertEqual(episodes[0]["thumbnail_url"], "https://images.example.invalid/remote.jpg")
+                self.assertTrue(
+                    database.save_episode_thumbnail_path(
+                        work_id, 1, "data/images/episodes/80/1.jpg"
+                    )
+                )
+                self.assertEqual(
+                    database.get_episodes(work_id)[0]["thumbnail_url"],
+                    "data/images/episodes/80/1.jpg",
+                )
+
+                self.assertFalse(database.save_character_image_path(True, "person.jpg"))
+                self.assertFalse(database.save_person_image_path(10**100, "person.jpg"))
+                self.assertFalse(database.save_cover_path(True, "data/images/works/80.jpg"))
+                self.assertTrue(database.save_cover_path(work_id, "data/images/works/80.jpg"))
+                self.assertEqual(database.get_work(work_id)["cover_path"], "data/images/works/80.jpg")
+
+                with self.assertRaises(ValueError):
+                    database.add_to_library(True, "Planning")
+                self.assertFalse(database.remove_from_library(True))
+                with self.assertRaises(ValueError):
+                    database.delete_work_data(1.5)
+
+                # After every malformed input, a normal transaction still works.
+                database.add_to_library(work_id, "Planning")
+                self.assertTrue(database.remove_from_library(work_id))
+            finally:
+                os.chdir(old_cwd)
+
+
 class DatabaseProgressStressTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
