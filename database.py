@@ -2018,7 +2018,11 @@ def get_bundle_staff(work_ids):
 
 def get_bundle_relations(work_ids):
     """Return unique external relations from every work in a bundle."""
-    ids = {int(work_id) for work_id in (work_ids or [])}
+    ids = _validated_work_ids(work_ids)
+    if not ids:
+        return []
+    if ids is None:
+        return []
     unique = {}
 
     for work_id in ids:
@@ -2055,7 +2059,12 @@ def get_bundle_relations(work_ids):
 
 def add_manual_bundle_link(work_a, work_b):
     """Persist an explicit user-selected bundle link between two works."""
-    work_a, work_b = sorted((int(work_a), int(work_b)))
+    try:
+        work_a = _validated_work_id(work_a)
+        work_b = _validated_work_id(work_b)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    work_a, work_b = sorted((work_a, work_b))
     if work_a == work_b:
         return False
 
@@ -2083,34 +2092,42 @@ def add_manual_bundle_link(work_a, work_b):
 
 
 def remove_manual_bundle_link(work_a, work_b):
-    work_a, work_b = sorted((int(work_a), int(work_b)))
+    try:
+        work_a = _validated_work_id(work_a)
+        work_b = _validated_work_id(work_b)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    work_a, work_b = sorted((work_a, work_b))
     connection = get_connection()
-    cursor = connection.execute(
-        "DELETE FROM manual_bundle_links WHERE work_a = ? AND work_b = ?",
-        (work_a, work_b),
-    )
-    changed = cursor.rowcount > 0
-    connection.commit()
-    connection.close()
-    return changed
+    try:
+        cursor = connection.execute(
+            "DELETE FROM manual_bundle_links WHERE work_a = ? AND work_b = ?",
+            (work_a, work_b),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def get_manual_bundle_links(work_ids=None):
     """Return explicit bundle links, optionally limited to works touching these IDs."""
-    connection = get_connection()
+    ids = None if work_ids is None else _validated_work_ids(work_ids)
+    if work_ids is not None and (ids is None or not ids):
+        return []
 
-    if work_ids is None:
-        rows = connection.execute(
-            "SELECT work_a, work_b FROM manual_bundle_links ORDER BY work_a, work_b"
-        ).fetchall()
-    else:
-        ids = sorted({int(work_id) for work_id in work_ids if work_id is not None})
-        if not ids:
-            connection.close()
-            return []
+    connection = get_connection()
+    try:
+        if ids is None:
+            return connection.execute(
+                "SELECT work_a, work_b FROM manual_bundle_links ORDER BY work_a, work_b"
+            ).fetchall()
 
         placeholders = ",".join("?" for _ in ids)
-        rows = connection.execute(
+        return connection.execute(
             f"""
             SELECT work_a, work_b
             FROM manual_bundle_links
@@ -2119,14 +2136,18 @@ def get_manual_bundle_links(work_ids=None):
             """,
             [*ids, *ids],
         ).fetchall()
-
-    connection.close()
-    return rows
+    finally:
+        connection.close()
 
 
 def add_bundle_exclusion(work_a, work_b):
     """Prevent two works from being automatically grouped together."""
-    work_a, work_b = sorted((int(work_a), int(work_b)))
+    try:
+        work_a = _validated_work_id(work_a)
+        work_b = _validated_work_id(work_b)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    work_a, work_b = sorted((work_a, work_b))
     if work_a == work_b:
         return False
 
@@ -2151,9 +2172,15 @@ def add_bundle_exclusion(work_a, work_b):
 
 def remove_bundle_member(work_id, target_id, bundle_member_ids):
     """Remove target_id from a bundle while keeping it in the Library."""
-    work_id = int(work_id)
-    target_id = int(target_id)
-    member_ids = {int(value) for value in (bundle_member_ids or []) if value is not None}
+    try:
+        work_id = _validated_work_id(work_id)
+        target_id = _validated_work_id(target_id)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    validated_members = _validated_work_ids(bundle_member_ids)
+    if validated_members is None:
+        return False
+    member_ids = set(validated_members)
     member_ids.discard(target_id)
 
     if work_id == target_id or work_id not in member_ids:
@@ -2201,27 +2228,26 @@ def remove_bundle_member(work_id, target_id, bundle_member_ids):
 
 def get_bundle_exclusions(work_ids=None):
     """Return persisted bundle exclusions."""
+    ids = None if work_ids is None else _validated_work_ids(work_ids)
+    if work_ids is not None and (ids is None or not ids):
+        return []
+
     connection = get_connection()
     try:
-        if work_ids is None:
-            rows = connection.execute(
+        if ids is None:
+            return connection.execute(
                 "SELECT work_a, work_b FROM bundle_exclusions ORDER BY work_a, work_b"
             ).fetchall()
-        else:
-            ids = sorted({int(work_id) for work_id in work_ids if work_id is not None})
-            if not ids:
-                return []
-            placeholders = ",".join("?" for _ in ids)
-            rows = connection.execute(
-                f"""
-                SELECT work_a, work_b
-                FROM bundle_exclusions
-                WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
-                ORDER BY work_a, work_b
-                """,
-                [*ids, *ids],
-            ).fetchall()
-        return rows
+        placeholders = ",".join("?" for _ in ids)
+        return connection.execute(
+            f"""
+            SELECT work_a, work_b
+            FROM bundle_exclusions
+            WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
+            ORDER BY work_a, work_b
+            """,
+            [*ids, *ids],
+        ).fetchall()
     finally:
         connection.close()
 
