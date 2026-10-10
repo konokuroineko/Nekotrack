@@ -1924,13 +1924,14 @@ def save_anime(anime):
                 """, (
                     target_id,
                     target_title,
-                    node.get("type") or "ANIME",
-                    node.get("format"),
-                    target_start_date.get("year"),
-                    target_start_date.get("month"),
-                    target_start_date.get("day"),
-                    cover_image.get("large"),
-                    node.get("idMal"),
+                    target_type,
+                    target_format,
+                    target_start_year,
+                    target_start_month,
+                    target_start_day,
+                    target_cover_url,
+                    target_mal_id,
+                    1 if target_type_is_valid else 0,
                 ))
             connection.execute(
                 "INSERT OR REPLACE INTO work_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)",
