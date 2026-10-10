@@ -424,6 +424,22 @@ def save_characters(work_id, characters):
                         "DELETE FROM work_characters WHERE work_id = ? AND character_id = ?",
                         (work_id, old_character_id),
                     )
+                    still_linked = connection.execute(
+                        "SELECT 1 FROM work_characters WHERE character_id = ? LIMIT 1",
+                        (old_character_id,),
+                    ).fetchone()
+                    if still_linked is None:
+                        # Character and voice-actor rows are globally keyed.
+                        # Remove them only after the character is no longer used
+                        # by any work, preserving shared cast entities.
+                        connection.execute(
+                            "DELETE FROM character_voice_actors WHERE character_id = ?",
+                            (old_character_id,),
+                        )
+                        connection.execute(
+                            "DELETE FROM characters WHERE id = ?",
+                            (old_character_id,),
+                        )
 
             # Voice-actor mappings are cached by character ID globally. Replace
             # them only for characters in this complete snapshot; malformed or
