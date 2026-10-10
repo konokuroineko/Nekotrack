@@ -49,6 +49,10 @@ class MediaDetailIdentifierStressTests(unittest.TestCase):
             float("inf"),
             float("-inf"),
             float("nan"),
+            1 << 100,
+            1 << 31,
+            -(1 << 63) - 1,
+            1e300,
             "not-an-id",
             "9" * 5000,
         )
