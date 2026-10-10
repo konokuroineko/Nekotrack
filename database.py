@@ -1426,7 +1426,28 @@ def save_anime(anime):
             except (TypeError, ValueError, OverflowError):
                 complete_snapshot = False
                 break
-            if target_id <= 0 or target_id > _MAX_SQLITE_INTEGER:
+            if (
+                target_id == 0
+                or target_id < _MIN_SQLITE_INTEGER
+                or target_id > _MAX_SQLITE_INTEGER
+                or (target_id < 0 and work_id >= 0)
+            ):
+                complete_snapshot = False
+                break
+
+            # Relations are only a complete snapshot when each referenced node
+            # has a usable title. Otherwise a sparse provider payload could
+            # falsely remove cached edges during reconciliation.
+            node_title = node.get("title") if isinstance(node, dict) else None
+            has_node_title = isinstance(node_title, dict) and any(
+                isinstance(value, str) and value.strip()
+                for value in (
+                    node_title.get("english"),
+                    node_title.get("romaji"),
+                    node_title.get("native"),
+                )
+            )
+            if not has_node_title:
                 complete_snapshot = False
                 break
             snapshot.add((target_id, relation_type))
@@ -1660,7 +1681,12 @@ def save_anime(anime):
                 target_id = int(target_id)
             except (TypeError, ValueError, OverflowError):
                 continue
-            if target_id <= 0 or target_id > _MAX_SQLITE_INTEGER:
+            if (
+                target_id == 0
+                or target_id < _MIN_SQLITE_INTEGER
+                or target_id > _MAX_SQLITE_INTEGER
+                or (target_id < 0 and work_id >= 0)
+            ):
                 continue
 
             target_title_data = node.get("title")
