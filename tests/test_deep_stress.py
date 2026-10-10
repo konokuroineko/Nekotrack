@@ -37,6 +37,50 @@ class FakeResponse:
         return self.payload
 
 
+class MediaDetailIdentifierStressTests(unittest.TestCase):
+    def test_invalid_media_identifiers_fail_before_provider_requests(self):
+        invalid_ids = (
+            None,
+            True,
+            False,
+            0,
+            -0.0,
+            1.5,
+            float("inf"),
+            float("-inf"),
+            float("nan"),
+            "not-an-id",
+            "9" * 5000,
+        )
+        with patch("api.anilist_request") as anilist, \
+             patch("api.get_mangabaka_series") as mangabaka:
+            for value in invalid_ids:
+                with self.subTest(value=repr(value)[:80]):
+                    with self.assertRaises(ValueError):
+                        api.get_media_details(value)
+            anilist.assert_not_called()
+            mangabaka.assert_not_called()
+
+    def test_numeric_string_media_id_is_normalized_before_graphql_request(self):
+        payload = {
+            "Media": {
+                "id": 123,
+                "type": "ANIME",
+                "characters": {"edges": [], "pageInfo": {
+                    "currentPage": 1, "lastPage": 1, "hasNextPage": False,
+                }},
+                "airingSchedule": {"nodes": [], "pageInfo": {
+                    "currentPage": 1, "lastPage": 1, "hasNextPage": False,
+                }},
+            }
+        }
+        with patch("api.anilist_request", return_value=payload) as request:
+            media = api.get_media_details(" 123 ")
+
+        self.assertEqual(media["id"], 123)
+        self.assertEqual(request.call_args.args[1]["id"], 123)
+
+
 class ApiResponseShapeStressTests(unittest.TestCase):
     def test_url_parser_only_accepts_real_positive_anilist_media_urls(self):
         valid = {
