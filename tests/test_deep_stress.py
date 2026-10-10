@@ -149,6 +149,39 @@ class StressRunnerDiscoveryStressTests(unittest.TestCase):
         self.assertEqual(result["tests_run"], 3)
 
 
+class OfflineNetworkGuardStressTests(unittest.TestCase):
+    def test_offline_guard_blocks_http_urllib_and_raw_socket_paths(self):
+        import socket
+        import urllib.request
+
+        attempted = []
+        with stress_test.offline_network_guard(attempted):
+            with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
+                api.requests.get("https://example.invalid/test")
+            with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
+                urllib.request.urlopen("https://example.invalid/test")
+            with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
+                socket.create_connection(("example.invalid", 443))
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
+                    client.connect(("example.invalid", 443))
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
+                    client.connect_ex(("example.invalid", 443))
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+                with self.assertRaisesRegex(AssertionError, "Unexpected network request"):
+                    client.sendto(b"offline", ("example.invalid", 53))
+
+        methods = [attempt["method"] for attempt in attempted]
+        self.assertEqual(len(methods), 6)
+        self.assertIn("GET", methods)
+        self.assertIn("urllib.request.urlopen", methods)
+        self.assertIn("socket.create_connection", methods)
+        self.assertIn("socket.connect", methods)
+        self.assertIn("socket.connect_ex", methods)
+        self.assertIn("socket.sendto", methods)
+
+
 class TmdbImageCacheResourceStressTests(unittest.TestCase):
     def test_oversized_cached_image_is_not_loaded_into_memory(self):
         url = "https://image.tmdb.org/t/p/w500/oversized.jpg"
