@@ -2279,81 +2279,112 @@ def get_manual_bundle_partners(work_id):
 
 def get_bundle_override(work_ids):
     """Return the saved presentation override for a bundle touching these works."""
-    ids = sorted({int(work_id) for work_id in work_ids if work_id is not None})
+    ids = _validated_work_ids(work_ids)
     if not ids:
         return None
 
     placeholders = ",".join("?" for _ in ids)
-    connection = get_connection()
     order_cases = " ".join(
         f"WHEN ? THEN {index}"
         for index, _ in enumerate(ids)
     )
-    row = connection.execute(
-        f"""
-        SELECT bundle_anchor_id, custom_title, cover_work_id, custom_cover_path
-        FROM bundle_overrides
-        WHERE bundle_anchor_id IN ({placeholders})
-        ORDER BY CASE bundle_anchor_id {order_cases} ELSE {len(ids)} END
-        LIMIT 1
-        """,
-        [*ids, *ids],
-    ).fetchone()
-    connection.close()
-    return row
+    connection = get_connection()
+    try:
+        return connection.execute(
+            f"""
+            SELECT bundle_anchor_id, custom_title, cover_work_id, custom_cover_path
+            FROM bundle_overrides
+            WHERE bundle_anchor_id IN ({placeholders})
+            ORDER BY CASE bundle_anchor_id {order_cases} ELSE {len(ids)} END
+            LIMIT 1
+            """,
+            [*ids, *ids],
+        ).fetchone()
+    finally:
+        connection.close()
 
 
 def save_bundle_override(work_ids, anchor_id, custom_title=None, cover_work_id=None, custom_cover_path=None):
     """Save a bundle presentation override against its current earliest member."""
-    ids = sorted({int(work_id) for work_id in work_ids if work_id is not None})
-    anchor_id = int(anchor_id)
-    if not ids or anchor_id not in ids:
+    ids = _validated_work_ids(work_ids)
+    if not ids:
+        return False
+    try:
+        safe_anchor_id = _validated_work_id(anchor_id)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if safe_anchor_id not in ids:
         return False
 
     if cover_work_id is not None:
-        cover_work_id = int(cover_work_id)
+        try:
+            cover_work_id = _validated_work_id(cover_work_id)
+        except (TypeError, ValueError, OverflowError):
+            return False
         if cover_work_id not in ids:
             return False
 
-    custom_title = str(custom_title).strip() if custom_title is not None else None
+    if custom_title is not None and not isinstance(custom_title, str):
+        return False
+    custom_title = custom_title.strip() if custom_title is not None else None
     custom_title = custom_title or None
-    custom_cover_path = str(custom_cover_path).strip() if custom_cover_path else None
+    if custom_title is not None and len(custom_title) > 500:
+        return False
+
+    if custom_cover_path in (None, ""):
+        custom_cover_path = None
+    elif isinstance(custom_cover_path, (str, Path)):
+        custom_cover_path = str(custom_cover_path).strip() or None
+        if custom_cover_path is not None and len(custom_cover_path) > 4096:
+            return False
+    else:
+        return False
 
     connection = get_connection()
     placeholders = ",".join("?" for _ in ids)
-    connection.execute(
-        f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
-        ids,
-    )
-    connection.execute(
-        """
-        INSERT INTO bundle_overrides (
-            bundle_anchor_id, custom_title, cover_work_id, custom_cover_path
+    try:
+        connection.execute(
+            f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
+            ids,
         )
-        VALUES (?, ?, ?, ?)
-        """,
-        (anchor_id, custom_title, cover_work_id, custom_cover_path),
-    )
-    connection.commit()
-    connection.close()
-    return True
+        connection.execute(
+            """
+            INSERT INTO bundle_overrides (
+                bundle_anchor_id, custom_title, cover_work_id, custom_cover_path
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (safe_anchor_id, custom_title, cover_work_id, custom_cover_path),
+        )
+        connection.commit()
+        return True
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def clear_bundle_override(work_ids):
     """Remove a bundle presentation override."""
-    ids = sorted({int(work_id) for work_id in work_ids if work_id is not None})
+    ids = _validated_work_ids(work_ids)
     if not ids:
         return False
 
     placeholders = ",".join("?" for _ in ids)
     connection = get_connection()
-    cursor = connection.execute(
-        f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
-        ids,
-    )
-    connection.commit()
-    connection.close()
-    return cursor.rowcount > 0
+    try:
+        cursor = connection.execute(
+            f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
+            ids,
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def add_to_library(work_id, status="Planning"):
