@@ -40,6 +40,39 @@ def _validated_work_id(value):
     return parsed
 
 
+def _safe_optional_integer(value, minimum=0, maximum=_MAX_SQLITE_INTEGER):
+    """Normalize optional integer metadata while rejecting malformed provider values."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        parsed = int(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text or len(text) > 20 or not re.fullmatch(r"[+-]?[0-9]+", text):
+            return None
+        try:
+            parsed = int(text)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    else:
+        return None
+    return parsed if minimum <= parsed <= maximum else None
+
+
+def _safe_optional_score(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return score if math.isfinite(score) and 0 <= score <= 100 else None
+
+
 def get_connection():
     # The application performs catalog imports and progress writes from worker
     # threads. Give SQLite time to serialize short concurrent write transactions
@@ -1099,13 +1132,66 @@ def save_anime(anime):
         if complete_snapshot:
             relation_snapshot = snapshot
 
-    title_data = anime["title"]
-    title = title_data.get("english") or title_data.get("romaji") or title_data.get("native")
-    start_date = anime.get("startDate") or {}
-    start_year = start_date.get("year")
-    start_month = start_date.get("month")
-    start_day = start_date.get("day")
-    cover_image = anime.get("coverImage") or {}
+    title_data = anime.get("title")
+    if isinstance(title_data, dict):
+        title = next(
+            (
+                candidate.strip()
+                for candidate in (
+                    title_data.get("english"),
+                    title_data.get("romaji"),
+                    title_data.get("native"),
+                )
+                if isinstance(candidate, str) and candidate.strip()
+            ),
+            None,
+        )
+    elif isinstance(title_data, str):
+        title = title_data.strip() or None
+    else:
+        title = None
+    if not title:
+        raise ValueError("A work record must include a non-empty title.")
+
+    start_date = anime.get("startDate")
+    if not isinstance(start_date, dict):
+        start_date = {}
+    start_year = _safe_optional_integer(start_date.get("year"), 1, 9999)
+    start_month = _safe_optional_integer(start_date.get("month"), 1, 12)
+    start_day = _safe_optional_integer(start_date.get("day"), 1, 31)
+
+    cover_image = anime.get("coverImage")
+    if not isinstance(cover_image, dict):
+        cover_image = {}
+    cover_url = cover_image.get("large")
+    if not isinstance(cover_url, str):
+        cover_url = None
+
+    end_date = anime.get("endDate")
+    if not isinstance(end_date, dict):
+        end_date = {}
+    end_year = _safe_optional_integer(end_date.get("year"), 1, 9999)
+
+    raw_type = anime.get("type")
+    type_is_valid = isinstance(raw_type, str) and bool(raw_type.strip())
+    media_type = raw_type.strip().upper() if type_is_valid else "ANIME"
+    description = anime.get("description")
+    if not isinstance(description, str):
+        description = None
+    media_format = anime.get("format")
+    if not isinstance(media_format, str):
+        media_format = None
+    source = anime.get("source")
+    if not isinstance(source, str):
+        source = None
+
+    episodes = _safe_optional_integer(anime.get("episodes"))
+    score = _safe_optional_score(anime.get("averageScore"))
+    chapters = _safe_optional_integer(anime.get("chapters"))
+    volumes = _safe_optional_integer(anime.get("volumes"))
+    duration = _safe_optional_integer(anime.get("duration"))
+    mal_id = _safe_optional_integer(anime.get("idMal"), 1)
+
     connection = get_connection()
     connection.execute("""
         INSERT INTO works (
@@ -1114,7 +1200,8 @@ def save_anime(anime):
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
-            title=excluded.title, type=excluded.type,
+            title=excluded.title,
+            type=CASE WHEN ? THEN excluded.type ELSE works.type END,
             description=COALESCE(excluded.description, works.description),
             episodes=COALESCE(excluded.episodes, works.episodes),
             score=COALESCE(excluded.score, works.score),
@@ -1142,16 +1229,22 @@ def save_anime(anime):
             duration=COALESCE(excluded.duration, works.duration),
             mal_id=COALESCE(excluded.mal_id, works.mal_id)
     """, (
-        work_id, title, anime.get("type") or "ANIME", anime.get("description"),
-        anime.get("episodes"), anime.get("averageScore"),
-        start_year, start_month, start_day, cover_image.get("large"),
-        anime.get("format"), anime.get("chapters"), anime.get("volumes"),
-        anime.get("source"), (anime.get("endDate") or {}).get("year"),
-        anime.get("duration"), anime.get("idMal")
+        work_id, title, media_type, description,
+        episodes, score,
+        start_year, start_month, start_day, cover_url,
+        media_format, chapters, volumes,
+        source, end_year, duration, mal_id,
+        1 if type_is_valid else 0,
     ))
-    for synonym in anime.get("synonyms") or []:
-        connection.execute("INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
-                           (work_id, synonym, None))
+    synonyms = anime.get("synonyms")
+    if isinstance(synonyms, (list, tuple)):
+        for synonym in synonyms:
+            if not isinstance(synonym, str) or not synonym.strip():
+                continue
+            connection.execute(
+                "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
+                (work_id, synonym.strip(), None),
+            )
 
     # Preserve provider-native metadata instead of flattening it into AniList fields.
     mangabaka_data = anime.get("_mangabaka")
@@ -1174,12 +1267,18 @@ def save_anime(anime):
         for title_record in title_records:
             if not isinstance(title_record, dict):
                 continue
-            alt_title = str(title_record.get("title") or "").strip()
-            if not alt_title or alt_title.casefold() == str(title or "").casefold():
+            raw_alt_title = title_record.get("title")
+            if not isinstance(raw_alt_title, str):
                 continue
+            alt_title = raw_alt_title.strip()
+            if not alt_title or alt_title.casefold() == title.casefold():
+                continue
+            language = title_record.get("language")
+            if not isinstance(language, str):
+                language = None
             connection.execute(
                 "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
-                (work_id, alt_title, title_record.get("language")),
+                (work_id, alt_title, language),
             )
     if studio_snapshot_valid is True:
         connection.execute(
