@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import catalog_search
+import series
 
 
 def anime_item(media_id, title, media_type="MANGA", media_format="MANGA", score=80):
@@ -235,3 +236,65 @@ class CombinedCatalogSearchTests(unittest.TestCase):
         )
         self.assertEqual([item["id"] for item in result["media"]], [100, 101])
 
+
+
+    @patch("series.get_media_relations_batch")
+    @patch("catalog_search.enrich_anilist_results")
+    @patch("catalog_search.search_mangabaka_media")
+    @patch("catalog_search.search_anime")
+    def test_mangabaka_only_results_bundle_through_native_relations(
+        self, search_anilist, search_mb, enrich, fetch_relations
+    ):
+        search_anilist.return_value = {
+            "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+            "media": [],
+        }
+        first = mb_item(11, "Example Original", local_id=-11)
+        second = mb_item(12, "Example Continuation", local_id=-12)
+        search_mb.return_value = {
+            "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+            "media": [first, second],
+        }
+
+        result = catalog_search.search_combined_media(
+            "Example", 1, None, None, {"sort": "SEARCH_MATCH"}
+        )
+        self.assertEqual({item["id"] for item in result["media"]}, {-11, -12})
+        self.assertTrue(all("_relations_loaded" not in item for item in result["media"]))
+        enrich.assert_not_called()
+
+        related_node = {
+            "id": second["id"],
+            "type": second["type"],
+            "format": second["format"],
+            "title": second["title"],
+            "coverImage": second.get("coverImage") or {"large": None},
+        }
+        first_details = {
+            **first,
+            "relations": {
+                "edges": [{"relationType": "SEQUEL", "node": related_node}],
+            },
+        }
+        second_details = {**second, "relations": {"edges": []}}
+        fetch_relations.return_value = {
+            -11: first_details,
+            -12: second_details,
+        }
+
+        with (
+            patch.dict(series._relation_cache, {}, clear=True),
+            patch("series.get_manual_bundle_links", return_value=[]),
+            patch("series.get_bundle_exclusions", return_value=[]),
+            patch("series.get", side_effect=lambda key: key == "bundle_include_manga"),
+        ):
+            groups = series.group_media_results(
+                result["media"], enrich=True, delay=0
+            )
+
+        fetch_relations.assert_called_once()
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(
+            {item["id"] for item in groups[0]["_series_members"]},
+            {-11, -12},
+        )
