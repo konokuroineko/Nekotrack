@@ -7,6 +7,7 @@ from pathlib import Path
 DATABASE_NAME = "anime_tracker.db"
 _MAX_SQLITE_INTEGER = (1 << 63) - 1
 _MIN_SQLITE_INTEGER = -(1 << 63)
+_MAX_TRACKED_EPISODE_NUMBER = 1_000_000
 
 
 def _validated_work_id(value):
@@ -626,37 +627,56 @@ def get_staff(work_id):
 
 
 def save_episodes(work_id, episode_data):
-    """Upsert episode metadata without deleting cached/user-owned episode rows.
-
-    A provider can return only a partial season after a timeout, schema change,
-    or date filter. Treat absence from an update as unknown rather than proof
-    that an episode is obsolete; deleting it could erase the user's watched
-    state and local artwork.
-    """
+    """Upsert episode metadata without erasing useful cached/user-owned fields."""
+    safe_work_id = _validated_work_id(work_id)
     try:
         episodes = list(episode_data or [])
     except TypeError:
         episodes = []
+
+    def valid_episode_number(value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            number = value
+        elif isinstance(value, float):
+            if not math.isfinite(value) or not value.is_integer():
+                return None
+            number = int(value)
+        elif isinstance(value, str):
+            text = value.strip()
+            if not text or len(text) > 7 or not re.fullmatch(r"[0-9]+", text):
+                return None
+            try:
+                number = int(text)
+            except (TypeError, ValueError, OverflowError):
+                return None
+        else:
+            return None
+        return number if 1 <= number <= _MAX_TRACKED_EPISODE_NUMBER else None
+
+    def optional_text(value):
+        if not isinstance(value, str):
+            return None
+        return value.strip() or None
+
     connection = get_connection()
     try:
         for episode in episodes:
             if not isinstance(episode, dict):
                 continue
-            try:
-                number = int(episode.get("episodeNumber"))
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if number < 1:
+            number = valid_episode_number(episode.get("episodeNumber"))
+            if number is None:
                 continue
 
-            incoming_thumbnail = str(episode.get("thumbnail") or "").strip() or None
+            incoming_thumbnail = optional_text(episode.get("thumbnail"))
             existing = connection.execute(
                 """
                 SELECT thumbnail_url
                 FROM episodes
                 WHERE work_id = ? AND episode_number = ?
                 """,
-                (int(work_id), number),
+                (safe_work_id, number),
             ).fetchone()
             existing_thumbnail = (
                 str(existing["thumbnail_url"]).strip()
@@ -684,16 +704,16 @@ def save_episodes(work_id, episode_data):
                 )
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(work_id, episode_number) DO UPDATE SET
-                    title = excluded.title,
-                    description = excluded.description,
-                    air_date = excluded.air_date,
-                    thumbnail_url = excluded.thumbnail_url
+                    title = COALESCE(excluded.title, episodes.title),
+                    description = COALESCE(excluded.description, episodes.description),
+                    air_date = COALESCE(excluded.air_date, episodes.air_date),
+                    thumbnail_url = COALESCE(excluded.thumbnail_url, episodes.thumbnail_url)
             """, (
-                int(work_id),
+                safe_work_id,
                 number,
-                episode.get("title"),
-                episode.get("description"),
-                episode.get("airdate"),
+                optional_text(episode.get("title")),
+                optional_text(episode.get("description")),
+                optional_text(episode.get("airdate")),
                 thumbnail,
             ))
         connection.commit()
