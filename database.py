@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 DATABASE_NAME = "anime_tracker.db"
+_MAX_SQLITE_INTEGER = (1 << 63) - 1
 
 
 def get_connection():
@@ -865,7 +866,7 @@ def save_anime(anime):
             except (TypeError, ValueError, OverflowError):
                 studio_snapshot_valid = False
                 break
-            if studio_id <= 0:
+            if studio_id <= 0 or studio_id > _MAX_SQLITE_INTEGER:
                 studio_snapshot_valid = False
                 break
 
@@ -896,7 +897,7 @@ def save_anime(anime):
             except (TypeError, ValueError, OverflowError):
                 complete_snapshot = False
                 break
-            if target_id <= 0:
+            if target_id <= 0 or target_id > _MAX_SQLITE_INTEGER:
                 complete_snapshot = False
                 break
             snapshot.add((target_id, relation_type))
@@ -1011,7 +1012,7 @@ def save_anime(anime):
             studio_id = int(studio_id)
         except (TypeError, ValueError, OverflowError):
             continue
-        if studio_id <= 0:
+        if studio_id <= 0 or studio_id > _MAX_SQLITE_INTEGER:
             continue
         connection.execute(
             "INSERT OR REPLACE INTO studios (id, name, is_main) VALUES (?, ?, ?)",
@@ -1050,7 +1051,7 @@ def save_anime(anime):
             target_id = int(target_id)
         except (TypeError, ValueError, OverflowError):
             continue
-        if target_id <= 0:
+        if target_id <= 0 or target_id > _MAX_SQLITE_INTEGER:
             continue
 
         target_title_data = node.get("title")
