@@ -55,7 +55,7 @@ python stress_test.py --seconds 30 --seed 7
 
 Every soak iteration runs seeded provider/API-shape, unified-search and bundling, SQLite state-machine, image-cache safety, and updater-security tests in a fresh Python process. The full regression pass also runs the PySide6 search-filter UI tests once. They are intentionally excluded from repeated worker processes because their Qt/native-extension teardown reproducibly aborts Python 3.11 workers even when assertions pass; the full regression pass completes normally. A live-network guard blocks and records unexpected HTTP attempts. The report records failed seeds and test output in `nekotrack_stress_report.json`. The harness does not use live provider requests or the normal application database; database tests use temporary directories. Pull requests run a 1-minute soak; manually dispatched runs allow up to 5 hours.
 
-For a hosted run, open **Actions → Adversarial stress → Run workflow** and choose a duration of 1–300 minutes. Pull requests run a ten-minute soak to catch issues that only appear after sustained repetition; use manual dispatch for longer campaigns. The workflow uploads the JSON report as an artifact.
+For a hosted run, open **Actions → Adversarial stress → Run workflow** and choose a duration of 1–300 minutes. Pull requests run a one-minute soak; use manual dispatch for longer campaigns (up to five hours). The workflow uploads the JSON report as an artifact.
 ## Data and privacy
 
 NekoTrack stores its local SQLite database as `anime_tracker.db`. Cover images are cached under `data/images/`. These generated/local files are intentionally ignored by Git.
