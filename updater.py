@@ -79,15 +79,17 @@ def _version_key(value):
     if not match:
         return (0, 0, 0, -1, 0)
 
+    try:
+        major, minor, patch = (int(match.group(index)) for index in (1, 2, 3))
+        stage_number = int(match.group(5) or 0)
+    except (ValueError, OverflowError):
+        # Extremely long digit strings can exceed Python's safe integer parser
+        # limits. A malformed tag must not abort the rest of the update feed.
+        return (0, 0, 0, -1, 0)
+
     stage = (match.group(4) or "stable").lower()
     stage_rank = {"dev": 0, "alpha": 1, "beta": 2, "rc": 3, "stable": 4}.get(stage, -1)
-    return (
-        int(match.group(1)),
-        int(match.group(2)),
-        int(match.group(3)),
-        stage_rank,
-        int(match.group(5) or 0),
-    )
+    return (major, minor, patch, stage_rank, stage_number)
 
 
 def is_newer(remote_version, current_version):
