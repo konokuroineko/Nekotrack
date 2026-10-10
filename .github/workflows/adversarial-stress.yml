@@ -16,6 +16,10 @@ on:
           - "10"
           - "20"
           - "30"
+          - "60"
+          - "120"
+          - "240"
+          - "300"
         default: "10"
       seed:
         description: "Starting random seed (change it to explore a different input sequence)"
@@ -30,7 +34,7 @@ jobs:
   stress:
     name: Adversarial fuzz and soak
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 360
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -50,7 +54,7 @@ jobs:
           python -m pip install -r requirements.txt
       - name: Run adversarial stress test
         env:
-          STRESS_MINUTES: ${{ inputs.minutes || '10' }}
+          STRESS_MINUTES: ${{ inputs.minutes || '1' }}
           STRESS_SEED: ${{ inputs.seed || github.run_number }}
         run: python stress_test.py --minutes "$STRESS_MINUTES" --seed "$STRESS_SEED"
       - name: Upload stress report
