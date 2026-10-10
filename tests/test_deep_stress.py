@@ -556,6 +556,11 @@ class DatabasePartialMetadataStressTests(unittest.TestCase):
                     "synonyms": "not-a-list",
                     "studios": {"edges": [None]},
                     "relations": {"edges": [None]},
+                    "_mangabaka": {
+                        "id": 88,
+                        "invalid_set": {1, 2},
+                        "non_finite": float("inf"),
+                    },
                 }
                 database.save_anime(malformed)
 
@@ -582,6 +587,10 @@ class DatabasePartialMetadataStressTests(unittest.TestCase):
                         "SELECT COUNT(*) FROM work_relations WHERE source_id = ?",
                         (614,),
                     ).fetchone()[0]
+                    provider_count = connection.execute(
+                        "SELECT COUNT(*) FROM work_provider_metadata WHERE work_id = ?",
+                        (614,),
+                    ).fetchone()[0]
                 finally:
                     connection.close()
 
@@ -605,6 +614,7 @@ class DatabasePartialMetadataStressTests(unittest.TestCase):
                 self.assertEqual(synonym_count, 0)
                 self.assertEqual(studio_count, 0)
                 self.assertEqual(relation_count, 0)
+                self.assertEqual(provider_count, 0)
             finally:
                 os.chdir(old_cwd)
 
