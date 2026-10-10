@@ -1325,214 +1325,218 @@ def save_anime(anime):
             mangabaka_data = None
 
     connection = get_connection()
-    connection.execute("""
-        INSERT INTO works (
-            id, title, type, description, episodes, score, start_year, start_month, start_day,
-            cover_url, format, chapters, volumes, source, end_year, duration, mal_id
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            title=excluded.title,
-            type=CASE WHEN ? THEN excluded.type ELSE works.type END,
-            description=COALESCE(excluded.description, works.description),
-            episodes=COALESCE(excluded.episodes, works.episodes),
-            score=COALESCE(excluded.score, works.score),
-            start_year=CASE
-                WHEN excluded.start_year IS NULL
-                 AND excluded.start_month IS NULL
-                 AND excluded.start_day IS NULL
-                THEN works.start_year ELSE excluded.start_year END,
-            start_month=CASE
-                WHEN excluded.start_year IS NULL
-                 AND excluded.start_month IS NULL
-                 AND excluded.start_day IS NULL
-                THEN works.start_month ELSE excluded.start_month END,
-            start_day=CASE
-                WHEN excluded.start_year IS NULL
-                 AND excluded.start_month IS NULL
-                 AND excluded.start_day IS NULL
-                THEN works.start_day ELSE excluded.start_day END,
-            cover_url=COALESCE(excluded.cover_url, works.cover_url),
-            format=COALESCE(excluded.format, works.format),
-            chapters=COALESCE(excluded.chapters, works.chapters),
-            volumes=COALESCE(excluded.volumes, works.volumes),
-            source=COALESCE(excluded.source, works.source),
-            end_year=COALESCE(excluded.end_year, works.end_year),
-            duration=COALESCE(excluded.duration, works.duration),
-            mal_id=COALESCE(excluded.mal_id, works.mal_id)
-    """, (
-        work_id, title, media_type, description,
-        episodes, score,
-        start_year, start_month, start_day, cover_url,
-        media_format, chapters, volumes,
-        source, end_year, duration, mal_id,
-        1 if type_is_valid else 0,
-    ))
-    synonyms = anime.get("synonyms")
-    if isinstance(synonyms, (list, tuple)):
-        for synonym in synonyms:
-            if not isinstance(synonym, str) or not synonym.strip():
-                continue
-            connection.execute(
-                "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
-                (work_id, synonym.strip(), None),
-            )
-
-    # Preserve provider-native metadata instead of flattening it into AniList fields.
-    if isinstance(mangabaka_data, dict) and mangabaka_payload_json is not None:
-        mangabaka_id = anime.get("_mangabaka_id") or mangabaka_data.get("id")
+    try:
         connection.execute("""
-            INSERT INTO work_provider_metadata (work_id, provider, provider_id, payload_json, updated_at)
-            VALUES (?, 'mangabaka', ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(work_id, provider) DO UPDATE SET
-                provider_id = COALESCE(excluded.provider_id, work_provider_metadata.provider_id),
-                payload_json = excluded.payload_json,
-                updated_at = CURRENT_TIMESTAMP
-        """, (
-            work_id,
-            str(mangabaka_id) if mangabaka_id is not None else None,
-            mangabaka_payload_json,
-        ))
-        title_records = mangabaka_data.get("titles") or []
-        for title_record in title_records:
-            if not isinstance(title_record, dict):
-                continue
-            raw_alt_title = title_record.get("title")
-            if not isinstance(raw_alt_title, str):
-                continue
-            alt_title = raw_alt_title.strip()
-            if not alt_title or alt_title.casefold() == title.casefold():
-                continue
-            language = title_record.get("language")
-            if not isinstance(language, str):
-                language = None
-            connection.execute(
-                "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
-                (work_id, alt_title, language),
+            INSERT INTO works (
+                id, title, type, description, episodes, score, start_year, start_month, start_day,
+                cover_url, format, chapters, volumes, source, end_year, duration, mal_id
             )
-    if studio_snapshot_valid is True:
-        connection.execute(
-            "DELETE FROM work_studios WHERE work_id = ?",
-            (work_id,),
-        )
-
-    for edge in studio_edges if isinstance(studio_edges, list) else []:
-        if not isinstance(edge, dict):
-            continue
-        studio = edge.get("node")
-        if not isinstance(studio, dict):
-            continue
-        studio_id = studio.get("id")
-        studio_name = studio.get("name")
-        if (
-            isinstance(studio_id, bool)
-            or isinstance(studio_id, float) and not studio_id.is_integer()
-            or isinstance(studio_id, str) and not re.fullmatch(r"\s*[0-9]+\s*", studio_id)
-            or not isinstance(studio_name, str)
-            or not studio_name.strip()
-        ):
-            continue
-        try:
-            studio_id = int(studio_id)
-        except (TypeError, ValueError, OverflowError):
-            continue
-        if studio_id <= 0 or studio_id > _MAX_SQLITE_INTEGER:
-            continue
-        connection.execute(
-            "INSERT OR REPLACE INTO studios (id, name, is_main) VALUES (?, ?, ?)",
-            (studio_id, studio_name.strip(), 1 if edge.get("isMain") else 0),
-        )
-        connection.execute(
-            "INSERT OR IGNORE INTO work_studios (work_id, studio_id) VALUES (?, ?)",
-            (work_id, studio_id),
-        )
-    if relation_snapshot is not None:
-        # Relation details are a cached snapshot, not an append-only history.
-        # Delete stale outgoing edges within this transaction before writing
-        # the current list. A valid empty list intentionally clears all edges.
-        connection.execute(
-            "DELETE FROM work_relations WHERE source_id = ?",
-            (work_id,),
-        )
-
-    for edge in relation_edges if isinstance(relation_edges, list) else []:
-        if not isinstance(edge, dict):
-            continue
-        node = edge.get("node")
-        if not isinstance(node, dict):
-            continue
-        target_id = node.get("id")
-        relation_type = edge.get("relationType")
-        if (
-            isinstance(target_id, bool)
-            or not isinstance(relation_type, str)
-            or not relation_type.strip()
-            or (isinstance(target_id, float) and not target_id.is_integer())
-            or (isinstance(target_id, str) and not re.fullmatch(r"\s*-?[0-9]+\s*", target_id))
-        ):
-            continue
-        try:
-            target_id = int(target_id)
-        except (TypeError, ValueError, OverflowError):
-            continue
-        if target_id <= 0 or target_id > _MAX_SQLITE_INTEGER:
-            continue
-
-        target_title_data = node.get("title")
-        if not isinstance(target_title_data, dict):
-            target_title_data = {}
-        target_title = next(
-            (
-                value.strip()
-                for value in (
-                    target_title_data.get("english"),
-                    target_title_data.get("romaji"),
-                    target_title_data.get("native"),
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title=excluded.title,
+                type=CASE WHEN ? THEN excluded.type ELSE works.type END,
+                description=COALESCE(excluded.description, works.description),
+                episodes=COALESCE(excluded.episodes, works.episodes),
+                score=COALESCE(excluded.score, works.score),
+                start_year=CASE
+                    WHEN excluded.start_year IS NULL
+                     AND excluded.start_month IS NULL
+                     AND excluded.start_day IS NULL
+                    THEN works.start_year ELSE excluded.start_year END,
+                start_month=CASE
+                    WHEN excluded.start_year IS NULL
+                     AND excluded.start_month IS NULL
+                     AND excluded.start_day IS NULL
+                    THEN works.start_month ELSE excluded.start_month END,
+                start_day=CASE
+                    WHEN excluded.start_year IS NULL
+                     AND excluded.start_month IS NULL
+                     AND excluded.start_day IS NULL
+                    THEN works.start_day ELSE excluded.start_day END,
+                cover_url=COALESCE(excluded.cover_url, works.cover_url),
+                format=COALESCE(excluded.format, works.format),
+                chapters=COALESCE(excluded.chapters, works.chapters),
+                volumes=COALESCE(excluded.volumes, works.volumes),
+                source=COALESCE(excluded.source, works.source),
+                end_year=COALESCE(excluded.end_year, works.end_year),
+                duration=COALESCE(excluded.duration, works.duration),
+                mal_id=COALESCE(excluded.mal_id, works.mal_id)
+        """, (
+            work_id, title, media_type, description,
+            episodes, score,
+            start_year, start_month, start_day, cover_url,
+            media_format, chapters, volumes,
+            source, end_year, duration, mal_id,
+            1 if type_is_valid else 0,
+        ))
+        synonyms = anime.get("synonyms")
+        if isinstance(synonyms, (list, tuple)):
+            for synonym in synonyms:
+                if not isinstance(synonym, str) or not synonym.strip():
+                    continue
+                connection.execute(
+                    "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
+                    (work_id, synonym.strip(), None),
                 )
-                if isinstance(value, str) and value.strip()
-            ),
-            None,
-        )
-        if target_title:
-            target_start_date = node.get("startDate")
-            if not isinstance(target_start_date, dict):
-                target_start_date = {}
-            cover_image = node.get("coverImage")
-            if not isinstance(cover_image, dict):
-                cover_image = {}
+
+        # Preserve provider-native metadata instead of flattening it into AniList fields.
+        if isinstance(mangabaka_data, dict) and mangabaka_payload_json is not None:
+            mangabaka_id = anime.get("_mangabaka_id") or mangabaka_data.get("id")
             connection.execute("""
-                INSERT INTO works (
-                    id, title, type, format, start_year, start_month, start_day,
-                    cover_url, mal_id
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    title = excluded.title,
-                    type = excluded.type,
-                    format = COALESCE(excluded.format, works.format),
-                    start_year = COALESCE(excluded.start_year, works.start_year),
-                    start_month = COALESCE(excluded.start_month, works.start_month),
-                    start_day = COALESCE(excluded.start_day, works.start_day),
-                    cover_url = COALESCE(excluded.cover_url, works.cover_url),
-                    mal_id = COALESCE(excluded.mal_id, works.mal_id)
+                INSERT INTO work_provider_metadata (work_id, provider, provider_id, payload_json, updated_at)
+                VALUES (?, 'mangabaka', ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(work_id, provider) DO UPDATE SET
+                    provider_id = COALESCE(excluded.provider_id, work_provider_metadata.provider_id),
+                    payload_json = excluded.payload_json,
+                    updated_at = CURRENT_TIMESTAMP
             """, (
-                target_id,
-                target_title,
-                node.get("type") or "ANIME",
-                node.get("format"),
-                target_start_date.get("year"),
-                target_start_date.get("month"),
-                target_start_date.get("day"),
-                cover_image.get("large"),
-                node.get("idMal"),
+                work_id,
+                str(mangabaka_id) if mangabaka_id is not None else None,
+                mangabaka_payload_json,
             ))
-        connection.execute(
-            "INSERT OR REPLACE INTO work_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)",
-            (work_id, target_id, relation_type),
-        )
-    connection.commit()
-    connection.close()
+            title_records = mangabaka_data.get("titles") or []
+            for title_record in title_records:
+                if not isinstance(title_record, dict):
+                    continue
+                raw_alt_title = title_record.get("title")
+                if not isinstance(raw_alt_title, str):
+                    continue
+                alt_title = raw_alt_title.strip()
+                if not alt_title or alt_title.casefold() == title.casefold():
+                    continue
+                language = title_record.get("language")
+                if not isinstance(language, str):
+                    language = None
+                connection.execute(
+                    "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
+                    (work_id, alt_title, language),
+                )
+        if studio_snapshot_valid is True:
+            connection.execute(
+                "DELETE FROM work_studios WHERE work_id = ?",
+                (work_id,),
+            )
 
+        for edge in studio_edges if isinstance(studio_edges, list) else []:
+            if not isinstance(edge, dict):
+                continue
+            studio = edge.get("node")
+            if not isinstance(studio, dict):
+                continue
+            studio_id = studio.get("id")
+            studio_name = studio.get("name")
+            if (
+                isinstance(studio_id, bool)
+                or isinstance(studio_id, float) and not studio_id.is_integer()
+                or isinstance(studio_id, str) and not re.fullmatch(r"\s*[0-9]+\s*", studio_id)
+                or not isinstance(studio_name, str)
+                or not studio_name.strip()
+            ):
+                continue
+            try:
+                studio_id = int(studio_id)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if studio_id <= 0 or studio_id > _MAX_SQLITE_INTEGER:
+                continue
+            connection.execute(
+                "INSERT OR REPLACE INTO studios (id, name, is_main) VALUES (?, ?, ?)",
+                (studio_id, studio_name.strip(), 1 if edge.get("isMain") else 0),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO work_studios (work_id, studio_id) VALUES (?, ?)",
+                (work_id, studio_id),
+            )
+        if relation_snapshot is not None:
+            # Relation details are a cached snapshot, not an append-only history.
+            # Delete stale outgoing edges within this transaction before writing
+            # the current list. A valid empty list intentionally clears all edges.
+            connection.execute(
+                "DELETE FROM work_relations WHERE source_id = ?",
+                (work_id,),
+            )
+
+        for edge in relation_edges if isinstance(relation_edges, list) else []:
+            if not isinstance(edge, dict):
+                continue
+            node = edge.get("node")
+            if not isinstance(node, dict):
+                continue
+            target_id = node.get("id")
+            relation_type = edge.get("relationType")
+            if (
+                isinstance(target_id, bool)
+                or not isinstance(relation_type, str)
+                or not relation_type.strip()
+                or (isinstance(target_id, float) and not target_id.is_integer())
+                or (isinstance(target_id, str) and not re.fullmatch(r"\s*-?[0-9]+\s*", target_id))
+            ):
+                continue
+            try:
+                target_id = int(target_id)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if target_id <= 0 or target_id > _MAX_SQLITE_INTEGER:
+                continue
+
+            target_title_data = node.get("title")
+            if not isinstance(target_title_data, dict):
+                target_title_data = {}
+            target_title = next(
+                (
+                    value.strip()
+                    for value in (
+                        target_title_data.get("english"),
+                        target_title_data.get("romaji"),
+                        target_title_data.get("native"),
+                    )
+                    if isinstance(value, str) and value.strip()
+                ),
+                None,
+            )
+            if target_title:
+                target_start_date = node.get("startDate")
+                if not isinstance(target_start_date, dict):
+                    target_start_date = {}
+                cover_image = node.get("coverImage")
+                if not isinstance(cover_image, dict):
+                    cover_image = {}
+                connection.execute("""
+                    INSERT INTO works (
+                        id, title, type, format, start_year, start_month, start_day,
+                        cover_url, mal_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        title = excluded.title,
+                        type = excluded.type,
+                        format = COALESCE(excluded.format, works.format),
+                        start_year = COALESCE(excluded.start_year, works.start_year),
+                        start_month = COALESCE(excluded.start_month, works.start_month),
+                        start_day = COALESCE(excluded.start_day, works.start_day),
+                        cover_url = COALESCE(excluded.cover_url, works.cover_url),
+                        mal_id = COALESCE(excluded.mal_id, works.mal_id)
+                """, (
+                    target_id,
+                    target_title,
+                    node.get("type") or "ANIME",
+                    node.get("format"),
+                    target_start_date.get("year"),
+                    target_start_date.get("month"),
+                    target_start_date.get("day"),
+                    cover_image.get("large"),
+                    node.get("idMal"),
+                ))
+            connection.execute(
+                "INSERT OR REPLACE INTO work_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)",
+                (work_id, target_id, relation_type),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 def save_cover_path(work_id, cover_path):
     connection = get_connection()
