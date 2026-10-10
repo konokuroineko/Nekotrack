@@ -334,6 +334,46 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
             connection.close()
         self.assertEqual([row["character_id"] for row in rows], [620])
 
+    def test_reading_item_numbers_are_bounded_and_invalid_batches_do_not_lock_database(self):
+        work_id = 618
+        database.save_anime(self.work(work_id, "MANGA", "MANGA"))
+
+        invalid_items = [
+            {"number": 10**100, "title": "Too large"},
+            {"number": float("inf"), "title": "Infinite"},
+            {"number": float("nan"), "title": "NaN"},
+            {"number": 1_000_001, "title": "Past supported maximum"},
+            {"number": True, "title": "Boolean"},
+            {"number": 1.5, "title": "Fractional"},
+            {"number": "9" * 5000, "title": "Huge numeric text"},
+        ]
+        with patch.object(database, "get_connection") as get_connection:
+            with self.assertRaises(ValueError):
+                database.save_reading_item_metadata(1 << 100, "chapter", invalid_items)
+            get_connection.assert_not_called()
+
+        self.assertEqual(
+            database.save_reading_item_metadata(work_id, "chapter", invalid_items),
+            0,
+        )
+        self.assertEqual(
+            database.save_reading_item_metadata(
+                work_id,
+                "chapter",
+                [{"number": 1, "title": "Chapter One"}],
+            ),
+            1,
+        )
+        connection = database.get_connection()
+        try:
+            rows = connection.execute(
+                "SELECT item_number, title FROM reading_items WHERE work_id = ? AND item_type = 'chapter'",
+                (work_id,),
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertEqual([(row["item_number"], row["title"]) for row in rows], [(1, "Chapter One")])
+
     def assert_database_invariants(self):
         connection = database.get_connection()
         self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
