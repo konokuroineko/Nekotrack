@@ -833,6 +833,42 @@ def save_anime(anime):
     # Reconcile outgoing relations only when a complete, well-formed edge list
     # is present. Search/partial records may omit relations entirely, and a
     # malformed response must not erase previously cached relationships.
+    # Like relations, studio associations come from a connection that can
+    # be missing on lightweight records. Reconcile them only when a complete,
+    # well-formed snapshot is supplied.
+    studio_snapshot_valid = None
+    studios_data = anime.get("studios")
+    studio_edges = studios_data.get("edges") if isinstance(studios_data, dict) else None
+    if isinstance(studio_edges, list):
+        studio_snapshot_valid = True
+        for edge in studio_edges:
+            if not isinstance(edge, dict):
+                studio_snapshot_valid = False
+                break
+            studio = edge.get("node")
+            if not isinstance(studio, dict):
+                studio_snapshot_valid = False
+                break
+            studio_id = studio.get("id")
+            studio_name = studio.get("name")
+            if (
+                isinstance(studio_id, bool)
+                or isinstance(studio_id, float) and not studio_id.is_integer()
+                or isinstance(studio_id, str) and not re.fullmatch(r"\\s*[0-9]+\\s*", studio_id)
+                or not isinstance(studio_name, str)
+                or not studio_name.strip()
+            ):
+                studio_snapshot_valid = False
+                break
+            try:
+                studio_id = int(studio_id)
+            except (TypeError, ValueError, OverflowError):
+                studio_snapshot_valid = False
+                break
+            if studio_id <= 0:
+                studio_snapshot_valid = False
+                break
+
     relation_snapshot = None
     relations = anime.get("relations")
     relation_edges = relations.get("edges") if isinstance(relations, dict) else None
@@ -937,13 +973,42 @@ def save_anime(anime):
                 "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
                 (anime["id"], alt_title, title_record.get("language")),
             )
-    for edge in (anime.get("studios") or {}).get("edges") or []:
-        studio = edge.get("node") or {}
-        if studio.get("id") and studio.get("name"):
-            connection.execute("INSERT OR REPLACE INTO studios (id, name, is_main) VALUES (?, ?, ?)",
-                               (studio["id"], studio["name"], 1 if edge.get("isMain") else 0))
-            connection.execute("INSERT OR IGNORE INTO work_studios (work_id, studio_id) VALUES (?, ?)",
-                               (anime["id"], studio["id"]))
+    if studio_snapshot_valid is True:
+        connection.execute(
+            "DELETE FROM work_studios WHERE work_id = ?",
+            (anime["id"],),
+        )
+
+    for edge in studio_edges if isinstance(studio_edges, list) else []:
+        if not isinstance(edge, dict):
+            continue
+        studio = edge.get("node")
+        if not isinstance(studio, dict):
+            continue
+        studio_id = studio.get("id")
+        studio_name = studio.get("name")
+        if (
+            isinstance(studio_id, bool)
+            or isinstance(studio_id, float) and not studio_id.is_integer()
+            or isinstance(studio_id, str) and not re.fullmatch(r"\\s*[0-9]+\\s*", studio_id)
+            or not isinstance(studio_name, str)
+            or not studio_name.strip()
+        ):
+            continue
+        try:
+            studio_id = int(studio_id)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if studio_id <= 0:
+            continue
+        connection.execute(
+            "INSERT OR REPLACE INTO studios (id, name, is_main) VALUES (?, ?, ?)",
+            (studio_id, studio_name.strip(), 1 if edge.get("isMain") else 0),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO work_studios (work_id, studio_id) VALUES (?, ?)",
+            (anime["id"], studio_id),
+        )
     if relation_snapshot is not None:
         # Relation details are a cached snapshot, not an append-only history.
         # Delete stale outgoing edges within this transaction before writing
