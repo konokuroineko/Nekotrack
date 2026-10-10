@@ -388,6 +388,50 @@ class DatabaseEpisodeMetadataStressTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_episode_progress_rejects_invalid_ids_without_leaking_transactions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                work_id = 80
+                database.save_anime({
+                    "id": work_id,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "title": {"english": "Progress ID test", "romaji": "Progress ID test"},
+                })
+                database.save_episodes(work_id, [{
+                    "episodeNumber": 1,
+                    "title": "Episode One",
+                }])
+                database.add_to_library(work_id)
+
+                invalid_calls = (
+                    (True, 1),
+                    (work_id, True),
+                    (work_id, 1.5),
+                    (work_id, 10**100),
+                    (10**100, 1),
+                )
+                for invalid_work_id, episode_number in invalid_calls:
+                    with self.subTest(work_id=invalid_work_id, episode_number=episode_number):
+                        self.assertEqual(
+                            database.set_episode_watched(
+                                invalid_work_id, episode_number, True
+                            ),
+                            (0, 0),
+                        )
+
+                # A valid write immediately after the invalid calls confirms
+                # they did not strand an open SQLite transaction/connection.
+                self.assertEqual(database.set_episode_watched(work_id, 1, True), (1, 1))
+                saved = database.get_work(work_id)
+                self.assertEqual(saved["progress_episodes"], 1)
+                self.assertEqual(saved["status"], "Completed")
+            finally:
+                os.chdir(old_cwd)
+
 
 class DatabaseCastPayloadStressTests(unittest.TestCase):
     def test_malformed_character_edges_do_not_crash_or_mark_partial_cast_loaded(self):
