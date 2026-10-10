@@ -1145,18 +1145,24 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
 
 def get_volume_records(series_id, max_pages=4, limit=50):
     """Resolve published volume records when a MangaBaka series has volume collections."""
+    safe_series_id = _bounded_positive_filter_int(series_id)
+    if safe_series_id is None:
+        return []
+
     collections = []
-    page_count = min(20, max(1, _safe_int(max_pages, 4)))
-    safe_limit = min(100, max(1, _safe_int(limit, 50)))
+    page_count = _safe_page_parameter(max_pages, 4, 20)
+    safe_limit = _safe_page_parameter(limit, 50, 100)
     for page in range(1, page_count + 1):
-        payload = get_series_collections(series_id, page=page, limit=safe_limit)
+        payload = get_series_collections(safe_series_id, page=page, limit=safe_limit)
         records = _records(payload)
         collections.extend(records)
         if not records or not _pagination(payload).get("next"):
             break
 
-    volume_collections = [item for item in collections
-                          if "volume" in str(item.get("type") or item.get("name") or "").lower()]
+    volume_collections = [
+        item for item in collections
+        if "volume" in str(item.get("type") or item.get("name") or "").lower()
+    ]
     if not volume_collections:
         return []
     volume_collections.sort(key=lambda item: (
@@ -1164,8 +1170,8 @@ def get_volume_records(series_id, max_pages=4, limit=50):
         -_safe_int(item.get("count") or item.get("works_count") or 0, 0),
     ))
     for collection in volume_collections:
-        collection_id = collection.get("id")
-        if not collection_id:
+        collection_id = _bounded_positive_filter_int(collection.get("id"))
+        if collection_id is None:
             continue
         works = []
         for page in range(1, 5):
@@ -1178,12 +1184,26 @@ def get_volume_records(series_id, max_pages=4, limit=50):
             continue
         normalized = []
         for index, work in enumerate(works, start=1):
-            raw_number = (work.get("volume_number") or work.get("volume") or
-                          work.get("number") or work.get("position") or index)
-            match = re.search(r"\d+", str(raw_number))
-            number = int(match.group(0)) if match else index
-            title = _first_text(work.get("title"), work.get("name"), work.get("title_en"),
-                                work.get("title_english"), work.get("title_native"))
+            raw_number = (
+                work.get("volume_number") or work.get("volume")
+                or work.get("number") or work.get("position") or index
+            )
+            number = index
+            number_match = re.search(r"\d+", str(raw_number))
+            if number_match:
+                digits = number_match.group(0)
+                # Never convert an arbitrarily long provider-supplied numeral.
+                if len(digits) <= 7:
+                    try:
+                        candidate_number = int(digits)
+                    except (TypeError, ValueError, OverflowError):
+                        candidate_number = index
+                    if 1 <= candidate_number <= 1_000_000:
+                        number = candidate_number
+            title = _first_text(
+                work.get("title"), work.get("name"), work.get("title_en"),
+                work.get("title_english"), work.get("title_native"),
+            )
             if not title or re.match(r"^(?:vol(?:ume)?\.?\s*)?\d+$", title, re.I):
                 title = f"Volume {number}"
             normalized.append({
