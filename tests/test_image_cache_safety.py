@@ -139,12 +139,12 @@ class CoverCacheInputSafetyTests(unittest.TestCase):
             image_cache, "IMAGE_DIRECTORY", Path(directory) / "works"
         ), patch.object(image_cache.requests, "get", side_effect=[redirect, response]) as request:
             saved = Path(image_cache.download_cover(12, VALID_URL))
+            self.assertTrue(saved.is_file())
 
         self.assertEqual(request.call_count, 2)
         self.assertEqual(request.call_args_list[0].args[0], VALID_URL)
         self.assertEqual(request.call_args_list[1].args[0], final_url)
         self.assertTrue(all(call.kwargs["allow_redirects"] is False for call in request.call_args_list))
-        self.assertTrue(saved.is_file())
 
     def test_valid_cover_is_streamed_resized_and_saved_inside_cache(self):
         payload = png_bytes(32, 48)
