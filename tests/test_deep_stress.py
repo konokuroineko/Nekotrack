@@ -486,6 +486,19 @@ class DatabaseCastReconciliationStressTests(unittest.TestCase):
                 ]
                 database.save_characters(work_id, first_snapshot)
                 self.assertTrue(database.characters_are_loaded(work_id))
+                connection = database.get_connection()
+                try:
+                    connection.execute(
+                        "UPDATE characters SET image_path = ?, image_url = NULL WHERE id = ?",
+                        ("data/images/characters/1.png", 1),
+                    )
+                    connection.execute(
+                        "UPDATE people SET image_path = ? WHERE id = ?",
+                        ("data/images/people/100.png", 100),
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
 
                 # A malformed snapshot must not remove any existing cast links.
                 partial_snapshot = [
@@ -515,6 +528,16 @@ class DatabaseCastReconciliationStressTests(unittest.TestCase):
                     connection.close()
                 self.assertEqual(after_partial_characters, [1, 2])
                 self.assertEqual(after_partial_actors, [100, 101])
+
+                connection = database.get_connection()
+                try:
+                    connection.execute(
+                        "UPDATE people SET image_path = ? WHERE id = ?",
+                        ("data/images/people/101.png", 101),
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
 
                 # A complete snapshot is authoritative: Character Two and the
                 # voice actor no longer reported for Character One are removed.
@@ -565,6 +588,14 @@ class DatabaseCastReconciliationStressTests(unittest.TestCase):
                         "SELECT 1 FROM people WHERE id = ?",
                         (101,),
                     ).fetchone()
+                    character_image_path = connection.execute(
+                        "SELECT image_path FROM characters WHERE id = ?",
+                        (1,),
+                    ).fetchone()["image_path"]
+                    actor_image_path = connection.execute(
+                        "SELECT image_path FROM people WHERE id = ?",
+                        (101,),
+                    ).fetchone()["image_path"]
                 finally:
                     connection.close()
                 self.assertIsNone(orphan_character)
@@ -572,6 +603,37 @@ class DatabaseCastReconciliationStressTests(unittest.TestCase):
                 self.assertIsNone(orphan_old_actor)
                 self.assertIsNone(orphan_second_actor)
                 self.assertIsNotNone(current_actor)
+                self.assertEqual(character_image_path, "data/images/characters/1.png")
+                self.assertEqual(actor_image_path, "data/images/people/101.png")
+
+                # If the provider image URL actually changes, invalidate that
+                # local cached path instead of displaying a stale image forever.
+                changed_character = character(
+                    1,
+                    "Character One",
+                    [actor(101, "New Actor")],
+                )
+                changed_character["node"]["image"]["large"] = (
+                    "https://images.example.invalid/character-new.png"
+                )
+                changed_character["voiceActors"][0]["image"]["large"] = (
+                    "https://images.example.invalid/actor-new.png"
+                )
+                database.save_characters(work_id, [changed_character])
+                connection = database.get_connection()
+                try:
+                    changed_paths = connection.execute(
+                        """
+                        SELECT characters.image_path AS character_path,
+                               people.image_path AS person_path
+                        FROM characters, people
+                        WHERE characters.id = 1 AND people.id = 101
+                        """
+                    ).fetchone()
+                finally:
+                    connection.close()
+                self.assertIsNone(changed_paths["character_path"])
+                self.assertIsNone(changed_paths["person_path"])
             finally:
                 os.chdir(old_cwd)
 
