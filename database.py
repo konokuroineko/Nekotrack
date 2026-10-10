@@ -944,16 +944,51 @@ def save_anime(anime):
             (anime["id"],),
         )
 
-    for edge in (anime.get("relations") or {}).get("edges") or []:
-        node = edge.get("node") or {}
+    for edge in relation_edges if isinstance(relation_edges, list) else []:
+        if not isinstance(edge, dict):
+            continue
+        node = edge.get("node")
+        if not isinstance(node, dict):
+            continue
         target_id = node.get("id")
         relation_type = edge.get("relationType")
-        if not target_id or not relation_type:
+        if (
+            isinstance(target_id, bool)
+            or not isinstance(relation_type, str)
+            or not relation_type.strip()
+            or (isinstance(target_id, float) and not target_id.is_integer())
+            or (isinstance(target_id, str) and not re.fullmatch(r"\s*-?[0-9]+\s*", target_id))
+        ):
             continue
-        target_title_data = node.get("title") or {}
-        target_title = target_title_data.get("english") or target_title_data.get("romaji") or target_title_data.get("native")
+        try:
+            target_id = int(target_id)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if target_id == 0:
+            continue
+
+        target_title_data = node.get("title")
+        if not isinstance(target_title_data, dict):
+            target_title_data = {}
+        target_title = next(
+            (
+                value.strip()
+                for value in (
+                    target_title_data.get("english"),
+                    target_title_data.get("romaji"),
+                    target_title_data.get("native"),
+                )
+                if isinstance(value, str) and value.strip()
+            ),
+            None,
+        )
         if target_title:
-            target_start_date = node.get("startDate") or {}
+            target_start_date = node.get("startDate")
+            if not isinstance(target_start_date, dict):
+                target_start_date = {}
+            cover_image = node.get("coverImage")
+            if not isinstance(cover_image, dict):
+                cover_image = {}
             connection.execute("""
                 INSERT INTO works (
                     id, title, type, format, start_year, start_month, start_day,
@@ -977,11 +1012,13 @@ def save_anime(anime):
                 target_start_date.get("year"),
                 target_start_date.get("month"),
                 target_start_date.get("day"),
-                (node.get("coverImage") or {}).get("large"),
+                cover_image.get("large"),
                 node.get("idMal"),
             ))
-        connection.execute("INSERT OR REPLACE INTO work_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)",
-                           (anime["id"], target_id, relation_type))
+        connection.execute(
+            "INSERT OR REPLACE INTO work_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)",
+            (anime["id"], target_id, relation_type),
+        )
     connection.commit()
     connection.close()
 
