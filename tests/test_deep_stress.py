@@ -11,6 +11,15 @@ import database
 import mangabaka_api as mb
 import series
 
+def _fuzz_seed(base):
+    """Keep tests reproducible while allowing each soak iteration to vary inputs."""
+    try:
+        offset = int(os.environ.get("NEKOTRACK_FUZZ_SEED", "0"))
+    except (TypeError, ValueError, OverflowError):
+        offset = 0
+    return (int(base) + offset) % (2**32)
+
+
 
 class FakeResponse:
     def __init__(self, payload, status_code=200, reason="OK", headers=None):
@@ -116,7 +125,7 @@ class MangaBakaShapeStressTests(unittest.TestCase):
         self.assertEqual(first, second)
 
     def test_invalid_dates_are_ignored_and_never_abort_normalization(self):
-        rng = random.Random(20261010)
+        rng = random.Random(_fuzz_seed(20261010))
         samples = [
             None, "", "unknown", "2020-13-40", "99999-01-01",
             {"year": "nope", "month": 1, "day": 1},
@@ -177,7 +186,7 @@ class MangaBakaShapeStressTests(unittest.TestCase):
         ))
 
     def test_randomized_provider_shapes_do_not_crash_local_filtering_or_normalization(self):
-        rng = random.Random(431072)
+        rng = random.Random(_fuzz_seed(431072))
         scalar_values = [None, "", "2022-06-05", "bad", 0, 1, 99, True, False, float("nan"), float("inf")]
         terms = [None, "", "Action", "action, Fantasy", ["Action", "Fantasy"], {"name": "Isekai"}, [None, 3, {"slug": "Fantasy"}]]
         for index in range(500):
@@ -257,7 +266,7 @@ class SeriesBundlingStressTests(unittest.TestCase):
         self.assertEqual(series.logical_season_count([first, second]), 2)
 
     def test_seeded_random_graphs_preserve_every_original_result_exactly_once(self):
-        rng = random.Random(120241)
+        rng = random.Random(_fuzz_seed(120241))
         formats = {
             "ANIME": ["TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL", "MUSIC", None],
             "MANGA": ["MANGA", "NOVEL", "ONE_SHOT", None],
@@ -340,7 +349,7 @@ class DatabaseProgressStressTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_random_progress_toggles_keep_sqlite_and_aggregate_counts_consistent(self):
-        rng = random.Random(2026101001)
+        rng = random.Random(_fuzz_seed(2026101001))
         expected = {
             work_id: {"chapter": set(), "volume": set()}
             for work_id in range(1, 5)
