@@ -1347,11 +1347,12 @@ class AniListRelationsChaosTests(unittest.TestCase):
         request.assert_called_once()
         for name in ("characters", "staff", "studios", "relations"):
             self.assertIsInstance(media[name], dict)
-        for name in ("characters", "staff"):
-            self.assertIsInstance(media[name].get("edges"), list)
+        self.assertIsInstance(media["characters"].get("edges"), list)
         self.assertEqual(media["characters"]["edges"], [])
         self.assertFalse(media["_characters_snapshot_valid"])
-        self.assertEqual(media["staff"]["edges"], [])
+        # Missing staff edges are non-authoritative too; [] would accidentally
+        # clear a previously cached staff list during detail re-import.
+        self.assertIsNone(media["staff"]["edges"])
         # Missing/invalid relation and studio lists stay non-authoritative;
         # replacing either with [] would erase previously cached connections.
         self.assertIsNone(media["studios"]["edges"])
