@@ -1321,6 +1321,39 @@ class MangaBakaShapeStressTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     mb.normalize_series({"id": value, "title": "Invalid ID"})
 
+    def test_mangabaka_ids_and_external_ids_are_bounded_before_conversion(self):
+        invalid_series_ids = (
+            1 << 63,
+            10**100,
+            "9" * 5000,
+            float("inf"),
+            float("nan"),
+        )
+        for value in invalid_series_ids:
+            with self.subTest(series_id=repr(value)[:60]):
+                with self.assertRaises(ValueError):
+                    mb.normalize_series({"id": value, "title": "Invalid series ID"})
+
+        with self.assertRaises(ValueError):
+            mb.normalize_series(
+                {"id": 7, "title": "Local work"},
+                preferred_id=1 << 31,
+            )
+
+        normalized = mb.normalize_series({
+            "id": 7,
+            "title": "Local work",
+            "external_ids": {
+                "anilist_id": "9" * 5000,
+            },
+        })
+        self.assertEqual(normalized["id"], -7)
+        self.assertEqual(normalized["_mangabaka_id"], 7)
+        self.assertIsNone(mb.extract_external_id(
+            {"anilist_id": "9" * 5000},
+            "anilist",
+        ))
+
     def test_nonfinite_scores_never_pass_local_minimum_score_filters(self):
         for rating in (float("nan"), float("inf"), float("-inf"), None, "unknown", [], {}):
             with self.subTest(rating=repr(rating)):
