@@ -798,14 +798,30 @@ def get_media_details(media_id):
     def _page_limit(page_info):
         return min(_safe_page(page_info.get("lastPage"), MAX_DETAIL_PAGES), MAX_DETAIL_PAGES)
 
-    characters_connection = media.get("characters")
-    if not isinstance(characters_connection, dict):
-        characters_connection = {}
+    raw_characters_connection = media.get("characters")
+    characters_snapshot_valid = isinstance(raw_characters_connection, dict)
+    characters_connection = (
+        raw_characters_connection if isinstance(raw_characters_connection, dict) else {}
+    )
+    raw_character_edges = characters_connection.get("edges")
+    if not isinstance(raw_character_edges, list):
+        characters_snapshot_valid = False
+        raw_character_edges = []
+    elif any(not isinstance(edge, dict) for edge in raw_character_edges):
+        # Deduplication intentionally drops non-dictionary entries; remember
+        # that doing so made this response incomplete, not an authoritative
+        # empty/smaller cast snapshot.
+        characters_snapshot_valid = False
+
     page_info = characters_connection.get("pageInfo")
     if not isinstance(page_info, dict):
+        characters_snapshot_valid = False
         page_info = {}
+    elif not isinstance(page_info.get("hasNextPage"), bool):
+        characters_snapshot_valid = False
+
     all_character_edges = _append_unique_records(
-        [], characters_connection.get("edges"), _character_key
+        [], raw_character_edges, _character_key
     )
     page = _safe_page(page_info.get("currentPage"))
     characters_query = """
@@ -843,20 +859,35 @@ def get_media_details(media_id):
         page_media = page_data.get("Media") if isinstance(page_data, dict) else None
         connection = page_media.get("characters") if isinstance(page_media, dict) else None
         if not isinstance(connection, dict):
+            characters_snapshot_valid = False
             break
         incoming_edges = connection.get("edges")
+        if not isinstance(incoming_edges, list):
+            characters_snapshot_valid = False
+            incoming_edges = []
+        elif any(not isinstance(edge, dict) for edge in incoming_edges):
+            characters_snapshot_valid = False
         previous_count = len(all_character_edges)
         all_character_edges = _append_unique_records(
             all_character_edges, incoming_edges, _character_key
         )
         page_info = connection.get("pageInfo")
         if not isinstance(page_info, dict):
+            characters_snapshot_valid = False
             page_info = {}
+        elif not isinstance(page_info.get("hasNextPage"), bool):
+            characters_snapshot_valid = False
         page = requested_page
         # A repeated/empty page despite hasNextPage=True is a broken provider
         # response. Stop instead of repeatedly downloading the same page.
         if len(all_character_edges) == previous_count:
+            if page_info.get("hasNextPage") is True:
+                characters_snapshot_valid = False
             break
+
+    if page_info.get("hasNextPage") is True and page >= _page_limit(page_info):
+        # The page cap is a safety stop, not proof that every page was fetched.
+        characters_snapshot_valid = False
 
     media["characters"] = {
         **characters_connection,
@@ -867,6 +898,7 @@ def get_media_details(media_id):
             "hasNextPage": False,
         },
     }
+    media["_characters_snapshot_valid"] = characters_snapshot_valid
 
     # The schedule data is used by detail/import views; write the complete
     # deduplicated node list back onto the returned media object.
