@@ -1,7 +1,8 @@
 """Bounded and path-safe cover-image downloads for NekoTrack."""
 from pathlib import Path
+import ipaddress
 import re
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import requests
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt
@@ -14,6 +15,7 @@ MAX_COVER_WIDTH = 8192
 MAX_COVER_HEIGHT = 8192
 MAX_COVER_PIXELS = 32_000_000
 MAX_WORK_ID_TEXT_LENGTH = 20
+MAX_COVER_REDIRECTS = 5
 
 
 def _safe_work_id(value):
@@ -43,20 +45,58 @@ def _safe_image_url(value):
         port = parsed.port
     except (TypeError, ValueError):
         raise ValueError("The cover image URL is invalid.")
+    host = (parsed.hostname or "").casefold().rstrip(".")
     if (
         parsed.scheme.casefold() != "https"
-        or not parsed.hostname
+        or not host
         or parsed.username is not None
         or parsed.password is not None
         or port not in (None, 443)
         or parsed.fragment
+        or host == "localhost"
+        or host.endswith((".localhost", ".local", ".internal"))
     ):
-        raise ValueError("Cover images must use a valid HTTPS URL.")
+        raise ValueError("Cover images must use a valid public HTTPS URL.")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and not address.is_global:
+        raise ValueError("Cover images cannot use private or local IP addresses.")
     return value.strip()
 
 
+def _open_cover_response(start_url):
+    """Follow redirects only after validating each destination URL."""
+    url = start_url
+    redirect_codes = {301, 302, 303, 307, 308}
+    for _ in range(MAX_COVER_REDIRECTS + 1):
+        response = requests.get(
+            url,
+            timeout=15,
+            stream=True,
+            allow_redirects=False,
+        )
+        status_code = getattr(response, "status_code", None)
+        if status_code in redirect_codes:
+            headers = getattr(response, "headers", None) or {}
+            location = headers.get("Location")
+            response.close()
+            if not isinstance(location, str) or not location.strip():
+                raise ValueError("The image server returned a redirect without a location.")
+            url = _safe_image_url(urljoin(url, location.strip()))
+            continue
+
+        response.raise_for_status()
+        final_url = getattr(response, "url", None) or url
+        _safe_image_url(final_url)
+        return response
+
+    raise ValueError("The cover image download exceeded the redirect limit.")
+
+
 def _download_payload(image_url):
-    with requests.get(image_url, timeout=15, stream=True) as response:
+    with _open_cover_response(image_url) as response:
         response.raise_for_status()
         headers = getattr(response, "headers", None) or {}
         raw_length = headers.get("Content-Length")
