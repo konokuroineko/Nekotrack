@@ -7,7 +7,10 @@ DATABASE_NAME = "anime_tracker.db"
 
 
 def get_connection():
-    connection = sqlite3.connect(DATABASE_NAME)
+    # The application performs catalog imports and progress writes from worker
+    # threads. Give SQLite time to serialize short concurrent write transactions
+    # instead of raising "database is locked" after its default 5-second wait.
+    connection = sqlite3.connect(DATABASE_NAME, timeout=15)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
