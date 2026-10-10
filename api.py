@@ -1532,15 +1532,25 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
     if not _is_safe_tmdb_episode_image_url(url):
         raise ValueError("Only HTTPS TMDB image URLs are allowed.")
 
-    if isinstance(work_id, bool) or isinstance(episode_number, bool):
-        raise ValueError("Work and episode IDs must be integers.")
-    try:
-        work_number = int(work_id)
-        episode_number = int(episode_number)
-    except (TypeError, ValueError, OverflowError) as error:
-        raise ValueError("Work and episode IDs must be integers.") from error
-    if work_number <= 0 or episode_number <= 0:
-        raise ValueError("Work and episode IDs must be positive.")
+    def positive_integer(value, label):
+        if isinstance(value, bool):
+            raise ValueError(f"{label} must be an integer.")
+        if isinstance(value, float) and (
+            not math.isfinite(value) or not value.is_integer()
+        ):
+            raise ValueError(f"{label} must be an integer.")
+        if isinstance(value, str) and not re.fullmatch(r"\\s*\\+?[0-9]+\\s*", value):
+            raise ValueError(f"{label} must be an integer.")
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError(f"{label} must be an integer.") from error
+        if parsed <= 0:
+            raise ValueError(f"{label} must be positive.")
+        return parsed
+
+    work_number = positive_integer(work_id, "Work ID")
+    episode_number = positive_integer(episode_number, "Episode number")
 
     digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
     directory = TMDB_EPISODE_CACHE_DIRECTORY / str(work_number)
