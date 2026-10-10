@@ -1,8 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-import api
-import mangabaka_api as mb
+import api as mb
 
 
 def sample_series(series_id=42, series_type="novel", english="Example Work"):
@@ -33,7 +32,7 @@ def sample_series(series_id=42, series_type="novel", english="Example Work"):
 
 class MangaBakaAPITests(unittest.TestCase):
     def test_normalize_keeps_native_romanized_and_english_titles(self):
-        normalized = mb.normalize_series(sample_series())
+        normalized = mb.normalize_mangabaka_series(sample_series())
         self.assertEqual(normalized["id"], -42)
         self.assertEqual(normalized["type"], "MANGA")
         self.assertEqual(normalized["format"], "NOVEL")
@@ -48,9 +47,9 @@ class MangaBakaAPITests(unittest.TestCase):
     def test_linked_anilist_id_is_used_instead_of_synthetic_id(self):
         series = sample_series(series_id=55)
         series["anilist_response"] = {"data": {"Media": {"id": 12345}}}
-        normalized = mb.normalize_series(series)
+        normalized = mb.normalize_mangabaka_series(series)
         self.assertEqual(normalized["id"], 12345)
-        self.assertEqual(mb.extract_external_id(series, "anilist"), 12345)
+        self.assertEqual(mb.get_mangabaka_external_id(series, "anilist"), 12345)
 
     def test_duplicate_english_titles_match_by_anilist_id(self):
         target = {"id": 200, "type": "MANGA", "title": {"english": "ReZero IF"}}
@@ -68,7 +67,7 @@ class MangaBakaAPITests(unittest.TestCase):
 
     def test_search_defaults_to_safe_and_suggestive_ratings(self):
         with patch.object(mb, "_request", return_value={"status": 200, "data": []}) as request:
-            mb.search_series("Example", page=2, limit=15)
+            mb.search_mangabaka_series("Example", page=2, limit=15)
         args, kwargs = request.call_args
         self.assertEqual(args[0], "series/search")
         self.assertEqual(kwargs["params"]["q"], "Example")
@@ -82,8 +81,8 @@ class MangaBakaAPITests(unittest.TestCase):
             "data": [sample_series(77)],
             "pagination": {"count": 21, "page": 1, "limit": 20, "next": "?page=2"},
         }
-        with patch.object(mb, "search_series", return_value=payload):
-            result = mb.search_media("Example", page=1, media_type="MANGA",
+        with patch.object(mb, "search_mangabaka_series", return_value=payload):
+            result = mb.search_mangabaka_media("Example", page=1, media_type="MANGA",
                                      media_format="NOVEL", filters={})
         self.assertEqual(len(result["media"]), 1)
         self.assertEqual(result["media"][0]["format"], "NOVEL")
@@ -94,11 +93,11 @@ class MangaBakaAPITests(unittest.TestCase):
         collection = {"id": 6, "type": "volume", "language": "en", "count": 1}
         work = {"id": 99, "volume_number": 1, "title": "The First Volume",
                 "isbn_13": "9780000000001", "published": "2021-02-03"}
-        with patch.object(mb, "get_series_collections",
+        with patch.object(mb, "get_mangabaka_series_collections",
                           return_value={"data": [collection], "pagination": {}}), \
-             patch.object(mb, "get_collection_works",
+             patch.object(mb, "get_mangabaka_collection_works",
                           return_value={"data": [work], "pagination": {}}):
-            volumes = mb.get_volume_records(42)
+            volumes = mb.get_mangabaka_volume_records(42)
         self.assertEqual(len(volumes), 1)
         self.assertEqual(volumes[0]["number"], 1)
         self.assertEqual(volumes[0]["title"], "The First Volume")
@@ -109,7 +108,7 @@ class MangaBakaAPITests(unittest.TestCase):
             mb, "_request",
             return_value={"status": 200, "data": {"id": 42, "titles": []}},
         ) as request:
-            mb.get_series(42, full=True)
+            mb.get_mangabaka_series(42, full=True)
         self.assertEqual(request.call_args.args[0], "series/42")
         self.assertEqual(request.call_args.kwargs["params"], {"schema": "full"})
 
@@ -119,53 +118,55 @@ class MangaBakaAPITests(unittest.TestCase):
             "data": [sample_series(88)],
             "pagination": {"count": 1, "page": 1, "limit": 20, "next": None},
         }
-        with patch.object(mb, "get_hidden_gems", return_value=payload) as hidden_gems:
-            result = mb.search_media("", browse_mode="hidden_gems")
+        with patch.object(mb, "get_mangabaka_hidden_gems", return_value=payload) as hidden_gems:
+            result = mb.search_mangabaka_media("", browse_mode="hidden_gems")
         hidden_gems.assert_called_once()
         self.assertEqual(result["media"][0]["_mangabaka_id"], 88)
 
     def test_query_in_hidden_gems_mode_still_performs_title_search(self):
         payload = {"status": 200, "data": [sample_series(89)],
                    "pagination": {"count": 1, "page": 1, "limit": 20, "next": None}}
-        with patch.object(mb, "search_series", return_value=payload) as search:
-            mb.search_media("Example", browse_mode="hidden_gems")
+        with patch.object(mb, "search_mangabaka_series", return_value=payload) as search:
+            mb.search_mangabaka_media("Example", browse_mode="hidden_gems")
         search.assert_called_once()
         self.assertEqual(search.call_args.args[0], "Example")
 
     def test_account_and_moderation_routes_are_not_public_catalog_calls(self):
         with self.assertRaises(ValueError):
-            mb.get_public_data("my/profile")
+            mb.get_mangabaka_public_data("my/profile")
         with self.assertRaises(ValueError):
-            mb.get_public_data("mod/statistics")
+            mb.get_mangabaka_public_data("mod/statistics")
 
 
-    def test_mangabaka_api_is_exposed_through_the_public_api_module(self):
-        exports = {
-            "MangaBakaAPIError": "MangaBakaAPIError",
-            "enrich_anilist_media": "enrich_anilist_media",
-            "enrich_anilist_results": "enrich_anilist_results",
-            "get_mangabaka_external_id": "extract_external_id",
-            "get_mangabaka_public_data": "get_public_data",
-            "get_mangabaka_series": "get_series",
-            "get_mangabaka_work": "get_work",
-            "get_mangabaka_related_series": "get_related_series",
-            "get_mangabaka_series_news": "get_series_news",
-            "get_mangabaka_volume_records": "get_volume_records",
-            "get_mangabaka_series_collections": "get_series_collections",
-            "get_mangabaka_collection_works": "get_collection_works",
-            "get_mangabaka_series_mix": "get_series_mix",
-            "get_mangabaka_hidden_gems": "get_hidden_gems",
-            "get_mangabaka_publishers": "get_publishers",
-            "get_mangabaka_publisher": "get_publisher",
-            "get_mangabaka_similar_publishers": "get_similar_publishers",
-            "get_mangabaka_publisher_stats": "get_publisher_stats",
-            "normalize_mangabaka_series": "normalize_series",
-            "search_mangabaka_media": "search_media",
-            "search_mangabaka_series": "search_series",
-        }
-        for public_name, implementation_name in exports.items():
+    def test_mangabaka_implementation_lives_in_central_api_module(self):
+        public_functions = (
+            "enrich_anilist_media",
+            "enrich_anilist_results",
+            "get_mangabaka_external_id",
+            "get_mangabaka_collection_works",
+            "get_mangabaka_public_data",
+            "get_mangabaka_publisher",
+            "get_mangabaka_publisher_stats",
+            "get_mangabaka_related_series",
+            "get_mangabaka_series",
+            "get_mangabaka_series_collections",
+            "get_mangabaka_series_mix",
+            "get_mangabaka_series_news",
+            "get_mangabaka_similar_publishers",
+            "get_mangabaka_volume_records",
+            "get_mangabaka_hidden_gems",
+            "get_mangabaka_work",
+            "get_mangabaka_publishers",
+            "normalize_mangabaka_series",
+            "search_mangabaka_media",
+            "search_mangabaka_series",
+        )
+        for public_name in public_functions:
             with self.subTest(api_name=public_name):
-                self.assertIs(getattr(api, public_name), getattr(mb, implementation_name))
+                function = getattr(mb, public_name)
+                self.assertTrue(callable(function))
+                self.assertEqual(function.__module__, "api")
+        self.assertEqual(mb.MangaBakaAPIError.__module__, "api")
 
 
 
