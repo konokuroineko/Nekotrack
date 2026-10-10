@@ -1438,9 +1438,15 @@ class AniListRelationsChaosTests(unittest.TestCase):
         with patch.object(nt_api, "anilist_request") as request, \
              patch.object(nt_api, "get_media_relations") as local_lookup:
             result = nt_api.get_media_relations_batch([
-                None, "bad-id", True, 12.5, 0, 1 << 31, "9" * 5000,
+                None, "bad-id", True, 12.5, 0, -(1 << 63), 1 << 31, "9" * 5000,
             ])
-        self.assertEqual(result, {})
+            self.assertEqual(result, {})
+            for malformed_container in (None, 123, True, "123", {"id": 1}):
+                with self.subTest(container=repr(malformed_container)):
+                    self.assertEqual(
+                        nt_api.get_media_relations_batch(malformed_container),
+                        {},
+                    )
         request.assert_not_called()
         local_lookup.assert_not_called()
 
