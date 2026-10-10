@@ -316,6 +316,36 @@ class DatabaseDeletionSafetyStressTests(unittest.TestCase):
 
 
 class DatabasePartialMetadataStressTests(unittest.TestCase):
+    def test_invalid_work_ids_are_rejected_before_any_database_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+
+                self.assertEqual(database._validated_work_id(-(1 << 63)), -(1 << 63))
+                self.assertEqual(database._validated_work_id((1 << 63) - 1), (1 << 63) - 1)
+
+                invalid_ids = (
+                    None, True, False, 0, 1.5, float("inf"), float("nan"),
+                    1 << 100, "x", "9" * 5000, str(1 << 63), str(-(1 << 63) - 1),
+                )
+                for value in invalid_ids:
+                    with self.subTest(value=repr(value)[:60]):
+                        with self.assertRaises(ValueError):
+                            database.save_anime({"id": value})
+
+                connection = database.get_connection()
+                try:
+                    self.assertEqual(
+                        connection.execute("SELECT COUNT(*) FROM works").fetchone()[0],
+                        0,
+                    )
+                finally:
+                    connection.close()
+            finally:
+                os.chdir(old_cwd)
+
     def test_partial_refresh_preserves_fields_from_previously_loaded_details(self):
         with tempfile.TemporaryDirectory() as directory:
             old_cwd = os.getcwd()
