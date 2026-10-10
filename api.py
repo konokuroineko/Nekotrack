@@ -527,6 +527,8 @@ def get_media_relations(media_id):
 
 def get_media_relations_batch(media_ids):
     """Fetch relation details for positive AniList IDs and negative MangaBaka IDs."""
+    if not isinstance(media_ids, (list, tuple, set, frozenset)):
+        return {}
     valid_ids = set()
     local_ids = set()
     for media_id in media_ids or []:
