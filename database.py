@@ -1618,14 +1618,24 @@ def save_anime(anime):
     end_year = _safe_optional_integer(end_date.get("year"), 1, 9999)
 
     raw_type = anime.get("type")
-    type_is_valid = isinstance(raw_type, str) and bool(raw_type.strip())
-    media_type = raw_type.strip().upper() if type_is_valid else "ANIME"
+    normalized_type = raw_type.strip().upper() if isinstance(raw_type, str) else ""
+    type_is_valid = normalized_type in {"ANIME", "MANGA"}
+    # Unknown strings aren't valid MediaType values. Existing records retain
+    # their previous type through the upsert flag; newly inserted records use
+    # the schema-safe ANIME fallback instead of persisting arbitrary provider text.
+    media_type = normalized_type if type_is_valid else "ANIME"
+
     description = anime.get("description")
     if not isinstance(description, str):
         description = None
-    media_format = anime.get("format")
-    if not isinstance(media_format, str):
-        media_format = None
+
+    valid_formats = {
+        "TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC",
+        "MANGA", "NOVEL", "ONE_SHOT",
+    }
+    raw_format = anime.get("format")
+    normalized_format = raw_format.strip().upper() if isinstance(raw_format, str) else ""
+    media_format = normalized_format if normalized_format in valid_formats else None
     source = anime.get("source")
     if not isinstance(source, str):
         source = None
