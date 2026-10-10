@@ -881,6 +881,26 @@ class TMDBPayloadChaosTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1)
         self.assertFalse(exists_after)
 
+    def test_tmdb_image_cache_rejects_fractional_and_boolean_identifiers(self):
+        url = "https://image.tmdb.org/t/p/w500/id-check.jpg"
+        invalid_pairs = (
+            (42.5, 3),
+            (42, 3.5),
+            (42, True),
+            (False, 3),
+            ("42.5", 3),
+            (42, "3.5"),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(nt_api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(temp_dir)), \
+             patch.object(nt_api.requests, "get") as request:
+            for work_id, episode_number in invalid_pairs:
+                with self.subTest(work_id=work_id, episode_number=episode_number):
+                    with self.assertRaisesRegex(ValueError, "integer"):
+                        nt_api.cache_tmdb_episode_image(url, work_id, episode_number)
+            request.assert_not_called()
+            self.assertFalse(any(path.is_file() for path in Path(temp_dir).rglob("*")))
+
     def test_tmdb_image_redirect_to_untrusted_host_is_rejected(self):
         url = "https://image.tmdb.org/t/p/w500/redirect.jpg"
         response = Mock()
