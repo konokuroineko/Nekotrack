@@ -922,9 +922,21 @@ def save_anime(anime):
             description=COALESCE(excluded.description, works.description),
             episodes=COALESCE(excluded.episodes, works.episodes),
             score=COALESCE(excluded.score, works.score),
-            start_year=COALESCE(excluded.start_year, works.start_year),
-            start_month=COALESCE(excluded.start_month, works.start_month),
-            start_day=COALESCE(excluded.start_day, works.start_day),
+            start_year=CASE
+                WHEN excluded.start_year IS NULL
+                 AND excluded.start_month IS NULL
+                 AND excluded.start_day IS NULL
+                THEN works.start_year ELSE excluded.start_year END,
+            start_month=CASE
+                WHEN excluded.start_year IS NULL
+                 AND excluded.start_month IS NULL
+                 AND excluded.start_day IS NULL
+                THEN works.start_month ELSE excluded.start_month END,
+            start_day=CASE
+                WHEN excluded.start_year IS NULL
+                 AND excluded.start_month IS NULL
+                 AND excluded.start_day IS NULL
+                THEN works.start_day ELSE excluded.start_day END,
             cover_url=COALESCE(excluded.cover_url, works.cover_url),
             format=COALESCE(excluded.format, works.format),
             chapters=COALESCE(excluded.chapters, works.chapters),
