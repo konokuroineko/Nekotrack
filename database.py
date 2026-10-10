@@ -2256,25 +2256,29 @@ def get_bundle_exclusions(work_ids=None):
 
 def get_manual_bundle_partners(work_id):
     """Return the works explicitly manually linked to one work."""
-    work_id = _validated_work_id(work_id)
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return []
     connection = get_connection()
-    rows = connection.execute(
-        """
-        SELECT
-            CASE WHEN links.work_a = ? THEN links.work_b ELSE links.work_a END AS partner_id,
-            works.title AS partner_title,
-            works.format AS partner_format,
-            works.type AS partner_type
-        FROM manual_bundle_links AS links
-        JOIN works ON works.id =
-            CASE WHEN links.work_a = ? THEN links.work_b ELSE links.work_a END
-        WHERE links.work_a = ? OR links.work_b = ?
-        ORDER BY works.title
-        """,
-        (work_id, work_id, work_id, work_id),
-    ).fetchall()
-    connection.close()
-    return rows
+    try:
+        return connection.execute(
+            """
+            SELECT
+                CASE WHEN links.work_a = ? THEN links.work_b ELSE links.work_a END AS partner_id,
+                works.title AS partner_title,
+                works.format AS partner_format,
+                works.type AS partner_type
+            FROM manual_bundle_links AS links
+            JOIN works ON works.id =
+                CASE WHEN links.work_a = ? THEN links.work_b ELSE links.work_a END
+            WHERE links.work_a = ? OR links.work_b = ?
+            ORDER BY works.title
+            """,
+            (safe_work_id, safe_work_id, safe_work_id, safe_work_id),
+        ).fetchall()
+    finally:
+        connection.close()
 
 
 
