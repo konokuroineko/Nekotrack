@@ -168,6 +168,28 @@ def _safe_int(value, default=0):
         return default
 
 
+_MAX_PROVIDER_FILTER_ID = (1 << 63) - 1
+
+
+def _bounded_positive_filter_int(value, maximum=_MAX_PROVIDER_FILTER_ID):
+    """Parse a bounded user/provider filter integer without unbounded digit conversion."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text or len(text) > 19 or not text.isascii() or not text.isdigit():
+            return None
+        try:
+            number = int(text)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    else:
+        return None
+    return number if 1 <= number <= maximum else None
+
+
 def _filter_values(values):
     if values is None or values == "":
         return None
@@ -872,16 +894,30 @@ def search_media(query="", page=1, media_type=None, media_format=None, filters=N
         except (TypeError, ValueError, OverflowError):
             pass
     year = filters.get("year")
-    if year and str(year).isdigit():
-        query_filters["start_year"] = int(year)
-        query_filters["end_year"] = int(year)
+    if year:
+        parsed_year = _bounded_positive_filter_int(year, maximum=9999)
+        if parsed_year is None:
+            return {
+                "pageInfo": {"currentPage": page, "lastPage": 1, "hasNextPage": False},
+                "media": [],
+                "_catalog": "MangaBaka",
+            }
+        query_filters["start_year"] = parsed_year
+        query_filters["end_year"] = parsed_year
     for key in ("genre", "tag"):
         value = filters.get(key)
         if value:
             query_filters[key] = [part.strip() for part in str(value).split(",") if part.strip()]
     publisher_id = filters.get("publisher_id")
-    if publisher_id and str(publisher_id).isdigit():
-        query_filters["publisher_id"] = int(publisher_id)
+    if publisher_id:
+        parsed_publisher_id = _bounded_positive_filter_int(publisher_id)
+        if parsed_publisher_id is None:
+            return {
+                "pageInfo": {"currentPage": page, "lastPage": 1, "hasNextPage": False},
+                "media": [],
+                "_catalog": "MangaBaka",
+            }
+        query_filters["publisher_id"] = parsed_publisher_id
     if filters.get("is_licensed") is not None:
         licensed_filter = _as_bool(filters.get("is_licensed"))
         if licensed_filter is not None:
