@@ -24,12 +24,14 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
 TEST_FILES = (
     ROOT / "tests" / "test_adversarial_regressions.py",
     ROOT / "tests" / "test_chaos_resilience.py",
     ROOT / "tests" / "test_deep_stress.py",
+    ROOT / "tests" / "test_ui_chaos.py",
 )
 MAX_SOAK_SECONDS = 5 * 60 * 60
 
@@ -107,6 +109,8 @@ def main():
         "duration_requested_seconds": duration,
         "starting_seed": args.seed,
         "network_requests_enabled": False,
+        "network_guard_enabled": True,
+        "blocked_network_attempts": 0,
         "real_application_database_touched": False,
         "fuzz_modules": [path.relative_to(ROOT).as_posix() for path in TEST_FILES],
         "max_soak_seconds": MAX_SOAK_SECONDS,
@@ -123,6 +127,7 @@ def main():
     print("=================================")
     print(f"Requested soak: {duration:g} seconds ({duration / 60:g} minutes)")
     print("Fuzz suites: " + ", ".join(path.name for path in TEST_FILES))
+    print("Live-network guard: enabled; any unmocked request fails the iteration")
     print(f"Starting seed: {args.seed}")
     print("Live API access: disabled")
     print("Application database: never accessed")
@@ -165,33 +170,55 @@ def main():
                 os.environ["NEKOTRACK_FUZZ_SEED"] = str(seed)
                 output = io.StringIO()
                 iteration_started = time.monotonic()
+                network_attempts = []
+
+                def block_network_request(_session, method, url, *args, **kwargs):
+                    network_attempts.append({"method": str(method), "url": str(url)})
+                    raise AssertionError(
+                        f"Unexpected network request blocked during offline fuzzing: "
+                        f"{method} {url}"
+                    )
+
                 try:
                     suite = unittest.TestSuite()
                     for stress_module in modules:
                         suite.addTests(
                             unittest.defaultTestLoader.loadTestsFromModule(stress_module)
                         )
-                    result = unittest.TextTestRunner(
-                        stream=output, verbosity=0, failfast=False
-                    ).run(suite)
+                    with patch(
+                        "requests.sessions.Session.request",
+                        new=block_network_request,
+                    ):
+                        result = unittest.TextTestRunner(
+                            stream=output, verbosity=0, failfast=False
+                        ).run(suite)
                     if result.testsRun == 0:
                         raise RuntimeError("No fuzz tests were loaded for this iteration.")
+
                     iteration += 1
                     report["stress_iterations"] = iteration
                     report["stress_tests_run"] += result.testsRun
+                    report["blocked_network_attempts"] += len(network_attempts)
                     iteration_elapsed = round(time.monotonic() - iteration_started, 3)
-                    if result.wasSuccessful():
+                    detail = output.getvalue()
+                    passed = result.wasSuccessful() and not network_attempts
+                    if passed:
                         report["stress_passes"] += 1
                     else:
                         report["stress_failures"] += 1
-                        detail = output.getvalue()
+                        if network_attempts:
+                            detail += (
+                                "\\nBlocked network requests detected: "
+                                + json.dumps(network_attempts, ensure_ascii=False)
+                            )
                         sample = {
                             "iteration": iteration,
                             "seed": seed,
                             "tests_run": result.testsRun,
                             "elapsed_seconds": iteration_elapsed,
-                            "failures": len(result.failures),
+                            "failures": len(result.failures) + bool(network_attempts),
                             "errors": len(result.errors),
+                            "network_attempts": network_attempts,
                             "output": detail[-8000:],
                         }
                         if len(report["failure_samples"]) < 40:
@@ -236,6 +263,7 @@ def main():
         "stress_passes": report["stress_passes"],
         "stress_failures": report["stress_failures"],
         "stress_tests_run": report["stress_tests_run"],
+        "blocked_network_attempts": report["blocked_network_attempts"],
         "interrupted": report["interrupted"],
     }
 
