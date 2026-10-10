@@ -26,7 +26,12 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parent
-TEST_FILE = ROOT / "tests" / "test_adversarial_regressions.py"
+STRESS_TEST_FILES = (
+    ROOT / "tests" / "test_adversarial_regressions.py",
+    ROOT / "tests" / "test_chaos_resilience.py",
+    ROOT / "tests" / "test_deep_stress.py",
+)
+
 MAX_SOAK_SECONDS = 30 * 60
 
 
@@ -40,15 +45,26 @@ def _resolve_duration(minutes, seconds=None):
     return duration
 
 
-def load_adversarial_tests():
+def load_stress_tests():
+    """Load all focused fuzz suites whose random seeds vary per soak iteration."""
     sys.path.insert(0, str(ROOT))
-    spec = importlib.util.spec_from_file_location("nekotrack_adversarial_tests", TEST_FILE)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load adversarial test module: {TEST_FILE}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
+    modules = []
+    for test_file in STRESS_TEST_FILES:
+        module_name = f"nekotrack_stress_{test_file.stem}"
+        spec = importlib.util.spec_from_file_location(module_name, test_file)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Cannot load adversarial test module: {test_file}")
+        module = importlib.util.module_from_spec(spec)
+        # Register before execution so standard library tooling and any future
+        # module-level metadata/dataclasses can resolve the module consistently.
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(module_name, None)
+            raise
+        modules.append(module)
+    return modules
 
 def run_full_regression_suite():
     """Run the entire repository test suite once before the soak loop."""
@@ -97,6 +113,7 @@ def main():
         "network_requests_enabled": False,
         "real_application_database_touched": False,
         "results": [],
+        "stress_test_modules": [path.name for path in STRESS_TEST_FILES],
         "stress_iterations": 0,
         "stress_passes": 0,
         "stress_failures": 0,
@@ -110,6 +127,7 @@ def main():
     print(f"Starting seed: {args.seed}")
     print("Live API access: disabled")
     print("Application database: never accessed")
+    print("Fuzz suites: " + ", ".join(path.name for path in STRESS_TEST_FILES))
     print("\nRunning the full regression suite first...")
 
     try:
@@ -127,14 +145,14 @@ def main():
         print(baseline["output"])
 
     try:
-        module = load_adversarial_tests()
+        modules = load_stress_tests()
     except Exception:
         report["results"].append({
             "name": "Load adversarial tests",
             "status": "FAIL",
             "output": traceback.format_exc(),
         })
-        module = None
+        modules = None
 
     original_seed = os.environ.get("NEKOTRACK_FUZZ_SEED")
     rng = random.Random(args.seed)
@@ -143,13 +161,16 @@ def main():
     next_progress = started + 10
     iteration = 0
     try:
-        if module is not None:
+        if modules is not None:
             while time.monotonic() < deadline:
                 seed = rng.randrange(1, 2**31 - 1)
                 os.environ["NEKOTRACK_FUZZ_SEED"] = str(seed)
                 output = io.StringIO()
                 try:
-                    suite = unittest.defaultTestLoader.loadTestsFromModule(module)
+                    suite = unittest.TestSuite()
+                    loader = unittest.defaultTestLoader
+                    for module in modules:
+                        suite.addTests(loader.loadTestsFromModule(module))
                     result = unittest.TextTestRunner(
                         stream=output, verbosity=0, failfast=False
                     ).run(suite)
