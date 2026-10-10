@@ -286,6 +286,22 @@ def _cast_provider_id(value):
 def save_characters(work_id, characters):
     """Persist a character snapshot, keeping incomplete payloads retryable."""
     if not isinstance(characters, (list, tuple)):
+        try:
+            safe_work_id = _validated_work_id(work_id)
+        except (TypeError, ValueError, OverflowError):
+            return
+        connection = get_connection()
+        try:
+            connection.execute(
+                "UPDATE works SET characters_loaded = 0 WHERE id = ?",
+                (safe_work_id,),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
         return
 
     normalized = []
