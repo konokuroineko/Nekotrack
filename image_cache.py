@@ -88,9 +88,16 @@ def _open_cover_response(start_url):
             url = _safe_image_url(urljoin(url, location.strip()))
             continue
 
-        response.raise_for_status()
-        final_url = getattr(response, "url", None) or url
-        _safe_image_url(final_url)
+        try:
+            response.raise_for_status()
+            final_url = getattr(response, "url", None) or url
+            _safe_image_url(final_url)
+        except Exception:
+            # This function returns a live streamed response to its caller.
+            # If status or final-URL validation fails before that handoff, no
+            # caller context manager exists yet to close the socket.
+            response.close()
+            raise
         return response
 
     raise ValueError("The cover image download exceeded the redirect limit.")
@@ -136,17 +143,19 @@ def _decode_cover(payload):
     reader = QImageReader(buffer)
     reader.setDecideFormatFromContent(True)
     dimensions = reader.size()
-    if dimensions.isValid():
-        width, height = dimensions.width(), dimensions.height()
-        if (
-            width <= 0
-            or height <= 0
-            or width > MAX_COVER_WIDTH
-            or height > MAX_COVER_HEIGHT
-            or width * height > MAX_COVER_PIXELS
-        ):
-            buffer.close()
-            raise ValueError("The cover image dimensions are too large.")
+    if not dimensions.isValid():
+        buffer.close()
+        raise ValueError("The cover image dimensions are invalid.")
+    width, height = dimensions.width(), dimensions.height()
+    if (
+        width <= 0
+        or height <= 0
+        or width > MAX_COVER_WIDTH
+        or height > MAX_COVER_HEIGHT
+        or width * height > MAX_COVER_PIXELS
+    ):
+        buffer.close()
+        raise ValueError("The cover image dimensions are too large.")
     image = reader.read()
     buffer.close()
     if image.isNull():
