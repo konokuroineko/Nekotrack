@@ -542,6 +542,35 @@ class MangaBakaShapeStressTests(unittest.TestCase):
         self.assertIsNone(mb._bounded_positive_filter_int("9" * 5000))
         self.assertIsNone(mb._bounded_positive_filter_int(10**100))
 
+    def test_extreme_provider_pagination_is_clamped_and_terminates(self):
+        payload = {
+            "data": {
+                "items": [{
+                    "id": 42,
+                    "type": "manga",
+                    "titles": [{"language": "en", "title": "Pagination boundary"}],
+                    "content_rating": "safe",
+                    "published": {"start": "2020-01-01"},
+                    "rating": 80,
+                }]
+            },
+            "pagination": {
+                "page": 10**100,
+                "limit": 20,
+                "count": 10**100,
+                "next": "https://api.mangabaka.org/v2/series?page=overflow",
+            },
+        }
+        with patch("mangabaka_api.get_series_mix", return_value=payload) as request:
+            result = mb.search_media("", page=10**100)
+
+        request.assert_called_once()
+        self.assertEqual(request.call_args.kwargs["page"], mb.MAX_PROVIDER_PAGES)
+        self.assertEqual(result["pageInfo"]["currentPage"], mb.MAX_PROVIDER_PAGES)
+        self.assertEqual(result["pageInfo"]["lastPage"], mb.MAX_PROVIDER_PAGES)
+        self.assertFalse(result["pageInfo"]["hasNextPage"])
+        self.assertEqual(len(result["media"]), 1)
+
     def test_provider_envelopes_never_leak_non_dictionary_pagination(self):
         payloads = [
             None, [], 5, "text", {},
