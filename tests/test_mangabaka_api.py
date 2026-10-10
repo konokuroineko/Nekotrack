@@ -44,6 +44,27 @@ class MangaBakaAPITests(unittest.TestCase):
         self.assertEqual(normalized["coverImage"]["large"], "https://images.example/cover.jpg")
         self.assertEqual(normalized["_mangabaka"]["authors"], ["Author Name"])
 
+    def test_light_novel_type_is_normalized_and_filtered_as_a_novel(self):
+        record = sample_series(series_type="light_novel")
+        normalized = mb.normalize_mangabaka_series(record)
+        self.assertEqual(normalized["format"], "NOVEL")
+        self.assertTrue(mb._matches_local_filters(record, "NOVEL", {}))
+        self.assertFalse(mb._matches_local_filters(record, "MANGA", {}))
+
+    def test_novel_search_includes_light_novel_provider_type(self):
+        payload = {
+            "status": 200,
+            "data": [sample_series(91, series_type="light_novel")],
+            "pagination": {"page": 1, "limit": 20, "count": 1, "next": None},
+        }
+        with patch.object(mb, "search_mangabaka_series", return_value=payload) as search:
+            result = mb.search_mangabaka_media(
+                "Example", media_type="MANGA", media_format="NOVEL", filters={},
+            )
+        self.assertEqual(len(result["media"]), 1)
+        self.assertEqual(result["media"][0]["format"], "NOVEL")
+        self.assertCountEqual(search.call_args.kwargs["type"], ["novel", "light_novel"])
+
     def test_linked_anilist_id_is_used_instead_of_synthetic_id(self):
         series = sample_series(series_id=55)
         series["anilist_response"] = {"data": {"Media": {"id": 12345}}}
