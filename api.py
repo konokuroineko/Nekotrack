@@ -1552,12 +1552,19 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
         suffix = ".jpg"
 
     path = directory / f"{episode_number}_{digest}{suffix}"
-    if path.is_file() and path.stat().st_size > 0:
+    if path.is_file():
         try:
-            cached_data = path.read_bytes()
+            cached_size = path.stat().st_size
+            # Do not read an untrusted/corrupt cache file into memory unless
+            # its size is already within the same limit as fresh downloads.
+            cached_data = (
+                path.read_bytes()
+                if 0 < cached_size <= MAX_TMDB_EPISODE_IMAGE_BYTES
+                else b""
+            )
         except OSError:
             cached_data = b""
-        if _valid_image_data(cached_data):
+        if cached_data and _valid_image_data(cached_data):
             return str(path)
         try:
             path.unlink()
