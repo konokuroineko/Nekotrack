@@ -2,6 +2,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import requests
 from PySide6.QtCore import QThread, Signal
@@ -9,6 +10,39 @@ from PySide6.QtCore import QThread, Signal
 
 REPO_API_URL = "https://api.github.com/repos/konokuroineko/Nekotrack/releases"
 REQUEST_TIMEOUT = 8
+MAX_INSTALLER_BYTES = 512 * 1024 * 1024
+RELEASE_ASSET_PREFIX = "/konokuroineko/Nekotrack/releases/download/"
+
+
+def _is_trusted_release_asset_url(value):
+    """Accept only HTTPS installer assets published in this repository's releases."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        parsed = urlparse(value.strip())
+        if (
+            parsed.scheme.lower() != "https"
+            or parsed.hostname is None
+            or parsed.hostname.lower() != "github.com"
+            or parsed.port not in (None, 443)
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return False
+        path = unquote(parsed.path)
+        if not path.startswith(RELEASE_ASSET_PREFIX):
+            return False
+        parts = path.split("/")
+        # /owner/repo/releases/download/<tag>/<asset name...>
+        return (
+            len(parts) >= 7
+            and all(part and part not in {".", ".."} for part in parts[1:])
+            and parts[1] == "konokuroineko"
+            and parts[2] == "Nekotrack"
+            and parts[3:5] == ["releases", "download"]
+        )
+    except (TypeError, ValueError):
+        return False
 
 
 def _version_key(value):
@@ -84,7 +118,12 @@ class UpdateChecker(QThread):
                         continue
                     name = asset.get("name")
                     url = asset.get("browser_download_url")
-                    if not isinstance(name, str) or not isinstance(url, str) or not url.strip():
+                    if (
+                        not isinstance(name, str)
+                        or not isinstance(url, str)
+                        or not url.strip()
+                        or not _is_trusted_release_asset_url(url)
+                    ):
                         continue
                     lowered_name = name.casefold()
                     if lowered_name.endswith(".exe") and "setup" in lowered_name:
@@ -115,12 +154,16 @@ class InstallerDownloader(QThread):
         self.asset_name = asset_name
 
     def run(self):
+        temp_path = None
         try:
             if not self.asset_url:
                 raise ValueError("The update does not contain an installer download URL.")
+            if not _is_trusted_release_asset_url(self.asset_url):
+                raise ValueError("The installer URL is not a trusted NekoTrack GitHub release asset.")
 
-            suffix = Path(self.asset_name or "NekoTrack-Setup.exe").suffix or ".exe"
-            temp_path = Path(tempfile.gettempdir()) / f"NekoTrack-update{suffix}"
+            suffix = Path(self.asset_name or "").suffix
+            if suffix.lower() != ".exe":
+                raise ValueError("The update asset must be a Windows .exe installer.")
 
             with requests.get(
                 self.asset_url,
@@ -129,12 +172,44 @@ class InstallerDownloader(QThread):
                 timeout=30,
             ) as response:
                 response.raise_for_status()
-                with temp_path.open("wb") as handle:
-                    for chunk in response.iter_content(chunk_size=1024 * 256):
-                        if chunk:
-                            handle.write(chunk)
+                content_length = response.headers.get("Content-Length")
+                try:
+                    declared_size = int(content_length) if content_length is not None else None
+                except (TypeError, ValueError, OverflowError):
+                    declared_size = None
+                if declared_size is not None and declared_size > MAX_INSTALLER_BYTES:
+                    raise ValueError(
+                        f"The installer exceeds the {MAX_INSTALLER_BYTES // (1024 * 1024)} MiB download limit."
+                    )
 
+                # Use an unpredictable, exclusively created file: a fixed name in
+                # the temp directory can collide with another process or follow a symlink.
+                with tempfile.NamedTemporaryFile(
+                    prefix="NekoTrack-update-",
+                    suffix=".exe",
+                    dir=tempfile.gettempdir(),
+                    delete=False,
+                ) as handle:
+                    temp_path = Path(handle.name)
+                    total_bytes = 0
+                    for chunk in response.iter_content(chunk_size=1024 * 256):
+                        if not chunk:
+                            continue
+                        total_bytes += len(chunk)
+                        if total_bytes > MAX_INSTALLER_BYTES:
+                            raise ValueError(
+                                f"The installer exceeds the {MAX_INSTALLER_BYTES // (1024 * 1024)} MiB download limit."
+                            )
+                        handle.write(chunk)
+
+            if temp_path is None or total_bytes == 0:
+                raise ValueError("The installer download was empty.")
             subprocess.Popen([str(temp_path)], close_fds=True)
             self.finished.emit(str(temp_path))
         except Exception as exc:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             self.failed.emit(str(exc))
