@@ -412,6 +412,39 @@ def save_characters(work_id, characters):
                 )
 
         if snapshot_valid:
+            incoming_character_ids = {character["id"] for character in normalized}
+            existing_character_rows = connection.execute(
+                "SELECT character_id FROM work_characters WHERE work_id = ?",
+                (work_id,),
+            ).fetchall()
+            for row in existing_character_rows:
+                old_character_id = row["character_id"]
+                if old_character_id not in incoming_character_ids:
+                    connection.execute(
+                        "DELETE FROM work_characters WHERE work_id = ? AND character_id = ?",
+                        (work_id, old_character_id),
+                    )
+
+            # Voice-actor mappings are cached by character ID globally. Replace
+            # them only for characters in this complete snapshot; malformed or
+            # partial snapshots leave prior mappings untouched for retry.
+            for character in normalized:
+                desired_actor_ids = {actor["id"] for actor in character["actors"]}
+                existing_actor_rows = connection.execute(
+                    "SELECT person_id FROM character_voice_actors WHERE character_id = ?",
+                    (character["id"],),
+                ).fetchall()
+                for row in existing_actor_rows:
+                    old_actor_id = row["person_id"]
+                    if old_actor_id not in desired_actor_ids:
+                        connection.execute(
+                            """
+                            DELETE FROM character_voice_actors
+                            WHERE character_id = ? AND person_id = ?
+                            """,
+                            (character["id"], old_actor_id),
+                        )
+
             connection.execute(
                 "UPDATE works SET characters_loaded = 1 WHERE id = ?",
                 (work_id,),
