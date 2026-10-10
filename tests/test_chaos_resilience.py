@@ -281,6 +281,32 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
             "startDate": {"year": 2020, "month": 1, "day": 1},
         }
 
+    def test_provider_metadata_payloads_are_validated_before_database_access(self):
+        with patch.object(database, "get_connection") as get_connection:
+            with self.assertRaisesRegex(ValueError, "valid JSON"):
+                database.save_provider_metadata(616, "mangabaka", {"nested": {1, 2}})
+            with self.assertRaisesRegex(ValueError, "valid JSON"):
+                database.save_provider_metadata(616, "mangabaka", {"score": float("nan")})
+            with self.assertRaises(ValueError):
+                database.save_provider_metadata(1 << 100, "mangabaka", {"id": 9})
+            self.assertIsNone(database.get_provider_metadata(1 << 100))
+            get_connection.assert_not_called()
+
+        database.save_anime(self.work(616, "MANGA", "MANGA"))
+        payload = {"id": 9, "titles": [{"language": "en", "title": "Provider title"}]}
+        database.save_provider_metadata(616, "MangaBaka", payload, provider_id=9)
+        self.assertEqual(database.get_provider_metadata(616), payload)
+
+        # Even a SQL error after connection acquisition must roll back and close
+        # the connection so later catalog imports do not inherit a leaked handle.
+        connection = Mock()
+        connection.execute.side_effect = RuntimeError("simulated SQL error")
+        with patch.object(database, "get_connection", return_value=connection):
+            with self.assertRaisesRegex(RuntimeError, "simulated SQL error"):
+                database.save_provider_metadata(616, "mangabaka", {"id": 10})
+        connection.rollback.assert_called_once()
+        connection.close.assert_called_once()
+
     def assert_database_invariants(self):
         connection = database.get_connection()
         self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
