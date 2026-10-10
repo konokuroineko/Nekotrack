@@ -882,6 +882,101 @@ class DatabaseDeletionSafetyStressTests(unittest.TestCase):
                 os.chdir(old_cwd)
 
 
+class DatabaseRelationMetadataSafetyStressTests(unittest.TestCase):
+    def test_malformed_optional_relation_fields_preserve_cached_target_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                source_id, target_id = 710, 711
+
+                def relation_work(edge):
+                    return {
+                        "id": source_id,
+                        "type": "ANIME",
+                        "format": "TV",
+                        "title": {
+                            "english": "Relation metadata source",
+                            "romaji": "Relation metadata source",
+                        },
+                        "relations": {"edges": [edge]},
+                    }
+
+                valid_edge = {
+                    "relationType": "SEQUEL",
+                    "node": {
+                        "id": target_id,
+                        "type": "MANGA",
+                        "format": "NOVEL",
+                        "title": {
+                            "english": "Cached related novel",
+                            "romaji": "Cached related novel",
+                            "native": None,
+                        },
+                        "coverImage": {"large": "https://images.example.invalid/novel.jpg"},
+                        "startDate": {"year": 2020, "month": 4, "day": 5},
+                        "idMal": 12345,
+                    },
+                }
+                database.save_anime(relation_work(valid_edge))
+
+                malformed_edge = {
+                    "relationType": "SEQUEL",
+                    "node": {
+                        "id": target_id,
+                        "type": {"invalid": "type"},
+                        "format": ["invalid"],
+                        "title": {
+                            "english": "Cached related novel",
+                            "romaji": "Cached related novel",
+                            "native": None,
+                        },
+                        "coverImage": {"large": {"unexpected": "object"}},
+                        "startDate": {
+                            "year": {"bad": 1},
+                            "month": [],
+                            "day": True,
+                        },
+                        "idMal": {"unexpected": "object"},
+                    },
+                }
+                database.save_anime(relation_work(malformed_edge))
+
+                connection = database.get_connection()
+                try:
+                    target = dict(connection.execute(
+                        """
+                        SELECT type, format, start_year, start_month, start_day,
+                               cover_url, mal_id
+                        FROM works WHERE id = ?
+                        """,
+                        (target_id,),
+                    ).fetchone())
+                    relations = connection.execute(
+                        "SELECT target_id, relation_type FROM work_relations WHERE source_id = ?",
+                        (source_id,),
+                    ).fetchall()
+                finally:
+                    connection.close()
+
+                self.assertEqual(target, {
+                    "type": "MANGA",
+                    "format": "NOVEL",
+                    "start_year": 2020,
+                    "start_month": 4,
+                    "start_day": 5,
+                    "cover_url": "https://images.example.invalid/novel.jpg",
+                    "mal_id": 12345,
+                })
+                self.assertEqual(
+                    [(row["target_id"], row["relation_type"]) for row in relations],
+                    [(target_id, "SEQUEL")],
+                )
+            finally:
+                os.chdir(old_cwd)
+
+
 class DatabasePartialMetadataStressTests(unittest.TestCase):
     def test_invalid_work_ids_are_rejected_before_any_database_write(self):
         with tempfile.TemporaryDirectory() as directory:
