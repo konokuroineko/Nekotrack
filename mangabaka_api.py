@@ -192,6 +192,28 @@ def _bounded_positive_filter_int(value, maximum=_MAX_PROVIDER_FILTER_ID):
     return number if 1 <= number <= maximum else None
 
 
+def _safe_page_parameter(value, default=1, maximum=MAX_PROVIDER_PAGES):
+    """Clamp page/limit inputs before any provider request is built."""
+    if isinstance(value, bool):
+        number = default
+    elif isinstance(value, int):
+        number = value
+    elif isinstance(value, float):
+        number = int(value) if math.isfinite(value) and value.is_integer() else default
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text or len(text) > 20 or not text.isascii() or not text.isdigit():
+            number = default
+        else:
+            try:
+                number = int(text)
+            except (TypeError, ValueError, OverflowError):
+                number = default
+    else:
+        number = default
+    return min(maximum, max(1, number))
+
+
 def _filter_values(values):
     if values is None or values == "":
         return None
@@ -380,8 +402,8 @@ def search_series(query="", page=1, limit=20, **filters):
     """Search series with filters. Basic title search survives filter-schema changes."""
     params = {
         "q": (query or "").strip(),
-        "page": max(1, int(page)),
-        "limit": min(50, max(1, int(limit))),
+        "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+        "limit": _safe_page_parameter(limit, 20, 50),
         "content_rating": ["safe", "suggestive"],
     }
     valid_filters = {
@@ -403,17 +425,17 @@ def search_series(query="", page=1, limit=20, **filters):
             raise
         basic = {
             "q": (query or "").strip(),
-            "page": max(1, int(page)),
-            "limit": min(50, max(1, int(limit))),
+            "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+            "limit": _safe_page_parameter(limit, 20, 50),
             "content_rating": ["safe", "suggestive"],
         }
         return _request("series/search", params=basic)
 
 
 def get_series(series_id, full=False):
-    series_id = int(series_id)
-    if series_id <= 0:
-        raise ValueError("MangaBaka series IDs must be positive.")
+    series_id = _bounded_positive_filter_int(series_id)
+    if series_id is None:
+        raise ValueError("MangaBaka series IDs must be positive bounded integers.")
     # MangaBaka selects the expanded schema with ?schema=full; /full is not
     # a separate endpoint. The fallback keeps the core record usable if this
     # optional query parameter changes in a future API revision.
@@ -426,59 +448,112 @@ def get_series(series_id, full=False):
 
 
 def get_series_collections(series_id, page=1, limit=50):
-    return _request(f"series/{int(series_id)}/collections",
-                    params={"page": max(1, int(page)), "limit": min(100, max(1, int(limit)))})
+    series_id = _bounded_positive_filter_int(series_id)
+    if series_id is None:
+        raise ValueError("MangaBaka series IDs must be positive bounded integers.")
+    return _request(
+        f"series/{series_id}/collections",
+        params={
+            "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+            "limit": _safe_page_parameter(limit, 50, 100),
+        },
+    )
 
 
 def get_collection_works(collection_id, page=1, limit=50):
-    return _request(f"collections/{int(collection_id)}/works",
-                    params={"page": max(1, int(page)), "limit": min(100, max(1, int(limit)))})
+    collection_id = _bounded_positive_filter_int(collection_id)
+    if collection_id is None:
+        raise ValueError("Collection IDs must be positive bounded integers.")
+    return _request(
+        f"collections/{collection_id}/works",
+        params={
+            "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+            "limit": _safe_page_parameter(limit, 50, 100),
+        },
+    )
 
 
 def get_work(work_id):
-    return _request(f"works/{int(work_id)}")
+    work_id = _bounded_positive_filter_int(work_id)
+    if work_id is None:
+        raise ValueError("MangaBaka work IDs must be positive bounded integers.")
+    return _request(f"works/{work_id}")
 
 
 def get_related_series(series_id):
-    return _request(f"series/{int(series_id)}/related")
+    series_id = _bounded_positive_filter_int(series_id)
+    if series_id is None:
+        raise ValueError("MangaBaka series IDs must be positive bounded integers.")
+    return _request(f"series/{series_id}/related")
 
 
 def get_series_news(series_id, page=1, limit=20):
-    return _request(f"series/{int(series_id)}/news",
-                    params={"page": max(1, int(page)), "limit": min(50, max(1, int(limit)))})
+    series_id = _bounded_positive_filter_int(series_id)
+    if series_id is None:
+        raise ValueError("MangaBaka series IDs must be positive bounded integers.")
+    return _request(
+        f"series/{series_id}/news",
+        params={
+            "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+            "limit": _safe_page_parameter(limit, 20, 50),
+        },
+    )
 
 
 def get_series_mix(page=1, limit=20, **filters):
-    params = {"page": max(1, int(page)), "limit": min(50, max(1, int(limit))),
-              "content_rating": ["safe", "suggestive"]}
+    params = {
+        "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+        "limit": _safe_page_parameter(limit, 20, 50),
+        "content_rating": ["safe", "suggestive"],
+    }
     params.update({key: value for key, value in filters.items() if value not in (None, "")})
     return _request("series/mix", params=params)
 
 
 def get_hidden_gems(page=1, limit=20, **filters):
-    params = {"page": max(1, int(page)), "limit": min(50, max(1, int(limit))),
-              "content_rating": ["safe", "suggestive"]}
+    params = {
+        "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+        "limit": _safe_page_parameter(limit, 20, 50),
+        "content_rating": ["safe", "suggestive"],
+    }
     params.update({key: value for key, value in filters.items() if value not in (None, "")})
     return _request("series/discover/hidden-gems", params=params)
 
 
 def get_publishers(page=1, limit=20, **filters):
-    params = {"page": max(1, int(page)), "limit": min(100, max(1, int(limit)))}
+    params = {
+        "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+        "limit": _safe_page_parameter(limit, 20, 100),
+    }
     params.update({key: value for key, value in filters.items() if value not in (None, "")})
     return _request("publishers", params=params)
 
 
 def get_publisher(publisher_id):
-    return _request(f"publishers/{int(publisher_id)}")
+    publisher_id = _bounded_positive_filter_int(publisher_id)
+    if publisher_id is None:
+        raise ValueError("Publisher IDs must be positive bounded integers.")
+    return _request(f"publishers/{publisher_id}")
 
 
 def get_similar_publishers(publisher_id, page=1, limit=20):
-    return _request(f"publishers/{int(publisher_id)}/similar",
-                    params={"page": max(1, int(page)), "limit": min(50, max(1, int(limit)))})
+    publisher_id = _bounded_positive_filter_int(publisher_id)
+    if publisher_id is None:
+        raise ValueError("Publisher IDs must be positive bounded integers.")
+    return _request(
+        f"publishers/{publisher_id}/similar",
+        params={
+            "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
+            "limit": _safe_page_parameter(limit, 20, 50),
+        },
+    )
 
 
 def get_publisher_stats(publisher_id):
-    return _request(f"publishers/{int(publisher_id)}/stats")
+    publisher_id = _bounded_positive_filter_int(publisher_id)
+    if publisher_id is None:
+        raise ValueError("Publisher IDs must be positive bounded integers.")
+    return _request(f"publishers/{publisher_id}/stats")
 
 
 def extract_external_id(series, provider):
