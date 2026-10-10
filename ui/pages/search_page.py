@@ -3,9 +3,8 @@ from threading import Event
 from PySide6.QtCore import QEvent, QObject, QPoint, QThread, Qt, Signal, QTimer, QPropertyAnimation, QEasingCurve
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
-from api import get_media_by_anilist_url, parse_anilist_url
+from api import enrich_anilist_media, get_media_by_anilist_url, parse_anilist_url
 from catalog_search import search_combined_media
-from mangabaka_api import enrich_anilist_media
 from series import group_media_results
 from ui.preferences import get
 from ui.theme import COLORS
