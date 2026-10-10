@@ -1001,12 +1001,22 @@ def set_episode_watched(work_id, episode_number, watched):
 
 def get_provider_metadata(work_id, provider="mangabaka"):
     """Return preserved raw metadata for a work and provider, if available."""
+    try:
+        safe_work_id = _validated_work_id(work_id)
+        normalized_provider = str(provider).strip().lower()
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not normalized_provider:
+        return None
+
     connection = get_connection()
-    row = connection.execute(
-        "SELECT payload_json FROM work_provider_metadata WHERE work_id = ? AND provider = ?",
-        (int(work_id), str(provider).lower()),
-    ).fetchone()
-    connection.close()
+    try:
+        row = connection.execute(
+            "SELECT payload_json FROM work_provider_metadata WHERE work_id = ? AND provider = ?",
+            (safe_work_id, normalized_provider),
+        ).fetchone()
+    finally:
+        connection.close()
     if not row:
         return None
     try:
@@ -1017,22 +1027,43 @@ def get_provider_metadata(work_id, provider="mangabaka"):
 
 
 def save_provider_metadata(work_id, provider, payload, provider_id=None):
-    """Persist an unmodified provider payload, including auxiliary endpoint results."""
+    """Persist a JSON-compatible provider payload before opening a DB connection."""
+    safe_work_id = _validated_work_id(work_id)
+    normalized_provider = str(provider).strip().lower()
+    if not normalized_provider:
+        raise ValueError("A provider name is required.")
+    if not isinstance(payload, (dict, list)):
+        raise ValueError("Provider metadata must be a JSON object or array.")
+    try:
+        payload_json = json.dumps(
+            payload,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError, OverflowError, RecursionError) as error:
+        raise ValueError("Provider metadata is not valid JSON data.") from error
+
     connection = get_connection()
-    connection.execute("""
-        INSERT INTO work_provider_metadata (work_id, provider, provider_id, payload_json, updated_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(work_id, provider) DO UPDATE SET
-            provider_id = COALESCE(excluded.provider_id, work_provider_metadata.provider_id),
-            payload_json = excluded.payload_json,
-            updated_at = CURRENT_TIMESTAMP
-    """, (
-        int(work_id), str(provider).lower(),
-        str(provider_id) if provider_id is not None else None,
-        json.dumps(payload, ensure_ascii=False),
-    ))
-    connection.commit()
-    connection.close()
+    try:
+        connection.execute("""
+            INSERT INTO work_provider_metadata (work_id, provider, provider_id, payload_json, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(work_id, provider) DO UPDATE SET
+                provider_id = COALESCE(excluded.provider_id, work_provider_metadata.provider_id),
+                payload_json = excluded.payload_json,
+                updated_at = CURRENT_TIMESTAMP
+        """, (
+            safe_work_id,
+            normalized_provider,
+            str(provider_id) if provider_id is not None else None,
+            payload_json,
+        ))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def save_reading_item_metadata(work_id, item_type, items):
