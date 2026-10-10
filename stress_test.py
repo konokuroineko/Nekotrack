@@ -140,6 +140,18 @@ def offline_network_guard(attempted_requests):
     def block_getaddrinfo(host, port, *args, **kwargs):
         record_attempt("socket.getaddrinfo", (host, port))
 
+    def block_gethostbyname(host):
+        record_attempt("socket.gethostbyname", host)
+
+    def block_gethostbyname_ex(host):
+        record_attempt("socket.gethostbyname_ex", host)
+
+    def block_gethostbyaddr(host):
+        record_attempt("socket.gethostbyaddr", host)
+
+    def block_getnameinfo(sockaddr, flags):
+        record_attempt("socket.getnameinfo", sockaddr)
+
     def block_socket_send(_socket, data, *args, **kwargs):
         record_attempt("socket.send", "<connected socket>")
 
@@ -163,6 +175,10 @@ def offline_network_guard(attempted_requests):
         stack.enter_context(patch.object(socket.socket, "connect", new=block_socket_connect))
         stack.enter_context(patch.object(socket.socket, "connect_ex", new=block_socket_connect_ex))
         stack.enter_context(patch.object(socket, "getaddrinfo", new=block_getaddrinfo))
+        stack.enter_context(patch.object(socket, "gethostbyname", new=block_gethostbyname))
+        stack.enter_context(patch.object(socket, "gethostbyname_ex", new=block_gethostbyname_ex))
+        stack.enter_context(patch.object(socket, "gethostbyaddr", new=block_gethostbyaddr))
+        stack.enter_context(patch.object(socket, "getnameinfo", new=block_getnameinfo))
         stack.enter_context(patch.object(socket.socket, "send", new=block_socket_send))
         stack.enter_context(patch.object(socket.socket, "sendall", new=block_socket_sendall))
         stack.enter_context(patch.object(socket.socket, "sendto", new=block_socket_sendto))
