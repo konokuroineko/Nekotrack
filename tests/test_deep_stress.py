@@ -154,9 +154,10 @@ class TmdbImageCacheResourceStressTests(unittest.TestCase):
         url = "https://image.tmdb.org/t/p/w500/oversized.jpg"
 
         class StreamingResponse:
-            status_code = 200
-            headers = {"Content-Length": "3"}
-            url = url
+            def __init__(self, response_url):
+                self.status_code = 200
+                self.headers = {"Content-Length": "3"}
+                self.url = response_url
 
             def raise_for_status(self):
                 return None
@@ -183,7 +184,7 @@ class TmdbImageCacheResourceStressTests(unittest.TestCase):
 
             with patch.object(api, "TMDB_EPISODE_CACHE_DIRECTORY", cache_root), \
                  patch.object(api, "MAX_TMDB_EPISODE_IMAGE_BYTES", 16), \
-                 patch.object(api.requests, "get", return_value=StreamingResponse()), \
+                 patch.object(api.requests, "get", return_value=StreamingResponse(url)), \
                  patch.object(Path, "read_bytes", forbid_cached_read):
                 result = api.cache_tmdb_episode_image(url, 42, 3)
 
