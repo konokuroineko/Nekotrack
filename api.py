@@ -8,11 +8,30 @@ import time
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from ui.preferences import get
+# Public API facade: runtime modules import provider operations from here.
+# The provider-specific module contains the MangaBaka HTTP/schema implementation.
 from mangabaka_api import (
+    MangaBakaAPIError,
     enrich_anilist_media,
+    enrich_anilist_results,
+    extract_external_id as get_mangabaka_external_id,
+    get_collection_works as get_mangabaka_collection_works,
+    get_public_data as get_mangabaka_public_data,
+    get_publisher as get_mangabaka_publisher,
+    get_publisher_stats as get_mangabaka_publisher_stats,
     get_related_series as get_mangabaka_related_series,
     get_series as get_mangabaka_series,
+    get_series_collections as get_mangabaka_series_collections,
+    get_series_mix as get_mangabaka_series_mix,
+    get_series_news as get_mangabaka_series_news,
+    get_similar_publishers as get_mangabaka_similar_publishers,
+    get_volume_records as get_mangabaka_volume_records,
+    get_hidden_gems as get_mangabaka_hidden_gems,
+    get_work as get_mangabaka_work,
+    get_publishers as get_mangabaka_publishers,
     normalize_series as normalize_mangabaka_series,
+    search_media as search_mangabaka_media,
+    search_series as search_mangabaka_series,
 )
 
 
