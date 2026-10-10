@@ -86,6 +86,25 @@ class CombinedCatalogSearchTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in result["media"]], [100])
         search_mb.assert_not_called()
 
+    def test_extremely_long_publisher_ids_are_rejected_without_crashing(self):
+        abusive_id = "9" * 5000
+
+        self.assertEqual(catalog_search._collect_publisher_ids(abusive_id), set())
+        self.assertEqual(catalog_search._collect_publisher_ids(10**200), set())
+        self.assertIsNone(catalog_search._positive_provider_id(abusive_id))
+        self.assertFalse(
+            catalog_search._matches_provider_only_filters(
+                {"_mangabaka": {"publisher_id": 5}},
+                {"publisher_id": abusive_id},
+            )
+        )
+        self.assertFalse(
+            catalog_search._matches_provider_only_filters(
+                {"_mangabaka": {"publisher_id": 5}},
+                {"publisher_id": 10**200},
+            )
+        )
+
     @patch("catalog_search.enrich_anilist_results")
     @patch("catalog_search.search_mangabaka_media")
     @patch("catalog_search.search_anime")
