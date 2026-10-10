@@ -1667,8 +1667,23 @@ class WorkDetailPage(QWidget):
                 raise RuntimeError("Could not load that work.")
 
             save_anime(details)
-            save_characters(work_id, (details.get("characters") or {}).get("edges"))
-            save_staff(work_id, (details.get("staff") or {}).get("edges"))
+            character_connection = details.get("characters")
+            character_edges = (
+                character_connection.get("edges")
+                if isinstance(character_connection, dict)
+                else None
+            )
+            if details.get("_characters_snapshot_valid", True) is False:
+                save_characters(work_id, None)
+            else:
+                save_characters(work_id, character_edges)
+            staff_connection = details.get("staff")
+            staff_edges = (
+                staff_connection.get("edges")
+                if isinstance(staff_connection, dict)
+                else None
+            )
+            save_staff(work_id, staff_edges)
             # Episode metadata is synchronized by get_episode_data() for the
             # exact AniList member. AniList streamingEpisodes is not an
             # episode-numbered database source.
