@@ -145,6 +145,8 @@ def _decode_cover(payload):
         reader.setDecideFormatFromContent(True)
         dimensions = reader.size()
         if not dimensions.isValid():
+            if not reader.canRead():
+                raise ValueError("Downloaded cover is not a supported image.")
             raise ValueError("The cover image dimensions are invalid.")
         width, height = dimensions.width(), dimensions.height()
         if (
