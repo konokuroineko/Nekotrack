@@ -536,80 +536,137 @@ def save_characters(work_id, characters):
 
 
 def characters_are_loaded(work_id):
-    connection = get_connection()
-    row = connection.execute(
-        "SELECT characters_loaded FROM works WHERE id = ? LIMIT 1",
-        (work_id,),
-    ).fetchone()
-    if not row or not row["characters_loaded"]:
-        connection.close()
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
         return False
 
-    # Older character imports did not store the AniList role. Treat those
-    # entries as needing one refresh so existing titles get their role data.
-    missing_role = connection.execute(
-        """
-        SELECT 1
-        FROM work_characters
-        WHERE work_id = ? AND role IS NULL
-        LIMIT 1
-        """,
-        (work_id,),
-    ).fetchone()
-    connection.close()
-    return missing_role is None
+    connection = get_connection()
+    try:
+        row = connection.execute(
+            "SELECT characters_loaded FROM works WHERE id = ? LIMIT 1",
+            (safe_work_id,),
+        ).fetchone()
+        if not row or not row["characters_loaded"]:
+            return False
+
+        # Older character imports did not store the AniList role. Treat those
+        # entries as needing one refresh so existing titles get their role data.
+        missing_role = connection.execute(
+            """
+            SELECT 1
+            FROM work_characters
+            WHERE work_id = ? AND role IS NULL
+            LIMIT 1
+            """,
+            (safe_work_id,),
+        ).fetchone()
+        return missing_role is None
+    finally:
+        connection.close()
 
 
 def get_tmdb_mapping(work_id):
     """Return the cached TMDB series/season mapping for one exact work."""
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return None, None
     connection = get_connection()
-    row = connection.execute(
-        "SELECT tmdb_id, tmdb_season_number FROM works WHERE id = ?",
-        (int(work_id),),
-    ).fetchone()
-    connection.close()
+    try:
+        row = connection.execute(
+            "SELECT tmdb_id, tmdb_season_number FROM works WHERE id = ?",
+            (safe_work_id,),
+        ).fetchone()
+    finally:
+        connection.close()
     if row is None:
         return None, None
     return row["tmdb_id"], row["tmdb_season_number"]
 
 
 def save_tmdb_mapping(work_id, tmdb_id, tmdb_season_number):
-    """Cache the TMDB mapping resolved for one exact NekoTrack season."""
-    connection = get_connection()
-    connection.execute(
-        """
-        UPDATE works
-        SET tmdb_id = ?, tmdb_season_number = ?
-        WHERE id = ?
-        """,
-        (
-            int(tmdb_id) if tmdb_id is not None else None,
-            int(tmdb_season_number) if tmdb_season_number is not None else None,
-            int(work_id),
-        ),
+    """Cache only valid TMDB identifiers; malformed refreshes keep the old mapping."""
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+    safe_tmdb_id = (
+        _safe_optional_integer(tmdb_id, 1, (1 << 31) - 1)
+        if tmdb_id is not None else None
     )
-    connection.commit()
-    connection.close()
+    safe_season = (
+        _safe_optional_integer(tmdb_season_number, 0, 10000)
+        if tmdb_season_number is not None else None
+    )
+    if (
+        (tmdb_id is not None and safe_tmdb_id is None)
+        or (tmdb_season_number is not None and safe_season is None)
+    ):
+        return False
+
+    connection = get_connection()
+    try:
+        cursor = connection.execute(
+            """
+            UPDATE works
+            SET tmdb_id = ?, tmdb_season_number = ?
+            WHERE id = ?
+            """,
+            (safe_tmdb_id, safe_season, safe_work_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def save_character_image_path(character_id, image_path):
+    safe_id = _cast_provider_id(character_id)
+    if safe_id is None:
+        return False
+    stored_path = str(image_path) if image_path is not None else None
+    if stored_path is not None and len(stored_path) > 4096:
+        return False
     connection = get_connection()
-    connection.execute(
-        "UPDATE characters SET image_path = ? WHERE id = ?",
-        (str(image_path), int(character_id)),
-    )
-    connection.commit()
-    connection.close()
+    try:
+        cursor = connection.execute(
+            "UPDATE characters SET image_path = ? WHERE id = ?",
+            (stored_path, safe_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def save_person_image_path(person_id, image_path):
+    safe_id = _cast_provider_id(person_id)
+    if safe_id is None:
+        return False
+    stored_path = str(image_path) if image_path is not None else None
+    if stored_path is not None and len(stored_path) > 4096:
+        return False
     connection = get_connection()
-    connection.execute(
-        "UPDATE people SET image_path = ? WHERE id = ?",
-        (str(image_path), int(person_id)),
-    )
-    connection.commit()
-    connection.close()
+    try:
+        cursor = connection.execute(
+            "UPDATE people SET image_path = ? WHERE id = ?",
+            (stored_path, safe_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def get_characters(work_id):
