@@ -6,6 +6,7 @@ are reproducible and never touch a real user's settings, database, or images.
 """
 import os
 import random
+from concurrent.futures import ThreadPoolExecutor
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -533,6 +534,115 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         self.assert_database_invariants()
         current_ids = {row["id"] for row in database.get_saved_anime()}
         self.assertEqual(current_ids, active)
+
+
+class DatabaseConcurrencyChaosTests(unittest.TestCase):
+    """Exercise real multi-connection write contention using a throwaway DB."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.old_cwd = os.getcwd()
+        os.chdir(self.temp_dir.name)
+        database.initialize_database()
+
+    def tearDown(self):
+        os.chdir(self.old_cwd)
+        self.temp_dir.cleanup()
+
+    def test_concurrent_imports_and_progress_updates_preserve_invariants(self):
+        base_work_id = 600_000
+
+        def worker(worker_id):
+            rng = random.Random(_fuzz_seed(0x711B + worker_id))
+            for step in range(10):
+                # Every worker first creates a distinct row. Later iterations
+                # deliberately collide on IDs to stress simultaneous upserts.
+                work_id = (
+                    base_work_id + worker_id + 1
+                    if step == 0
+                    else base_work_id + rng.randint(1, 8)
+                )
+                item_number = rng.randint(1, 36)
+                work = DatabaseStateMachineChaosTests.work(
+                    work_id, "MANGA", "MANGA"
+                )
+                work["title"]["english"] = (
+                    f"Concurrent import {worker_id} {step}"
+                )
+                work["title"]["romaji"] = work["title"]["english"]
+
+                database.save_anime(work)
+                database.add_to_library(work_id)
+                page_offset = ((item_number - 1) // 12) * 12
+                database.ensure_reading_placeholders(
+                    work_id, "chapter", 36, offset=page_offset, limit=12
+                )
+                database.set_reading_item_read(
+                    work_id, "chapter", item_number, bool(rng.getrandbits(1))
+                )
+
+                read_count, total = database.get_reading_progress(
+                    work_id, "chapter", total_hint=36
+                )
+                if not 0 <= read_count <= total:
+                    raise AssertionError(
+                        f"Invalid concurrent progress for {work_id}: "
+                        f"{read_count}/{total}"
+                    )
+
+        # No connection object is shared between threads. Each production
+        # database call opens its own SQLite connection, matching app usage.
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            list(executor.map(worker, range(8)))
+
+        connection = database.get_connection()
+        try:
+            self.assertEqual(
+                connection.execute("PRAGMA integrity_check").fetchone()[0],
+                "ok",
+            )
+            self.assertEqual(
+                connection.execute("PRAGMA foreign_key_check").fetchall(),
+                [],
+            )
+            work_ids = [
+                row[0]
+                for row in connection.execute(
+                    "SELECT id FROM works WHERE id BETWEEN ? AND ? ORDER BY id",
+                    (base_work_id + 1, base_work_id + 8),
+                ).fetchall()
+            ]
+            self.assertEqual(work_ids, list(range(base_work_id + 1, base_work_id + 9)))
+
+            mismatched_progress = connection.execute(
+                """
+                SELECT library.work_id, library.progress_chapters,
+                       COALESCE(items.read_count, 0)
+                FROM user_library AS library
+                LEFT JOIN (
+                    SELECT work_id, SUM(is_read) AS read_count
+                    FROM reading_items
+                    WHERE item_type = 'chapter'
+                    GROUP BY work_id
+                ) AS items ON items.work_id = library.work_id
+                WHERE library.work_id BETWEEN ? AND ?
+                  AND library.progress_chapters != COALESCE(items.read_count, 0)
+                """,
+                (base_work_id + 1, base_work_id + 8),
+            ).fetchall()
+            self.assertEqual(mismatched_progress, [])
+
+            invalid_items = connection.execute(
+                """
+                SELECT COUNT(*) FROM reading_items
+                WHERE work_id BETWEEN ? AND ?
+                  AND (item_number < 1 OR is_read NOT IN (0, 1))
+                """,
+                (base_work_id + 1, base_work_id + 8),
+            ).fetchone()[0]
+            self.assertEqual(invalid_items, 0)
+        finally:
+            connection.close()
 
 
 class TMDBPayloadChaosTests(unittest.TestCase):
