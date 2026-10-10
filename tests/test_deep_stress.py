@@ -461,6 +461,111 @@ class DatabaseCastPayloadStressTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_staff_refresh_reconciles_stale_roles_but_partial_snapshots_preserve_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                work_id = 79
+                database.save_anime({
+                    "id": work_id,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "title": {"english": "Staff reconciliation", "romaji": "Staff reconciliation"},
+                })
+
+                def staff_edge(person_id, name, role):
+                    return {
+                        "node": {
+                            "id": person_id,
+                            "name": {"full": name},
+                            "image": {"large": None},
+                        },
+                        "role": role,
+                    }
+
+                def saved_staff():
+                    connection = database.get_connection()
+                    try:
+                        return {
+                            (row["person_id"], row["role"])
+                            for row in connection.execute(
+                                "SELECT person_id, role FROM work_staff WHERE work_id = ?",
+                                (work_id,),
+                            ).fetchall()
+                        }
+                    finally:
+                        connection.close()
+
+                database.save_staff(work_id, [
+                    staff_edge(90, "Staff One", "Writer"),
+                    staff_edge(91, "Staff Two", "Artist"),
+                ])
+                original = {(90, "Writer"), (91, "Artist")}
+                self.assertEqual(saved_staff(), original)
+
+                # A malformed list must not let valid-looking partial edges
+                # erase the old rows. New info can be added, but stale rows wait
+                # for a complete snapshot before removal.
+                database.save_staff(work_id, [
+                    staff_edge(90, "Staff One", "Editor"),
+                    None,
+                ])
+                self.assertTrue(original.issubset(saved_staff()))
+                self.assertIn((90, "Editor"), saved_staff())
+
+                # This person is still used as a voice actor after disappearing
+                # from the work's staff list, so global person cleanup must keep it.
+                database.save_characters(work_id, [{
+                    "node": {
+                        "id": 300,
+                        "name": {"full": "Character"},
+                        "image": {"large": None},
+                    },
+                    "role": "MAIN",
+                    "voiceActors": [{
+                        "id": 91,
+                        "name": {"full": "Staff Two"},
+                        "image": {"large": None},
+                        "language": "Japanese",
+                    }],
+                }])
+
+                database.save_staff(work_id, [staff_edge(90, "Staff One", "Editor")])
+                self.assertEqual(saved_staff(), {(90, "Editor")})
+
+                connection = database.get_connection()
+                try:
+                    still_shared = connection.execute(
+                        "SELECT 1 FROM people WHERE id = ?",
+                        (91,),
+                    ).fetchone()
+                finally:
+                    connection.close()
+                self.assertIsNotNone(still_shared)
+
+                # A complete empty snapshot clears links and deletes truly
+                # orphaned people, but not records still referenced by cast.
+                database.save_staff(work_id, [])
+                self.assertEqual(saved_staff(), set())
+                connection = database.get_connection()
+                try:
+                    orphan = connection.execute(
+                        "SELECT 1 FROM people WHERE id = ?",
+                        (90,),
+                    ).fetchone()
+                    shared = connection.execute(
+                        "SELECT 1 FROM people WHERE id = ?",
+                        (91,),
+                    ).fetchone()
+                finally:
+                    connection.close()
+                self.assertIsNone(orphan)
+                self.assertIsNotNone(shared)
+            finally:
+                os.chdir(old_cwd)
+
 
 class DatabaseCastReconciliationStressTests(unittest.TestCase):
     def test_complete_cast_refresh_removes_stale_characters_and_voice_actors(self):
