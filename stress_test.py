@@ -18,10 +18,13 @@ import math
 import os
 import random
 import re
+import socket
 import subprocess
 import sys
 import time
 import traceback
+import urllib.request
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 import unittest
@@ -101,6 +104,59 @@ def run_full_regression_suite():
     }
 
 
+@contextmanager
+def offline_network_guard(attempted_requests):
+    """Block common HTTP-client and raw-socket paths during offline tests.
+
+    Patching requests.Session.request alone leaves urllib and direct socket
+    clients invisible to the stress report. The lower-level guards are a
+    second safety boundary; all attempts are recorded before raising.
+    """
+    def record_attempt(method, destination):
+        attempted_requests.append({
+            "method": str(method),
+            "url": str(destination),
+        })
+        raise AssertionError(
+            f"Unexpected network request blocked during offline fuzzing: "
+            f"{method} {destination}"
+        )
+
+    def block_requests(_session, method, url, *args, **kwargs):
+        record_attempt(method, url)
+
+    def block_urlopen(url, *args, **kwargs):
+        record_attempt("urllib.request.urlopen", url)
+
+    def block_create_connection(address, *args, **kwargs):
+        record_attempt("socket.create_connection", address)
+
+    def block_socket_connect(_socket, address):
+        record_attempt("socket.connect", address)
+
+    def block_socket_connect_ex(_socket, address):
+        record_attempt("socket.connect_ex", address)
+
+    def block_socket_sendto(_socket, *args, **kwargs):
+        destination = kwargs.get("address")
+        if destination is None:
+            # sendto(data, address) uses args[1]; a connected sendto(data)
+            # has no explicit destination but is still an attempted send.
+            destination = args[1] if len(args) >= 2 else "<connected socket>"
+        record_attempt("socket.sendto", destination)
+
+    with ExitStack() as stack:
+        stack.enter_context(patch(
+            "requests.sessions.Session.request", new=block_requests
+        ))
+        stack.enter_context(patch("urllib.request.urlopen", new=block_urlopen))
+        stack.enter_context(patch("socket.create_connection", new=block_create_connection))
+        stack.enter_context(patch("socket.socket.connect", new=block_socket_connect))
+        stack.enter_context(patch("socket.socket.connect_ex", new=block_socket_connect_ex))
+        stack.enter_context(patch("socket.socket.sendto", new=block_socket_sendto))
+        yield
+
+
 def run_iteration_worker(seed):
     """Run one fuzz iteration in a fresh process and emit a machine-readable result."""
     os.environ["NEKOTRACK_FUZZ_SEED"] = str(seed)
@@ -111,12 +167,6 @@ def run_iteration_worker(seed):
         "failures": 0, "errors": 0, "network_attempts": [], "output": "",
     }
 
-    def block_network_request(_session, method, url, *args, **kwargs):
-        attempted_requests.append({"method": str(method), "url": str(url)})
-        raise AssertionError(
-            f"Unexpected network request blocked during offline fuzzing: {method} {url}"
-        )
-
     try:
         modules = load_adversarial_tests()
         suite = unittest.TestSuite()
@@ -125,7 +175,7 @@ def run_iteration_worker(seed):
         if suite.countTestCases() == 0:
             raise RuntimeError("No fuzz tests were loaded for this iteration.")
 
-        with patch("requests.sessions.Session.request", new=block_network_request):
+        with offline_network_guard(attempted_requests):
             result = unittest.TextTestRunner(
                 stream=output, verbosity=0, failfast=False
             ).run(suite)
