@@ -78,9 +78,24 @@ def run_full_regression_suite():
         env=env,
     )
     output = (completed.stdout + "\n" + completed.stderr).strip()
+    summary = re.search(r"(?m)^\\s*Ran\\s+(\\d+)\\s+tests?\\s+in\\s+[0-9.]+s\\s*$", output)
+    tests_run = int(summary.group(1)) if summary else 0
+
+    # A zero exit code alone is not enough: unittest discovery can succeed
+    # while finding no tests (for example after a directory/package regression).
+    # Treat missing or zero-count summaries as failures so the harness cannot
+    # report a green baseline when it exercised nothing.
+    summary_valid = summary is not None and tests_run > 0
+    if not summary_valid:
+        output += (
+            "\\nRegression test discovery did not report a positive test count; "
+            "treating the baseline as failed."
+        )
+
     return {
-        "status": "PASS" if completed.returncode == 0 else "FAIL",
+        "status": "PASS" if completed.returncode == 0 and summary_valid else "FAIL",
         "exit_code": completed.returncode,
+        "tests_run": tests_run,
         "output": output[-24000:],
     }
 
