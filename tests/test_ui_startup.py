@@ -39,6 +39,7 @@ class MemorySettings:
 # the developer's real NekoTrack preferences.
 with patch.object(preferences, "QSettings", MemorySettings):
     from ui.main_window import MainWindow
+    from ui.pages.library_page import RelationSyncWorker, pending_relation_sync_ids
     from ui.pages.settings_page import SettingsPage
     from ui.pages.work_detail_page import WorkDetailPage
     from ui.setup_wizard import SetupWizard
@@ -48,6 +49,79 @@ class UiStartupTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_library_relation_sync_does_not_skip_previously_connected_ids(self):
+        # A work can already appear as a target/source in a stale or partial
+        # relation graph; only completed or failed attempts in this app session
+        # should suppress another full-snapshot fetch.
+        pending = pending_relation_sync_ids(
+            [21355, 108632, -148237],
+            checked_ids={108632},
+            failed_ids=set(),
+        )
+        self.assertEqual(pending, [-148237, 21355])
+
+    def test_relation_sync_worker_persists_full_relation_snapshots(self):
+        details = {
+            "id": 21355,
+            "type": "ANIME",
+            "format": "TV",
+            "title": {"romaji": "Re:Zero", "english": "Re:Zero"},
+            "relations": {
+                "edges": [
+                    {
+                        "relationType": "SIDE_STORY",
+                        "node": {
+                            "id": 100049,
+                            "type": "ANIME",
+                            "format": "OVA",
+                            "title": {"romaji": "Re:Zero OVAs", "english": "Re:Zero OVAs"},
+                        },
+                    }
+                ]
+            },
+        }
+        emitted = []
+        worker = RelationSyncWorker([21355])
+        worker.finished.connect(emitted.append)
+
+        with patch(
+            "ui.pages.library_page.get_media_relations_batch",
+            return_value={21355: details},
+        ) as fetch_relations, patch(
+            "ui.pages.library_page.save_anime"
+        ) as save_anime:
+            worker.run()
+
+        fetch_relations.assert_called_once_with([21355])
+        save_anime.assert_called_once_with(details)
+        self.assertEqual(emitted, [{21355}])
+
+    def test_relation_sync_worker_falls_back_after_batch_failure(self):
+        details = {
+            "id": 21355,
+            "type": "ANIME",
+            "format": "TV",
+            "title": {"romaji": "Re:Zero", "english": "Re:Zero"},
+            "relations": {"edges": []},
+        }
+        emitted = []
+        worker = RelationSyncWorker([21355])
+        worker.finished.connect(emitted.append)
+
+        with patch(
+            "ui.pages.library_page.get_media_relations_batch",
+            side_effect=[RuntimeError("batch unavailable"), {21355: details}],
+        ) as fetch_relations, patch(
+            "ui.pages.library_page.save_anime"
+        ) as save_anime, patch(
+            "ui.pages.library_page.log_exception"
+        ):
+            worker.run()
+
+        self.assertEqual(fetch_relations.call_count, 2)
+        save_anime.assert_called_once_with(details)
+        self.assertEqual(emitted, [{21355}])
 
     def test_remote_cover_finished_ignores_deleted_label(self):
         page = WorkDetailPage()

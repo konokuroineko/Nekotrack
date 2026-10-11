@@ -4,7 +4,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, Signal, QEvent, QTimer, QPropertyAnimation, QEasingCurve, QThread
 from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLayout
 
-from api import get_media_details
+from api import get_media_relations_batch
 from diagnostics import diagnostic_context, diagnostic_field, log_event, log_exception
 from database import clear_bundle_override, delete_work_data, get_bundle_override, get_connection, save_anime, save_bundle_override
 from series import get_library_series
@@ -13,41 +13,95 @@ from ui.theme import COLORS
 from ui.widgets.work_card import WorkCard
 
 
+def pending_relation_sync_ids(work_ids, checked_ids=(), failed_ids=()):
+    """Return library IDs whose full relation snapshots have not been checked."""
+    all_ids = {int(work_id) for work_id in work_ids}
+    checked = {int(work_id) for work_id in checked_ids}
+    failed = {int(work_id) for work_id in failed_ids}
+    return sorted(all_ids - checked - failed)
+
+
 class RelationSyncWorker(QObject):
     finished = Signal(object)
 
     def __init__(self, work_ids):
         super().__init__()
-        self.work_ids = work_ids
+        self.work_ids = sorted({int(work_id) for work_id in work_ids})
 
     def run(self):
         succeeded_ids = set()
+        details_by_id = {}
+        try:
+            fetched = get_media_relations_batch(self.work_ids)
+            if isinstance(fetched, dict):
+                details_by_id = fetched
+            log_event(
+                "library.relation_sync.batch_completed",
+                requested_count=len(self.work_ids),
+                returned_count=len(details_by_id),
+            )
+        except Exception as error:
+            # A failed batch must not prevent valid individual works from being
+            # repaired. Fall back to per-ID requests below.
+            log_exception(
+                "library.relation_sync.batch_failed",
+                error,
+                requested_count=len(self.work_ids),
+            )
+
         for work_id in self.work_ids:
             with diagnostic_context(workflow="library_relation_sync", work_id=work_id):
                 log_event("library.relation_sync.item_started")
-                try:
-                    details = get_media_details(work_id)
-                    if details:
-                        save_anime(details)
-                        succeeded_ids.add(int(work_id))
-                        relation_data = details.get("relations") or {}
-                        relation_edges = relation_data.get("edges") or []
-                        log_event(
-                            "library.relation_sync.item_completed",
-                            media_type=details.get("type"),
-                            media_format=details.get("format"),
-                            relation_count=len(relation_edges),
-                            relation_types=sorted({
-                                str(edge.get("relationType") or "")
-                                for edge in relation_edges
-                                if isinstance(edge, dict)
-                            })[:30],
+                details = details_by_id.get(work_id)
+                if details is None:
+                    try:
+                        individual = get_media_relations_batch([work_id])
+                        details = (
+                            individual.get(work_id)
+                            if isinstance(individual, dict)
+                            else None
                         )
-                    else:
-                        log_event("library.relation_sync.empty_details")
+                    except Exception as error:
+                        log_exception("library.relation_sync.item_failed", error)
+                        continue
+
+                if not isinstance(details, dict) or details.get("id") != work_id:
+                    log_event(
+                        "library.relation_sync.item_missing_details",
+                        expected_work_id=work_id,
+                    )
+                    continue
+
+                relation_data = details.get("relations")
+                relation_edges = (
+                    relation_data.get("edges")
+                    if isinstance(relation_data, dict)
+                    else None
+                )
+                if not isinstance(relation_edges, list):
+                    log_event("library.relation_sync.item_missing_relation_snapshot")
+                    continue
+
+                try:
+                    save_anime(details)
                 except Exception as error:
                     log_exception("library.relation_sync.item_failed", error)
-        failed_ids = sorted(set(int(value) for value in self.work_ids) - succeeded_ids)
+                    continue
+
+                succeeded_ids.add(work_id)
+                log_event(
+                    "library.relation_sync.item_completed",
+                    media_type=details.get("type"),
+                    media_format=details.get("format"),
+                    relation_count=len(relation_edges),
+                    relation_types=sorted({
+                        str(edge.get("relationType") or "")
+                        for edge in relation_edges
+                        if isinstance(edge, dict)
+                    })[:30],
+                )
+
+        failed_ids = sorted(set(self.work_ids) - succeeded_ids)
         log_event(
             "library.relation_sync.worker_completed",
             attempted_count=len(self.work_ids),
@@ -215,27 +269,26 @@ class LibraryPage(QWidget):
             }
         finally:
             connection.close()
-        missing = [
-            work_id for work_id in ids
-            if work_id not in connected
-            and work_id not in self._sync_done_ids
-            and work_id not in self._sync_failed_ids
-        ]
+        pending = pending_relation_sync_ids(
+            ids,
+            checked_ids=self._sync_done_ids,
+            failed_ids=self._sync_failed_ids,
+        )
         log_event(
             "library.relation_sync.plan",
             library_work_count=len(ids),
             library_work_ids=ids[:100],
             connected_work_count=len(connected),
             connected_sample=sorted(connected)[:100],
-            missing_relation_ids=missing[:100],
-            missing_relation_count=len(missing),
+            pending_relation_ids=pending[:100],
+            pending_relation_count=len(pending),
             already_checked_ids=sorted(self._sync_done_ids)[:100],
             previously_failed_ids=sorted(self._sync_failed_ids)[:100],
         )
-        if not missing:
+        if not pending:
             return
         self._sync_thread = QThread(self)
-        self._sync_worker = RelationSyncWorker(missing)
+        self._sync_worker = RelationSyncWorker(pending)
         self._sync_worker.moveToThread(self._sync_thread)
         self._sync_thread.started.connect(self._sync_worker.run)
         self._sync_worker.finished.connect(self._relation_sync_finished)

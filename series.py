@@ -2,7 +2,7 @@ from collections import defaultdict
 import re
 import time
 
-from api import get_media_details, get_media_relations_batch
+from api import get_media_relations_batch
 from diagnostics import diagnostic_context, log_event, log_exception
 from database import get_all_library, get_bundle_override, get_bundle_exclusions, get_connection, get_manual_bundle_links, save_anime
 from ui.preferences import get
@@ -1101,29 +1101,76 @@ def _relation_data_for(ids):
 
 
 def sync_library_relations():
+    """Persist complete relation snapshots for every unchecked library work."""
     rows = list(get_all_library())
-    if len(rows) < 2:
+    if not rows:
         return False
 
     ids = {int(row["id"]) for row in rows}
-    existing_rows = _relation_data_for(ids)
-    existing = (
-        {int(row["source_id"]) for row in existing_rows}
-        | {int(row["target_id"]) for row in existing_rows}
-    )
+    pending = ids - _relation_sync_checked_ids
+    if not pending:
+        return False
 
-    missing = ids - existing - _relation_sync_checked_ids
+    details_by_id = {}
+    try:
+        fetched = get_media_relations_batch(sorted(pending))
+        if isinstance(fetched, dict):
+            details_by_id = fetched
+    except Exception as error:
+        log_exception(
+            "library.relation_sync.batch_failed",
+            error,
+            requested_count=len(pending),
+        )
+
     changed = False
+    for work_id in sorted(pending):
+        details = details_by_id.get(work_id)
+        if details is None:
+            try:
+                individual = get_media_relations_batch([work_id])
+                details = (
+                    individual.get(work_id)
+                    if isinstance(individual, dict)
+                    else None
+                )
+            except Exception as error:
+                log_exception(
+                    "library.relation_sync.item_failed",
+                    error,
+                    work_id=work_id,
+                )
+                continue
 
-    for work_id in missing:
-        try:
-            details = get_media_details(work_id)
-            _relation_sync_checked_ids.add(work_id)
-            if details:
-                save_anime(details)
-                changed = True
-        except Exception:
+        if not isinstance(details, dict) or details.get("id") != work_id:
+            log_event(
+                "library.relation_sync.item_missing_details",
+                work_id=work_id,
+            )
             continue
+        relation_data = details.get("relations")
+        if (
+            not isinstance(relation_data, dict)
+            or not isinstance(relation_data.get("edges"), list)
+        ):
+            log_event(
+                "library.relation_sync.item_missing_relation_snapshot",
+                work_id=work_id,
+            )
+            continue
+
+        try:
+            save_anime(details)
+        except Exception as error:
+            log_exception(
+                "library.relation_sync.item_failed",
+                error,
+                work_id=work_id,
+            )
+            continue
+
+        _relation_sync_checked_ids.add(work_id)
+        changed = True
 
     return changed
 
