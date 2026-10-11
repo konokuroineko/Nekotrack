@@ -4,6 +4,8 @@ import re
 import sqlite3
 from pathlib import Path
 
+from diagnostics import log_exception
+
 DATABASE_NAME = "anime_tracker.db"
 _MAX_SQLITE_INTEGER = (1 << 63) - 1
 _MIN_SQLITE_INTEGER = -(1 << 63)
@@ -94,10 +96,20 @@ def get_connection():
     # The application performs catalog imports and progress writes from worker
     # threads. Give SQLite time to serialize short concurrent write transactions
     # instead of raising "database is locked" after its default 5-second wait.
-    connection = sqlite3.connect(DATABASE_NAME, timeout=15)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    return connection
+    connection = None
+    try:
+        connection = sqlite3.connect(DATABASE_NAME, timeout=15)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+    except Exception as error:
+        if connection is not None:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
+        log_exception("database.connection_failed", error, database_name=DATABASE_NAME)
+        raise
 
 
 def initialize_database():
