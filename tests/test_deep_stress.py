@@ -172,13 +172,15 @@ class ApiResponseShapeStressTests(unittest.TestCase):
         for payload in malformed:
             with self.subTest(payload=repr(payload)):
                 response = FakeResponse(payload)
-                with patch("api.requests.post", return_value=response), patch("api.time.sleep"):
+                with patch("api.requests.post", return_value=response), \
+                     patch("api.time.sleep"), patch("api._wait_for_anilist_slot"):
                     with self.assertRaises(Exception):
                         api.anilist_request("query { Page { pageInfo { currentPage } } }")
 
     def test_malformed_rate_limit_payload_still_retries_and_returns_a_useful_error(self):
         response = FakeResponse(None, status_code=429, reason="Too Many Requests")
-        with patch("api.requests.post", return_value=response) as post, patch("api.time.sleep"):
+        with patch("api.requests.post", return_value=response) as post, \
+             patch("api.time.sleep"), patch("api._wait_for_anilist_slot"):
             with self.assertRaisesRegex(Exception, "429"):
                 api.anilist_request("query { Page { pageInfo { currentPage } } }")
         self.assertEqual(post.call_count, api.MAX_RETRIES)
@@ -195,7 +197,8 @@ class ApiResponseShapeStressTests(unittest.TestCase):
                 )
                 with patch.object(api, "MAX_RETRIES", 2), \
                      patch("api.requests.post", side_effect=[limited, success]), \
-                     patch("api.time.sleep") as sleep:
+                     patch("api.time.sleep") as sleep, \
+                     patch("api._wait_for_anilist_slot"):
                     result = api.anilist_request(
                         "query { Page { media { id } } }"
                     )
@@ -209,7 +212,8 @@ class ApiResponseShapeStressTests(unittest.TestCase):
 
     def test_valid_graphql_envelope_is_unchanged(self):
         response = FakeResponse({"data": {"Page": {"media": []}}})
-        with patch("api.requests.post", return_value=response):
+        with patch("api.requests.post", return_value=response), \
+             patch("api._wait_for_anilist_slot"):
             self.assertEqual(api.anilist_request("query { Page { media { id } } }"), {"Page": {"media": []}})
 
 
