@@ -8,6 +8,15 @@ APP_NAME = "NekoTrack"
 APP_VERSION = "0.1.0-beta.2"
 APP_DATA_DIR = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")) / APP_NAME
 
+from diagnostics import (
+    configure_logging,
+    install_qt_message_handler,
+    log_event,
+    log_exception,
+    log_operation,
+    log_runtime_snapshot,
+)
+
 
 def _legacy_data_dir():
     """Return the directory used by older portable/source builds."""
@@ -36,9 +45,19 @@ def prepare_user_data():
     os.chdir(APP_DATA_DIR)
 
 
-prepare_user_data()
+configure_logging(APP_DATA_DIR)
+log_event(
+    "startup.bootstrap",
+    app_version=APP_VERSION,
+    frozen=bool(getattr(sys, "frozen", False)),
+    executable=Path(sys.executable).name,
+)
+with log_operation("startup.prepare_user_data"):
+    prepare_user_data()
 
 from PySide6.QtWidgets import QApplication, QMessageBox, QProxyStyle, QStyle
+
+install_qt_message_handler()
 
 from ui.branding import application_icon
 from ui.main_window import MainWindow
@@ -91,28 +110,47 @@ def _check_for_updates(window):
 
 
 def main():
-    app = QApplication(sys.argv)
+    log_event(
+        "app.launch",
+        setup_forced="--setup" in sys.argv,
+        argument_count=len(sys.argv),
+    )
+    with log_operation("startup.create_qapplication"):
+        app = QApplication(sys.argv)
     app.setStyle(NekoProxyStyle("Fusion"))
     app.setWindowIcon(application_icon())
+    log_runtime_snapshot(APP_VERSION)
 
     # The first-launch wizard configures preferences only; it does not touch
     # the user's SQLite library or cached artwork. --setup is a developer/user
     # testing switch that reopens the wizard without resetting any data.
     force_setup = "--setup" in sys.argv
-    if force_setup or not get("setup_complete"):
-        wizard = SetupWizard()
-        wizard.exec()
+    setup_complete = bool(get("setup_complete"))
+    log_event(
+        "startup.setup_check",
+        forced=force_setup,
+        setup_complete=setup_complete,
+    )
+    if force_setup or not setup_complete:
+        with log_operation("startup.setup_wizard", forced=force_setup):
+            wizard = SetupWizard()
+            wizard.exec()
 
-    window = MainWindow()
+    with log_operation("startup.create_main_window"):
+        window = MainWindow()
     if get("maximized"):
         window.showMaximized()
     else:
         window.show()
 
+    log_event("app.ready", maximized=bool(get("maximized")))
     # Update checks run in the background so startup is not blocked by network/VPN latency.
     _check_for_updates(window)
 
-    sys.exit(app.exec())
+    with log_operation("app.event_loop"):
+        exit_code = app.exec()
+    log_event("app.exit", exit_code=exit_code)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
