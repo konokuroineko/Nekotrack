@@ -56,7 +56,7 @@ _URL_SECRET = re.compile(
     r"(?i)([?&](?:tmdb[_-]?api[_-]?token|api[_-]?token|api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret)=)[^&#\s]+"
 )
 _SENSITIVE_KEY = re.compile(
-    r"(?i)(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|authorization|cookie)"
+    r"(?i)(?:tmdb[_-]?api[_-]?token|api[_-]?token|api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|authorization|cookie)"
 )
 _OMIT_KEYS = {
     "query", "variables", "payload", "body", "request_body", "response_body",
