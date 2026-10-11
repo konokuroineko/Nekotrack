@@ -76,7 +76,7 @@ class LibraryImportWorker(QObject):
         self.work_id = int(work_id)
 
     def run(self):
-        with diagnostic_context(operation="library_import", work_id=self.work_id):
+        with diagnostic_context(workflow="library_import", work_id=self.work_id):
             log_event("library.import.started")
             self._run_import()
 
