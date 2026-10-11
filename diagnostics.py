@@ -7,6 +7,8 @@ This module intentionally avoids importing Qt or any application modules.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 import importlib.util
 import json
