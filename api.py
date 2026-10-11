@@ -11,6 +11,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from ui.preferences import get
+from diagnostics import log_event, log_operation
 # All media-provider implementations are maintained in this module. Keep provider
 # helpers private where possible and expose the supported operations through __all__.
 
@@ -108,10 +109,24 @@ def anilist_request(query, variables=None):
 
     for attempt in range(MAX_RETRIES):
         try:
-            response = requests.post(
-                ANILIST_URL,
-                json={"query": query, "variables": variables or {}},
-                timeout=30,
+            with log_operation(
+                "api.request",
+                provider="AniList",
+                endpoint="graphql",
+                attempt=attempt + 1,
+                variable_names=sorted(str(name) for name in (variables or {}).keys())[:20],
+            ):
+                response = requests.post(
+                    ANILIST_URL,
+                    json={"query": query, "variables": variables or {}},
+                    timeout=30,
+                )
+            log_event(
+                "api.response",
+                provider="AniList",
+                endpoint="graphql",
+                status_code=getattr(response, "status_code", None),
+                attempt=attempt + 1,
             )
             try:
                 data = response.json()
@@ -1171,14 +1186,17 @@ def test_tmdb_connection(token):
     if not token:
         raise ValueError("TMDB API token is required.")
 
-    response = requests.get(
-        f"{TMDB_BASE_URL}/configuration",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "accept": "application/json",
-        },
-        timeout=10,
-    )
+    with log_operation("api.request", provider="TMDB", endpoint="configuration"):
+        response = requests.get(
+            f"{TMDB_BASE_URL}/configuration",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "accept": "application/json",
+            },
+            timeout=10,
+        )
+    log_event("api.response", provider="TMDB", endpoint="configuration",
+              status_code=getattr(response, "status_code", None))
     try:
         response.raise_for_status()
     finally:
@@ -1193,15 +1211,19 @@ def _tmdb_get(path, params=None):
             "TMDB API token is not configured. Open Settings and enter your TMDB API Read Access Token."
         )
 
-    response = requests.get(
-        f"{TMDB_BASE_URL}/{str(path).lstrip('/')}",
-        params=params or {},
-        headers={
-            "Authorization": f"Bearer {token}",
-            "accept": "application/json",
-        },
-        timeout=20,
-    )
+    endpoint = str(path).lstrip("/")
+    with log_operation("api.request", provider="TMDB", endpoint=endpoint):
+        response = requests.get(
+            f"{TMDB_BASE_URL}/{endpoint}",
+            params=params or {},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "accept": "application/json",
+            },
+            timeout=20,
+        )
+    log_event("api.response", provider="TMDB", endpoint=endpoint,
+              status_code=getattr(response, "status_code", None))
     response.raise_for_status()
     time.sleep(0.15)
     try:
@@ -1700,13 +1722,17 @@ def _get_tmdb_episode_image_response(url):
         if not _is_safe_tmdb_episode_image_url(current_url):
             raise ValueError("Only HTTPS TMDB image URLs are allowed.")
 
-        response = requests.get(
-            current_url,
-            timeout=20,
-            stream=True,
-            allow_redirects=False,
-        )
+        with log_operation("api.request", provider="TMDB", endpoint="episode-image",
+                           redirect_attempt=redirect_count + 1):
+            response = requests.get(
+                current_url,
+                timeout=20,
+                stream=True,
+                allow_redirects=False,
+            )
         status_code = getattr(response, "status_code", 200)
+        log_event("api.response", provider="TMDB", endpoint="episode-image",
+                  status_code=status_code, redirect_attempt=redirect_count + 1)
         if status_code in {301, 302, 303, 307, 308}:
             headers = getattr(response, "headers", {}) or {}
             location = headers.get("Location") or headers.get("location")
@@ -2156,20 +2182,35 @@ def _request(path, params=None, use_cache=True):
         with _cache_lock:
             cached = _cache.get(key)
             if cached and cached[0] > now:
+                log_event("api.cache_hit", provider="MangaBaka", endpoint=clean_path)
                 return copy.deepcopy(cached[1])
 
     url = urljoin(MANGABAKA_BASE_URL, clean_path)
     last_error = None
     for attempt in range(MANGABAKA_MAX_RETRIES):
         try:
-            response = requests.get(
-                url,
-                params=params or {},
-                headers={
-                    "Accept": "application/json",
-                    "User-Agent": "NekoTrack/0.1 (desktop media tracker)",
-                },
-                timeout=REQUEST_TIMEOUT,
+            with log_operation(
+                "api.request",
+                provider="MangaBaka",
+                endpoint=clean_path,
+                attempt=attempt + 1,
+                parameter_names=sorted(str(name) for name in (params or {}).keys())[:30],
+            ):
+                response = requests.get(
+                    url,
+                    params=params or {},
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": "NekoTrack/0.1 (desktop media tracker)",
+                    },
+                    timeout=REQUEST_TIMEOUT,
+                )
+            log_event(
+                "api.response",
+                provider="MangaBaka",
+                endpoint=clean_path,
+                status_code=getattr(response, "status_code", None),
+                attempt=attempt + 1,
             )
             if response.status_code == 429 or response.status_code >= 500:
                 last_error = MangaBakaAPIError(
