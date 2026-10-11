@@ -61,6 +61,18 @@ class DiagnosticRedactionTests(unittest.TestCase):
             self.assertNotIn("CURRENT_SECRET", report)
             self.assertIn("<redacted>", report)
 
+    def test_diagnostic_context_is_inherited_and_explicit_fields_win(self):
+        with diagnostics.diagnostic_context(workflow="bundle", work_id=55):
+            payload = diagnostics._event_payload(
+                "api.request",
+                {"operation": "provider_request", "provider": "AniList"},
+            )
+        self.assertEqual(payload["workflow"], "bundle")
+        self.assertEqual(payload["work_id"], 55)
+        self.assertEqual(payload["operation"], "provider_request")
+        self.assertEqual(payload["provider"], "AniList")
+        self.assertNotIn("work_id", diagnostics._event_payload("outside.context", {}))
+
     def test_operation_logs_failure_context_and_reraises(self):
         failure = ValueError("expected test failure")
         with patch.object(diagnostics, "log_event") as event, \
