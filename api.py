@@ -877,30 +877,9 @@ def get_media_details(media_id):
         # Bring in the provider's native relationship graph where it exists.
         try:
             related_payload = get_mangabaka_related_series(abs(numeric_id))
-            related_data = related_payload.get("data", related_payload) if isinstance(related_payload, dict) else related_payload
-            if isinstance(related_data, dict):
-                related_data = related_data.get("related") or related_data.get("series") or related_data.get("items") or []
-            edges = []
-            for related in related_data if isinstance(related_data, list) else []:
-                if not isinstance(related, dict):
-                    continue
-                raw_node = related.get("series") if isinstance(related.get("series"), dict) else related
-                if not raw_node.get("id"):
-                    continue
-                node = normalize_mangabaka_series(raw_node)
-                edges.append({
-                    "relationType": str(related.get("relation_type") or related.get("relationType") or "RELATED").upper(),
-                    "node": {
-                        "id": node["id"],
-                        "idMal": node.get("idMal"),
-                        "type": node.get("type"),
-                        "format": node.get("format"),
-                        "title": node.get("title"),
-                        "coverImage": node.get("coverImage"),
-                        "startDate": node.get("startDate"),
-                    },
-                })
-            media["relations"] = {"edges": edges}
+            media["relations"] = {
+                "edges": _normalize_mangabaka_related_edges(related_payload)
+            }
         except Exception as error:
             print(f"MangaBaka related-series lookup skipped: {error}")
         return media
@@ -2121,6 +2100,7 @@ def get_tmdb_episode_sample(
 # ---------------------------------------------------------------------------
 
 MANGABAKA_BASE_URL = "https://api.mangabaka.org/v2/"
+MANGABAKA_V1_BASE_URL = "https://api.mangabaka.org/v1/"
 REQUEST_TIMEOUT = 18
 MANGABAKA_MAX_RETRIES = 3
 MAX_PROVIDER_PAGES = 10000
@@ -2168,24 +2148,31 @@ def _unwrap(payload):
     return payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
 
 
-def _request(path, params=None, use_cache=True):
+def _request(path, params=None, use_cache=True, api_version=2):
     """GET a public MangaBaka route with bounded retries and a short cache."""
+    if isinstance(api_version, bool) or api_version not in {1, 2}:
+        raise ValueError("MangaBaka API version must be 1 or 2.")
+
     clean_path = str(path or "").lstrip("/")
     if clean_path.startswith(("http://", "https://")):
         raise ValueError("Pass an API path, not a full URL.")
     if any(part in {"my", "mod", "auth"} for part in clean_path.split("/")):
         raise ValueError("Account, moderation, and authentication routes are not used by NekoTrack.")
 
-    key = _cache_key(clean_path, params)
+    # Include the version in cache identity: /v1 and /v2 have different response
+    # schemas even when their relative route names are identical.
+    key = _cache_key(f"v{api_version}/{clean_path}", params)
     now = time.monotonic()
     if use_cache:
         with _cache_lock:
             cached = _cache.get(key)
             if cached and cached[0] > now:
-                log_event("api.cache_hit", provider="MangaBaka", endpoint=clean_path)
+                log_event("api.cache_hit", provider="MangaBaka", endpoint=clean_path,
+                          api_version=api_version)
                 return copy.deepcopy(cached[1])
 
-    url = urljoin(MANGABAKA_BASE_URL, clean_path)
+    base_url = MANGABAKA_V1_BASE_URL if api_version == 1 else MANGABAKA_BASE_URL
+    url = urljoin(base_url, clean_path)
     last_error = None
     for attempt in range(MANGABAKA_MAX_RETRIES):
         try:
@@ -2193,6 +2180,7 @@ def _request(path, params=None, use_cache=True):
                 "api.request",
                 provider="MangaBaka",
                 endpoint=clean_path,
+                api_version=api_version,
                 attempt=attempt + 1,
                 parameter_names=sorted(str(name) for name in (params or {}).keys())[:30],
             ):
@@ -2209,6 +2197,7 @@ def _request(path, params=None, use_cache=True):
                 "api.response",
                 provider="MangaBaka",
                 endpoint=clean_path,
+                api_version=api_version,
                 status_code=getattr(response, "status_code", None),
                 attempt=attempt + 1,
             )
@@ -2607,7 +2596,104 @@ def get_mangabaka_related_series(series_id):
     series_id = _bounded_positive_filter_int(series_id)
     if series_id is None:
         raise ValueError("MangaBaka series IDs must be positive bounded integers.")
-    return _request(f"series/{series_id}/related")
+    # The related-series endpoint belongs to MangaBaka's v1 API. The same
+    # route under v2 returns 404 because v2 does not expose relationship data.
+    return _request(f"series/{series_id}/related", api_version=1)
+
+
+def _mangabaka_relation_type(value):
+    """Map MangaBaka relation labels to the relation names used by bundling."""
+    normalized = str(value or "").strip().casefold()
+    normalized = re.sub(r"[\s-]+", "_", normalized)
+    aliases = {
+        "main_story": "PARENT",
+        "parent": "PARENT",
+        "prequel": "PREQUEL",
+        "sequel": "SEQUEL",
+        "side_story": "SIDE_STORY",
+        "spin_off": "SPIN_OFF",
+        "alternative": "ALTERNATIVE",
+        "full_story": "FULL_STORY",
+        "summary": "SUMMARY",
+        "compilation": "COMPILATION",
+        "contains": "CONTAINS",
+        "adaptation": "ADAPTATION",
+        "other": "RELATED",
+        "related": "RELATED",
+    }
+    return aliases.get(normalized, "RELATED")
+
+
+def _normalize_mangabaka_related_edges(payload):
+    """Normalize MangaBaka's grouped v1 related-series payload."""
+    data = payload.get("data", payload) if isinstance(payload, dict) else payload
+    groups = []
+
+    if isinstance(data, dict):
+        # Some compatible response shapes wrap one array in a named field.
+        for key in ("related", "series", "items", "relationships"):
+            candidate = data.get(key)
+            if isinstance(candidate, list):
+                data = candidate
+                break
+
+    if isinstance(data, dict):
+        # The v1 related endpoint returns relation categories mapped to arrays
+        # of full series objects, e.g. {"prequel": [...], "side_story": [...]}.
+        groups = [
+            (key, values)
+            for key, values in data.items()
+            if isinstance(values, (list, tuple))
+        ]
+    elif isinstance(data, (list, tuple)):
+        groups = [("", data)]
+    else:
+        return []
+
+    edges = []
+    seen = set()
+    for group_relation, records in groups:
+        for related in records:
+            if not isinstance(related, dict):
+                continue
+            nested_series = related.get("series")
+            nested_node = related.get("node")
+            if isinstance(nested_series, dict):
+                raw_node = nested_series
+            elif isinstance(nested_node, dict):
+                raw_node = nested_node
+            else:
+                raw_node = related
+            if not raw_node.get("id"):
+                continue
+            try:
+                node = normalize_mangabaka_series(raw_node)
+            except (TypeError, ValueError, OverflowError):
+                continue
+
+            raw_relation = (
+                related.get("relation_type")
+                or related.get("relationType")
+                or group_relation
+            )
+            relation_type = _mangabaka_relation_type(raw_relation)
+            identity = (relation_type, node["id"])
+            if identity in seen:
+                continue
+            seen.add(identity)
+            edges.append({
+                "relationType": relation_type,
+                "node": {
+                    "id": node["id"],
+                    "idMal": node.get("idMal"),
+                    "type": node.get("type"),
+                    "format": node.get("format"),
+                    "title": node.get("title"),
+                    "coverImage": node.get("coverImage"),
+                    "startDate": node.get("startDate"),
+                },
+            })
+    return edges
 
 
 def get_mangabaka_series_news(series_id, page=1, limit=20):
