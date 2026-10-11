@@ -30,6 +30,7 @@ htmlcov/
 .pytest_cache/
 *.log
 nekotrack_diagnostics.json
+nekotrack_diagnostics.txt
 nekotrack_stress_report.json
 bundle_tv_debug.json
 
