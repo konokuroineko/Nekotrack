@@ -45,7 +45,11 @@ def prepare_user_data():
     os.chdir(APP_DATA_DIR)
 
 
-configure_logging(APP_DATA_DIR)
+try:
+    configure_logging(APP_DATA_DIR)
+except Exception as logging_error:
+    # Diagnostics are best-effort and must never prevent startup.
+    print(f"NekoTrack could not initialize its log file: {logging_error}", file=sys.stderr)
 log_event(
     "startup.bootstrap",
     app_version=APP_VERSION,
