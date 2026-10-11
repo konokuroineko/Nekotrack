@@ -6,8 +6,17 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, Q
 
 from api import get_media_relations_batch
 from diagnostics import diagnostic_context, diagnostic_field, log_event, log_exception
-from database import clear_bundle_override, delete_work_data, get_bundle_override, get_connection, save_anime, save_bundle_override
-from series import get_library_series
+from database import (
+    clear_bundle_override,
+    delete_work_data,
+    get_automatic_bundle_memberships,
+    get_bundle_override,
+    get_connection,
+    save_anime,
+    save_automatic_bundle_membership,
+    save_bundle_override,
+)
+from series import get_library_series, group_media_results
 from ui.preferences import get
 from ui.theme import COLORS
 from ui.widgets.work_card import WorkCard
@@ -19,6 +28,67 @@ def pending_relation_sync_ids(work_ids, checked_ids=(), failed_ids=()):
     checked = {int(work_id) for work_id in checked_ids}
     failed = {int(work_id) for work_id in failed_ids}
     return sorted(all_ids - checked - failed)
+
+
+
+def _backfill_automatic_bundle_memberships(work_ids, details_by_id):
+    """Recover bundle snapshots for older libraries after a complete relation sync."""
+    ids = {int(work_id) for work_id in work_ids}
+    if len(ids) < 2 or not ids.issubset(details_by_id):
+        return 0
+
+    # Never overwrite a bundle explicitly captured from Search by the current
+    # app version. Only backfill members that predate that persisted snapshot.
+    existing_memberships = get_automatic_bundle_memberships(ids)
+    protected_ids = {
+        int(row["work_id"])
+        for row in existing_memberships
+        if int(row["work_id"]) in ids
+    }
+
+    results = []
+    for work_id in sorted(ids):
+        details = details_by_id.get(work_id)
+        relations = details.get("relations") if isinstance(details, dict) else None
+        if (
+            not isinstance(details, dict)
+            or details.get("id") != work_id
+            or not isinstance(relations, dict)
+            or not isinstance(relations.get("edges"), list)
+        ):
+            return 0
+        results.append(details)
+
+    # Reuse Search's own bundler against the complete set of synced Library
+    # entries. It performs no new provider requests with enrich=False.
+    groups = group_media_results(results, enrich=False)
+    saved_count = 0
+    for group in groups:
+        members = group.get("_series_members") or [group]
+        member_ids = sorted({
+            int(member["id"])
+            for member in members
+            if isinstance(member, dict)
+            and member.get("id") is not None
+            and int(member["id"]) in ids
+        })
+        if len(member_ids) < 2 or protected_ids.intersection(member_ids):
+            continue
+
+        bundle_id = int(group.get("id") or member_ids[0])
+        if bundle_id not in member_ids:
+            bundle_id = member_ids[0]
+        if save_automatic_bundle_membership(bundle_id, member_ids):
+            saved_count += 1
+            protected_ids.update(member_ids)
+
+    if saved_count:
+        log_event(
+            "library.relation_sync.memberships_backfilled",
+            input_count=len(ids),
+            group_count=saved_count,
+        )
+    return saved_count
 
 
 class RelationSyncWorker(QObject):
@@ -96,6 +166,7 @@ class RelationSyncWorker(QObject):
                     log_exception("library.relation_sync.item_failed", error)
                     continue
 
+                details_by_id[work_id] = details
                 succeeded_ids.add(work_id)
                 log_event(
                     "library.relation_sync.item_completed",
@@ -110,6 +181,19 @@ class RelationSyncWorker(QObject):
                 )
 
         failed_ids = sorted(set(self.work_ids) - succeeded_ids)
+        if not failed_ids:
+            try:
+                _backfill_automatic_bundle_memberships(
+                    self.work_ids,
+                    details_by_id,
+                )
+            except Exception as error:
+                log_exception(
+                    "library.relation_sync.membership_backfill_failed",
+                    error,
+                    library_work_count=len(self.work_ids),
+                )
+
         log_event(
             "library.relation_sync.worker_completed",
             attempted_count=len(self.work_ids),

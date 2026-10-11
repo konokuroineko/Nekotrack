@@ -39,7 +39,11 @@ class MemorySettings:
 # the developer's real NekoTrack preferences.
 with patch.object(preferences, "QSettings", MemorySettings):
     from ui.main_window import MainWindow
-    from ui.pages.library_page import RelationSyncWorker, pending_relation_sync_ids
+    from ui.pages.library_page import (
+        RelationSyncWorker,
+        _backfill_automatic_bundle_memberships,
+        pending_relation_sync_ids,
+    )
     from ui.pages.settings_page import SettingsPage
     from ui.pages.work_detail_page import WorkDetailPage
     from ui.setup_wizard import SetupWizard
@@ -97,6 +101,103 @@ class UiStartupTests(unittest.TestCase):
                     },
                 ):
                     groups = series.get_library_series()
+                self.assertEqual(len(groups), 1)
+                self.assertEqual(
+                    {int(member["id"]) for member in groups[0]["_series_members"]},
+                    {21355, 100049, 120700},
+                )
+            finally:
+                os.chdir(old_cwd)
+
+    def test_relation_sync_backfills_existing_library_bundles_from_complete_graph(self):
+        import os
+        import tempfile
+
+        import database
+        import series
+
+        tv = {
+            "id": 21355,
+            "type": "ANIME",
+            "format": "TV",
+            "title": {"english": "Re:Zero", "romaji": "Re:Zero"},
+            "relations": {"edges": [
+                {
+                    "relationType": "SIDE_STORY",
+                    "node": {
+                        "id": 100049, "type": "ANIME", "format": "OVA",
+                        "title": {"english": "Re:Zero OVAs", "romaji": "Re:Zero OVAs"},
+                    },
+                },
+                {
+                    "relationType": "SPIN_OFF",
+                    "node": {
+                        "id": 120700, "type": "ANIME", "format": "ONA",
+                        "title": {"english": "Re:Zero Break Time", "romaji": "Re:Zero Break Time"},
+                    },
+                },
+            ]},
+        }
+        ova = {
+            "id": 100049,
+            "type": "ANIME",
+            "format": "OVA",
+            "title": {"english": "Re:Zero OVAs", "romaji": "Re:Zero OVAs"},
+            "relations": {"edges": [
+                {
+                    "relationType": "PREQUEL",
+                    "node": {
+                        "id": 21355, "type": "ANIME", "format": "TV",
+                        "title": {"english": "Re:Zero", "romaji": "Re:Zero"},
+                    },
+                },
+            ]},
+        }
+        ona = {
+            "id": 120700,
+            "type": "ANIME",
+            "format": "ONA",
+            "title": {"english": "Re:Zero Break Time", "romaji": "Re:Zero Break Time"},
+            "relations": {"edges": [
+                {
+                    "relationType": "SPIN_OFF",
+                    "node": {
+                        "id": 21355, "type": "ANIME", "format": "TV",
+                        "title": {"english": "Re:Zero", "romaji": "Re:Zero"},
+                    },
+                },
+            ]},
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                items = [tv, ova, ona]
+                for item in items:
+                    database.save_anime(item)
+                    database.add_to_library(item["id"], "Planning")
+
+                with patch(
+                    "series.get",
+                    side_effect=lambda key: key in {
+                        "bundle_include_ovas",
+                        "bundle_include_onas",
+                    },
+                ):
+                    saved = _backfill_automatic_bundle_memberships(
+                        [item["id"] for item in items],
+                        {item["id"]: item for item in items},
+                    )
+
+                self.assertEqual(saved, 1)
+                memberships = database.get_automatic_bundle_memberships([21355])
+                self.assertEqual(
+                    {int(row["work_id"]) for row in memberships},
+                    {21355, 100049, 120700},
+                )
+                groups = series.get_library_series()
                 self.assertEqual(len(groups), 1)
                 self.assertEqual(
                     {int(member["id"]) for member in groups[0]["_series_members"]},
