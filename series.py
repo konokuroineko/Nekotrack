@@ -988,7 +988,7 @@ def group_media_results(results, enrich=False, max_requests=0, delay=0.25, stop_
         except Exception:
             settings[key] = None
 
-    with diagnostic_context(operation="bundling", seed_ids=seed_ids):
+    with diagnostic_context(workflow="bundling", seed_ids=seed_ids):
         log_event(
             "bundling.started",
             seed_count=len(results),
