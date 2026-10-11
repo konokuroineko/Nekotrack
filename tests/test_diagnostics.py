@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,6 +69,21 @@ class DiagnosticRedactionTests(unittest.TestCase):
             self.assertNotIn("BACKUP_SECRET", report)
             self.assertNotIn("CURRENT_SECRET", report)
             self.assertIn("<redacted>", report)
+
+    def test_diagnostic_field_supports_dict_and_sqlite_row(self):
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT 123 AS id, 'Example' AS title"
+            ).fetchone()
+            self.assertEqual(diagnostics.diagnostic_field(row, "id"), 123)
+            self.assertEqual(diagnostics.diagnostic_field(row, "title"), "Example")
+            self.assertEqual(diagnostics.diagnostic_field(row, "missing", "fallback"), "fallback")
+            self.assertEqual(diagnostics.diagnostic_field({"id": 7}, "id"), 7)
+            self.assertEqual(diagnostics.diagnostic_field(None, "id", "fallback"), "fallback")
+        finally:
+            connection.close()
 
     def test_diagnostic_context_is_inherited_and_explicit_fields_win(self):
         with diagnostics.diagnostic_context(workflow="bundle", work_id=55):
