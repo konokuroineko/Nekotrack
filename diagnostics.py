@@ -360,7 +360,12 @@ def install_qt_message_handler() -> bool:
         )
 
     _QT_MESSAGE_HANDLER = _qt_handler
-    qInstallMessageHandler(_qt_handler)
+    try:
+        qInstallMessageHandler(_qt_handler)
+    except Exception as error:
+        log_exception("diagnostics.qt_handler_install_failed", error)
+        _QT_MESSAGE_HANDLER = None
+        return False
     log_event("diagnostics.qt_handler_installed")
     return True
 
@@ -539,8 +544,8 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(redact_text(line) for line in lines[-count:]))
         return 0
     if args.export_to_repo or args.output:
-        configure_logging()
-        log_event("diagnostics.export_started")
+        # Export reads the app's existing log. Do not open a second rotating
+        # handler here; that could conflict with the still-running desktop app.
         output = export_diagnostics(args.output)
         print(f"Exported diagnostics: {output}")
         print("Review the report before sharing it; it may contain catalog titles and exception details.")
