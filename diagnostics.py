@@ -32,6 +32,7 @@ MAX_FIELD_TEXT = 800
 MAX_EXPORT_BYTES = 12_000_000
 
 _LOGGER = logging.getLogger("nekotrack")
+_EVENT_CONTEXT = ContextVar("nekotrack_event_context", default={})
 _LOCK = threading.RLock()
 _CONFIGURED = False
 _CONFIGURED_DATA_DIR: Path | None = None
@@ -153,10 +154,23 @@ def _event_payload(event: str, fields: dict[str, Any]) -> dict[str, Any]:
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
         "thread": threading.current_thread().name,
     }
+    for key, value in (_EVENT_CONTEXT.get() or {}).items():
+        payload[str(key)] = _safe_value(str(key), value)
     for key, value in fields.items():
         payload[str(key)] = _safe_value(str(key), value)
     return payload
 
+
+@contextmanager
+def diagnostic_context(**fields: Any):
+    """Attach identifiers to events emitted during the current operation/thread."""
+    inherited = dict(_EVENT_CONTEXT.get() or {})
+    inherited.update(fields)
+    token = _EVENT_CONTEXT.set(inherited)
+    try:
+        yield
+    finally:
+        _EVENT_CONTEXT.reset(token)
 
 def log_event(event: str, level: int = logging.INFO, **fields: Any) -> None:
     """Write one JSON-formatted event without allowing diagnostics to break the app."""
