@@ -65,6 +65,66 @@ class MangaBakaAPITests(unittest.TestCase):
         second = sample_series(2, "novel", "ReZero")
         self.assertIsNone(mb.match_series_for_anilist(target, [first, second]))
 
+    def test_related_series_uses_v1_endpoint(self):
+        with patch.object(mb, "_request", return_value={"status": 200, "data": {}}) as request:
+            result = mb.get_mangabaka_related_series(42)
+        self.assertEqual(result, {"status": 200, "data": {}})
+        self.assertEqual(request.call_args.args[0], "series/42/related")
+        self.assertEqual(request.call_args.kwargs["api_version"], 1)
+
+    def test_request_selects_v1_base_url_without_using_live_network(self):
+        class FakeResponse:
+            status_code = 200
+            headers = {}
+            text = '{"status": 200, "data": {}}'
+
+            @staticmethod
+            def json():
+                return {"status": 200, "data": {}}
+
+        with patch.object(mb.requests, "get", return_value=FakeResponse()) as request:
+            mb._request("series/42/related", use_cache=False, api_version=1)
+        self.assertEqual(
+            request.call_args.args[0],
+            "https://api.mangabaka.org/v1/series/42/related",
+        )
+
+    def test_grouped_related_payload_maps_bundling_relation_types(self):
+        payload = {
+            "status": 200,
+            "data": {
+                "main_story": [sample_series(41, english="ReZero")],
+                "prequel": [sample_series(42, english="ReZero Prequel")],
+                "side_story": [sample_series(43, english="ReZero Side Story")],
+                "spin_off": [sample_series(44, english="ReZero Spin Off")],
+                "other": [sample_series(45, english="Another Work")],
+            },
+        }
+        edges = mb._normalize_mangabaka_related_edges(payload)
+        by_id = {edge["node"]["id"]: edge["relationType"] for edge in edges}
+        self.assertEqual(by_id[-41], "PARENT")
+        self.assertEqual(by_id[-42], "PREQUEL")
+        self.assertEqual(by_id[-43], "SIDE_STORY")
+        self.assertEqual(by_id[-44], "SPIN_OFF")
+        self.assertEqual(by_id[-45], "RELATED")
+
+    def test_get_media_details_attaches_grouped_mangabaka_relations(self):
+        source = sample_series(42, english="ReZero")
+        related = {
+            "status": 200,
+            "data": {
+                "prequel": [sample_series(43, english="ReZero Prequel")],
+                "side_story": [sample_series(44, english="ReZero Side Story")],
+            },
+        }
+        with patch.object(mb, "get_mangabaka_series", return_value={"data": source}), \
+             patch.object(mb, "get_mangabaka_related_series", return_value=related):
+            details = mb.get_media_details(-42)
+        self.assertEqual(details["relations"]["edges"][0]["relationType"], "PREQUEL")
+        self.assertEqual(details["relations"]["edges"][0]["node"]["id"], -43)
+        self.assertEqual(details["relations"]["edges"][1]["relationType"], "SIDE_STORY")
+        self.assertEqual(details["relations"]["edges"][1]["node"]["id"], -44)
+
     def test_search_defaults_to_safe_and_suggestive_ratings(self):
         with patch.object(mb, "_request", return_value={"status": 200, "data": []}) as request:
             mb.search_mangabaka_series("Example", page=2, limit=15)
