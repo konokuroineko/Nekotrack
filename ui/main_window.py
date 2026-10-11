@@ -52,7 +52,7 @@ class ImageWorker(QObject):
         self.image_url = image_url
 
     def run(self):
-        with diagnostic_context(operation="cover_download", work_id=self.work_id):
+        with diagnostic_context(workflow="cover_download", work_id=self.work_id):
             try:
                 with log_operation("cover.download", work_id=self.work_id):
                     cover_path = download_cover(self.work_id, self.image_url)
