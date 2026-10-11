@@ -29,6 +29,7 @@ from database import (
     save_tmdb_mapping,
 )
 from image_cache import download_cover
+from diagnostics import diagnostic_context, log_event, log_exception, log_operation
 from ui.branding import application_icon, logo_pixmap, navigation_icon, wordmark_pixmap
 from ui.navigation import NavigationController
 from ui.preferences import get
@@ -51,10 +52,19 @@ class ImageWorker(QObject):
         self.image_url = image_url
 
     def run(self):
-        try:
-            self.finished.emit(self.work_id, download_cover(self.work_id, self.image_url))
-        except Exception as error:
-            self.error.emit(self.work_id, str(error))
+        with diagnostic_context(operation="cover_download", work_id=self.work_id):
+            try:
+                with log_operation("cover.download", work_id=self.work_id):
+                    cover_path = download_cover(self.work_id, self.image_url)
+                log_event("cover.download.signal_success", available=bool(cover_path))
+                self.finished.emit(self.work_id, cover_path)
+            except Exception as error:
+                log_event(
+                    "cover.download.signal_error",
+                    error_type=type(error).__name__,
+                    error=str(error),
+                )
+                self.error.emit(self.work_id, str(error))
 
 
 class LibraryImportWorker(QObject):
@@ -66,6 +76,11 @@ class LibraryImportWorker(QObject):
         self.work_id = int(work_id)
 
     def run(self):
+        with diagnostic_context(operation="library_import", work_id=self.work_id):
+            log_event("library.import.started")
+            self._run_import()
+
+    def _run_import(self):
         try:
             details = get_media_details(self.work_id)
             if not details:
@@ -96,6 +111,8 @@ class LibraryImportWorker(QObject):
                                 volume_records,
                             )
                     except Exception as volume_error:
+                        log_exception("library.import.volume_metadata_failed", volume_error,
+                                      work_id=self.work_id, provider="MangaBaka")
                         print(
                             f"MangaBaka volume lookup failed for work {self.work_id}: "
                             f"{volume_error}"
@@ -123,6 +140,8 @@ class LibraryImportWorker(QObject):
                                 provider_id=mb_id,
                             )
                     except Exception as news_error:
+                        log_exception("library.import.news_metadata_failed", news_error,
+                                      work_id=self.work_id, provider="MangaBaka")
                         print(
                             f"MangaBaka news lookup failed for work {self.work_id}: "
                             f"{news_error}"
@@ -151,6 +170,11 @@ class LibraryImportWorker(QObject):
             # use chapter/volume placeholders until reading-item metadata is
             # available, so never try to match them to a television season.
             if str(details.get("type") or "").upper() != "ANIME":
+                log_event(
+                    "library.import.completed",
+                    media_type=str(details.get("type") or "").upper(),
+                    episode_preload="not_applicable",
+                )
                 self.finished.emit(self.work_id, details)
                 return
 
@@ -191,6 +215,7 @@ class LibraryImportWorker(QObject):
 
             # Episode preloading is best-effort. A missing TMDB token or a
             # temporary provider failure must not prevent Library import.
+            episode_payload = {}
             try:
                 episode_payload = get_tmdb_episode_data(
                     title_variants,
@@ -214,13 +239,27 @@ class LibraryImportWorker(QObject):
                     episode_payload.get("episodes") or [],
                 )
             except Exception as episode_error:
+                log_exception("library.import.episode_preload_failed", episode_error,
+                              work_id=self.work_id, provider="TMDB")
                 print(
                     f"Episode preload failed for work {self.work_id}: "
                     f"{episode_error}"
                 )
 
+            log_event(
+                "library.import.completed",
+                media_type=str(details.get("type") or "").upper(),
+                episode_preload=(
+                    "completed" if episode_payload.get("episodes")
+                    else "completed_empty"
+                ) if str(details.get("type") or "").upper() == "ANIME" else "not_applicable",
+                episode_count=len(episode_payload.get("episodes") or [])
+                if str(details.get("type") or "").upper() == "ANIME" else None,
+            )
             self.finished.emit(self.work_id, details)
         except Exception as error:
+            log_exception("library.import.failed", error, work_id=self.work_id)
+            log_event("library.import.error_signal", work_id=self.work_id)
             self.error.emit(self.work_id, str(error))
 
 
@@ -235,6 +274,7 @@ class LibraryEpisodePreloadWorker(QObject):
 
     def run(self):
         for work_id in self.work_ids:
+            log_event("library.episode_preload.started", work_id=work_id)
             try:
                 connection_work = get_work(work_id)
                 if connection_work is None:
@@ -289,8 +329,15 @@ class LibraryEpisodePreloadWorker(QObject):
                 if episodes:
                     save_episodes(work_id, episodes)
 
+                log_event(
+                    "library.episode_preload.completed",
+                    work_id=work_id,
+                    episode_count=len(episodes),
+                    tmdb_id=resolved_tmdb_id,
+                )
                 self.finished.emit(work_id, episodes)
             except Exception as error:
+                log_exception("library.episode_preload.failed", error, work_id=work_id)
                 self.error.emit(work_id, str(error))
 
 
@@ -331,7 +378,8 @@ class NavigationButton(QPushButton):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        initialize_database()
+        with log_operation("database.initialize"):
+            initialize_database()
         self.setWindowTitle("NekoTrack")
         self.setWindowIcon(application_icon())
         self.resize(1380, 860)
@@ -673,6 +721,8 @@ class MainWindow(QMainWindow):
                     self.work_detail_page.preload_work(group)
                     break
         except Exception as error:
+            log_exception("library.episode_preload.ui_finalize_failed", error,
+                          work_id=work_id)
             print(
                 f"Existing library preload failed for work {work_id}: "
                 f"{error}"
@@ -760,7 +810,9 @@ class MainWindow(QMainWindow):
             )
             save_staff(work["id"], staff_edges)
             self.show_work_details(get_work(work["id"]) or work)
-        except Exception:
+        except Exception as error:
+            log_exception("work_details.search_enrichment_failed", error,
+                          work_id=work.get("id") if hasattr(work, "get") else None)
             self.show_work_details(work)
 
     def show_relation(self, relation):
@@ -799,6 +851,25 @@ class MainWindow(QMainWindow):
             if not bundle_members:
                 bundle_members = [anime]
 
+            title_value = anime.get("title")
+            log_event(
+                "library.add_requested",
+                representative_id=primary_id,
+                representative_title=(
+                    title_value.get("english") or title_value.get("romaji")
+                    if isinstance(title_value, dict) else title_value
+                ),
+                member_count=len(bundle_members),
+                members=[
+                    {
+                        "id": member.get("id"),
+                        "title": member.get("title"),
+                        "type": member.get("type"),
+                        "format": member.get("format"),
+                    }
+                    for member in bundle_members[:50]
+                ],
+            )
             for member in bundle_members:
                 member_id = int(member["id"])
 
@@ -838,6 +909,8 @@ class MainWindow(QMainWindow):
                 button,
             )
         except Exception as error:
+            log_exception("library.add_failed", error,
+                          work_id=anime.get("id") if hasattr(anime, "get") else None)
             button.setText("Error")
             self.search_page.results_title.setText(f"Could not save: {error}")
 
@@ -896,6 +969,7 @@ class MainWindow(QMainWindow):
 
     def _library_import_error(self, work_id, message):
         self._detail_enrichment_ids.discard(int(work_id))
+        log_event("library.import.error_signal", work_id=work_id, error=message)
         # The basic library entry remains usable when optional full metadata
         # enrichment fails.
         return
