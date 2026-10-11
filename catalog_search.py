@@ -6,7 +6,7 @@ import math
 import re
 
 from api import enrich_anilist_results, search_anime, search_mangabaka_media
-from diagnostics import log_event, log_exception
+from diagnostics import diagnostic_context, log_event, log_exception
 
 ANIME_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL", "MUSIC"}
 PROVIDER_ONLY_FILTERS = ("publisher_id", "is_licensed")
@@ -294,11 +294,20 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
 
     anilist_error = None
     try:
-        data = search_anime(
-            query, page, per_page=PAGE_SIZE, media_type=anilist_type,
-            media_format=media_format, include_relations=include_relations,
-            **anilist_filters,
-        )
+        with diagnostic_context(
+            workflow="catalog_search",
+            provider="AniList",
+            query_present=bool(query),
+            query_length=len(query),
+            page=page,
+            media_type=str(anilist_type or "").upper() or None,
+            requested_format=requested_format,
+        ):
+            data = search_anime(
+                query, page, per_page=PAGE_SIZE, media_type=anilist_type,
+                media_format=media_format, include_relations=include_relations,
+                **anilist_filters,
+            )
         data = data if isinstance(data, dict) else {}
         anilist_items = [item for item in (data.get("media") or []) if isinstance(item, dict)]
         anilist_page = _page_info(data, page)
@@ -322,9 +331,18 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
         if not query and mb_filters.get("sort") == "SEARCH_MATCH":
             mb_filters["sort"] = "POPULARITY_DESC"
         try:
-            data = search_mangabaka_media(
-                query, page, media_type, media_format, mb_filters, limit=PAGE_SIZE
-            )
+            with diagnostic_context(
+                workflow="catalog_search",
+                provider="MangaBaka",
+                query_present=bool(query),
+                query_length=len(query),
+                page=page,
+                media_type=str(media_type or "").upper() or None,
+                requested_format=requested_format,
+            ):
+                data = search_mangabaka_media(
+                    query, page, media_type, media_format, mb_filters, limit=PAGE_SIZE
+                )
             data = data if isinstance(data, dict) else {}
             mangabaka_items = [
                 item for item in (data.get("media") or [])
