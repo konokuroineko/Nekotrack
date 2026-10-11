@@ -65,6 +65,26 @@ class MangaBakaAPITests(unittest.TestCase):
         second = sample_series(2, "novel", "ReZero")
         self.assertIsNone(mb.match_series_for_anilist(target, [first, second]))
 
+    def test_series_collections_and_collection_works_use_v1_endpoints(self):
+        with patch.object(mb, "_request", return_value={"status": 200, "data": []}) as request:
+            mb.get_mangabaka_series_collections(42, page=2, limit=25)
+        self.assertEqual(request.call_args.args[0], "series/42/collections")
+        self.assertEqual(request.call_args.kwargs["api_version"], 1)
+        self.assertEqual(request.call_args.kwargs["params"], {"page": 2, "limit": 25})
+
+        with patch.object(mb, "_request", return_value={"status": 200, "data": []}) as request:
+            mb.get_mangabaka_collection_works(99, page=3, limit=30)
+        self.assertEqual(request.call_args.args[0], "collections/99/works")
+        self.assertEqual(request.call_args.kwargs["api_version"], 1)
+        self.assertEqual(request.call_args.kwargs["params"], {"page": 3, "limit": 30})
+
+    def test_series_news_uses_v1_endpoint(self):
+        with patch.object(mb, "_request", return_value={"status": 200, "data": []}) as request:
+            mb.get_mangabaka_series_news(42, page=2, limit=10)
+        self.assertEqual(request.call_args.args[0], "series/42/news")
+        self.assertEqual(request.call_args.kwargs["api_version"], 1)
+        self.assertEqual(request.call_args.kwargs["params"], {"page": 2, "limit": 10})
+
     def test_related_series_uses_v1_endpoint(self):
         with patch.object(mb, "_request", return_value={"status": 200, "data": {}}) as request:
             result = mb.get_mangabaka_related_series(42)
