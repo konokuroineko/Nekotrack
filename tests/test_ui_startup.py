@@ -1,11 +1,16 @@
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+import shiboken6
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QBuffer, QIODevice
+from PySide6.QtGui import QPixmap
+from PySide6.QtNetwork import QNetworkReply
+from PySide6.QtWidgets import QApplication, QLabel
 
 import ui.preferences as preferences
 
@@ -35,6 +40,7 @@ class MemorySettings:
 with patch.object(preferences, "QSettings", MemorySettings):
     from ui.main_window import MainWindow
     from ui.pages.settings_page import SettingsPage
+    from ui.pages.work_detail_page import WorkDetailPage
     from ui.setup_wizard import SetupWizard
 
 
@@ -42,6 +48,59 @@ class UiStartupTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_remote_cover_finished_ignores_deleted_label(self):
+        page = WorkDetailPage()
+        label = QLabel()
+        shiboken6.delete(label)
+
+        buffer = QBuffer()
+        self.assertTrue(buffer.open(QIODevice.WriteOnly))
+        image = QPixmap(2, 2)
+        image.fill()
+        self.assertTrue(image.save(buffer, "PNG"))
+        image_bytes = bytes(buffer.data())
+        buffer.close()
+
+        class FakeReply:
+            NetworkError = QNetworkReply.NetworkError
+
+            def __init__(self):
+                self.deleted = False
+
+            @staticmethod
+            def error():
+                return QNetworkReply.NetworkError.NoError
+
+            @staticmethod
+            def readAll():
+                return image_bytes
+
+            def deleteLater(self):
+                self.deleted = True
+
+        reply = FakeReply()
+        page._cover_reply = reply
+        cover_url = "https://example.invalid/cover.png?deleted-label-test"
+
+        with tempfile.TemporaryDirectory() as directory:
+            image_directory = Path(directory)
+            with patch(
+                "ui.pages.work_detail_page.IMAGE_DIRECTORY", image_directory
+            ), patch(
+                "ui.pages.work_detail_page.save_cover_path"
+            ) as save_cover_path:
+                page._remote_cover_finished(label, 42, cover_url, reply)
+
+            self.assertIsNone(page._cover_reply)
+            self.assertTrue(reply.deleted)
+            self.assertIn(cover_url, page._cover_cache)
+            self.assertTrue((image_directory / "42.jpg").is_file())
+            save_cover_path.assert_called_once_with(
+                42, str(image_directory / "42.jpg")
+            )
+        page.deleteLater()
+        self.app.processEvents()
 
     def test_bundle_options_are_available_in_setup_and_settings(self):
         option_defaults = {
