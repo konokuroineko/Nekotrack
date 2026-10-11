@@ -198,7 +198,8 @@ class UiStartupTests(unittest.TestCase):
                     {int(row["work_id"]) for row in memberships},
                     {21355, 100049, 120700},
                 )
-                groups = series.get_library_series()
+                # Assert against the grouping computed with the same enabled
+                # OVA/ONA preferences, rather than re-running with defaults.
                 self.assertEqual(len(groups), 1)
                 self.assertEqual(
                     {int(member["id"]) for member in groups[0]["_series_members"]},
