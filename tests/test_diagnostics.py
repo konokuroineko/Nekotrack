@@ -13,7 +13,9 @@ class DiagnosticRedactionTests(unittest.TestCase):
             "api_key=API_SECRET_VALUE password='PASSWORD VALUE' "
             "https://example.test/items?access_token=URL_SECRET_VALUE "
             "tmdb_api_token=TMDB_SECRET_VALUE "
-            "https://example.test/items?api_token=API_TOKEN_SECRET"
+            "https://example.test/items?api_token=API_TOKEN_SECRET "
+            "'tmdb_api_token': 'SERIALIZED_TOKEN_SECRET' "
+            "'Authorization': 'Bearer SERIALIZED_AUTH_SECRET'"
         )
         result = diagnostics.redact_text(source)
         for secret in (
@@ -23,6 +25,8 @@ class DiagnosticRedactionTests(unittest.TestCase):
             "URL_SECRET_VALUE",
             "TMDB_SECRET_VALUE",
             "API_TOKEN_SECRET",
+            "SERIALIZED_TOKEN_SECRET",
+            "SERIALIZED_AUTH_SECRET",
         ):
             self.assertNotIn(secret, result)
         self.assertIn("<redacted>", result)
