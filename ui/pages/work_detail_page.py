@@ -5,6 +5,7 @@ from api import (
 )
 from html import escape as html_escape
 from pathlib import Path
+from shiboken6 import isValid
 
 from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread, QTimer
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
@@ -1523,25 +1524,52 @@ class WorkDetailPage(QWidget):
         if cached is not None and not cached.isNull():
             label.setPixmap(self._cropped_cover(cached, label.size(), 14)); return
         if cover_url in self._cover_failures: return
-        self._cover_reply = self._cover_manager.get(QNetworkRequest(QUrl(cover_url)))
-        self._cover_reply.finished.connect(lambda: self._remote_cover_finished(label, work_id, cover_url))
+        reply = self._cover_manager.get(QNetworkRequest(QUrl(cover_url)))
+        self._cover_reply = reply
+        reply.finished.connect(
+            lambda label=label, work_id=work_id, cover_url=cover_url, reply=reply:
+                self._remote_cover_finished(label, work_id, cover_url, reply)
+        )
 
-    def _remote_cover_finished(self, label, work_id, cover_url):
-        reply = self._cover_reply; self._cover_reply = None
+    def _remote_cover_finished(self, label, work_id, cover_url, reply=None):
+        # Multiple page builds can leave more than one cover request in flight.
+        # Use the reply that fired this callback rather than whichever reply was
+        # most recently stored on the page.
+        if reply is None:
+            reply = self._cover_reply
+        if self._cover_reply is reply:
+            self._cover_reply = None
+
         if reply is not None and reply.error() == reply.NetworkError.NoError:
             pix = QPixmap()
             if pix.loadFromData(reply.readAll()):
                 self._cover_cache[cover_url] = pix
-                label.setText(""); label.setPixmap(self._cropped_cover(pix, label.size(), 14))
+
+                # The user can navigate away before the network finishes. Qt
+                # deletes the old hero QLabel with its page content, while the
+                # reply can still complete. Cache/save the image, but never
+                # touch an invalid C++ widget wrapper.
+                if label is not None and isValid(label):
+                    try:
+                        label.setText("")
+                        label.setPixmap(self._cropped_cover(pix, label.size(), 14))
+                    except RuntimeError:
+                        pass
+
                 try:
                     IMAGE_DIRECTORY.mkdir(parents=True, exist_ok=True)
                     path = IMAGE_DIRECTORY / f"{work_id}.jpg"
-                    if pix.save(str(path), "JPG", 85): save_cover_path(work_id, str(path))
+                    if pix.save(str(path), "JPG", 85):
+                        save_cover_path(work_id, str(path))
                 except Exception:
                     pass
-            else: self._cover_failures.add(cover_url)
-        else: self._cover_failures.add(cover_url)
-        if reply is not None: reply.deleteLater()
+            else:
+                self._cover_failures.add(cover_url)
+        else:
+            self._cover_failures.add(cover_url)
+
+        if reply is not None:
+            reply.deleteLater()
 
     def _library_group(self):
         # Library cards already carry their complete series grouping. Reuse it
