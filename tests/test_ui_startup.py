@@ -167,7 +167,7 @@ class UiStartupTests(unittest.TestCase):
         ):
             worker.run()
 
-        fetch_relations.assert_called_once_with([108632, 119661, 21355])
+        fetch_relations.assert_called_once_with([21355, 108632, 119661])
         save_anime.assert_not_called()
         self.assertEqual(emitted, [set()])
 
