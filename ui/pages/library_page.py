@@ -5,7 +5,7 @@ from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, Signal, QEvent, QT
 from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLayout
 
 from api import get_media_details
-from diagnostics import diagnostic_context, log_event, log_exception
+from diagnostics import diagnostic_context, diagnostic_field, log_event, log_exception
 from database import clear_bundle_override, delete_work_data, get_bundle_override, get_connection, save_anime, save_bundle_override
 from series import get_library_series
 from ui.preferences import get
@@ -159,22 +159,25 @@ class LibraryPage(QWidget):
         group_summary = []
         library_member_count = 0
         for group in self.all_anime[:100]:
-            members = group.get("_series_members") or [group]
+            members = diagnostic_field(group, "_series_members") or [group]
             library_member_count += len(members)
+            representative_title = diagnostic_field(group, "title")
+            if isinstance(representative_title, dict):
+                representative_title = (
+                    representative_title.get("english")
+                    or representative_title.get("romaji")
+                    or representative_title.get("native")
+                )
             group_summary.append({
-                "representative_id": group.get("id"),
-                "representative_title": (
-                    (group.get("title") or {}).get("english")
-                    or (group.get("title") or {}).get("romaji")
-                    if isinstance(group.get("title"), dict) else group.get("title")
-                ),
+                "representative_id": diagnostic_field(group, "id"),
+                "representative_title": representative_title,
                 "member_count": len(members),
                 "members": [
                     {
-                        "id": member.get("id"),
-                        "title": member.get("title"),
-                        "type": member.get("type"),
-                        "format": member.get("format"),
+                        "id": diagnostic_field(member, "id"),
+                        "title": diagnostic_field(member, "title"),
+                        "type": diagnostic_field(member, "type"),
+                        "format": diagnostic_field(member, "format"),
                     }
                     for member in members[:50]
                 ],
