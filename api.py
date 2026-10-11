@@ -2569,6 +2569,7 @@ def get_mangabaka_series_collections(series_id, page=1, limit=50):
             "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
             "limit": _safe_page_parameter(limit, 50, 100),
         },
+        api_version=1,
     )
 
 
@@ -2582,6 +2583,7 @@ def get_mangabaka_collection_works(collection_id, page=1, limit=50):
             "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
             "limit": _safe_page_parameter(limit, 50, 100),
         },
+        api_version=1,
     )
 
 
@@ -2700,12 +2702,15 @@ def get_mangabaka_series_news(series_id, page=1, limit=20):
     series_id = _bounded_positive_filter_int(series_id)
     if series_id is None:
         raise ValueError("MangaBaka series IDs must be positive bounded integers.")
+    # Like related-series metadata, this optional route is part of v1 rather
+    # than the v2 catalog API.
     return _request(
         f"series/{series_id}/news",
         params={
             "page": _safe_page_parameter(page, 1, MAX_PROVIDER_PAGES),
             "limit": _safe_page_parameter(limit, 20, 50),
         },
+        api_version=1,
     )
 
 
