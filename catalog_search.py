@@ -6,6 +6,7 @@ import math
 import re
 
 from api import enrich_anilist_results, search_anime, search_mangabaka_media
+from diagnostics import log_event, log_exception
 
 ANIME_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL", "MUSIC"}
 PROVIDER_ONLY_FILTERS = ("publisher_id", "is_licensed")
@@ -269,6 +270,18 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
         and not anime_only
         and requested_format != "ONE_SHOT"
     )
+    log_event(
+        "catalog_search.started",
+        query_present=bool(query),
+        query_length=len(query),
+        page=page,
+        media_type=str(media_type or "").upper() or None,
+        requested_format=requested_format,
+        anime_only=anime_only,
+        use_mangabaka=use_mangabaka,
+        include_relations=bool(include_relations),
+        filter_names=sorted(str(key) for key in filters.keys())[:50],
+    )
     anilist_type = media_type
     if requested_format in ANIME_FORMATS or (season and not media_type):
         anilist_type = "ANIME"
@@ -290,6 +303,13 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
         anilist_items = [item for item in (data.get("media") or []) if isinstance(item, dict)]
         anilist_page = _page_info(data, page)
     except Exception as error:
+        log_exception(
+            "catalog_search.anilist_failed",
+            error,
+            query_present=bool(query),
+            media_type=str(media_type or "").upper() or None,
+            requested_format=requested_format,
+        )
         anilist_error = str(error)
         anilist_items = []
         anilist_page = {"currentPage": page, "lastPage": 1, "hasNextPage": False}
@@ -316,6 +336,13 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
             ]
             mangabaka_page = _page_info(data, page)
         except Exception as error:
+            log_exception(
+                "catalog_search.mangabaka_failed",
+                error,
+                query_present=bool(query),
+                media_type=str(media_type or "").upper() or None,
+                requested_format=requested_format,
+            )
             mangabaka_error = str(error)
 
     if anilist_error and (not use_mangabaka or mangabaka_error):
@@ -327,6 +354,9 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
         anilist_items = []
     if mangabaka_error:
         mangabaka_items = []
+
+    raw_anilist_count = len(anilist_items)
+    raw_mangabaka_count = len(mangabaka_items)
 
     # Drop duplicate AniList rows before performing cross-catalog enrichment.
     seen_anilist_ids = set()
@@ -403,6 +433,39 @@ def search_combined_media(search_text, page, media_type, media_format, filters,
         warnings.append("AniList is temporarily unavailable; showing MangaBaka results.")
     if mangabaka_error:
         warnings.append("MangaBaka is temporarily unavailable; showing AniList results.")
+
+    def result_summary(item):
+        raw_title = item.get("title") or {}
+        if isinstance(raw_title, dict):
+            title = raw_title.get("english") or raw_title.get("romaji") or raw_title.get("native")
+        else:
+            title = raw_title
+        return {
+            "id": _media_id(item),
+            "provider_id": _provider_id(item),
+            "title": title,
+            "type": item.get("type"),
+            "format": item.get("format"),
+            "has_mangabaka_metadata": isinstance(item.get("_mangabaka"), dict),
+        }
+
+    log_event(
+        "catalog_search.completed",
+        query_present=bool(query),
+        media_type=str(media_type or "").upper() or None,
+        requested_format=requested_format,
+        use_mangabaka=use_mangabaka,
+        anilist_error=bool(anilist_error),
+        mangabaka_error=bool(mangabaka_error),
+        anilist_raw_count=raw_anilist_count,
+        mangabaka_raw_count=raw_mangabaka_count,
+        anilist_count=len(anilist_items),
+        mangabaka_standalone_count=len(unique_mb),
+        linked_provider_count=len(attached_provider_ids),
+        result_count=len(results),
+        warnings=warnings,
+        result_sample=[result_summary(item) for item in results[:50]],
+    )
     return {
         "pageInfo": {
             "currentPage": page,
