@@ -3,6 +3,7 @@ import re
 import time
 
 from api import get_media_details, get_media_relations_batch
+from diagnostics import diagnostic_context, log_event, log_exception
 from database import get_all_library, get_bundle_override, get_bundle_exclusions, get_connection, get_manual_bundle_links, save_anime
 from ui.preferences import get
 
@@ -720,6 +721,18 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
 
         frontier = next_frontier
 
+    log_event(
+        "bundling.relation_discovery",
+        seed_count=len(items),
+        discovered_count=len(discovered),
+        request_batches=requests_used,
+        processed_nodes=len(processed_ids),
+        failed_node_ids=sorted(fetch_failures)[:100],
+        failed_node_count=len(fetch_failures),
+        stopped_by_event=bool(stop_event is not None and stop_event.is_set()),
+        hit_node_limit=len(discovered) >= max_nodes,
+        request_limit=max_requests,
+    )
     return discovered, requests_used
 
 
@@ -927,18 +940,107 @@ def _group_discovered(results, discovered):
     return [item for _, item in grouped]
 
 
+def _diagnostic_media_summary(item, include_relations=False):
+    try:
+        edges = _search_relation_edges(item)
+    except Exception:
+        edges = []
+    summary = {
+        "id": _get(item, "id"),
+        "title": _title_text(item),
+        "type": _media_type(item),
+        "format": str(_get(item, "format") or "").upper(),
+        "relations_loaded": bool(_get(item, "_relations_loaded")),
+        "relation_count": len(edges),
+    }
+    if include_relations:
+        summary["relations"] = [
+            {
+                "relation_type": edge.get("relationType"),
+                "target_id": _get(edge.get("node") or {}, "id"),
+                "target_title": _title_text(edge.get("node") or {}),
+                "target_type": _media_type(edge.get("node") or {}),
+                "target_format": str(_get(edge.get("node") or {}, "format") or "").upper(),
+            }
+            for edge in edges[:20]
+        ]
+    return summary
+
+
 def group_media_results(results, enrich=False, max_requests=0, delay=0.25, stop_event=None):
     if not results:
+        log_event("bundling.empty_input")
         return []
 
-    discovered, _ = _discover_related(
-        results,
-        max_requests=max_requests if enrich else -1,
-        delay=delay,
-        stop_event=stop_event,
-    )
-    return _group_discovered(results, discovered)
+    seed_ids = [_get(item, "id") for item in results[:100]]
+    seed_summary = [
+        _diagnostic_media_summary(item, include_relations=True)
+        for item in results[:50]
+    ]
+    settings = {}
+    for key in (
+        "bundle_include_movies", "bundle_include_ovas", "bundle_include_onas",
+        "bundle_include_specials", "bundle_include_manga", "bundle_include_novels",
+        "bundle_include_one_shots",
+    ):
+        try:
+            settings[key] = bool(get(key))
+        except Exception:
+            settings[key] = None
 
+    with diagnostic_context(operation="bundling", seed_ids=seed_ids):
+        log_event(
+            "bundling.started",
+            seed_count=len(results),
+            enrich=bool(enrich),
+            max_requests=max_requests,
+            delay=delay,
+            options=settings,
+            seed_items=seed_summary,
+        )
+        try:
+            discovered, requests_used = _discover_related(
+                results,
+                max_requests=max_requests if enrich else -1,
+                delay=delay,
+                stop_event=stop_event,
+            )
+            groups = _group_discovered(results, discovered)
+        except Exception as error:
+            log_exception(
+                "bundling.failed",
+                error,
+                seed_count=len(results),
+                enrich=bool(enrich),
+                max_requests=max_requests,
+            )
+            raise
+
+        group_summary = []
+        for group in groups[:50]:
+            members = group.get("_series_members") or [group]
+            group_summary.append({
+                "representative_id": _get(group, "id"),
+                "representative_title": _title_text(group),
+                "member_count": len(members),
+                "members": [
+                    _diagnostic_media_summary(member)
+                    for member in members[:50]
+                ],
+            })
+        log_event(
+            "bundling.completed",
+            seed_count=len(results),
+            discovered_count=len(discovered),
+            request_batches=requests_used,
+            output_group_count=len(groups),
+            discovered_items=[
+                _diagnostic_media_summary(item, include_relations=True)
+                for item in discovered[:50]
+            ],
+            groups=group_summary,
+        )
+        return groups
 
 def has_pending_relation_enrichment(results):
     seen = set()
