@@ -23,7 +23,7 @@ class RelationSyncWorker(QObject):
     def run(self):
         succeeded_ids = set()
         for work_id in self.work_ids:
-            with diagnostic_context(operation="library_relation_sync", work_id=work_id):
+            with diagnostic_context(workflow="library_relation_sync", work_id=work_id):
                 log_event("library.relation_sync.item_started")
                 try:
                     details = get_media_details(work_id)
