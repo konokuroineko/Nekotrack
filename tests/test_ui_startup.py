@@ -190,6 +190,7 @@ class UiStartupTests(unittest.TestCase):
                         [item["id"] for item in items],
                         {item["id"]: item for item in items},
                     )
+                    groups = series.get_library_series()
 
                 self.assertEqual(saved, 1)
                 memberships = database.get_automatic_bundle_memberships([21355])
