@@ -50,6 +50,61 @@ class UiStartupTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_library_uses_the_bundle_saved_from_search_before_relation_sync_finishes(self):
+        import os
+        import tempfile
+
+        import database
+        import series
+
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                items = [
+                    {
+                        "id": 21355,
+                        "title": {"romaji": "Re:Zero", "english": "Re:Zero"},
+                        "type": "ANIME",
+                        "format": "TV",
+                    },
+                    {
+                        "id": 100049,
+                        "title": {"romaji": "Re:Zero OVAs", "english": "Re:Zero OVAs"},
+                        "type": "ANIME",
+                        "format": "OVA",
+                    },
+                    {
+                        "id": 120700,
+                        "title": {"romaji": "Re:Zero Break Time", "english": "Re:Zero Break Time"},
+                        "type": "ANIME",
+                        "format": "ONA",
+                    },
+                ]
+                for item in items:
+                    database.save_anime(item)
+                    database.add_to_library(item["id"], "Planning")
+                database.save_automatic_bundle_membership(
+                    21355,
+                    [item["id"] for item in items],
+                )
+                with patch(
+                    "series.get",
+                    side_effect=lambda key: key in {
+                        "bundle_include_ovas",
+                        "bundle_include_onas",
+                    },
+                ):
+                    groups = series.get_library_series()
+                self.assertEqual(len(groups), 1)
+                self.assertEqual(
+                    {int(member["id"]) for member in groups[0]["_series_members"]},
+                    {21355, 100049, 120700},
+                )
+            finally:
+                os.chdir(old_cwd)
+
     def test_library_relation_sync_does_not_skip_previously_connected_ids(self):
         # A work can already appear as a target/source in a stale or partial
         # relation graph; only completed or failed attempts in this app session
@@ -97,21 +152,14 @@ class UiStartupTests(unittest.TestCase):
         save_anime.assert_called_once_with(details)
         self.assertEqual(emitted, [{21355}])
 
-    def test_relation_sync_worker_falls_back_after_batch_failure(self):
-        details = {
-            "id": 21355,
-            "type": "ANIME",
-            "format": "TV",
-            "title": {"romaji": "Re:Zero", "english": "Re:Zero"},
-            "relations": {"edges": []},
-        }
+    def test_relation_sync_worker_does_not_fan_out_after_batch_failure(self):
         emitted = []
-        worker = RelationSyncWorker([21355])
+        worker = RelationSyncWorker([21355, 108632, 119661])
         worker.finished.connect(emitted.append)
 
         with patch(
             "ui.pages.library_page.get_media_relations_batch",
-            side_effect=[RuntimeError("batch unavailable"), {21355: details}],
+            side_effect=RuntimeError("batch unavailable"),
         ) as fetch_relations, patch(
             "ui.pages.library_page.save_anime"
         ) as save_anime, patch(
@@ -119,9 +167,9 @@ class UiStartupTests(unittest.TestCase):
         ):
             worker.run()
 
-        self.assertEqual(fetch_relations.call_count, 2)
-        save_anime.assert_called_once_with(details)
-        self.assertEqual(emitted, [{21355}])
+        fetch_relations.assert_called_once_with([108632, 119661, 21355])
+        save_anime.assert_not_called()
+        self.assertEqual(emitted, [set()])
 
     def test_remote_cover_finished_ignores_deleted_label(self):
         page = WorkDetailPage()

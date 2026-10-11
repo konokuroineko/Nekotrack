@@ -20,6 +20,7 @@ from database import (
     get_work,
     initialize_database,
     save_anime,
+    save_automatic_bundle_membership,
     save_characters,
     save_cover_path,
     save_episodes,
@@ -924,6 +925,14 @@ class MainWindow(QMainWindow):
                 self.library_import_threads.append(thread)
                 self.library_import_workers.append(worker)
                 thread.start()
+
+            membership_ids = [int(member["id"]) for member in bundle_members]
+            save_automatic_bundle_membership(primary_id, membership_ids)
+            log_event(
+                "library.add_bundle_membership_saved",
+                bundle_id=primary_id,
+                member_count=len(membership_ids),
+            )
 
             button.setText("Added")
             button.setEnabled(False)

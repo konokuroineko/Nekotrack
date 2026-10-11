@@ -61,6 +61,55 @@ class ManualBundleDatabaseTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_automatic_bundle_membership_round_trips_and_replaces_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                for work_id, title in ((1, "Main"), (2, "Extra"), (3, "Different")):
+                    database.save_anime({
+                        "id": work_id,
+                        "title": {"romaji": title, "english": None, "native": None},
+                        "type": "ANIME",
+                        "format": "TV",
+                    })
+                self.assertTrue(database.save_automatic_bundle_membership(1, [1, 2]))
+                first = database.get_automatic_bundle_memberships([1])
+                self.assertEqual(
+                    [(row["bundle_id"], row["work_id"]) for row in first],
+                    [(1, 1), (1, 2)],
+                )
+                self.assertTrue(database.save_automatic_bundle_membership(1, [1, 3]))
+                replaced = database.get_automatic_bundle_memberships([1])
+                self.assertEqual(
+                    [(row["bundle_id"], row["work_id"]) for row in replaced],
+                    [(1, 1), (1, 3)],
+                )
+                self.assertTrue(database.save_automatic_bundle_membership(1, [1]))
+                self.assertEqual(database.get_automatic_bundle_memberships([1]), [])
+            finally:
+                os.chdir(old_cwd)
+
+    def test_deleting_work_removes_automatic_bundle_membership(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                for work_id in (1, 2):
+                    database.save_anime({
+                        "id": work_id,
+                        "title": {"romaji": f"Work {work_id}", "english": None, "native": None},
+                        "type": "ANIME",
+                        "format": "TV",
+                    })
+                database.save_automatic_bundle_membership(1, [1, 2])
+                self.assertTrue(database.delete_work_data(2))
+                self.assertEqual(database.get_automatic_bundle_memberships(), [])
+            finally:
+                os.chdir(old_cwd)
+
     def test_remove_from_library_keeps_work_data(self):
         with tempfile.TemporaryDirectory() as directory:
             old_cwd = os.getcwd()

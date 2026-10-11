@@ -4,7 +4,15 @@ import time
 
 from api import get_media_relations_batch
 from diagnostics import diagnostic_context, log_event, log_exception
-from database import get_all_library, get_bundle_override, get_bundle_exclusions, get_connection, get_manual_bundle_links, save_anime
+from database import (
+    get_all_library,
+    get_automatic_bundle_memberships,
+    get_bundle_override,
+    get_bundle_exclusions,
+    get_connection,
+    get_manual_bundle_links,
+    save_anime,
+)
 from ui.preferences import get
 
 
@@ -1182,6 +1190,7 @@ def get_library_series():
 
     ids = {int(row["id"]) for row in rows}
     parent = {work_id: work_id for work_id in ids}
+    component_members = {work_id: {work_id} for work_id in ids}
 
     def find(work_id):
         while parent[work_id] != work_id:
@@ -1190,15 +1199,48 @@ def get_library_series():
         return work_id
 
     def union(left, right):
-        left, right = find(left), find(right)
-        if left != right:
-            parent[right] = left
+        left_root, right_root = find(left), find(right)
+        if left_root == right_root:
+            return True
+
+        left_members = component_members[left_root]
+        right_members = component_members[right_root]
+        if any(
+            tuple(sorted((left_id, right_id))) in excluded_links
+            for left_id in left_members
+            for right_id in right_members
+        ):
+            return False
+
+        parent[right_root] = left_root
+        left_members.update(component_members.pop(right_root))
+        return True
 
     row_by_id = {int(row["id"]): row for row in rows}
     excluded_links = {
         tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
         for link in get_bundle_exclusions(ids)
     }
+
+    # Search already computed these bundles using the full discovered relation
+    # graph. Preserve that exact grouping in Library while honoring current
+    # format preferences and explicit pair exclusions.
+    saved_groups = defaultdict(set)
+    for membership in get_automatic_bundle_memberships(ids):
+        bundle_id = int(membership["bundle_id"])
+        work_id = int(membership["work_id"])
+        if work_id in ids:
+            saved_groups[bundle_id].add(work_id)
+
+    for member_ids in saved_groups.values():
+        bundleable_ids = sorted(
+            work_id for work_id in member_ids
+            if work_id in row_by_id and _auto_bundleable(row_by_id[work_id])
+        )
+        if len(bundleable_ids) > 1:
+            anchor_id = bundleable_ids[0]
+            for work_id in bundleable_ids[1:]:
+                union(anchor_id, work_id)
 
     for relation in _relation_data_for(ids):
         source_id = int(relation["source_id"])

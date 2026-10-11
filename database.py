@@ -147,6 +147,14 @@ def initialize_database():
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS automatic_bundle_memberships (
+            bundle_id INTEGER NOT NULL,
+            work_id INTEGER NOT NULL,
+            PRIMARY KEY (bundle_id, work_id),
+            FOREIGN KEY (work_id) REFERENCES works(id)
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS bundle_overrides (
             bundle_anchor_id INTEGER PRIMARY KEY,
             custom_title TEXT,
@@ -2231,6 +2239,101 @@ def get_manual_bundle_links(work_ids=None):
         connection.close()
 
 
+def save_automatic_bundle_membership(bundle_id, work_ids):
+    """Replace the saved member snapshot for an automatically grouped Search result."""
+    try:
+        safe_bundle_id = _validated_work_id(bundle_id)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    safe_ids = _validated_work_ids(work_ids)
+    if safe_ids is None:
+        return False
+
+    connection = get_connection()
+    try:
+        connection.execute(
+            "DELETE FROM automatic_bundle_memberships WHERE bundle_id = ?",
+            (safe_bundle_id,),
+        )
+        if safe_ids:
+            placeholders = ",".join("?" for _ in safe_ids)
+            existing = {
+                int(row["id"])
+                for row in connection.execute(
+                    f"SELECT id FROM works WHERE id IN ({placeholders})",
+                    safe_ids,
+                ).fetchall()
+            }
+        else:
+            existing = set()
+        member_ids = sorted(existing)
+        if len(member_ids) >= 2:
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO automatic_bundle_memberships (bundle_id, work_id)
+                VALUES (?, ?)
+                """,
+                [(safe_bundle_id, work_id) for work_id in member_ids],
+            )
+        connection.commit()
+        return True
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def get_automatic_bundle_memberships(work_ids=None):
+    """Return full saved Search-bundle snapshots touching these works."""
+    if work_ids is None:
+        ids = None
+    else:
+        ids = _validated_work_ids(work_ids)
+        if ids is None or not ids:
+            return []
+
+    connection = get_connection()
+    try:
+        if ids is None:
+            return connection.execute(
+                """
+                SELECT bundle_id, work_id
+                FROM automatic_bundle_memberships
+                ORDER BY bundle_id, work_id
+                """
+            ).fetchall()
+
+        placeholders = ",".join("?" for _ in ids)
+        bundle_ids = [
+            int(row["bundle_id"])
+            for row in connection.execute(
+                f"""
+                SELECT DISTINCT bundle_id
+                FROM automatic_bundle_memberships
+                WHERE bundle_id IN ({placeholders})
+                   OR work_id IN ({placeholders})
+                ORDER BY bundle_id
+                """,
+                [*ids, *ids],
+            ).fetchall()
+        ]
+        if not bundle_ids:
+            return []
+        group_placeholders = ",".join("?" for _ in bundle_ids)
+        return connection.execute(
+            f"""
+            SELECT bundle_id, work_id
+            FROM automatic_bundle_memberships
+            WHERE bundle_id IN ({group_placeholders})
+            ORDER BY bundle_id, work_id
+            """,
+            bundle_ids,
+        ).fetchall()
+    finally:
+        connection.close()
+
+
 def add_bundle_exclusion(work_a, work_b):
     """Prevent two works from being automatically grouped together."""
     try:
@@ -2589,6 +2692,21 @@ def delete_work_data(work_id):
             )
 
         connection.execute(
+            "DELETE FROM automatic_bundle_memberships WHERE bundle_id = ? OR work_id = ?",
+            (work_id, work_id),
+        )
+        connection.execute(
+            """
+            DELETE FROM automatic_bundle_memberships
+            WHERE bundle_id IN (
+                SELECT bundle_id
+                FROM automatic_bundle_memberships
+                GROUP BY bundle_id
+                HAVING COUNT(*) < 2
+            )
+            """
+        )
+        connection.execute(
             "DELETE FROM manual_bundle_links WHERE work_a = ? OR work_b = ?",
             (work_id, work_id),
         )
@@ -2618,6 +2736,10 @@ def delete_work_data(work_id):
         checks = (
             ("works", "SELECT 1 FROM works WHERE id = ? LIMIT 1"),
             ("user_library", "SELECT 1 FROM user_library WHERE work_id = ? LIMIT 1"),
+            (
+                "automatic_bundle_memberships",
+                "SELECT 1 FROM automatic_bundle_memberships WHERE bundle_id = ? OR work_id = ? LIMIT 1",
+            ),
             (
                 "manual_bundle_links",
                 "SELECT 1 FROM manual_bundle_links WHERE work_a = ? OR work_b = ? LIMIT 1",

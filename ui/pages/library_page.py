@@ -31,18 +31,20 @@ class RelationSyncWorker(QObject):
     def run(self):
         succeeded_ids = set()
         details_by_id = {}
+        batch_completed = False
         try:
             fetched = get_media_relations_batch(self.work_ids)
             if isinstance(fetched, dict):
                 details_by_id = fetched
+            batch_completed = True
             log_event(
                 "library.relation_sync.batch_completed",
                 requested_count=len(self.work_ids),
                 returned_count=len(details_by_id),
             )
         except Exception as error:
-            # A failed batch must not prevent valid individual works from being
-            # repaired. Fall back to per-ID requests below.
+            # Don't turn a batch-wide AniList 429 into a separate retry sequence
+            # for every Library item. Let a later refresh retry the batch.
             log_exception(
                 "library.relation_sync.batch_failed",
                 error,
@@ -53,6 +55,12 @@ class RelationSyncWorker(QObject):
             with diagnostic_context(workflow="library_relation_sync", work_id=work_id):
                 log_event("library.relation_sync.item_started")
                 details = details_by_id.get(work_id)
+                if details is None and not batch_completed:
+                    log_event(
+                        "library.relation_sync.item_deferred_after_batch_failure",
+                        expected_work_id=work_id,
+                    )
+                    continue
                 if details is None:
                     try:
                         individual = get_media_relations_batch([work_id])

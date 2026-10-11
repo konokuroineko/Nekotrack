@@ -62,6 +62,45 @@ RETRY_DELAY = 1
 MAX_ANILIST_MEDIA_ID = (1 << 31) - 1
 MIN_LOCAL_MEDIA_ID = -((1 << 63) - 1)
 
+# Bundle imports can launch many detail/episode requests at once. Pace all
+# GraphQL calls across worker threads and share cooldowns after HTTP 429.
+ANILIST_MIN_REQUEST_INTERVAL = 0.8
+_anilist_rate_lock = threading.Lock()
+_anilist_next_request_at = 0.0
+_anilist_cooldown_until = 0.0
+
+
+def _wait_for_anilist_slot():
+    """Reserve a paced request slot, respecting cooldowns announced by any thread."""
+    global _anilist_next_request_at
+    while True:
+        with _anilist_rate_lock:
+            now = time.monotonic()
+            ready_at = max(_anilist_next_request_at, _anilist_cooldown_until)
+            if now >= ready_at:
+                _anilist_next_request_at = now + ANILIST_MIN_REQUEST_INTERVAL
+                return
+            wait_time = ready_at - now
+        time.sleep(wait_time)
+
+
+def _extend_anilist_cooldown(seconds):
+    """Make one AniList rate-limit response pause requests from every worker."""
+    global _anilist_cooldown_until
+    try:
+        delay = float(seconds)
+    except (TypeError, ValueError, OverflowError):
+        delay = RETRY_DELAY
+    if not math.isfinite(delay):
+        delay = RETRY_DELAY
+    delay = min(60.0, max(1.0, delay))
+    with _anilist_rate_lock:
+        _anilist_cooldown_until = max(
+            _anilist_cooldown_until,
+            time.monotonic() + delay,
+        )
+
+
 
 def _validated_media_id(value):
     """Normalize a local/AniList media ID without truncation or scalar overflow."""
@@ -109,6 +148,7 @@ def anilist_request(query, variables=None):
 
     for attempt in range(MAX_RETRIES):
         try:
+            _wait_for_anilist_slot()
             with log_operation(
                 "api.request",
                 provider="AniList",
@@ -136,26 +176,27 @@ def anilist_request(query, variables=None):
                 data = {}
 
             if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                fallback_wait = RETRY_DELAY * (2 ** attempt)
+                try:
+                    requested_wait = (
+                        float(retry_after)
+                        if retry_after is not None
+                        else fallback_wait
+                    )
+                    # Keep provider-controlled Retry-After finite and bounded.
+                    wait_time = (
+                        min(60.0, max(1.0, requested_wait))
+                        if math.isfinite(requested_wait)
+                        else fallback_wait
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    wait_time = fallback_wait
+
+                # Every worker observes this cooldown, even after this request
+                # exhausts its own retry budget.
+                _extend_anilist_cooldown(wait_time)
                 if attempt < MAX_RETRIES - 1:
-                    retry_after = response.headers.get("Retry-After")
-                    fallback_wait = RETRY_DELAY * (2 ** attempt)
-                    try:
-                        requested_wait = (
-                            float(retry_after)
-                            if retry_after is not None
-                            else fallback_wait
-                        )
-                        # Retry-After is provider-controlled. Values such as
-                        # "1e309" become infinity, while huge finite values can
-                        # effectively hang a worker. Keep all waits finite and
-                        # bounded, with exponential backoff for malformed input.
-                        wait_time = (
-                            min(60.0, max(1.0, requested_wait))
-                            if math.isfinite(requested_wait)
-                            else fallback_wait
-                        )
-                    except (TypeError, ValueError, OverflowError):
-                        wait_time = fallback_wait
                     print(
                         f"AniList rate limited the request (attempt {attempt + 1}/{MAX_RETRIES}). "
                         f"Retrying in {wait_time:g}s..."
