@@ -5,6 +5,7 @@ from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, Signal, QEvent, QT
 from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLayout
 
 from api import get_media_details
+from diagnostics import diagnostic_context, log_event, log_exception
 from database import clear_bundle_override, delete_work_data, get_bundle_override, get_connection, save_anime, save_bundle_override
 from series import get_library_series
 from ui.preferences import get
@@ -22,13 +23,37 @@ class RelationSyncWorker(QObject):
     def run(self):
         succeeded_ids = set()
         for work_id in self.work_ids:
-            try:
-                details = get_media_details(work_id)
-                if details:
-                    save_anime(details)
-                    succeeded_ids.add(int(work_id))
-            except Exception:
-                continue
+            with diagnostic_context(operation="library_relation_sync", work_id=work_id):
+                log_event("library.relation_sync.item_started")
+                try:
+                    details = get_media_details(work_id)
+                    if details:
+                        save_anime(details)
+                        succeeded_ids.add(int(work_id))
+                        relation_data = details.get("relations") or {}
+                        relation_edges = relation_data.get("edges") or []
+                        log_event(
+                            "library.relation_sync.item_completed",
+                            media_type=details.get("type"),
+                            media_format=details.get("format"),
+                            relation_count=len(relation_edges),
+                            relation_types=sorted({
+                                str(edge.get("relationType") or "")
+                                for edge in relation_edges
+                                if isinstance(edge, dict)
+                            })[:30],
+                        )
+                    else:
+                        log_event("library.relation_sync.empty_details")
+                except Exception as error:
+                    log_exception("library.relation_sync.item_failed", error)
+        failed_ids = sorted(set(int(value) for value in self.work_ids) - succeeded_ids)
+        log_event(
+            "library.relation_sync.worker_completed",
+            attempted_count=len(self.work_ids),
+            succeeded_ids=sorted(succeeded_ids)[:100],
+            failed_ids=failed_ids[:100],
+        )
         self.finished.emit(succeeded_ids)
 
 
@@ -126,32 +151,110 @@ class LibraryPage(QWidget):
         return super().eventFilter(watched, event)
 
     def refresh(self, retry_failed=True):
+        log_event("library.refresh.started", retry_failed=bool(retry_failed))
         if retry_failed:
             self._sync_failed_ids.clear()
-        self._cancel_resize_animation(); self.all_anime = get_library_series(); self._apply_filter(); self._populate(); self._start_relation_sync()
+        self._cancel_resize_animation()
+        self.all_anime = get_library_series()
+        group_summary = []
+        library_member_count = 0
+        for group in self.all_anime[:100]:
+            members = group.get("_series_members") or [group]
+            library_member_count += len(members)
+            group_summary.append({
+                "representative_id": group.get("id"),
+                "representative_title": (
+                    (group.get("title") or {}).get("english")
+                    or (group.get("title") or {}).get("romaji")
+                    if isinstance(group.get("title"), dict) else group.get("title")
+                ),
+                "member_count": len(members),
+                "members": [
+                    {
+                        "id": member.get("id"),
+                        "title": member.get("title"),
+                        "type": member.get("type"),
+                        "format": member.get("format"),
+                    }
+                    for member in members[:50]
+                ],
+            })
+        log_event(
+            "library.refresh.grouped",
+            group_count=len(self.all_anime),
+            member_count=library_member_count,
+            groups=group_summary,
+        )
+        self._apply_filter()
+        self._populate()
+        self._start_relation_sync()
+        log_event("library.refresh.completed", visible_group_count=len(self.all_anime))
 
     def _start_relation_sync(self):
-        if self._sync_thread is not None and self._sync_thread.isRunning(): return
+        if self._sync_thread is not None and self._sync_thread.isRunning():
+            log_event("library.relation_sync.already_running")
+            return
         connection = get_connection()
-        ids = [int(row["id"]) for row in connection.execute("SELECT DISTINCT works.id FROM works JOIN user_library ON user_library.work_id=works.id").fetchall()]
-        connected = {int(row["id"]) for row in connection.execute("SELECT DISTINCT source_id AS id FROM work_relations UNION SELECT DISTINCT target_id AS id FROM work_relations").fetchall()}
-        connection.close()
+        try:
+            ids = [
+                int(row["id"])
+                for row in connection.execute(
+                    "SELECT DISTINCT works.id FROM works "
+                    "JOIN user_library ON user_library.work_id=works.id"
+                ).fetchall()
+            ]
+            connected = {
+                int(row["id"])
+                for row in connection.execute(
+                    "SELECT DISTINCT source_id AS id FROM work_relations "
+                    "UNION SELECT DISTINCT target_id AS id FROM work_relations"
+                ).fetchall()
+            }
+        finally:
+            connection.close()
         missing = [
             work_id for work_id in ids
             if work_id not in connected
             and work_id not in self._sync_done_ids
             and work_id not in self._sync_failed_ids
         ]
-        if not missing: return
-        self._sync_thread = QThread(self); self._sync_worker = RelationSyncWorker(missing); self._sync_worker.moveToThread(self._sync_thread)
-        self._sync_thread.started.connect(self._sync_worker.run); self._sync_worker.finished.connect(self._relation_sync_finished); self._sync_worker.finished.connect(self._sync_thread.quit); self._sync_thread.finished.connect(self._sync_worker.deleteLater); self._sync_thread.finished.connect(self._sync_thread.deleteLater); self._sync_thread.start()
+        log_event(
+            "library.relation_sync.plan",
+            library_work_count=len(ids),
+            library_work_ids=ids[:100],
+            connected_work_count=len(connected),
+            connected_sample=sorted(connected)[:100],
+            missing_relation_ids=missing[:100],
+            missing_relation_count=len(missing),
+            already_checked_ids=sorted(self._sync_done_ids)[:100],
+            previously_failed_ids=sorted(self._sync_failed_ids)[:100],
+        )
+        if not missing:
+            return
+        self._sync_thread = QThread(self)
+        self._sync_worker = RelationSyncWorker(missing)
+        self._sync_worker.moveToThread(self._sync_thread)
+        self._sync_thread.started.connect(self._sync_worker.run)
+        self._sync_worker.finished.connect(self._relation_sync_finished)
+        self._sync_worker.finished.connect(self._sync_thread.quit)
+        self._sync_thread.finished.connect(self._sync_worker.deleteLater)
+        self._sync_thread.finished.connect(self._sync_thread.deleteLater)
+        self._sync_thread.start()
 
     def _relation_sync_finished(self, succeeded_ids):
         succeeded_ids = {int(work_id) for work_id in (succeeded_ids or set())}
         attempted_ids = set(self._sync_worker.work_ids) if self._sync_worker is not None else set()
+        failed_ids = attempted_ids - succeeded_ids
+        log_event(
+            "library.relation_sync.finished",
+            attempted_count=len(attempted_ids),
+            succeeded_ids=sorted(succeeded_ids)[:100],
+            failed_ids=sorted(failed_ids)[:100],
+        )
         self._sync_done_ids.update(succeeded_ids)
-        self._sync_failed_ids.update(attempted_ids - succeeded_ids)
-        self._sync_thread = None; self._sync_worker = None
+        self._sync_failed_ids.update(failed_ids)
+        self._sync_thread = None
+        self._sync_worker = None
         self.refresh(retry_failed=False)
 
     def _delete_item(self, group):
