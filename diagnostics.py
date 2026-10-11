@@ -150,6 +150,20 @@ def _safe_value(key: str, value: Any, depth: int = 0) -> Any:
     return text
 
 
+def diagnostic_field(record: Any, key: str, default: Any = None) -> Any:
+    """Read a field from dict-like records, including sqlite3.Row (which lacks .get())."""
+    getter = getattr(record, "get", None)
+    if callable(getter):
+        try:
+            return getter(key, default)
+        except (TypeError, ValueError, AttributeError):
+            pass
+    try:
+        return record[key]
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return default
+
+
 def _event_payload(event: str, fields: dict[str, Any]) -> dict[str, Any]:
     payload = {
         "event": str(event),
