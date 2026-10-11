@@ -240,9 +240,10 @@ def _handle_thread_exception(args) -> None:
 
 def _handle_unraisable_exception(args) -> None:
     try:
+        object_name = getattr(args.object, "__qualname__", type(args.object).__name__)
         _LOGGER.error(
             "Unraisable exception in %s: %s",
-            getattr(args.object, "__qualname__", repr(args.object)),
+            object_name,
             args.err_msg or "",
             exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
         )
