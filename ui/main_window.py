@@ -239,12 +239,26 @@ class LibraryImportWorker(QObject):
                     episode_payload.get("episodes") or [],
                 )
             except Exception as episode_error:
-                log_exception("library.import.episode_preload_failed", episode_error,
-                              work_id=self.work_id, provider="TMDB")
-                print(
-                    f"Episode preload failed for work {self.work_id}: "
-                    f"{episode_error}"
-                )
+                # A missing TMDB catalog match is normal for some catalog
+                # entries and is not an import failure. Keep it observable in
+                # the diagnostic log without printing an alarming traceback.
+                if (
+                    isinstance(episode_error, RuntimeError)
+                    and str(episode_error) == "TMDB could not find a matching TV series."
+                ):
+                    log_event(
+                        "library.import.episode_preload.unavailable",
+                        work_id=self.work_id,
+                        provider="TMDB",
+                        reason="no_series_match",
+                    )
+                else:
+                    log_exception("library.import.episode_preload_failed", episode_error,
+                                  work_id=self.work_id, provider="TMDB")
+                    print(
+                        f"Episode preload failed for work {self.work_id}: "
+                        f"{episode_error}"
+                    )
 
             log_event(
                 "library.import.completed",
@@ -267,6 +281,7 @@ class LibraryImportWorker(QObject):
 class LibraryEpisodePreloadWorker(QObject):
     finished = Signal(int, object)
     error = Signal(int, str)
+    skipped = Signal(int)
 
     def __init__(self, work_ids):
         super().__init__()
@@ -337,8 +352,20 @@ class LibraryEpisodePreloadWorker(QObject):
                 )
                 self.finished.emit(work_id, episodes)
             except Exception as error:
-                log_exception("library.episode_preload.failed", error, work_id=work_id)
-                self.error.emit(work_id, str(error))
+                if (
+                    isinstance(error, RuntimeError)
+                    and str(error) == "TMDB could not find a matching TV series."
+                ):
+                    log_event(
+                        "library.episode_preload.unavailable",
+                        work_id=work_id,
+                        provider="TMDB",
+                        reason="no_series_match",
+                    )
+                    self.skipped.emit(work_id)
+                else:
+                    log_exception("library.episode_preload.failed", error, work_id=work_id)
+                    self.error.emit(work_id, str(error))
 
 
 class NavigationButton(QPushButton):
@@ -695,6 +722,7 @@ class MainWindow(QMainWindow):
         )
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
+        worker.skipped.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(
