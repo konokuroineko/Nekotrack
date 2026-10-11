@@ -12,7 +12,6 @@ from diagnostics import (
     configure_logging,
     install_qt_message_handler,
     log_event,
-    log_exception,
     log_operation,
     log_runtime_snapshot,
 )
