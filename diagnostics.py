@@ -45,11 +45,11 @@ _ORIGINAL_THREAD_EXCEPTHOOK = getattr(threading, "excepthook", None)
 _ORIGINAL_UNRAISABLEHOOK = getattr(sys, "unraisablehook", None)
 
 _SECRET_ASSIGNMENT = re.compile(
-    r"(?i)(\b(?:tmdb[_-]?api[_-]?token|api[_-]?token|api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|passwd|secret|client_secret)\b\s*[:=]\s*)"
-    r'("[^"]*"|\'[^\']*\'|[^&\s,;]+)'
+    r"""(?i)(["']?\b(?:tmdb[_-]?api[_-]?token|api[_-]?token|api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|passwd|secret|client_secret)\b["']?\s*[:=]\s*)"""
+    r"""("[^"]*"|'[^']*'|[^&\s,;}\]]+)"""
 )
 _AUTH_HEADER = re.compile(
-    r"(?i)(\b(?:proxy-)?authorization\b\s*[:=]\s*(?:bearer|basic)\s+)[^\s,;\"']+"
+    r"""(?i)(["']?\b(?:proxy-)?authorization\b["']?\s*[:=]\s*["']?(?:bearer|basic)\s+)[^\s,;}"']+"""
 )
 _BEARER_VALUE = re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}")
 _URL_SECRET = re.compile(
