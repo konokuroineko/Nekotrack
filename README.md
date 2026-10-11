@@ -32,7 +32,7 @@ No external provider can guarantee complete chapter or volume records for every 
 
 ## Code organization
 
-`api.py` is the single implementation and entry point for media-provider calls: AniList, TMDB, and MangaBaka. The MangaBaka request/cache/retry layer, response normalization, title matching, enrichment, search, discovery, publisher, relationship, and volume-record operations are implemented directly in `api.py` and exposed through the `get_mangabaka_*` / `search_mangabaka_*` names. There is no separate MangaBaka API module. `catalog_search.py` combines and deduplicates catalog results, while `series.py` handles relationship traversal and bundling. `image_cache.py` owns safe cover downloads, and `updater.py` owns GitHub release checks and installer downloads because those have separate caching and security requirements.
+`api.py` is the single implementation and entry point for media-provider calls: AniList, TMDB, and MangaBaka. The MangaBaka request/cache/retry layer, response normalization, title matching, enrichment, search, discovery, publisher, relationship, and volume-record operations are implemented directly in `api.py` and exposed through the `get_mangabaka_*` / `search_mangabaka_*` names. There is no separate MangaBaka API module. `catalog_search.py` combines and deduplicates catalog results, while `series.py` handles relationship traversal and bundling. `diagnostics.py` provides rotating application logs, crash/Qt capture, and a redacted diagnostic export. `image_cache.py` owns safe cover downloads, and `updater.py` owns GitHub release checks and installer downloads because those have separate caching and security requirements.
 
 ## Known limitations
 
@@ -60,6 +60,25 @@ python stress_test.py --seconds 30 --seed 7
 Every soak iteration runs seeded provider/API-shape, unified-search and bundling, SQLite state-machine, image-cache safety, and updater-security tests in a fresh Python process. The full regression pass also runs the PySide6 search-filter UI tests once. They are intentionally excluded from repeated worker processes because their Qt/native-extension teardown reproducibly aborts Python 3.11 workers even when assertions pass; the full regression pass completes normally. A live-network guard blocks and records unexpected HTTP attempts. The report records failed seeds and test output in `nekotrack_stress_report.json`. The harness does not use live provider requests or the normal application database; database tests use temporary directories. Pull requests run a 1-minute soak; manually dispatched runs allow up to 5 hours.
 
 For a hosted run, open **Actions → Adversarial stress → Run workflow** and choose a duration of 1–300 minutes. Pull requests run a one-minute soak; use manual dispatch for longer campaigns (up to five hours). The workflow uploads the JSON report as an artifact.
+## Application diagnostics
+
+NekoTrack automatically writes a rotating application log to `%APPDATA%\NekoTrack\logs\nekotrack.log`. It keeps the current log plus four backups, rotating at approximately 2 MB each. Startup failures, uncaught Python/background-thread exceptions, Qt warnings and errors, provider request outcomes, unified search results, library relation sync, and automatic bundle decisions are recorded where relevant.
+
+After reproducing a bug, open PowerShell in the repository folder and run:
+
+```powershell
+python diagnostics.py --export-to-repo
+```
+
+This creates `nekotrack_diagnostics.txt` in the repository root. Attach that text file to your message so the log can be inspected with the relevant code. To inspect recent events or find the log location, use:
+
+```powershell
+python diagnostics.py --tail 100
+python diagnostics.py --show-path
+```
+
+The report does **not** include the SQLite database contents, personal notes, or cover images. Credential-like values and common local paths are redacted, and request bodies/search text are intentionally omitted. Titles, work IDs, provider endpoints, and exception messages may still appear, so review the report before sharing it. The report is a local diagnostic artifact; it is not automatically committed or uploaded.
+
 ## Data and privacy
 
 NekoTrack stores its local SQLite database as `anime_tracker.db`. Cover images are cached under `data/images/`. These generated/local files are intentionally ignored by Git.
