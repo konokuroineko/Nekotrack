@@ -108,6 +108,16 @@ class ReadingProgressTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_library_membership_is_not_confused_with_publication_status(self):
+        work_id = 301
+        work = self._work(work_id, "MANGA", "NOVEL", chapters=24, volumes=4)
+        work["status"] = "FINISHED"
+        database.save_anime(work)
+
+        self.assertFalse(database.is_work_in_library(work_id))
+        database.add_to_library(work_id, "Planning")
+        self.assertTrue(database.is_work_in_library(work_id))
+
     def test_older_manga_episode_imports_are_removed_but_anime_episodes_remain(self):
         anime_id = 201
         manga_id = 202
