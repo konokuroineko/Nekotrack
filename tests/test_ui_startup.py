@@ -608,6 +608,7 @@ class UiStartupTests(unittest.TestCase):
                     "media": {"edges": []},
                 }
                 page._render_profile()
+                self.app.processEvents()
 
                 header = page.content.findChild(QFrame, "profileHeader")
                 self.assertIsNotNone(header)
@@ -661,6 +662,7 @@ class UiStartupTests(unittest.TestCase):
                     },
                 }
                 page._render_profile()
+                self.app.processEvents()
 
                 section_titles = [
                     label.text()
@@ -711,6 +713,7 @@ class UiStartupTests(unittest.TestCase):
                     "characterMedia": {"edges": []},
                 }
                 page._render_profile()
+                self.app.processEvents()
 
                 section = next(
                     frame for frame in page.content.findChildren(QFrame, "profileSection")
@@ -760,6 +763,7 @@ class UiStartupTests(unittest.TestCase):
                     "media": {"edges": []},
                 }
                 page._render_profile()
+                self.app.processEvents()
                 card = page.content.findChild(PersonCard)
                 self.assertIsNotNone(card)
                 role = card.findChild(QLabel, "personRole")
