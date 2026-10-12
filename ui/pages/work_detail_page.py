@@ -947,51 +947,17 @@ class WorkDetailPage(QWidget):
                 border:1px solid {COLORS['border']};
                 border-radius:12px;
             }}
-            QFrame#readingItemCard {{
-                background:{COLORS['surface']};
-                border:1px solid {COLORS['border']};
-                border-radius:10px;
-            }}
-            QFrame#readingItemCard:hover {{
-                background:{COLORS['surface_hover']};
-                border-color:{COLORS['border_hover']};
-            }}
-            QLabel#readingItemNumber {{
-                color:{COLORS['accent']};
-                font-size:10px;
-                font-weight:900;
-                letter-spacing:.4px;
-                background:transparent;
-            }}
-            QLabel#readingItemTitle {{
+            QSpinBox#readingProgressCount {{
+                min-width:110px;
                 color:{COLORS['primary']};
-                font-size:12px;
-                font-weight:800;
-                background:transparent;
-            }}
-            QLabel#readingItemDescription {{
-                color:{COLORS['muted']};
-                font-size:10px;
-                background:transparent;
-            }}
-            QCheckBox#readingItemCheck {{
-                color:{COLORS['secondary']};
-                font-size:11px;
-                font-weight:750;
-                spacing:5px;
-                background:transparent;
-            }}
-            QPushButton#readingLoadMore {{
-                color:{COLORS['accent']};
                 background:{COLORS['surface']};
                 border:1px solid {COLORS['border']};
-                border-radius:9px;
-                padding:8px 12px;
-                font-weight:800;
+                border-radius:8px;
+                padding:6px 8px;
             }}
-            QPushButton#readingLoadMore:hover {{
-                background:{COLORS['surface_hover']};
-                border-color:{COLORS['accent']};
+            QSpinBox#readingProgressCount:disabled {{
+                color:{COLORS['muted']};
+                background:{COLORS['surface_alt']};
             }}
             QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:2px solid transparent; border-radius:{get('corner_radius') + 2}px; font-size:30px; font-weight:900; padding:0; }}
             QToolButton#detailMenu:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
@@ -1046,10 +1012,6 @@ class WorkDetailPage(QWidget):
                 "readingSectionTitle": f"font-size:17px;font-weight:800;color:{COLORS['primary']};",
                 "readingKindHeading": f"font-size:14px;font-weight:850;color:{COLORS['primary']};",
                 "readingKindProgress": f"color:{COLORS['accent']};font-size:11px;font-weight:850;",
-                "readingPlaceholderNote": f"color:{COLORS['secondary']};font-size:12px;background:{COLORS['surface_alt']};border:1px solid {COLORS['border']};border-radius:10px;padding:10px 12px;",
-                "readingItemNumber": f"color:{COLORS['accent']};font-size:10px;font-weight:900;letter-spacing:.4px;background:transparent;",
-                "readingItemTitle": f"color:{COLORS['primary']};font-size:12px;font-weight:800;background:transparent;",
-                "readingItemDescription": f"color:{COLORS['muted']};font-size:10px;background:transparent;",
             }
             for label in content.findChildren(QLabel):
                 stylesheet = label_styles.get(label.objectName())
@@ -2022,7 +1984,7 @@ class WorkDetailPage(QWidget):
             return 0
 
     def _reading_section(self):
-        """Show count-backed chapter/volume placeholders and save reading progress."""
+        """Show honest numeric chapter/volume progress without fictional item cards."""
         members = self._episode_members()
         member_ids = {int(member["id"]) for member in members}
         if self._selected_episode_work_id not in member_ids:
@@ -2048,15 +2010,6 @@ class WorkDetailPage(QWidget):
             f"font-size:17px;font-weight:800;color:{COLORS['primary']};"
         )
         header.addWidget(title)
-
-        placeholder_badge = QLabel("PLACEHOLDER DETAILS")
-        placeholder_badge.setObjectName("readingPlaceholderBadge")
-        placeholder_badge.setStyleSheet(
-            f"color:{COLORS['accent']};background:{COLORS['accent_soft']};"
-            f"border:1px solid {COLORS['border']};border-radius:8px;"
-            "padding:4px 8px;font-size:9px;font-weight:900;letter-spacing:.4px;"
-        )
-        header.addWidget(placeholder_badge)
         header.addStretch(1)
 
         if len(members) > 1:
@@ -2089,36 +2042,39 @@ class WorkDetailPage(QWidget):
 
         layout.addLayout(header)
 
-        note = QLabel(
-            "Chapter and volume titles, individual descriptions, and volume artwork "
-            "are placeholders for now. Your read progress is saved locally."
-        )
-        note.setObjectName("readingPlaceholderNote")
-        note.setWordWrap(True)
-        note.setStyleSheet(
-            f"color:{COLORS['secondary']};font-size:12px;"
-            f"background:{COLORS['surface_alt']};border:1px solid {COLORS['border']};"
-            "border-radius:10px;padding:10px 12px;"
-        )
-        layout.addWidget(note)
-
         if selected_id is None:
             empty = QLabel("Save this work to your Library to track reading progress.")
+            empty.setWordWrap(True)
             empty.setStyleSheet(muted_label_stylesheet())
             layout.addWidget(empty)
             return frame
 
+        is_in_library = False
+        if selected_work is not None:
+            try:
+                is_in_library = selected_work["status"] is not None
+            except (KeyError, IndexError, TypeError):
+                is_in_library = False
+
+        if not is_in_library:
+            note = QLabel("Add this work to your Library to track reading progress.")
+            note.setWordWrap(True)
+            note.setStyleSheet(muted_label_stylesheet())
+            layout.addWidget(note)
+
         chapter_total = self._work_count(selected_work, "chapters")
         volume_total = self._work_count(selected_work, "volumes")
         self._reading_kind_section(
-            layout, int(selected_id), "chapter", chapter_total
+            layout, int(selected_id), "chapter", chapter_total, is_in_library
         )
         self._reading_kind_section(
-            layout, int(selected_id), "volume", volume_total
+            layout, int(selected_id), "volume", volume_total, is_in_library
         )
         return frame
 
-    def _reading_kind_section(self, parent_layout, work_id, item_type, total):
+    def _reading_kind_section(
+        self, parent_layout, work_id, item_type, total, enabled=True
+    ):
         label = "Chapters" if item_type == "chapter" else "Volumes"
         section = QFrame()
         section.setObjectName("readingKindSection")
@@ -2137,7 +2093,9 @@ class WorkDetailPage(QWidget):
 
         read_count, _ = get_reading_progress(work_id, item_type, total)
         progress_label = QLabel(
-            f"{read_count} / {total} read" if total else f"{read_count} read · total unknown"
+            f"{read_count} / {total} read"
+            if total
+            else f"{read_count} read · total unknown"
         )
         progress_label.setObjectName("readingKindProgress")
         progress_label.setStyleSheet(
@@ -2146,71 +2104,49 @@ class WorkDetailPage(QWidget):
         header.addWidget(progress_label)
         box.addLayout(header)
 
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(8)
-        box.addLayout(grid)
+        control_row = QHBoxLayout()
+        description = QLabel(
+            "How many have you read?"
+            if total
+            else "Enter the number you've read; the total is not known."
+        )
+        description.setWordWrap(True)
+        description.setStyleSheet(muted_label_stylesheet())
+        control_row.addWidget(description, 1)
 
-        if total <= 0:
-            empty = QLabel(
-                f"A {item_type} count is not available yet. "
-                f"{label} placeholders will appear when AniList provides a total."
-            )
-            empty.setObjectName("readingKindEmpty")
-            empty.setWordWrap(True)
-            empty.setStyleSheet(muted_label_stylesheet())
-            box.addWidget(empty)
-            parent_layout.addWidget(section)
-            return
-
-        page_size = 24
-        state = {"offset": 0}
-
-        def load_page():
-            offset = state["offset"]
-            items = ensure_reading_placeholders(
-                work_id, item_type, total, offset=offset, limit=page_size
-            )
-            for local_index, item in enumerate(items):
-                item_index = offset + local_index
-                card = ReadingItemCard(item)
-                card.read_changed.connect(
-                    lambda kind, number, checked, wid=work_id, total_count=total,
-                           count_label=progress_label:
-                        self._reading_item_toggled(
-                            wid, kind, number, checked, total_count, count_label
-                        )
+        counter = QSpinBox()
+        counter.setObjectName("readingProgressCount")
+        counter.setMinimum(0)
+        counter.setMaximum(min(max(total, 1), 1_000_000) if total else 1_000_000)
+        counter.setSingleStep(1)
+        counter.setKeyboardTracking(False)
+        counter.setSuffix(f" / {total}" if total else " read")
+        counter.setValue(min(read_count, counter.maximum()))
+        counter.setEnabled(bool(enabled))
+        counter.setToolTip(
+            f"Number of {label.lower()} read for this entry."
+        )
+        counter.valueChanged.connect(
+            lambda value, wid=work_id, kind=item_type, total_hint=total,
+                   status_label=progress_label:
+                self._reading_progress_changed(
+                    wid, kind, value, total_hint, status_label
                 )
-                grid.addWidget(card, item_index // 2, item_index % 2)
-
-            state["offset"] += len(items)
-            if state["offset"] >= total:
-                load_more.hide()
-            else:
-                load_more.setText(
-                    f"Load more {label.lower()} "
-                    f"({state['offset']} of {total} shown)"
-                )
-
-        load_more = QPushButton()
-        load_more.setObjectName("readingLoadMore")
-        load_more.setCursor(Qt.PointingHandCursor)
-        load_more.clicked.connect(load_page)
-        box.addWidget(load_more)
-        load_page()
+        )
+        control_row.addWidget(counter, 0, Qt.AlignVCenter)
+        box.addLayout(control_row)
         parent_layout.addWidget(section)
 
-    def _reading_item_toggled(
-        self, work_id, item_type, item_number, checked, total_hint, label
+    def _reading_progress_changed(
+        self, work_id, item_type, read_count, total_hint, label
     ):
-        read_count, _total = set_reading_item_read(
-            work_id, item_type, item_number, checked
+        saved_count, _total = set_reading_progress_count(
+            work_id, item_type, read_count, total_hint
         )
         label.setText(
-            f"{read_count} / {total_hint} read"
+            f"{saved_count} / {total_hint} read"
             if total_hint
-            else f"{read_count} read · total unknown"
+            else f"{saved_count} read · total unknown"
         )
 
     def _reading_member_changed(self, work_id):
