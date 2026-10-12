@@ -92,11 +92,11 @@ class StaffPageWorker(QObject):
 
     def run(self):
         results = []
-        for work_id, page in self.requests:
+        for work_id, anilist_id, page in self.requests:
             if self.stop_event.is_set():
                 break
             try:
-                payload = get_media_staff_page(work_id, page=page, per_page=15)
+                payload = get_media_staff_page(anilist_id, page=page, per_page=15)
                 edges = payload.get("edges") if isinstance(payload, dict) else None
                 page_info = payload.get("pageInfo") if isinstance(payload, dict) else None
                 if not isinstance(edges, list):
@@ -107,7 +107,7 @@ class StaffPageWorker(QObject):
                         work_id,
                         "anilist_staff_page_info",
                         page_info,
-                        provider_id=work_id,
+                        provider_id=anilist_id,
                     )
                 results.append({
                     "work_id": int(work_id),
@@ -678,8 +678,7 @@ class WorkDetailPage(QWidget):
         self.work = work
         detail_ids = self._detail_work_ids()
         for work_id in detail_ids:
-            if work_id > 0:
-                self._staff_next_pages.setdefault(work_id, 2)
+            self._staff_next_pages.setdefault(work_id, 2)
         self._staff_visible_counts.setdefault(tuple(detail_ids), 12)
 
         self.mangabaka_metadata = self._value("_mangabaka")
@@ -2714,25 +2713,45 @@ class WorkDetailPage(QWidget):
 
     def _staff_page_requests(self, detail_ids):
         requests = []
-        for work_id in detail_ids or []:
+        for local_work_id in detail_ids or []:
             try:
-                work_id = int(work_id)
+                local_work_id = int(local_work_id)
             except (TypeError, ValueError, OverflowError):
                 continue
-            if work_id <= 0 or work_id in self._staff_exhausted_ids:
+            if local_work_id == 0 or local_work_id in self._staff_exhausted_ids:
                 continue
+
+            # Most local works use their AniList ID as their work ID. A
+            # MangaBaka-only work may keep a negative local ID but have an
+            # explicitly linked AniList record stored alongside it.
+            anilist_id = local_work_id if local_work_id > 0 else None
+            if anilist_id is None:
+                try:
+                    linked_record = get_provider_metadata(
+                        local_work_id, "anilist_media_id"
+                    )
+                    raw_anilist_id = (
+                        linked_record.get("id")
+                        if isinstance(linked_record, dict) else None
+                    )
+                    anilist_id = int(raw_anilist_id)
+                except (TypeError, ValueError, OverflowError):
+                    anilist_id = None
+            if anilist_id is None or anilist_id <= 0:
+                continue
+
             try:
-                saved_staff_count = len(get_staff(work_id))
+                saved_staff_count = len(get_staff(local_work_id))
             except Exception:
                 saved_staff_count = 0
             try:
                 page_info = get_provider_metadata(
-                    work_id, "anilist_staff_page_info"
+                    local_work_id, "anilist_staff_page_info"
                 )
             except Exception:
                 page_info = None
             if isinstance(page_info, dict) and page_info.get("hasNextPage") is False:
-                self._staff_exhausted_ids.add(work_id)
+                self._staff_exhausted_ids.add(local_work_id)
                 continue
             if (
                 not isinstance(page_info, dict)
@@ -2742,7 +2761,11 @@ class WorkDetailPage(QWidget):
                 # information was cached alongside the initial credit list.
                 if saved_staff_count < 15:
                     continue
-            requests.append((work_id, self._staff_next_pages.get(work_id, 2)))
+            requests.append((
+                local_work_id,
+                anilist_id,
+                self._staff_next_pages.get(local_work_id, 2),
+            ))
         return requests
 
     def _staff_section(self, detail_ids, items=None):
