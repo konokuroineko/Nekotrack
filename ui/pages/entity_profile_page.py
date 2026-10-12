@@ -588,7 +588,7 @@ class EntityProfilePage(QWidget):
             r"\[(?P<base>https?://(?:www\.)?youtube\.com/)\]\((?P=base)\)"
             r"\[@(?P<handle>[A-Za-z0-9_.-]+)\]"
             r"\(https?://anilist\.co/user/[^)]+\)"
-            r"(?P<suffix>(?:\?[^\s)]*)?)\)"
+            r"(?P<suffix>[-A-Za-z0-9_.]*(?:\?[^\s)]*)?)\)"
         )
 
         def replace_link(match):
