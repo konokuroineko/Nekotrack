@@ -95,9 +95,9 @@ class LibraryImportWorker(QObject):
 
             save_anime(details)
 
-            # Pull published volume/work records when MangaBaka has them. The
-            # local progress rows stay authoritative; this only fills real
-            # titles into the existing volume placeholders.
+            # Cache real published volume/work records when MangaBaka has them.
+            # Numeric read progress is stored separately and never depends on
+            # generating fictional chapter or volume entries.
             if not self._cancelled() and str(details.get("type") or "").upper() == "MANGA":
                 mb_id = details.get("_mangabaka_id")
                 if mb_id is None and self.work_id < 0:
