@@ -653,12 +653,18 @@ class UiStartupTests(unittest.TestCase):
 
 
     def test_malformed_anilist_youtube_link_renders_as_a_clean_clickable_link(self):
-        description = (
+        malformed_link = (
             "[Youtube]\\([https://youtube.com/](https://youtube.com/)"
             "[@officialyoutubechannel3974]"
             "(https://anilist.co/user/officialyoutubechannel3974)"
             "?si=9AjlJ6Ujj2Vw1CiU)"
         )
+        self.assertEqual(
+            EntityProfilePage._normalize_profile_description(malformed_link),
+            "[Youtube](https://youtube.com/@officialyoutubechannel3974?si=9AjlJ6Ujj2Vw1CiU)",
+        )
+        # AniList's asHtml=true response can wrap malformed Markdown inside HTML.
+        description = f"<p>{malformed_link}</p>"
         with patch.object(EntityProfilePage, "_start_profile_load"):
             page = EntityProfilePage()
             try:
