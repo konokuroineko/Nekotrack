@@ -1,5 +1,3 @@
-from datetime import date
-
 from PySide6.QtCore import Qt, Signal, QUrl, QObject, QRunnable, QThreadPool
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
@@ -597,10 +595,6 @@ class EntityProfilePage(QWidget):
             note.setWordWrap(True)
             note.setStyleSheet(muted_label_stylesheet())
             layout.addWidget(note)
-            retry = QPushButton("Retry profile details")
-            retry.setCursor(Qt.PointingHandCursor)
-            retry.clicked.connect(lambda checked=False, token=self._request_token: self._start_profile_load(token))
-            layout.addWidget(retry, 0, Qt.AlignLeft)
             self.content_layout.addWidget(section)
 
         if is_character:
