@@ -480,6 +480,8 @@ class MainWindow(QMainWindow):
         self._settings_rebuild_pending = False
         self._detail_enrichment_ids = set()
         self._entity_profile_history = []
+        self._profile_work_return_state = None
+        self._opening_profile_credit_work = False
         self._library_episode_preload_thread = None
         self._library_episode_preload_worker = None
         self._ui_root_stack = None
@@ -563,7 +565,7 @@ class MainWindow(QMainWindow):
         self.navigation.page_changed.connect(self._page_changed)
         self.library_page.work_selected.connect(self.show_work_details)
         self.search_page.anime_selected.connect(self.show_search_work)
-        self.work_detail_page.back_requested.connect(lambda: self.navigation.show("collections"))
+        self.work_detail_page.back_requested.connect(self._back_from_work_detail)
         self.work_detail_page.bundle_edit_requested.connect(self.library_page._edit_bundle)
         self.work_detail_page.character_selected.connect(
             lambda character: self.show_entity_profile("character", character)
@@ -577,6 +579,7 @@ class MainWindow(QMainWindow):
         self.entity_profile_page.voice_actor_selected.connect(
             lambda actor: self.show_entity_profile("voice_actor", actor)
         )
+        self.entity_profile_page.work_selected.connect(self.show_profile_credit_work)
         self.entity_profile_page.back_requested.connect(self._back_from_entity_profile)
         self.work_detail_page.relation_selected.connect(self.show_relation)
         self.work_detail_page.bundle_changed.connect(self._refresh_library_after_bundle_change)
@@ -889,8 +892,13 @@ class MainWindow(QMainWindow):
 
 
     def show_work_details(self, work):
+        # A normal work selection starts a new navigation path. Preserve the
+        # profile return target only while opening a work from a profile credit.
+        if not self._opening_profile_credit_work:
+            self._profile_work_return_state = None
+
         # Open the detail page immediately. Older library entries may still
-        # need their full AniList character/staff payload, so enrich them in
+        # need their full character/staff payload, so enrich them in
         # the existing background worker instead of blocking the click.
         self.work_detail_page.set_work(work)
         self.navigation.show("work_detail")
@@ -989,6 +997,32 @@ class MainWindow(QMainWindow):
             log_exception("work_details.search_enrichment_failed", error,
                           work_id=work.get("id") if hasattr(work, "get") else None)
             self.show_work_details(work)
+
+    def show_profile_credit_work(self, work):
+        """Open a work from a character/staff credit inside NekoTrack."""
+        if not work:
+            return
+        self._profile_work_return_state = self.entity_profile_page.profile_state()
+        self._opening_profile_credit_work = True
+        try:
+            self.show_search_work(work)
+        finally:
+            self._opening_profile_credit_work = False
+
+    def _back_from_work_detail(self):
+        """Return to the profile that opened an internal media-credit page."""
+        state = self._profile_work_return_state
+        self._profile_work_return_state = None
+        if isinstance(state, dict):
+            self.entity_profile_page.set_profile(
+                state["entity_type"],
+                state["record"],
+                source_work=state["source_work"],
+                voice_actors=state["voice_actors"],
+            )
+            self.navigation.show("entity_profile")
+            return
+        self.navigation.show("collections")
 
     def show_entity_profile(self, entity_type, entity):
         """Open a detailed character, staff, or voice-actor profile."""
