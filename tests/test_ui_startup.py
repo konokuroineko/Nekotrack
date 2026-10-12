@@ -541,7 +541,12 @@ class UiStartupTests(unittest.TestCase):
                      patch("ui.pages.entity_profile_page.EntityProfilePage._start_profile_load"), \
                      patch("ui.main_window.get_bundle_character_voice_actors", side_effect=[[], [actor]]), \
                      patch("ui.main_window.get_work", side_effect=lambda work_id: {"id": work_id, "type": "ANIME"}), \
-                     patch("ui.main_window.get_characters", return_value=[{"id": 90185, "person_id": None}]), \
+                     patch(
+                         "database.get_characters",
+                         side_effect=lambda work_id: (
+                             [{"id": 90185, "person_id": None}] if int(work_id) == 21355 else []
+                         ),
+                     ) as get_characters, \
                      patch("ui.main_window.invalidate_character_snapshots", return_value=2) as invalidate, \
                      patch.object(MainWindow, "_queue_library_imports") as queue_imports:
                     window = MainWindow()
@@ -553,6 +558,10 @@ class UiStartupTests(unittest.TestCase):
                         "character",
                         {"id": 90185, "character_name": "Crusch Karsten"},
                     )
+
+                    # Refresh must not depend on the target character already being
+                    # present in every member's potentially incomplete cache.
+                    get_characters.assert_not_called()
 
                     invalidate.assert_called_once_with([21355, 108632])
                     queue_imports.assert_called_once_with([21355, 108632])
