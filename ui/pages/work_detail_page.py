@@ -1983,13 +1983,61 @@ class WorkDetailPage(QWidget):
             "MANGA", "NOVEL", "ONE_SHOT",
         }
 
-    @staticmethod
-    def _work_count(work, key):
-        try:
-            value = work[key]
-            return max(0, int(value or 0))
-        except (KeyError, IndexError, TypeError, ValueError):
+    def _work_count(self, work, key):
+        """Read a published count, falling back to saved MangaBaka metadata.
+
+        Older imports can have a blank count when MangaBaka's preferred field
+        existed with a null value. The raw provider payload is retained locally,
+        so use its alternate count fields rather than leaving the tracker unusable.
+        """
+        def parse_count(raw):
+            if raw is None or isinstance(raw, bool):
+                return 0
+            try:
+                count = int(raw)
+                return count if count > 0 else 0
+            except (TypeError, ValueError, OverflowError):
+                pass
+            if isinstance(raw, str):
+                import re
+                match = re.search(r"(?<![-0-9])[0-9]+", raw)
+                if match:
+                    try:
+                        return max(0, int(match.group(0)))
+                    except (TypeError, ValueError, OverflowError):
+                        return 0
             return 0
+
+        try:
+            value = parse_count(work[key])
+        except (KeyError, IndexError, TypeError):
+            value = 0
+        if value:
+            return value
+
+        try:
+            work_id = int(work["id"])
+        except (KeyError, IndexError, TypeError, ValueError, OverflowError):
+            return 0
+        try:
+            metadata = get_provider_metadata(work_id, "mangabaka")
+        except Exception:
+            metadata = None
+        if not isinstance(metadata, dict):
+            return 0
+
+        if key == "chapters":
+            fields = ("total_chapters", "chapters", "chapter_count")
+        elif key == "volumes":
+            fields = ("total_volumes", "volumes", "final_volume", "volume_count")
+        else:
+            fields = ()
+
+        for field in fields:
+            value = parse_count(metadata.get(field))
+            if value:
+                return value
+        return 0
 
     def _reading_section(self):
         """Show honest numeric chapter/volume progress without fictional item cards."""
