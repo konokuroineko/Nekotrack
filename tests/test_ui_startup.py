@@ -542,7 +542,7 @@ class UiStartupTests(unittest.TestCase):
                      patch("ui.main_window.get_bundle_character_voice_actors", side_effect=[[], [actor]]), \
                      patch("ui.main_window.get_work", side_effect=lambda work_id: {"id": work_id, "type": "ANIME"}), \
                      patch(
-                         "ui.main_window.get_characters",
+                         "database.get_characters",
                          side_effect=lambda work_id: (
                              [{"id": 90185, "person_id": None}] if int(work_id) == 21355 else []
                          ),
