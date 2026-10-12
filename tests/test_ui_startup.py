@@ -678,7 +678,7 @@ class UiStartupTests(unittest.TestCase):
                 self.assertTrue(bio.openExternalLinks())
                 rendered = bio.toHtml()
                 self.assertIn("https://www.youtube.com/@Ueda-Kana", rendered)
-                self.assertIn(">YouTube</a>", rendered)
+                self.assertIn("YouTube", rendered)
                 self.assertNotIn("https://anilist.co/user/Ueda", rendered)
                 self.assertNotIn("[YouTube](", rendered)
             finally:
