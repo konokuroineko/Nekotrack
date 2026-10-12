@@ -1,9 +1,10 @@
-from PySide6.QtCore import Qt, Signal, QUrl, QObject, QRunnable, QThreadPool, QRectF
+from PySide6.QtCore import Qt, Signal, QUrl, QObject, QRunnable, QThreadPool, QRectF, QPoint, QRect, QSize
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
+    QLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -15,6 +16,8 @@ from PySide6.QtWidgets import (
 from api import get_entity_profile
 from ui.theme import COLORS, muted_label_stylesheet
 from ui.widgets.person_card import PersonCard
+from ui.widgets.character_card import CharacterCard
+from ui.widgets.work_card import WorkCard
 
 
 def _crop_pixmap_to_size(pixmap, size):
@@ -342,6 +345,117 @@ class MediaCreditCard(QFrame):
         super().mousePressEvent(event)
 
 
+class ProfileFlowLayout(QLayout):
+    """Wrap fixed-width profile credit cards into tidy poster rows."""
+
+    def __init__(self, parent=None, h_spacing=10, v_spacing=14):
+        super().__init__(parent)
+        self._items = []
+        self._h_spacing = int(h_spacing)
+        self._v_spacing = int(v_spacing)
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations()
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        return size + QSize(
+            margins.left() + margins.right(),
+            margins.top() + margins.bottom(),
+        )
+
+    def _do_layout(self, rect, test_only):
+        margins = self.contentsMargins()
+        effective = rect.adjusted(
+            margins.left(), margins.top(), -margins.right(), -margins.bottom()
+        )
+        x = effective.x()
+        y = effective.y()
+        row_height = 0
+        used_any = False
+
+        for item in self._items:
+            size = item.sizeHint()
+            if size.width() <= 0:
+                continue
+            if used_any and x + size.width() > effective.right() + 1:
+                x = effective.x()
+                y += row_height + self._v_spacing
+                row_height = 0
+                used_any = False
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), size))
+            x += size.width() + self._h_spacing
+            row_height = max(row_height, size.height())
+            used_any = True
+
+        if not used_any:
+            return margins.top() + margins.bottom()
+        return y + row_height - rect.y() + margins.bottom()
+
+
+class ProfileWorkCreditCard(WorkCard):
+    """Compact poster-style work card with a short, inspectable staff-role label."""
+
+    def __init__(self, edge, parent=None):
+        edge = edge if isinstance(edge, dict) else {}
+        node = edge.get("node") if isinstance(edge.get("node"), dict) else {}
+        work = dict(node)
+        super().__init__(
+            work,
+            mode="search",
+            show_add_button=False,
+            parent=parent,
+        )
+
+        raw_role = edge.get("staffRole") or edge.get("role") or ""
+        full_role = " ".join(str(raw_role).split())
+        if not full_role:
+            return
+
+        role = QLabel(full_role)
+        role.setObjectName("profileCreditRole")
+        role.setWordWrap(True)
+        role.setFixedHeight(30)
+        role.setToolTip(full_role)
+        role.setStyleSheet(
+            f"background:transparent;border:none;color:{COLORS['muted']};"
+            "font-size:10px;"
+        )
+        root = self.layout()
+        root.insertWidget(max(0, root.count() - 1), role)
+        self.setFixedHeight(self.height() + role.height() + root.spacing())
+
+
 class EntityProfilePage(QWidget):
     """NekoTrack character and voice-actor profiles with internal work navigation."""
 
@@ -447,10 +561,19 @@ class EntityProfilePage(QWidget):
                 border:1px solid {COLORS['frame']};
                 border-radius:14px;
             }}
+            QLabel#profileInlineTitle {{
+                color:{COLORS['accent']};
+                font-size:10px;
+                font-weight:900;
+                letter-spacing:1px;
+                background:transparent;
+                border:none;
+            }}
             QLabel#profileDescription {{
                 color:{COLORS['secondary']};
-                font-size:13px;
-                line-height:1.35;
+                font-size:12px;
+                background:transparent;
+                border:none;
             }}
             """
         )
@@ -723,42 +846,42 @@ class EntityProfilePage(QWidget):
         for fact in facts:
             facts_column.addWidget(self._fact("", fact))
 
+        description = str(
+            remote.get("description")
+            or self._value(record, "description", "")
+            or ""
+        ).strip()
+        if description:
+            about_title = QLabel("ABOUT")
+            about_title.setObjectName("profileInlineTitle")
+            facts_column.addWidget(about_title)
+            description_label = QLabel(description)
+            description_label.setObjectName("profileDescription")
+            description_label.setWordWrap(True)
+            description_label.setTextFormat(Qt.PlainText)
+            description_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            facts_column.addWidget(description_label)
+        elif self._remote_error:
+            note = QLabel(
+                "Biography unavailable. Showing the saved profile details."
+            )
+            note.setWordWrap(True)
+            note.setStyleSheet(muted_label_stylesheet())
+            facts_column.addWidget(note)
+
         if self.source_work is not None:
             facts_column.addWidget(self._fact("Opened from", self._work_title(self.source_work)))
         facts_column.addStretch(1)
         row.addLayout(facts_column, 1)
         self.content_layout.addWidget(header)
 
-        description = str(remote.get("description") or self._value(record, "description", "") or "").strip()
-        if description:
-            section, layout = self._section("About")
-            description_label = QLabel(description)
-            description_label.setObjectName("profileDescription")
-            description_label.setWordWrap(True)
-            description_label.setTextFormat(Qt.PlainText)
-            description_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            layout.addWidget(description_label)
-            self.content_layout.addWidget(section)
-        elif self._remote_error:
-            section, layout = self._section("About")
-            note = QLabel(
-                "The detailed biography could not be loaded. Your saved character "
-                "or staff information is still available below."
-            )
-            note.setWordWrap(True)
-            note.setStyleSheet(muted_label_stylesheet())
-            layout.addWidget(note)
-            self.content_layout.addWidget(section)
-
         if is_character:
             self._render_voice_actors()
             connection = remote.get("media")
             self._render_media_credits("Appears in", connection, "character")
+        elif is_voice_actor:
+            self._render_voice_acting_roles(remote.get("characterMedia"), remote)
         else:
-            if is_voice_actor:
-                self._render_media_credits(
-                    "Voice acting roles", remote.get("characterMedia"), "voice_actor"
-                )
             self._render_media_credits(
                 "Staff credits", remote.get("staffMedia"), "staff"
             )
@@ -808,38 +931,150 @@ class EntityProfilePage(QWidget):
             )
             for index, actor in enumerate(ordered):
                 person = dict(actor)
-                credits = person.get("credits")
-                role_labels = []
-                if isinstance(credits, list):
-                    for credit in credits:
-                        if not isinstance(credit, dict):
-                            continue
-                        work_title = str(credit.get("work_title") or "").strip()
-                        work_id = credit.get("work_id")
-                        if not work_title and work_id is not None:
-                            work_title = f"Work {work_id}"
-                        language = str(credit.get("language") or "").strip()
-                        if language and work_title:
-                            label = f"{language} · {work_title}"
-                        else:
-                            label = language or work_title
-                        if label and label not in role_labels:
-                            role_labels.append(label)
+                credits = [
+                    credit for credit in (person.get("credits") or [])
+                    if isinstance(credit, dict)
+                ]
                 languages = person.get("languages")
-                if not role_labels:
-                    if isinstance(languages, (list, tuple)):
-                        role_labels = [
-                            str(language).strip()
-                            for language in languages
-                            if str(language).strip()
-                        ]
-                    if not role_labels and person.get("language"):
-                        role_labels = [str(person["language"]).strip()]
-                person["role"] = " / ".join(role_labels) or "Voice actor"
+                language_labels = []
+                if isinstance(languages, (list, tuple)):
+                    for language in languages:
+                        label = str(language or "").strip()
+                        if label and label not in language_labels:
+                            language_labels.append(label)
+                if not language_labels:
+                    for credit in credits:
+                        label = str(credit.get("language") or "").strip()
+                        if label and label not in language_labels:
+                            language_labels.append(label)
+                if not language_labels and person.get("language"):
+                    language_labels = [str(person["language"]).strip()]
+
+                work_keys = set()
+                credit_tooltip = []
+                for credit in credits:
+                    work_title = str(credit.get("work_title") or "").strip()
+                    work_id = credit.get("work_id")
+                    if work_id is not None:
+                        work_keys.add(str(work_id))
+                    elif work_title:
+                        work_keys.add(work_title.casefold())
+                    language = str(credit.get("language") or "").strip()
+                    line = " · ".join(value for value in (language, work_title) if value)
+                    if line and line not in credit_tooltip:
+                        credit_tooltip.append(line)
+
+                summary = list(language_labels)
+                credit_count = len(work_keys)
+                if credit_count:
+                    summary.append(
+                        f"{credit_count} {'credit' if credit_count == 1 else 'credits'}"
+                    )
+                person["role"] = " · ".join(summary) or "Voice actor"
                 card = PersonCard(person, portrait_size=(90, 120))
+                if credit_tooltip:
+                    card.setToolTip("\n".join(credit_tooltip))
                 card.clicked.connect(self.voice_actor_selected.emit)
                 grid.addWidget(card, index // 5, index % 5)
             body.addWidget(grid_host)
+        self.content_layout.addWidget(section)
+
+    def _render_voice_acting_roles(self, connection, remote):
+        """Render one Characters-tab-style card per credited voice-acting role."""
+        section, body = self._section("Voice acting roles")
+        edges = connection.get("edges") if isinstance(connection, dict) else None
+        roles_by_character = {}
+        role_priority = {"MAIN": 0, "SUPPORTING": 1, "BACKGROUND": 2}
+
+        actor = dict(self.current_record or {})
+        actor_id = remote.get("id") or self._value(
+            actor, "person_id", self._value(actor, "id")
+        )
+        actor_name = (
+            self._name_from(remote.get("name"))
+            or str(self._value(actor, "name", "Unknown voice actor") or "Unknown voice actor")
+        )
+        actor_image_url = self._image_url(remote.get("image")) or self._value(
+            actor, "image_url"
+        )
+        actor_image_path = self._value(actor, "image_path")
+
+        if isinstance(edges, list):
+            for edge in edges:
+                if not isinstance(edge, dict):
+                    continue
+                role = str(edge.get("characterRole") or "").strip().upper()
+                characters = edge.get("characters")
+                if not isinstance(characters, list):
+                    continue
+                for character in characters:
+                    if not isinstance(character, dict):
+                        continue
+                    try:
+                        character_id = int(character.get("id") or 0)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if character_id <= 0:
+                        continue
+
+                    raw_name = character.get("name")
+                    if isinstance(raw_name, dict):
+                        character_name = (
+                            raw_name.get("full") or raw_name.get("native")
+                            or "Unknown character"
+                        )
+                    else:
+                        character_name = raw_name or "Unknown character"
+                    image = character.get("image")
+                    character_image_url = (
+                        image.get("large") if isinstance(image, dict) else None
+                    )
+                    item = {
+                        "id": character_id,
+                        "character_name": str(character_name),
+                        "character_image_url": character_image_url,
+                        "character_role": role,
+                        "person_id": actor_id,
+                        "person_name": actor_name,
+                        "person_image_path": actor_image_path,
+                        "person_image_url": actor_image_url,
+                        "person_language": remote.get("languageV2"),
+                    }
+                    previous = roles_by_character.get(character_id)
+                    if (
+                        previous is None
+                        or role_priority.get(role, 3)
+                        < role_priority.get(str(previous.get("character_role") or "").upper(), 3)
+                    ):
+                        roles_by_character[character_id] = item
+
+        if not roles_by_character:
+            empty = QLabel("No voice-acting character roles were found.")
+            empty.setWordWrap(True)
+            empty.setStyleSheet(muted_label_stylesheet())
+            body.addWidget(empty)
+        else:
+            host = QWidget()
+            grid = QGridLayout(host)
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setHorizontalSpacing(12)
+            grid.setVerticalSpacing(12)
+            ordered = sorted(
+                roles_by_character.values(),
+                key=lambda item: (
+                    role_priority.get(str(item.get("character_role") or "").upper(), 3),
+                    str(item.get("character_name") or "").casefold(),
+                    int(item.get("id") or 0),
+                ),
+            )
+            for index, character in enumerate(ordered):
+                card = CharacterCard(character)
+                card.clicked.connect(self.character_selected.emit)
+                card.voice_actor_clicked.connect(self.voice_actor_selected.emit)
+                grid.addWidget(card, index // 4, index % 4)
+            for column in range(4):
+                grid.setColumnStretch(column, 1)
+            body.addWidget(host)
         self.content_layout.addWidget(section)
 
     def _render_media_credits(self, heading, connection, credit_kind):
@@ -855,6 +1090,14 @@ class EntityProfilePage(QWidget):
             empty.setWordWrap(True)
             empty.setStyleSheet(muted_label_stylesheet())
             body.addWidget(empty)
+        elif credit_kind == "staff":
+            host = QWidget()
+            flow = ProfileFlowLayout(host, h_spacing=10, v_spacing=14)
+            for edge in [edge for edge in edges if isinstance(edge, dict)][:12]:
+                card = ProfileWorkCreditCard(edge)
+                card.clicked.connect(self.work_selected.emit)
+                flow.addWidget(card)
+            body.addWidget(host)
         else:
             host = QWidget()
             grid = QGridLayout(host)
@@ -866,13 +1109,7 @@ class EntityProfilePage(QWidget):
                 card = MediaCreditCard(edge, credit_kind)
                 card.work_selected.connect(self.work_selected.emit)
                 card.character_selected.connect(self.character_selected.emit)
-                if credit_kind == "voice_actor":
-                    grid.addWidget(card, index, 0, 1, 3)
-                else:
-                    grid.addWidget(card, index // 3, index % 3)
-            if credit_kind == "voice_actor":
-                for column in range(3):
-                    grid.setColumnStretch(column, 1)
+                grid.addWidget(card, index // 3, index % 3)
             body.addWidget(host)
         self.content_layout.addWidget(section)
 
