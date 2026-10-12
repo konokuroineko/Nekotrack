@@ -1116,13 +1116,14 @@ def get_reading_progress(work_id, item_type, total_hint=None):
     connection = get_connection()
     try:
         row = connection.execute(
-            """
+            f"""
             SELECT COALESCE(
                 (SELECT read_count FROM reading_progress
                  WHERE work_id = ? AND item_type = ?),
-                (SELECT progress_chapters FROM user_library
-                 WHERE work_id = ?)
-            , 0) AS read_count
+                (SELECT {progress_column} FROM user_library
+                 WHERE work_id = ?),
+                0
+            ) AS read_count
             """,
             (safe_work_id, kind, safe_work_id),
         ).fetchone()
@@ -1137,9 +1138,6 @@ def get_reading_progress(work_id, item_type, total_hint=None):
     finally:
         connection.close()
 
-    # Keep this variable reference to the validated dynamic column explicit:
-    # chapter/volume is already normalized and is never used as raw SQL input.
-    del progress_column
     hinted_total = (
         _safe_optional_integer(total_hint, 0, _MAX_TRACKED_EPISODE_NUMBER)
         if total_hint is not None else None
@@ -2574,10 +2572,10 @@ def add_to_library(work_id, status="Planning"):
             VALUES (
                 ?, ?,
                 (SELECT COUNT(*) FROM episodes WHERE work_id = ? AND watched = 1),
-                (SELECT COALESCE(read_count, 0) FROM reading_progress
-                 WHERE work_id = ? AND item_type = 'chapter'),
-                (SELECT COALESCE(read_count, 0) FROM reading_progress
-                 WHERE work_id = ? AND item_type = 'volume'),
+                COALESCE((SELECT read_count FROM reading_progress
+                 WHERE work_id = ? AND item_type = 'chapter'), 0),
+                COALESCE((SELECT read_count FROM reading_progress
+                 WHERE work_id = ? AND item_type = 'volume'), 0),
                 CURRENT_TIMESTAMP
             )
             ON CONFLICT(work_id) DO UPDATE SET
