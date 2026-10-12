@@ -740,7 +740,7 @@ class UiStartupTests(unittest.TestCase):
                 self.assertTrue(all(card.height() == 140 for card in cards))
                 self.assertEqual(
                     [card.findChild(QLabel, "mediaCreditRole").text() for card in cards],
-                    ["MAIN", "SUPPORTING", "BACKGROUND"],
+                    ["Main", "Supporting", "Background"],
                 )
                 for card in cards:
                     self.assertEqual(len(card.character_cards), 1)
