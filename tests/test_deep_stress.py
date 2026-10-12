@@ -1934,68 +1934,53 @@ class DatabaseProgressStressTests(unittest.TestCase):
         os.chdir(self.old_cwd)
         self.temp_dir.cleanup()
 
-    def test_random_progress_toggles_keep_sqlite_and_aggregate_counts_consistent(self):
+    def test_random_numeric_progress_counts_keep_aggregates_consistent(self):
         rng = random.Random(_fuzz_seed(2026101001))
         expected = {
-            work_id: {"chapter": set(), "volume": set()}
+            work_id: {"chapter": 0, "volume": 0}
             for work_id in range(1, 5)
         }
         for _ in range(450):
             work_id = rng.randint(1, 4)
             item_type = rng.choice(["chapter", "volume"])
-            item_number = rng.randint(1, 120)
-            is_read = bool(rng.getrandbits(1))
-            database.set_reading_item_read(work_id, item_type, item_number, is_read)
-            if is_read:
-                expected[work_id][item_type].add(item_number)
-            else:
-                expected[work_id][item_type].discard(item_number)
+            read_count = rng.randint(0, 120)
+            database.set_reading_progress_count(
+                work_id, item_type, read_count, total_hint=120
+            )
+            expected[work_id][item_type] = read_count
 
-            read_count, total = database.get_reading_progress(work_id, item_type, total_hint=120)
-            self.assertEqual(read_count, len(expected[work_id][item_type]))
+            count, total = database.get_reading_progress(
+                work_id, item_type, total_hint=120
+            )
+            self.assertEqual(count, read_count)
             self.assertEqual(total, 120)
 
         for work_id, by_type in expected.items():
             saved = database.get_work(work_id)
-            self.assertEqual(saved["progress_chapters"], len(by_type["chapter"]))
-            self.assertEqual(saved["progress_volumes"], len(by_type["volume"]))
+            self.assertEqual(saved["progress_chapters"], by_type["chapter"])
+            self.assertEqual(saved["progress_volumes"], by_type["volume"])
 
-    def test_huge_placeholder_requests_are_bounded_and_idempotent(self):
-        first = database.ensure_reading_placeholders(1, "chapter", 10**9, offset=10, limit=10**8)
-        second = database.ensure_reading_placeholders(1, "chapter", 10**9, offset=10, limit=10**8)
-        self.assertEqual(len(first), 100)
-        self.assertEqual(len(second), 100)
-        self.assertEqual([int(row["item_number"]) for row in first], list(range(11, 111)))
-        self.assertEqual([int(row["item_number"]) for row in second], list(range(11, 111)))
-        self.assertEqual(len(database.get_reading_items(1, "chapter", limit=100)), 100)
-
-    def test_nonfinite_numeric_paging_arguments_fail_safely(self):
-        self.assertEqual(
-            database.ensure_reading_placeholders(1, "chapter", math.inf),
-            [],
-        )
-        self.assertEqual(
-            database.ensure_reading_placeholders(1, "chapter", 50, offset=math.inf),
-            [],
-        )
-        self.assertEqual(
-            database.get_reading_items(1, "chapter", limit=math.inf, offset=math.inf),
-            [],
-        )
+    def test_nonfinite_progress_totals_fail_safely(self):
         self.assertEqual(
             database.get_reading_progress(1, "chapter", total_hint=math.inf),
             (0, 0),
         )
         with self.assertRaises(ValueError):
-            database.set_reading_item_read(1, "chapter", math.inf, True)
+            database.set_reading_progress_count(1, "chapter", math.inf)
         with self.assertRaises(ValueError):
-            database.set_reading_item_read(1, "chapter", 1.5, True)
+            database.set_reading_progress_count(1, "chapter", 1.5)
+        with self.assertRaises(ValueError):
+            database.set_reading_progress_count(1, "chapter", -1)
 
-    def test_nonpositive_reading_item_numbers_are_rejected(self):
-        for number in (0, -1, -500):
-            with self.subTest(number=number):
-                with self.assertRaises(ValueError):
-                    database.set_reading_item_read(1, "chapter", number, True)
+    def test_progress_counts_clamp_to_known_total(self):
+        self.assertEqual(
+            database.set_reading_progress_count(1, "chapter", 999, total_hint=90),
+            (90, 90),
+        )
+        self.assertEqual(
+            database.set_reading_progress_count(1, "volume", 30, total_hint=30),
+            (30, 30),
+        )
 
 
 if __name__ == "__main__":
