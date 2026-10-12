@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QGridLayout
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QGridLayout, QWidget
 
 from ui.pages.entity_profile_page import (
     ClickableCharacterArtwork,
@@ -87,11 +87,22 @@ class EntityProfileUiTests(unittest.TestCase):
         self.assertIsNotNone(title_label)
         self.assertEqual(title_label.text(), "Example Series")
         self.assertEqual(title_label.parentWidget(), card)
-        text_column = card.layout().itemAt(1).layout()
-        text_layout = text_column.itemAt(1).layout()
+        text_layout = card.layout().itemAt(1).layout()
         self.assertIsInstance(text_layout, QGridLayout)
-        self.assertEqual(text_layout.getItemPosition(0), (0, 0, 1, 1))
-        self.assertEqual(text_layout.getItemPosition(1), (0, 0, 1, 1))
+        role_index = text_layout.indexOf(role_label)
+        name_widget = role_label.parentWidget().findChild(QWidget)
+        self.assertGreaterEqual(role_index, 0)
+        self.assertEqual(text_layout.getItemPosition(role_index), (0, 0, 1, 1))
+        name_widget_item = next(
+            index for index in range(text_layout.count())
+            if text_layout.itemAt(index).widget() is name_label.parentWidget()
+        )
+        title_item = next(
+            index for index in range(text_layout.count())
+            if text_layout.itemAt(index).widget() is title_label
+        )
+        self.assertEqual(text_layout.getItemPosition(name_widget_item), (0, 0, 1, 1))
+        self.assertEqual(text_layout.getItemPosition(title_item), (1, 0, 1, 1))
         QTest.mouseClick(card.character_cards[0], Qt.LeftButton)
         self.assertEqual(len(selected_character), 1)
         self.assertEqual(selected_character[0]["id"], 456)
