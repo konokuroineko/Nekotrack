@@ -281,6 +281,49 @@ def initialize_database():
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reading_progress (
+            work_id INTEGER NOT NULL,
+            item_type TEXT NOT NULL CHECK(item_type IN ('chapter', 'volume')),
+            read_count INTEGER NOT NULL DEFAULT 0 CHECK(read_count >= 0),
+            updated_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (work_id, item_type),
+            FOREIGN KEY (work_id) REFERENCES works(id)
+        )
+    """)
+    # Migrate old per-item progress once into durable counters before removing
+    # generated placeholder rows. Counters stay after Library membership is
+    # removed, matching the previous remove/re-add behavior without fake rows.
+    progress_row_count = cursor.execute(
+        "SELECT COUNT(*) FROM reading_progress"
+    ).fetchone()[0]
+    if progress_row_count == 0:
+        cursor.execute("""
+            INSERT INTO reading_progress (work_id, item_type, read_count)
+            SELECT work_id, item_type, SUM(is_read)
+            FROM reading_items
+            GROUP BY work_id, item_type
+            HAVING SUM(is_read) > 0
+        """)
+        for item_type, progress_column in (
+            ("chapter", "progress_chapters"),
+            ("volume", "progress_volumes"),
+        ):
+            cursor.execute(
+                f"""
+                INSERT INTO reading_progress (work_id, item_type, read_count)
+                SELECT work_id, ?, COALESCE({progress_column}, 0)
+                FROM user_library
+                WHERE COALESCE({progress_column}, 0) > 0
+                ON CONFLICT(work_id, item_type) DO UPDATE SET
+                    read_count = MAX(reading_progress.read_count, excluded.read_count)
+                """,
+                (item_type,),
+            )
+    # Unnamed rows were generated as Chapter N / Volume N placeholders.
+    # Keep genuine provider-titled volume metadata, but never render or retain
+    # the old fictional entries after their aggregate counts have been migrated.
+    cursor.execute("DELETE FROM reading_items WHERE title IS NULL")
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS songs (
             id INTEGER PRIMARY KEY, title TEXT NOT NULL, artist TEXT, image_url TEXT
         )
@@ -801,8 +844,8 @@ def get_characters(work_id):
     finally:
         connection.close()
 
-def save_staff(work_id, staff_edges):
-    """Save staff edges and reconcile stale links only for complete snapshots."""
+def save_staff(work_id, staff_edges, replace_snapshot=True):
+    """Save staff edges; allow additional pages to be merged without deleting prior credits."""
     try:
         safe_work_id = _validated_work_id(work_id)
     except (TypeError, ValueError, OverflowError):
@@ -849,7 +892,7 @@ def save_staff(work_id, staff_edges):
     connection = get_connection()
     try:
         old_person_ids = set()
-        if snapshot_valid:
+        if snapshot_valid and replace_snapshot:
             old_person_ids = {
                 row["person_id"]
                 for row in connection.execute(
@@ -857,8 +900,8 @@ def save_staff(work_id, staff_edges):
                     (safe_work_id,),
                 ).fetchall()
             }
-            # Only a well-formed complete edge list may remove stale roles.
-            # A valid empty list is authoritative and clears the old snapshot.
+            # Only a complete snapshot may remove stale roles. Paginated pages
+            # use replace_snapshot=False and only add newly encountered credits.
             connection.execute(
                 "DELETE FROM work_staff WHERE work_id = ?",
                 (safe_work_id,),
@@ -883,7 +926,7 @@ def save_staff(work_id, staff_edges):
                 (safe_work_id, person_id, role),
             )
 
-        if snapshot_valid:
+        if snapshot_valid and replace_snapshot:
             for person_id in old_person_ids:
                 still_referenced = connection.execute(
                     """
@@ -1059,113 +1102,34 @@ def _reading_item_type(value):
     return value
 
 
-def ensure_reading_placeholders(work_id, item_type, total_count, offset=0, limit=24):
-    """Create bounded generic placeholders only for the visible reading-list page."""
-    kind = _reading_item_type(item_type)
-    try:
-        safe_work_id = _validated_work_id(work_id)
-    except (TypeError, ValueError, OverflowError):
-        return []
-
-    # The provider's declared total can be absurdly large (or stale).
-    # Clamp a valid non-negative hint to the largest trackable item number,
-    # while still allowing the requested visible page to be created. The page
-    # itself is independently capped below, so this never creates an enormous
-    # range or inserts more than 100 placeholders per call.
-    total = _safe_optional_integer(total_count, 0, _MAX_SQLITE_INTEGER)
-    if total is None:
-        return []
-    total = min(total, _MAX_TRACKED_EPISODE_NUMBER)
-    safe_offset = _safe_optional_integer(offset, 0, _MAX_TRACKED_EPISODE_NUMBER)
-    if safe_offset is None:
-        return []
-    # Accept large-but-valid page-size requests and clamp the actual page;
-    # the input limit should not be constrained by the maximum item number.
-    parsed_limit = _safe_optional_integer(limit, 0, _MAX_SQLITE_INTEGER)
-    if parsed_limit is None:
-        return []
-    page_size = min(100, max(1, parsed_limit))
-
-    if total <= safe_offset:
-        return []
-    end = min(total, safe_offset + page_size)
-    start_number = safe_offset + 1
-    connection = get_connection()
-    try:
-        connection.executemany(
-            """
-            INSERT OR IGNORE INTO reading_items
-                (work_id, item_type, item_number, title, is_read)
-            VALUES (?, ?, ?, NULL, 0)
-            """,
-            [
-                (safe_work_id, kind, number)
-                for number in range(start_number, end + 1)
-            ],
-        )
-        connection.commit()
-        rows = connection.execute(
-            """
-            SELECT work_id, item_type, item_number, title, is_read
-            FROM reading_items
-            WHERE work_id = ? AND item_type = ?
-              AND item_number BETWEEN ? AND ?
-            ORDER BY item_number
-            """,
-            (safe_work_id, kind, start_number, end),
-        ).fetchall()
-        return rows
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-
-def get_reading_items(work_id, item_type, limit=24, offset=0):
-    """Return a bounded page of already-created placeholder entries."""
-    kind = _reading_item_type(item_type)
-    try:
-        safe_work_id = _validated_work_id(work_id)
-    except (TypeError, ValueError, OverflowError):
-        return []
-
-    parsed_limit = _safe_optional_integer(limit, 0, _MAX_SQLITE_INTEGER)
-    parsed_offset = _safe_optional_integer(offset, 0, _MAX_TRACKED_EPISODE_NUMBER)
-    if parsed_limit is None or parsed_offset is None:
-        return []
-    safe_limit = min(100, max(1, parsed_limit))
-
-    connection = get_connection()
-    try:
-        return connection.execute(
-            """
-            SELECT work_id, item_type, item_number, title, is_read
-            FROM reading_items
-            WHERE work_id = ? AND item_type = ?
-            ORDER BY item_number
-            LIMIT ? OFFSET ?
-            """,
-            (safe_work_id, kind, safe_limit, parsed_offset),
-        ).fetchall()
-    finally:
-        connection.close()
-
-
 def get_reading_progress(work_id, item_type, total_hint=None):
-    """Return read/available counts, using a valid bounded provider total when known."""
+    """Return durable aggregate read progress and the best available total."""
     kind = _reading_item_type(item_type)
     try:
         safe_work_id = _validated_work_id(work_id)
     except (TypeError, ValueError, OverflowError):
         return 0, 0
 
+    progress_column = (
+        "progress_chapters" if kind == "chapter" else "progress_volumes"
+    )
     connection = get_connection()
     try:
         row = connection.execute(
+            f"""
+            SELECT COALESCE(
+                (SELECT read_count FROM reading_progress
+                 WHERE work_id = ? AND item_type = ?),
+                (SELECT {progress_column} FROM user_library
+                 WHERE work_id = ?),
+                0
+            ) AS read_count
+            """,
+            (safe_work_id, kind, safe_work_id),
+        ).fetchone()
+        item_row = connection.execute(
             """
-            SELECT COALESCE(SUM(is_read), 0) AS read_count,
-                   COALESCE(MAX(item_number), 0) AS highest_item
+            SELECT COALESCE(MAX(item_number), 0) AS highest_item
             FROM reading_items
             WHERE work_id = ? AND item_type = ?
             """,
@@ -1174,72 +1138,61 @@ def get_reading_progress(work_id, item_type, total_hint=None):
     finally:
         connection.close()
 
-    hinted_total = _safe_optional_integer(
-        total_hint,
-        0,
-        _MAX_TRACKED_EPISODE_NUMBER,
-    ) if total_hint is not None else None
-    total = hinted_total if hinted_total is not None and hinted_total > 0 else int(
-        row["highest_item"] or 0
+    hinted_total = (
+        _safe_optional_integer(total_hint, 0, _MAX_TRACKED_EPISODE_NUMBER)
+        if total_hint is not None else None
     )
-    return int(row["read_count"] or 0), total
+    stored_total = int(item_row["highest_item"] or 0) if item_row else 0
+    total = (
+        hinted_total if hinted_total is not None and hinted_total > 0
+        else stored_total
+    )
+    return (int(row["read_count"] or 0) if row else 0), total
 
 
-def set_reading_item_read(work_id, item_type, item_number, is_read):
-    """Save read state and synchronize aggregate chapter/volume progress."""
+def set_reading_progress_count(work_id, item_type, read_count, total_hint=None):
+    """Save chapter/volume progress durably without generating per-item placeholders."""
     kind = _reading_item_type(item_type)
     try:
         safe_work_id = _validated_work_id(work_id)
     except (TypeError, ValueError, OverflowError) as error:
         raise ValueError("Work ID must be a non-zero SQLite-safe integer.") from error
 
-    safe_item_number = _safe_optional_integer(
-        item_number,
-        1,
-        _MAX_TRACKED_EPISODE_NUMBER,
+    parsed_count = _safe_optional_integer(
+        read_count, 0, _MAX_TRACKED_EPISODE_NUMBER
     )
-    if safe_item_number is None or isinstance(item_number, bool):
-        raise ValueError("Reading item number must be an integer from 1 to 1000000.")
+    if parsed_count is None or isinstance(read_count, bool):
+        raise ValueError("Read progress must be a non-negative integer.")
 
+    parsed_total = (
+        _safe_optional_integer(total_hint, 0, _MAX_TRACKED_EPISODE_NUMBER)
+        if total_hint is not None else None
+    )
+    if parsed_total is not None and parsed_total > 0:
+        parsed_count = min(parsed_count, parsed_total)
+
+    progress_column = (
+        "progress_chapters" if kind == "chapter" else "progress_volumes"
+    )
     connection = get_connection()
     try:
         connection.execute(
             """
-            INSERT OR IGNORE INTO reading_items
-                (work_id, item_type, item_number, title, is_read)
-            VALUES (?, ?, ?, NULL, 0)
-            """,
-            (safe_work_id, kind, safe_item_number),
-        )
-        connection.execute(
-            """
-            UPDATE reading_items SET is_read = ?
-            WHERE work_id = ? AND item_type = ? AND item_number = ?
-            """,
-            (1 if is_read else 0, safe_work_id, kind, safe_item_number),
-        )
-        chapter_count = connection.execute(
-            """
-            SELECT COALESCE(SUM(is_read), 0)
-            FROM reading_items WHERE work_id = ? AND item_type = 'chapter'
-            """,
-            (safe_work_id,),
-        ).fetchone()[0]
-        volume_count = connection.execute(
-            """
-            SELECT COALESCE(SUM(is_read), 0)
-            FROM reading_items WHERE work_id = ? AND item_type = 'volume'
-            """,
-            (safe_work_id,),
-        ).fetchone()[0]
-        connection.execute(
-            """
-            UPDATE user_library
-            SET progress_chapters = ?, progress_volumes = ?,
+            INSERT INTO reading_progress (work_id, item_type, read_count, updated_date)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(work_id, item_type) DO UPDATE SET
+                read_count = excluded.read_count,
                 updated_date = CURRENT_TIMESTAMP
+            """,
+            (safe_work_id, kind, parsed_count),
+        )
+        connection.execute(
+            f"""
+            UPDATE user_library
+            SET {progress_column} = ?, updated_date = CURRENT_TIMESTAMP
             WHERE work_id = ?
             """,
-            (int(chapter_count or 0), int(volume_count or 0), safe_work_id),
+            (parsed_count, safe_work_id),
         )
         connection.commit()
     except Exception:
@@ -1247,7 +1200,7 @@ def set_reading_item_read(work_id, item_type, item_number, is_read):
         raise
     finally:
         connection.close()
-    return get_reading_progress(safe_work_id, kind)
+    return get_reading_progress(safe_work_id, kind, parsed_total)
 
 
 def save_episode_thumbnail_path(work_id, episode_number, thumbnail_path):
@@ -2065,22 +2018,35 @@ def get_relations(work_id):
         connection.close()
 
 def get_bundle_characters(work_ids):
-    """Return unique characters from every work represented by a bundle."""
+    """Return unique characters, preferring their strongest role across a bundle."""
     unique = {}
+    role_priority = {"MAIN": 0, "SUPPORTING": 1, "BACKGROUND": 2}
 
     for work_id in work_ids or []:
-        for row in get_characters(work_id):
-            character_id = row["id"]
-            if character_id not in unique:
-                unique[int(character_id)] = dict(row)
+        for raw_row in get_characters(work_id):
+            # sqlite3.Row supports indexed access but not dict.get(); normalize
+            # each provider/database row before merging per-work roles.
+            row = dict(raw_row)
+            try:
+                character_id = int(row["id"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            role = str(row.get("character_role") or "").upper()
+            existing = unique.get(character_id)
+            if existing is None:
+                unique[character_id] = row
+                continue
+
+            # Role is specific to each work. Choose the strongest role in the
+            # entire bundle, regardless of which member was processed first.
+            existing_role = str(existing.get("character_role") or "").upper()
+            if role_priority.get(role, 3) < role_priority.get(existing_role, 3):
+                existing["character_role"] = row.get("character_role")
 
     return sorted(
         unique.values(),
         key=lambda row: (
-            0 if str(row.get("character_role") or "").upper() == "MAIN" else
-            1 if str(row.get("character_role") or "").upper() == "SUPPORTING" else
-            2 if str(row.get("character_role") or "").upper() == "BACKGROUND" else
-            3,
+            role_priority.get(str(row.get("character_role") or "").upper(), 3),
             str(row.get("character_name") or "").lower(),
         ),
     )
@@ -2606,10 +2572,10 @@ def add_to_library(work_id, status="Planning"):
             VALUES (
                 ?, ?,
                 (SELECT COUNT(*) FROM episodes WHERE work_id = ? AND watched = 1),
-                (SELECT COALESCE(SUM(is_read), 0) FROM reading_items
-                 WHERE work_id = ? AND item_type = 'chapter'),
-                (SELECT COALESCE(SUM(is_read), 0) FROM reading_items
-                 WHERE work_id = ? AND item_type = 'volume'),
+                COALESCE((SELECT read_count FROM reading_progress
+                 WHERE work_id = ? AND item_type = 'chapter'), 0),
+                COALESCE((SELECT read_count FROM reading_progress
+                 WHERE work_id = ? AND item_type = 'volume'), 0),
                 CURRENT_TIMESTAMP
             )
             ON CONFLICT(work_id) DO UPDATE SET
@@ -2679,6 +2645,7 @@ def delete_work_data(work_id):
         for table in (
             "episodes",
             "reading_items",
+            "reading_progress",
             "work_characters",
             "work_staff",
             "work_studios",

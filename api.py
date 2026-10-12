@@ -355,7 +355,7 @@ def _media_fields(include_details=False, include_relations=True):
                 hasNextPage
             }
         }
-        staff(perPage: 15) {
+        staff(page: 1, perPage: 15) {
             edges {
                 role
                 node {
@@ -363,6 +363,11 @@ def _media_fields(include_details=False, include_relations=True):
                     name { full }
                     image { large }
                 }
+            }
+            pageInfo {
+                currentPage
+                lastPage
+                hasNextPage
             }
         }
         relations {
@@ -380,6 +385,85 @@ def _media_fields(include_details=False, include_relations=True):
             }
         }
     """
+
+
+def get_media_staff_page(media_id, page=2, per_page=15):
+    """Fetch one bounded page of AniList staff credits for explicit More actions."""
+    numeric_id = _validated_media_id(media_id)
+    if numeric_id <= 0:
+        return {
+            "edges": [],
+            "pageInfo": {
+                "currentPage": 1,
+                "lastPage": 1,
+                "hasNextPage": False,
+            },
+        }
+
+    def safe_page(value, fallback, maximum):
+        if isinstance(value, bool):
+            return fallback
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+        return min(maximum, max(1, parsed))
+
+    page_number = safe_page(page, 2, 100)
+    page_size = safe_page(per_page, 15, 50)
+    query = """
+    query ($id: Int, $page: Int, $perPage: Int) {
+        Media(id: $id) {
+            staff(page: $page, perPage: $perPage) {
+                edges {
+                    role
+                    node {
+                        id
+                        name { full }
+                        image { large }
+                    }
+                }
+                pageInfo {
+                    currentPage
+                    lastPage
+                    hasNextPage
+                }
+            }
+        }
+    }
+    """
+    payload = anilist_request(
+        query,
+        {"id": numeric_id, "page": page_number, "perPage": page_size},
+    )
+    media = payload.get("Media") if isinstance(payload, dict) else None
+    if not isinstance(media, dict):
+        raise RuntimeError(f"AniList returned no staff page for media ID {numeric_id}.")
+    connection = media.get("staff")
+    if not isinstance(connection, dict) or not isinstance(connection.get("edges"), list):
+        raise RuntimeError("AniList returned a malformed staff page.")
+    page_info = connection.get("pageInfo")
+    if not isinstance(page_info, dict):
+        page_info = {}
+    has_next = page_info.get("hasNextPage")
+    if not isinstance(has_next, bool):
+        has_next = False
+    try:
+        current_page = int(page_info.get("currentPage") or page_number)
+    except (TypeError, ValueError, OverflowError):
+        current_page = page_number
+    try:
+        last_page = int(page_info.get("lastPage") or current_page)
+    except (TypeError, ValueError, OverflowError):
+        last_page = current_page
+    return {
+        "edges": connection["edges"],
+        "pageInfo": {
+            "currentPage": max(1, current_page),
+            "lastPage": max(1, last_page),
+            "hasNextPage": has_next and current_page < 100,
+        },
+    }
 
 
 def parse_anilist_url(value):
@@ -925,14 +1009,86 @@ def get_media_details(media_id):
             raise RuntimeError("MangaBaka returned details for a different series ID.")
 
         media = normalize_mangabaka_series(record, preferred_id=numeric_id)
-        # Bring in the provider's native relationship graph where it exists.
+        empty_connection = {
+            "edges": [],
+            "pageInfo": {
+                "currentPage": 1,
+                "lastPage": 1,
+                "hasNextPage": False,
+            },
+        }
+        media["characters"] = dict(empty_connection)
+        media["staff"] = dict(empty_connection)
+        media["_characters_snapshot_valid"] = True
+        media["_staff_snapshot_valid"] = True
+
+        # When MangaBaka's full upstream metadata contains an explicit AniList
+        # ID, reuse AniList's cast, crew, and relation graph while retaining the
+        # existing negative local work ID. Never guess a link from similar titles.
+        linked_anilist_id = get_mangabaka_external_id(record, "anilist")
+        anilist_relation_edges = []
+        if linked_anilist_id is not None:
+            try:
+                linked_details = get_media_details(linked_anilist_id)
+                characters = linked_details.get("characters")
+                staff = linked_details.get("staff")
+                relations = linked_details.get("relations")
+                if isinstance(characters, dict) and isinstance(characters.get("edges"), list):
+                    media["characters"] = characters
+                    media["_characters_snapshot_valid"] = (
+                        linked_details.get("_characters_snapshot_valid", True) is not False
+                    )
+                else:
+                    media["_characters_snapshot_valid"] = False
+                if isinstance(staff, dict) and isinstance(staff.get("edges"), list):
+                    media["staff"] = staff
+                    media["_staff_snapshot_valid"] = (
+                        linked_details.get("_staff_snapshot_valid", True) is not False
+                    )
+                    page_info = staff.get("pageInfo")
+                    if isinstance(page_info, dict):
+                        media["_anilist_staff_page_info"] = dict(page_info)
+                else:
+                    media["_staff_snapshot_valid"] = False
+                if isinstance(relations, dict) and isinstance(relations.get("edges"), list):
+                    anilist_relation_edges = relations["edges"]
+                media["_anilist_id"] = linked_anilist_id
+            except Exception as error:
+                # The MangaBaka record remains usable offline. Mark failed
+                # snapshots incomplete so a later detail import can retry.
+                media["_characters_snapshot_valid"] = False
+                media["_staff_snapshot_valid"] = False
+                print(
+                    "MangaBaka-linked AniList enrichment skipped for "
+                    f"series {abs(numeric_id)} (AniList ID {linked_anilist_id}): {error}"
+                )
+
+        mangabaka_relation_edges = []
         try:
             related_payload = get_mangabaka_related_series(abs(numeric_id))
-            media["relations"] = {
-                "edges": _normalize_mangabaka_related_edges(related_payload)
-            }
+            mangabaka_relation_edges = _normalize_mangabaka_related_edges(related_payload)
         except Exception as error:
             print(f"MangaBaka related-series lookup skipped: {error}")
+
+        # Merge both providers, retaining distinct relation types but avoiding
+        # duplicate edges to the same target with the same relationship label.
+        combined_relation_edges = []
+        seen_relation_keys = set()
+        for edge in [*anilist_relation_edges, *mangabaka_relation_edges]:
+            if not isinstance(edge, dict):
+                continue
+            node = edge.get("node")
+            if not isinstance(node, dict) or node.get("id") is None:
+                continue
+            relation_type = str(
+                edge.get("relationType") or edge.get("relation_type") or "RELATED"
+            ).upper()
+            relation_key = (str(node["id"]), relation_type)
+            if relation_key in seen_relation_keys:
+                continue
+            seen_relation_keys.add(relation_key)
+            combined_relation_edges.append(edge)
+        media["relations"] = {"edges": combined_relation_edges}
         return media
     query = """
     query ($id: Int) {

@@ -394,9 +394,21 @@ class IsolatedDatabaseAdversarialTests(unittest.TestCase):
                     {"number": "-5", "title": "Invalid negative volume"},
                     {"number": "3", "title": "Volume 3"},
                 ])
-                rows = database.get_reading_items(work_id, "volume", limit=100)
+                connection = database.get_connection()
+                try:
+                    rows = connection.execute(
+                        """
+                        SELECT item_number, title FROM reading_items
+                        WHERE work_id = ? AND item_type = 'volume'
+                        ORDER BY item_number
+                        """,
+                        (work_id,),
+                    ).fetchall()
+                finally:
+                    connection.close()
                 self.assertEqual(saved, 1)
                 self.assertEqual([row["item_number"] for row in rows], [3])
+                self.assertEqual([row["title"] for row in rows], ["Volume 3"])
             finally:
                 os.chdir(original_cwd)
 

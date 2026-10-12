@@ -42,6 +42,7 @@ from ui.pages.library_page import LibraryPage
 from ui.pages.search_page import SearchPage
 from ui.pages.settings_page import SettingsPage
 from ui.pages.work_detail_page import WorkDetailPage
+from ui.pages.entity_profile_page import EntityProfilePage
 
 
 class ImageWorker(QObject):
@@ -94,9 +95,9 @@ class LibraryImportWorker(QObject):
 
             save_anime(details)
 
-            # Pull published volume/work records when MangaBaka has them. The
-            # local progress rows stay authoritative; this only fills real
-            # titles into the existing volume placeholders.
+            # Cache real published volume/work records when MangaBaka has them.
+            # Numeric read progress is stored separately and never depends on
+            # generating fictional chapter or volume entries.
             if not self._cancelled() and str(details.get("type") or "").upper() == "MANGA":
                 mb_id = details.get("_mangabaka_id")
                 if mb_id is None and self.work_id < 0:
@@ -173,7 +174,37 @@ class LibraryImportWorker(QObject):
                 if isinstance(staff_connection, dict)
                 else None
             )
-            save_staff(self.work_id, staff_edges)
+            if details.get("_staff_snapshot_valid", True) is False:
+                save_staff(self.work_id, None)
+            else:
+                save_staff(self.work_id, staff_edges)
+
+            try:
+                linked_anilist_id = int(
+                    details.get("_anilist_id") or self.work_id
+                )
+            except (TypeError, ValueError, OverflowError):
+                linked_anilist_id = 0
+            staff_page_info = details.get("_anilist_staff_page_info")
+            if not isinstance(staff_page_info, dict):
+                staff_page_info = (
+                    staff_connection.get("pageInfo")
+                    if isinstance(staff_connection, dict) else None
+                )
+            if linked_anilist_id > 0 and isinstance(staff_page_info, dict):
+                if self.work_id < 0:
+                    save_provider_metadata(
+                        self.work_id,
+                        "anilist_media_id",
+                        {"id": linked_anilist_id},
+                        provider_id=linked_anilist_id,
+                    )
+                save_provider_metadata(
+                    self.work_id,
+                    "anilist_staff_page_info",
+                    staff_page_info,
+                    provider_id=linked_anilist_id,
+                )
 
             # Preserve core work data, but don't start further optional provider
             # requests once the application is closing.
@@ -500,6 +531,7 @@ class MainWindow(QMainWindow):
         self.library_page = LibraryPage()
         self.search_page = SearchPage(self.add_to_library)
         self.work_detail_page = WorkDetailPage()
+        self.entity_profile_page = EntityProfilePage()
         self.settings_page = SettingsPage()
         self.home_page = HomePage()
         pages = {
@@ -507,6 +539,7 @@ class MainWindow(QMainWindow):
             "collections": self.library_page,
             "search": self.search_page,
             "work_detail": self.work_detail_page,
+            "entity_profile": self.entity_profile_page,
             "settings": self.settings_page,
         }
         for name, page in pages.items():
@@ -530,6 +563,15 @@ class MainWindow(QMainWindow):
         self.search_page.anime_selected.connect(self.show_search_work)
         self.work_detail_page.back_requested.connect(lambda: self.navigation.show("collections"))
         self.work_detail_page.bundle_edit_requested.connect(self.library_page._edit_bundle)
+        self.work_detail_page.character_selected.connect(
+            lambda character: self.show_entity_profile("character", character)
+        )
+        self.work_detail_page.person_selected.connect(
+            lambda person: self.show_entity_profile("staff", person)
+        )
+        self.entity_profile_page.back_requested.connect(
+            lambda: self.navigation.show("work_detail")
+        )
         self.work_detail_page.relation_selected.connect(self.show_relation)
         self.work_detail_page.bundle_changed.connect(self._refresh_library_after_bundle_change)
         self.settings_page.settings_changed.connect(self.apply_settings)
@@ -623,6 +665,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "work_detail_page") and hasattr(self.work_detail_page, "refresh_theme"):
             self.work_detail_page.refresh_theme()
 
+        if hasattr(self, "entity_profile_page") and hasattr(self.entity_profile_page, "refresh_theme"):
+            self.entity_profile_page.refresh_theme()
+
         if hasattr(self, "settings_page") and hasattr(self.settings_page, "refresh_theme"):
             self.settings_page.refresh_theme()
 
@@ -635,6 +680,8 @@ class MainWindow(QMainWindow):
         for page in root.findChildren(LibraryPage):
             page.request_shutdown()
         for page in root.findChildren(WorkDetailPage):
+            page.request_shutdown()
+        for page in root.findChildren(EntityProfilePage):
             page.request_shutdown()
         for thread in root.findChildren(QThread):
             try:
@@ -896,12 +943,57 @@ class MainWindow(QMainWindow):
                 if isinstance(staff_connection, dict)
                 else None
             )
-            save_staff(work["id"], staff_edges)
+            try:
+                work_id = int(work["id"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                work_id = 0
+            if details.get("_staff_snapshot_valid", True) is False:
+                save_staff(work_id, None)
+            else:
+                save_staff(work_id, staff_edges)
+
+            try:
+                linked_anilist_id = int(
+                    details.get("_anilist_id") or work_id
+                )
+            except (TypeError, ValueError, OverflowError):
+                linked_anilist_id = 0
+            staff_page_info = details.get("_anilist_staff_page_info")
+            if not isinstance(staff_page_info, dict):
+                staff_page_info = (
+                    staff_connection.get("pageInfo")
+                    if isinstance(staff_connection, dict) else None
+                )
+            if linked_anilist_id > 0 and isinstance(staff_page_info, dict):
+                if work_id < 0:
+                    save_provider_metadata(
+                        work_id,
+                        "anilist_media_id",
+                        {"id": linked_anilist_id},
+                        provider_id=linked_anilist_id,
+                    )
+                save_provider_metadata(
+                    work_id,
+                    "anilist_staff_page_info",
+                    staff_page_info,
+                    provider_id=linked_anilist_id,
+                )
             self.show_work_details(get_work(work["id"]) or work)
         except Exception as error:
             log_exception("work_details.search_enrichment_failed", error,
                           work_id=work.get("id") if hasattr(work, "get") else None)
             self.show_work_details(work)
+
+    def show_entity_profile(self, entity_type, entity):
+        """Open a cached character or staff profile from a work-detail card."""
+        if not entity:
+            return
+        self.entity_profile_page.set_profile(
+            entity_type,
+            entity,
+            source_work=self.work_detail_page.work,
+        )
+        self.navigation.show("entity_profile")
 
     def show_relation(self, relation):
         if not relation:
@@ -1117,6 +1209,8 @@ class MainWindow(QMainWindow):
             library_page.request_shutdown()
         for detail_page in self.findChildren(WorkDetailPage):
             detail_page.request_shutdown()
+        for profile_page in self.findChildren(EntityProfilePage):
+            profile_page.request_shutdown()
         # Stop each event loop; blocking provider requests still need to return.
         # This window stays alive until every QThread has actually stopped.
         for thread in self.findChildren(QThread):

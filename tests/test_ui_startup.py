@@ -392,7 +392,10 @@ class UiStartupTests(unittest.TestCase):
                     window = MainWindow()
                     self.assertEqual(
                         set(window.navigation.pages),
-                        {"home", "collections", "search", "work_detail", "settings"},
+                        {
+                            "home", "collections", "search", "work_detail",
+                            "entity_profile", "settings",
+                        },
                     )
                     self.assertFalse(window.windowIcon().isNull())
                     self.assertFalse(window.brand_mark.pixmap().isNull())

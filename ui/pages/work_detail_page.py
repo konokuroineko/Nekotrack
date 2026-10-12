@@ -3,6 +3,7 @@ import threading
 from api import (
     cache_tmdb_episode_image,
     get_media_details,
+    get_media_staff_page,
     get_tmdb_episode_data,
 )
 from html import escape as html_escape
@@ -15,16 +16,16 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout,
     QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
-    QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget, QWidgetAction
+    QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 )
 
 from database import (
     add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
-    get_reading_progress, ensure_reading_placeholders,
+    get_reading_progress, get_staff,
     get_tmdb_mapping, get_work, get_provider_metadata, save_anime, save_characters, save_cover_path,
-    save_episode_thumbnail_path, save_episodes, save_staff, save_tmdb_mapping,
-    set_episode_watched, set_reading_item_read,
+    save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
+    set_episode_watched, set_reading_progress_count,
 )
 from series import get_library_series
 from ui.preferences import get
@@ -77,6 +78,50 @@ class EpisodeSyncWorker(QObject):
             self.finished.emit(self.work_id, payload)
         except Exception as error:
             self.error.emit(self.work_id, str(error))
+
+
+class StaffPageWorker(QObject):
+    """Fetch the next bounded page of AniList credits for each eligible work."""
+
+    pages_loaded = Signal(object)
+
+    def __init__(self, requests, stop_event):
+        super().__init__()
+        self.requests = list(requests or [])[:50]
+        self.stop_event = stop_event
+
+    def run(self):
+        results = []
+        for work_id, anilist_id, page in self.requests:
+            if self.stop_event.is_set():
+                break
+            try:
+                payload = get_media_staff_page(anilist_id, page=page, per_page=15)
+                edges = payload.get("edges") if isinstance(payload, dict) else None
+                page_info = payload.get("pageInfo") if isinstance(payload, dict) else None
+                if not isinstance(edges, list):
+                    raise RuntimeError("AniList returned an invalid staff page.")
+                save_staff(work_id, edges, replace_snapshot=False)
+                if isinstance(page_info, dict):
+                    save_provider_metadata(
+                        work_id,
+                        "anilist_staff_page_info",
+                        page_info,
+                        provider_id=anilist_id,
+                    )
+                results.append({
+                    "work_id": int(work_id),
+                    "page": int(page),
+                    "edge_count": len(edges),
+                    "page_info": page_info if isinstance(page_info, dict) else {},
+                })
+            except Exception as error:
+                results.append({
+                    "work_id": int(work_id),
+                    "page": int(page),
+                    "error": str(error),
+                })
+        self.pages_loaded.emit(results)
 
 
 class EpisodeImageCacheWorker(QObject):
@@ -303,64 +348,6 @@ class EpisodeCard(QFrame):
             except (ValueError, IndexError):
                 pass
         return text
-
-
-
-
-class ReadingItemCard(QFrame):
-    """A numbered chapter/volume placeholder with individually saved read state."""
-
-    read_changed = Signal(str, int, bool)
-
-    def __init__(self, item, parent=None):
-        super().__init__(parent)
-        self.item_type = str(item["item_type"])
-        self.item_number = int(item["item_number"])
-        self.setObjectName("readingItemCard")
-        self.setMinimumHeight(82)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-        row = QHBoxLayout(self)
-        row.setContentsMargins(12, 10, 12, 10)
-        row.setSpacing(10)
-
-        number = QLabel(
-            f"{self.item_type.upper()} {self.item_number:03d}"
-        )
-        number.setObjectName("readingItemNumber")
-        number.setMinimumWidth(112)
-        row.addWidget(number, 0, Qt.AlignVCenter)
-
-        description = QVBoxLayout()
-        description.setSpacing(3)
-        title = QLabel(
-            str(item["title"] or f"{self.item_type.title()} {self.item_number}")
-        )
-        title.setObjectName("readingItemTitle")
-        title.setWordWrap(True)
-        detail = QLabel(
-            f"{self.item_type.title()} details placeholder — "
-            "titles and artwork can be added later."
-        )
-        detail.setObjectName("readingItemDescription")
-        detail.setWordWrap(True)
-        description.addWidget(title)
-        description.addWidget(detail)
-        row.addLayout(description, 1)
-
-        self.read_checkbox = QCheckBox("Read")
-        self.read_checkbox.setObjectName("readingItemCheck")
-        self.read_checkbox.setCursor(Qt.PointingHandCursor)
-        self.read_checkbox.setChecked(bool(item["is_read"]))
-        self.read_checkbox.toggled.connect(
-            lambda checked: self.read_changed.emit(
-                self.item_type, self.item_number, checked
-            )
-        )
-        row.addWidget(self.read_checkbox, 0, Qt.AlignVCenter)
-
-    def refresh_theme(self):
-        self.update()
 
 
 
@@ -601,6 +588,7 @@ class WorkDetailPage(QWidget):
     relation_selected = Signal(object)
     bundle_changed = Signal()
     bundle_edit_requested = Signal(object)
+    staff_thread_stopped = Signal(object, object)
 
     _cover_cache = {}
     _cover_failures = set()
@@ -618,6 +606,14 @@ class WorkDetailPage(QWidget):
         self._episode_sync_work_id = None
         self._episode_image_cache_threads = {}
         self._episode_image_cache_workers = {}
+        self._staff_next_pages = {}
+        self._staff_exhausted_ids = set()
+        self._staff_page_errors = {}
+        self._staff_visible_counts = {}
+        self._staff_sync_thread = None
+        self._staff_sync_worker = None
+        self._staff_loading = False
+        self.staff_thread_stopped.connect(self._staff_thread_finished)
         self._detail_build_token = 0
         self._detail_content_cache = {}
         self._episode_sync_completed = set()
@@ -639,6 +635,8 @@ class WorkDetailPage(QWidget):
         threads = []
         if self._episode_sync_thread is not None:
             threads.append(self._episode_sync_thread)
+        if self._staff_sync_thread is not None:
+            threads.append(self._staff_sync_thread)
         threads.extend(self._episode_image_cache_threads.values())
         for thread in threads:
             try:
@@ -679,6 +677,9 @@ class WorkDetailPage(QWidget):
     def _prepare_detail_state(self, work):
         self.work = work
         detail_ids = self._detail_work_ids()
+        for work_id in detail_ids:
+            self._staff_next_pages.setdefault(work_id, 2)
+        self._staff_visible_counts.setdefault(tuple(detail_ids), 12)
 
         self.mangabaka_metadata = self._value("_mangabaka")
         self.mangabaka_volume_records = []
@@ -952,51 +953,17 @@ class WorkDetailPage(QWidget):
                 border:1px solid {COLORS['border']};
                 border-radius:12px;
             }}
-            QFrame#readingItemCard {{
-                background:{COLORS['surface']};
-                border:1px solid {COLORS['border']};
-                border-radius:10px;
-            }}
-            QFrame#readingItemCard:hover {{
-                background:{COLORS['surface_hover']};
-                border-color:{COLORS['border_hover']};
-            }}
-            QLabel#readingItemNumber {{
-                color:{COLORS['accent']};
-                font-size:10px;
-                font-weight:900;
-                letter-spacing:.4px;
-                background:transparent;
-            }}
-            QLabel#readingItemTitle {{
+            QSpinBox#readingProgressCount {{
+                min-width:110px;
                 color:{COLORS['primary']};
-                font-size:12px;
-                font-weight:800;
-                background:transparent;
-            }}
-            QLabel#readingItemDescription {{
-                color:{COLORS['muted']};
-                font-size:10px;
-                background:transparent;
-            }}
-            QCheckBox#readingItemCheck {{
-                color:{COLORS['secondary']};
-                font-size:11px;
-                font-weight:750;
-                spacing:5px;
-                background:transparent;
-            }}
-            QPushButton#readingLoadMore {{
-                color:{COLORS['accent']};
                 background:{COLORS['surface']};
                 border:1px solid {COLORS['border']};
-                border-radius:9px;
-                padding:8px 12px;
-                font-weight:800;
+                border-radius:8px;
+                padding:6px 8px;
             }}
-            QPushButton#readingLoadMore:hover {{
-                background:{COLORS['surface_hover']};
-                border-color:{COLORS['accent']};
+            QSpinBox#readingProgressCount:disabled {{
+                color:{COLORS['muted']};
+                background:{COLORS['surface_alt']};
             }}
             QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:2px solid transparent; border-radius:{get('corner_radius') + 2}px; font-size:30px; font-weight:900; padding:0; }}
             QToolButton#detailMenu:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
@@ -1051,10 +1018,6 @@ class WorkDetailPage(QWidget):
                 "readingSectionTitle": f"font-size:17px;font-weight:800;color:{COLORS['primary']};",
                 "readingKindHeading": f"font-size:14px;font-weight:850;color:{COLORS['primary']};",
                 "readingKindProgress": f"color:{COLORS['accent']};font-size:11px;font-weight:850;",
-                "readingPlaceholderNote": f"color:{COLORS['secondary']};font-size:12px;background:{COLORS['surface_alt']};border:1px solid {COLORS['border']};border-radius:10px;padding:10px 12px;",
-                "readingItemNumber": f"color:{COLORS['accent']};font-size:10px;font-weight:900;letter-spacing:.4px;background:transparent;",
-                "readingItemTitle": f"color:{COLORS['primary']};font-size:12px;font-weight:800;background:transparent;",
-                "readingItemDescription": f"color:{COLORS['muted']};font-size:10px;background:transparent;",
             }
             for label in content.findChildren(QLabel):
                 stylesheet = label_styles.get(label.objectName())
@@ -1137,16 +1100,11 @@ class WorkDetailPage(QWidget):
                 CharacterCard,
                 self.character_selected,
                 4,
+                empty_message=self._detail_empty_message("Characters", detail_ids),
             )
         )
         layout.addWidget(
-            self._grid_section(
-                "Staff",
-                get_bundle_staff(detail_ids),
-                PersonCard,
-                self.person_selected,
-                6,
-            )
+            self._staff_section(detail_ids, get_bundle_staff(detail_ids))
         )
         layout.addWidget(
             self._grid_section(
@@ -1155,6 +1113,7 @@ class WorkDetailPage(QWidget):
                 RelationCard,
                 self.relation_selected,
                 6,
+                empty_message=self._detail_empty_message("Relations", detail_ids),
             )
         )
 
@@ -1226,15 +1185,18 @@ class WorkDetailPage(QWidget):
             items = []
 
         loading.deleteLater()
-        layout.addWidget(
-            self._grid_section(
+        if title == "Staff":
+            section_widget = self._staff_section(detail_ids, items)
+        else:
+            section_widget = self._grid_section(
                 title,
                 items,
                 card_class,
                 signal,
                 columns,
+                empty_message=self._detail_empty_message(title, detail_ids),
             )
-        )
+        layout.addWidget(section_widget)
 
         next_specs = {
             "Characters": (
@@ -2029,7 +1991,7 @@ class WorkDetailPage(QWidget):
             return 0
 
     def _reading_section(self):
-        """Show count-backed chapter/volume placeholders and save reading progress."""
+        """Show honest numeric chapter/volume progress without fictional item cards."""
         members = self._episode_members()
         member_ids = {int(member["id"]) for member in members}
         if self._selected_episode_work_id not in member_ids:
@@ -2055,15 +2017,6 @@ class WorkDetailPage(QWidget):
             f"font-size:17px;font-weight:800;color:{COLORS['primary']};"
         )
         header.addWidget(title)
-
-        placeholder_badge = QLabel("PLACEHOLDER DETAILS")
-        placeholder_badge.setObjectName("readingPlaceholderBadge")
-        placeholder_badge.setStyleSheet(
-            f"color:{COLORS['accent']};background:{COLORS['accent_soft']};"
-            f"border:1px solid {COLORS['border']};border-radius:8px;"
-            "padding:4px 8px;font-size:9px;font-weight:900;letter-spacing:.4px;"
-        )
-        header.addWidget(placeholder_badge)
         header.addStretch(1)
 
         if len(members) > 1:
@@ -2096,36 +2049,39 @@ class WorkDetailPage(QWidget):
 
         layout.addLayout(header)
 
-        note = QLabel(
-            "Chapter and volume titles, individual descriptions, and volume artwork "
-            "are placeholders for now. Your read progress is saved locally."
-        )
-        note.setObjectName("readingPlaceholderNote")
-        note.setWordWrap(True)
-        note.setStyleSheet(
-            f"color:{COLORS['secondary']};font-size:12px;"
-            f"background:{COLORS['surface_alt']};border:1px solid {COLORS['border']};"
-            "border-radius:10px;padding:10px 12px;"
-        )
-        layout.addWidget(note)
-
         if selected_id is None:
             empty = QLabel("Save this work to your Library to track reading progress.")
+            empty.setWordWrap(True)
             empty.setStyleSheet(muted_label_stylesheet())
             layout.addWidget(empty)
             return frame
 
+        is_in_library = False
+        if selected_work is not None:
+            try:
+                is_in_library = selected_work["status"] is not None
+            except (KeyError, IndexError, TypeError):
+                is_in_library = False
+
+        if not is_in_library:
+            note = QLabel("Add this work to your Library to track reading progress.")
+            note.setWordWrap(True)
+            note.setStyleSheet(muted_label_stylesheet())
+            layout.addWidget(note)
+
         chapter_total = self._work_count(selected_work, "chapters")
         volume_total = self._work_count(selected_work, "volumes")
         self._reading_kind_section(
-            layout, int(selected_id), "chapter", chapter_total
+            layout, int(selected_id), "chapter", chapter_total, is_in_library
         )
         self._reading_kind_section(
-            layout, int(selected_id), "volume", volume_total
+            layout, int(selected_id), "volume", volume_total, is_in_library
         )
         return frame
 
-    def _reading_kind_section(self, parent_layout, work_id, item_type, total):
+    def _reading_kind_section(
+        self, parent_layout, work_id, item_type, total, enabled=True
+    ):
         label = "Chapters" if item_type == "chapter" else "Volumes"
         section = QFrame()
         section.setObjectName("readingKindSection")
@@ -2144,7 +2100,9 @@ class WorkDetailPage(QWidget):
 
         read_count, _ = get_reading_progress(work_id, item_type, total)
         progress_label = QLabel(
-            f"{read_count} / {total} read" if total else f"{read_count} read · total unknown"
+            f"{read_count} / {total} read"
+            if total
+            else f"{read_count} read · total unknown"
         )
         progress_label.setObjectName("readingKindProgress")
         progress_label.setStyleSheet(
@@ -2153,71 +2111,49 @@ class WorkDetailPage(QWidget):
         header.addWidget(progress_label)
         box.addLayout(header)
 
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(8)
-        box.addLayout(grid)
+        control_row = QHBoxLayout()
+        description = QLabel(
+            "How many have you read?"
+            if total
+            else "Enter the number you've read; the total is not known."
+        )
+        description.setWordWrap(True)
+        description.setStyleSheet(muted_label_stylesheet())
+        control_row.addWidget(description, 1)
 
-        if total <= 0:
-            empty = QLabel(
-                f"A {item_type} count is not available yet. "
-                f"{label} placeholders will appear when AniList provides a total."
-            )
-            empty.setObjectName("readingKindEmpty")
-            empty.setWordWrap(True)
-            empty.setStyleSheet(muted_label_stylesheet())
-            box.addWidget(empty)
-            parent_layout.addWidget(section)
-            return
-
-        page_size = 24
-        state = {"offset": 0}
-
-        def load_page():
-            offset = state["offset"]
-            items = ensure_reading_placeholders(
-                work_id, item_type, total, offset=offset, limit=page_size
-            )
-            for local_index, item in enumerate(items):
-                item_index = offset + local_index
-                card = ReadingItemCard(item)
-                card.read_changed.connect(
-                    lambda kind, number, checked, wid=work_id, total_count=total,
-                           count_label=progress_label:
-                        self._reading_item_toggled(
-                            wid, kind, number, checked, total_count, count_label
-                        )
+        counter = QSpinBox()
+        counter.setObjectName("readingProgressCount")
+        counter.setMinimum(0)
+        counter.setMaximum(min(max(total, 1), 1_000_000) if total else 1_000_000)
+        counter.setSingleStep(1)
+        counter.setKeyboardTracking(False)
+        counter.setSuffix(f" / {total}" if total else " read")
+        counter.setValue(min(read_count, counter.maximum()))
+        counter.setEnabled(bool(enabled))
+        counter.setToolTip(
+            f"Number of {label.lower()} read for this entry."
+        )
+        counter.valueChanged.connect(
+            lambda value, wid=work_id, kind=item_type, total_hint=total,
+                   status_label=progress_label:
+                self._reading_progress_changed(
+                    wid, kind, value, total_hint, status_label
                 )
-                grid.addWidget(card, item_index // 2, item_index % 2)
-
-            state["offset"] += len(items)
-            if state["offset"] >= total:
-                load_more.hide()
-            else:
-                load_more.setText(
-                    f"Load more {label.lower()} "
-                    f"({state['offset']} of {total} shown)"
-                )
-
-        load_more = QPushButton()
-        load_more.setObjectName("readingLoadMore")
-        load_more.setCursor(Qt.PointingHandCursor)
-        load_more.clicked.connect(load_page)
-        box.addWidget(load_more)
-        load_page()
+        )
+        control_row.addWidget(counter, 0, Qt.AlignVCenter)
+        box.addLayout(control_row)
         parent_layout.addWidget(section)
 
-    def _reading_item_toggled(
-        self, work_id, item_type, item_number, checked, total_hint, label
+    def _reading_progress_changed(
+        self, work_id, item_type, read_count, total_hint, label
     ):
-        read_count, _total = set_reading_item_read(
-            work_id, item_type, item_number, checked
+        saved_count, _total = set_reading_progress_count(
+            work_id, item_type, read_count, total_hint
         )
         label.setText(
-            f"{read_count} / {total_hint} read"
+            f"{saved_count} / {total_hint} read"
             if total_hint
-            else f"{read_count} read · total unknown"
+            else f"{saved_count} read · total unknown"
         )
 
     def _reading_member_changed(self, work_id):
@@ -2755,7 +2691,259 @@ class WorkDetailPage(QWidget):
             f" QFrame#section {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
         )
 
-    def _grid_section(self, title, items, cls, signal, columns):
+    @staticmethod
+    def _detail_empty_message(title, detail_ids):
+        ids = []
+        for work_id in detail_ids or []:
+            try:
+                ids.append(int(work_id))
+            except (TypeError, ValueError, OverflowError):
+                continue
+        if ids and all(work_id < 0 for work_id in ids):
+            if title == "Characters":
+                return (
+                    "No character cast is available from this MangaBaka entry "
+                    "or its explicitly linked AniList metadata."
+                )
+            if title == "Staff":
+                return (
+                    "No full staff-credit list is available from this MangaBaka entry "
+                    "or an explicitly linked AniList record. Available authors and "
+                    "artists are shown in MangaBaka metadata."
+                )
+            if title == "Relations":
+                return (
+                    "Neither MangaBaka nor explicitly linked AniList metadata has "
+                    "related-work links available for this entry."
+                )
+        return "Nothing stored locally yet."
+
+    def _staff_page_requests(self, detail_ids):
+        requests = []
+        for local_work_id in detail_ids or []:
+            try:
+                local_work_id = int(local_work_id)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if local_work_id == 0 or local_work_id in self._staff_exhausted_ids:
+                continue
+
+            # Most local works use their AniList ID as their work ID. A
+            # MangaBaka-only work may keep a negative local ID but have an
+            # explicitly linked AniList record stored alongside it.
+            anilist_id = local_work_id if local_work_id > 0 else None
+            if anilist_id is None:
+                try:
+                    linked_record = get_provider_metadata(
+                        local_work_id, "anilist_media_id"
+                    )
+                    raw_anilist_id = (
+                        linked_record.get("id")
+                        if isinstance(linked_record, dict) else None
+                    )
+                    anilist_id = int(raw_anilist_id)
+                except (TypeError, ValueError, OverflowError):
+                    anilist_id = None
+            if anilist_id is None or anilist_id <= 0:
+                continue
+
+            try:
+                saved_staff_count = len(get_staff(local_work_id))
+            except Exception:
+                saved_staff_count = 0
+            try:
+                page_info = get_provider_metadata(
+                    local_work_id, "anilist_staff_page_info"
+                )
+            except Exception:
+                page_info = None
+            if isinstance(page_info, dict) and page_info.get("hasNextPage") is False:
+                self._staff_exhausted_ids.add(local_work_id)
+                continue
+            if (
+                not isinstance(page_info, dict)
+                or page_info.get("hasNextPage") is not True
+            ):
+                # Backward compatibility for databases created before page
+                # information was cached alongside the initial credit list.
+                if saved_staff_count < 15:
+                    continue
+                saved_next_page = 2
+            else:
+                try:
+                    saved_next_page = max(
+                        2, int(page_info.get("currentPage") or 1) + 1
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    saved_next_page = 2
+
+            # The DB pageInfo is persisted, so use it to resume correctly after
+            # an application restart. The in-memory counter can only move this
+            # forward, never back to an already-imported page.
+            next_page = max(
+                saved_next_page,
+                self._staff_next_pages.get(local_work_id, saved_next_page),
+            )
+            requests.append((local_work_id, anilist_id, next_page))
+        return requests
+
+    def _staff_section(self, detail_ids, items=None):
+        items = list(items if items is not None else get_bundle_staff(detail_ids))
+        section_key = tuple(int(work_id) for work_id in (detail_ids or []))
+        visible_count = self._staff_visible_counts.setdefault(section_key, 12)
+
+        frame = QFrame()
+        frame.setObjectName("section")
+        frame.setProperty("_staff_section", True)
+        frame.setProperty("_detail_section_ids", list(section_key))
+        frame.setStyleSheet(self._detail_section_frame_stylesheet())
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(20, 18, 20, 20)
+        layout.setSpacing(12)
+
+        header = QLabel("Staff")
+        header.setObjectName("detailSectionHeader")
+        header.setStyleSheet(
+            f"font-size:17px;font-weight:800;color:{COLORS['primary']};"
+        )
+        layout.addWidget(header)
+
+        container = QWidget()
+        flow = StaffFlowLayout(container, h_spacing=8, v_spacing=12)
+        if not items:
+            empty = QLabel(self._detail_empty_message("Staff", detail_ids))
+            empty.setWordWrap(True)
+            empty.setStyleSheet(muted_label_stylesheet())
+            flow.addWidget(empty)
+        else:
+            for person in items[:max(0, visible_count)]:
+                card = PersonCard(person)
+                card.clicked.connect(self.person_selected)
+                flow.addWidget(card)
+        layout.addWidget(container)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        if len(items) > visible_count:
+            more_local = QPushButton(
+                f"Show 12 more staff ({len(items) - visible_count} remaining)"
+            )
+            more_local.setObjectName("staffMoreButton")
+            more_local.setCursor(Qt.PointingHandCursor)
+            more_local.clicked.connect(
+                lambda checked=False, ids=list(section_key):
+                    self._show_more_staff(ids)
+            )
+            actions.addWidget(more_local)
+
+        requests = self._staff_page_requests(detail_ids)
+        if requests:
+            if self._staff_loading:
+                text = "Loading staff credits…"
+            elif any(
+                work_id in self._staff_page_errors
+                for work_id, _anilist_id, _page in requests
+            ):
+                text = "Retry loading staff credits"
+            else:
+                text = "Load more credits from AniList"
+            load_api = QPushButton(text)
+            load_api.setObjectName("staffMoreButton")
+            load_api.setCursor(Qt.PointingHandCursor)
+            load_api.setEnabled(not self._staff_loading)
+            load_api.clicked.connect(self._load_more_staff_pages)
+            actions.addWidget(load_api)
+        if actions.count() > 1:
+            layout.addLayout(actions)
+        return frame
+
+    def _show_more_staff(self, detail_ids):
+        key = tuple(int(work_id) for work_id in (detail_ids or []))
+        self._staff_visible_counts[key] = self._staff_visible_counts.get(key, 12) + 12
+        self._replace_staff_section()
+
+    def _load_more_staff_pages(self):
+        if self._staff_loading or self._shutdown_event.is_set():
+            return
+        detail_ids = self._detail_work_ids()
+        requests = self._staff_page_requests(detail_ids)
+        if not requests:
+            self._replace_staff_section()
+            return
+
+        self._staff_loading = True
+        worker = StaffPageWorker(requests, self._shutdown_event)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.pages_loaded.connect(self._staff_pages_loaded)
+        worker.pages_loaded.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(
+            lambda current_thread=thread, current_worker=worker:
+                self.staff_thread_stopped.emit(current_thread, current_worker)
+        )
+        self._staff_sync_thread = thread
+        self._staff_sync_worker = worker
+        self._replace_staff_section()
+        thread.start()
+
+    def _staff_pages_loaded(self, results):
+        for result in results or []:
+            try:
+                work_id = int(result.get("work_id"))
+            except (TypeError, ValueError, OverflowError, AttributeError):
+                continue
+            if result.get("error"):
+                self._staff_page_errors[work_id] = str(result["error"])
+                continue
+            self._staff_page_errors.pop(work_id, None)
+            page_info = result.get("page_info") or {}
+            try:
+                current_page = int(page_info.get("currentPage") or result.get("page") or 1)
+            except (TypeError, ValueError, OverflowError):
+                current_page = int(result.get("page") or 1)
+            has_next = page_info.get("hasNextPage") is True
+            edge_count = int(result.get("edge_count") or 0)
+            if not has_next or edge_count == 0 or current_page >= 100:
+                self._staff_exhausted_ids.add(work_id)
+            else:
+                self._staff_next_pages[work_id] = current_page + 1
+
+    def _staff_thread_finished(self, thread, worker):
+        if self._staff_sync_thread is thread:
+            self._staff_sync_thread = None
+            self._staff_sync_worker = None
+        self._staff_loading = False
+        try:
+            thread.deleteLater()
+        except RuntimeError:
+            pass
+        self._replace_staff_section()
+
+    def _replace_staff_section(self):
+        contents = [self.scroll_area.widget(), *self._detail_content_cache.values()]
+        seen_contents = set()
+        for content in contents:
+            if content is None or id(content) in seen_contents:
+                continue
+            seen_contents.add(id(content))
+            root = content.layout()
+            if root is None:
+                continue
+            for index in range(root.count()):
+                item = root.itemAt(index)
+                old_frame = item.widget() if item is not None else None
+                if old_frame is None or not old_frame.property("_staff_section"):
+                    continue
+                ids = old_frame.property("_detail_section_ids") or []
+                items = get_bundle_staff(ids)
+                new_frame = self._staff_section(ids, items)
+                root.replaceWidget(old_frame, new_frame)
+                old_frame.deleteLater()
+                break
+
+    def _grid_section(self, title, items, cls, signal, columns, empty_message=None):
         frame = QFrame()
         frame.setObjectName("charactersSection" if title == "Characters" else "section")
         frame.setStyleSheet(self._detail_section_frame_stylesheet())
@@ -2775,7 +2963,8 @@ class WorkDetailPage(QWidget):
             flow = StaffFlowLayout(container, h_spacing=8, v_spacing=12)
 
             if not items:
-                empty = QLabel("Nothing stored locally yet.")
+                empty = QLabel(empty_message or "Nothing stored locally yet.")
+                empty.setWordWrap(True)
                 empty.setStyleSheet(muted_label_stylesheet())
                 flow.addWidget(empty)
             else:
@@ -2794,14 +2983,15 @@ class WorkDetailPage(QWidget):
         grid.setVerticalSpacing(12)
 
         if not items:
-            x = QLabel("Nothing stored locally yet.")
-            x.setStyleSheet(muted_label_stylesheet())
-            grid.addWidget(x, 0, 0)
+            empty = QLabel(empty_message or "Nothing stored locally yet.")
+            empty.setWordWrap(True)
+            empty.setStyleSheet(muted_label_stylesheet())
+            grid.addWidget(empty, 0, 0)
         else:
-            for i, item in enumerate(items):
+            for index, item in enumerate(items):
                 card = cls(item)
                 card.clicked.connect(signal)
-                grid.addWidget(card, i // columns, i % columns)
+                grid.addWidget(card, index // columns, index % columns)
 
         lay.addWidget(container)
         return frame

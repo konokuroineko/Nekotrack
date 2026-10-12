@@ -145,6 +145,58 @@ class MangaBakaAPITests(unittest.TestCase):
         self.assertEqual(details["relations"]["edges"][1]["relationType"], "SIDE_STORY")
         self.assertEqual(details["relations"]["edges"][1]["node"]["id"], -44)
 
+    def test_negative_mangabaka_work_reuses_explicit_anilist_metadata(self):
+        source = sample_series(42, english="ReZero IF")
+        source["anilist_response"] = {"data": {"Media": {"id": 12345}}}
+        linked_details = {
+            "id": 12345,
+            "characters": {
+                "edges": [{"role": "MAIN", "node": {"id": 700, "name": {"full": "Linked Character"}}}],
+                "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+            },
+            "staff": {
+                "edges": [{"role": "Original Creator", "node": {"id": 701, "name": {"full": "Linked Staff"}}}],
+                "pageInfo": {"currentPage": 1, "lastPage": 2, "hasNextPage": True},
+            },
+            "relations": {
+                "edges": [{
+                    "relationType": "SEQUEL",
+                    "node": {"id": 800, "type": "MANGA", "title": {"romaji": "Linked sequel"}},
+                }]
+            },
+        }
+        related = {
+            "status": 200,
+            "data": {
+                "side_story": [sample_series(43, english="ReZero IF Side Story")],
+            },
+        }
+        original_get_media_details = mb.get_media_details
+
+        def details_for(media_id):
+            if int(media_id) == 12345:
+                return linked_details
+            return original_get_media_details(media_id)
+
+        with patch.object(mb, "get_mangabaka_series", return_value={"data": source}), \
+             patch.object(mb, "get_mangabaka_related_series", return_value=related), \
+             patch.object(mb, "get_media_details", side_effect=details_for):
+            details = mb.get_media_details(-42)
+
+        self.assertEqual(details["id"], -42)
+        self.assertEqual(details["_anilist_id"], 12345)
+        self.assertTrue(details["_characters_snapshot_valid"])
+        self.assertTrue(details["_staff_snapshot_valid"])
+        self.assertEqual(details["characters"]["edges"][0]["node"]["id"], 700)
+        self.assertEqual(details["staff"]["edges"][0]["node"]["id"], 701)
+        self.assertTrue(details["_anilist_staff_page_info"]["hasNextPage"])
+        relation_keys = {
+            (edge["node"]["id"], edge["relationType"])
+            for edge in details["relations"]["edges"]
+        }
+        self.assertIn((800, "SEQUEL"), relation_keys)
+        self.assertIn((-43, "SIDE_STORY"), relation_keys)
+
     def test_search_defaults_to_safe_and_suggestive_ratings(self):
         with patch.object(mb, "_request", return_value={"status": 200, "data": []}) as request:
             mb.search_mangabaka_series("Example", page=2, limit=15)
