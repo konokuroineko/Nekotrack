@@ -7,7 +7,7 @@ from unittest.mock import patch
 import shiboken6
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt, QBuffer, QIODevice, QEvent, QCoreApplication
+from PySide6.QtCore import Qt, QBuffer, QIODevice
 from PySide6.QtTest import QTest
 from PySide6.QtGui import QPixmap
 from PySide6.QtNetwork import QNetworkReply
@@ -608,10 +608,14 @@ class UiStartupTests(unittest.TestCase):
                     "media": {"edges": []},
                 }
                 page._render_profile()
-                QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-                self.app.processEvents()
 
-                header = page.content.findChild(QFrame, "profileHeader")
+                active_widgets = [
+                    page.content_layout.itemAt(index).widget()
+                    for index in range(page.content_layout.count())
+                    if page.content_layout.itemAt(index) is not None
+                    and page.content_layout.itemAt(index).widget() is not None
+                ]
+                header = active_widgets[0] if active_widgets else None
                 self.assertIsNotNone(header)
                 about = header.findChild(QLabel, "profileDescription")
                 self.assertIsNotNone(about)
@@ -619,7 +623,8 @@ class UiStartupTests(unittest.TestCase):
                 self.assertFalse(
                     any(
                         section.isAncestorOf(about)
-                        for section in page.content.findChildren(QFrame, "profileSection")
+                        for section in active_widgets
+                        if isinstance(section, QFrame) and section.objectName() == "profileSection"
                     )
                 )
             finally:
@@ -663,18 +668,26 @@ class UiStartupTests(unittest.TestCase):
                     },
                 }
                 page._render_profile()
-                QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-                self.app.processEvents()
 
+                active_widgets = [
+                    page.content_layout.itemAt(index).widget()
+                    for index in range(page.content_layout.count())
+                    if page.content_layout.itemAt(index) is not None
+                    and page.content_layout.itemAt(index).widget() is not None
+                ]
                 section_titles = [
-                    label.text()
-                    for label in page.content.findChildren(QLabel, "profileSectionTitle")
+                    title.text()
+                    for widget in active_widgets
+                    if isinstance(widget, QFrame)
+                    and (title := widget.findChild(QLabel, "profileSectionTitle")) is not None
                 ]
                 self.assertIn("Voice acting roles", section_titles)
                 self.assertNotIn("Staff credits", section_titles)
                 section = next(
-                    frame for frame in page.content.findChildren(QFrame, "profileSection")
+                    frame for frame in active_widgets
                     if (
+                        isinstance(frame, QFrame)
+                        and frame.objectName() == "profileSection"
                         (title := frame.findChild(QLabel, "profileSectionTitle")) is not None
                         and title.text() == "Voice acting roles"
                     )
@@ -715,12 +728,18 @@ class UiStartupTests(unittest.TestCase):
                     "characterMedia": {"edges": []},
                 }
                 page._render_profile()
-                QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-                self.app.processEvents()
 
+                active_widgets = [
+                    page.content_layout.itemAt(index).widget()
+                    for index in range(page.content_layout.count())
+                    if page.content_layout.itemAt(index) is not None
+                    and page.content_layout.itemAt(index).widget() is not None
+                ]
                 section = next(
-                    frame for frame in page.content.findChildren(QFrame, "profileSection")
+                    frame for frame in active_widgets
                     if (
+                        isinstance(frame, QFrame)
+                        and frame.objectName() == "profileSection"
                         (title := frame.findChild(QLabel, "profileSectionTitle")) is not None
                         and title.text() == "Staff credits"
                     )
@@ -766,9 +785,22 @@ class UiStartupTests(unittest.TestCase):
                     "media": {"edges": []},
                 }
                 page._render_profile()
-                QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-                self.app.processEvents()
-                card = page.content.findChild(PersonCard)
+                active_widgets = [
+                    page.content_layout.itemAt(index).widget()
+                    for index in range(page.content_layout.count())
+                    if page.content_layout.itemAt(index) is not None
+                    and page.content_layout.itemAt(index).widget() is not None
+                ]
+                voice_section = next(
+                    widget for widget in active_widgets
+                    if isinstance(widget, QFrame)
+                    and widget.objectName() == "profileSection"
+                    and (
+                        (title := widget.findChild(QLabel, "profileSectionTitle")) is not None
+                        and title.text() == "Voice actors"
+                    )
+                )
+                card = voice_section.findChild(PersonCard)
                 self.assertIsNotNone(card)
                 role = card.findChild(QLabel, "personRole")
                 self.assertIsNotNone(role)
