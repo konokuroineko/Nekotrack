@@ -493,7 +493,7 @@ def get_entity_profile(entity_type, entity_id):
                 id
                 name { full native alternative }
                 image { large }
-                description(asHtml: false)
+                description(asHtml: true)
                 gender
                 dateOfBirth { year month day }
                 age
@@ -525,7 +525,7 @@ def get_entity_profile(entity_type, entity_id):
                 name { full native alternative }
                 languageV2
                 image { large }
-                description(asHtml: false)
+                description(asHtml: true)
                 primaryOccupations
                 gender
                 age
