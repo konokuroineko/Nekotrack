@@ -841,19 +841,28 @@ class DatabaseConcurrencyChaosTests(unittest.TestCase):
 
             mismatched_progress = connection.execute(
                 """
-                SELECT library.work_id, library.progress_chapters,
-                       COALESCE(items.read_count, 0)
+                SELECT library.work_id, 'chapter' AS item_type,
+                       library.progress_chapters, COALESCE(progress.read_count, 0)
                 FROM user_library AS library
-                LEFT JOIN (
-                    SELECT work_id, SUM(is_read) AS read_count
-                    FROM reading_items
-                    WHERE item_type = 'chapter'
-                    GROUP BY work_id
-                ) AS items ON items.work_id = library.work_id
+                LEFT JOIN reading_progress AS progress
+                  ON progress.work_id = library.work_id
+                 AND progress.item_type = 'chapter'
                 WHERE library.work_id BETWEEN ? AND ?
-                  AND library.progress_chapters != COALESCE(items.read_count, 0)
+                  AND library.progress_chapters != COALESCE(progress.read_count, 0)
+                UNION ALL
+                SELECT library.work_id, 'volume' AS item_type,
+                       library.progress_volumes, COALESCE(progress.read_count, 0)
+                FROM user_library AS library
+                LEFT JOIN reading_progress AS progress
+                  ON progress.work_id = library.work_id
+                 AND progress.item_type = 'volume'
+                WHERE library.work_id BETWEEN ? AND ?
+                  AND library.progress_volumes != COALESCE(progress.read_count, 0)
                 """,
-                (base_work_id + 1, base_work_id + 8),
+                (
+                    base_work_id + 1, base_work_id + 8,
+                    base_work_id + 1, base_work_id + 8,
+                ),
             ).fetchall()
             self.assertEqual(mismatched_progress, [])
 
