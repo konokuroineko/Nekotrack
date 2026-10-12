@@ -49,6 +49,10 @@ class EntityProfilePage(QWidget):
         self.scroll_area.setWidget(self.content)
         root.addWidget(self.scroll_area, 1)
 
+        self.refresh_theme()
+
+        self.set_profile("character", {})
+
         self.setStyleSheet(
             f"""
             QPushButton {{
@@ -95,7 +99,6 @@ class EntityProfilePage(QWidget):
             }}
             """
         )
-        self.set_profile("character", {})
 
     @staticmethod
     def _value(item, key, fallback=None):
