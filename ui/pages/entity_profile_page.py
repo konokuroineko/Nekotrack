@@ -1,3 +1,4 @@
+import html
 import re
 
 from PySide6.QtCore import Qt, Signal, QUrl, QObject, QRunnable, QThreadPool, QRectF, QPoint, QRect, QSize
@@ -221,11 +222,23 @@ class MediaCreditCard(QFrame):
             credit = edge.get("staffRole") or edge.get("role")
 
         if self.credit_kind == "voice_actor" and character_data is not None:
-            # Mirror CharacterCard's central layout: role anchored at the top and
-            # character name vertically centered in the same text area. The work
-            # title remains available on hover instead of pushing both labels down.
+            # Keep the anime title visible. Within the remaining area, mirror the
+            # Characters tab: role pinned to the top and the character name centered.
             self.setToolTip(str(title))
-            self.cover.setToolTip(str(title))
+            text_column = QVBoxLayout()
+            text_column.setContentsMargins(0, 0, 0, 0)
+            text_column.setSpacing(3)
+
+            title_label = QLabel(str(title))
+            title_label.setObjectName("mediaCreditTitle")
+            title_label.setWordWrap(True)
+            title_label.setMaximumHeight(36)
+            title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            title_label.setStyleSheet(
+                f"background:transparent;border:none;color:{COLORS['primary']};"
+                "font-weight:750;font-size:13px;"
+            )
+            text_column.addWidget(title_label)
 
             text_layout = QGridLayout()
             text_layout.setContentsMargins(0, 0, 0, 0)
@@ -272,11 +285,11 @@ class MediaCreditCard(QFrame):
             names_row.addWidget(name_label, 1)
             names_widget = QWidget()
             names_widget.setLayout(names_row)
-            # This intentionally overlays the role in the same grid cell, exactly
-            # as CharacterCard does: role top-aligned, name row vertically centered.
+            # As in CharacterCard, the role and name share one expanding grid cell.
             text_layout.addWidget(names_widget, 0, 0, 1, 1)
             text_layout.setRowStretch(0, 1)
-            row.addLayout(text_layout, 1)
+            text_column.addLayout(text_layout, 1)
+            row.addLayout(text_column, 1)
         else:
             text_column = QVBoxLayout()
             text_column.setContentsMargins(0, 0, 0, 0)
@@ -568,23 +581,30 @@ class EntityProfilePage(QWidget):
                 updater()
 
     @staticmethod
-    def _normalize_profile_description(description):
-        """Repair AniList's nested YouTube/Staff-link markup before Markdown parsing."""
+    def _normalize_profile_description(description, html_mode=False):
+        """Repair malformed AniList YouTube links while preserving the bio format."""
         pattern = (
-            r"\[(?P<label>[^\]]+)\]\("
+            r"\[(?P<label>[^\]]+)\]\s*\\?\("
             r"\[(?P<base>https?://(?:www\.)?youtube\.com/)\]\((?P=base)\)"
             r"\[@(?P<handle>[A-Za-z0-9_.-]+)\]"
             r"\(https?://anilist\.co/user/[^)]+\)"
-            r"(?P<suffix>[-A-Za-z0-9_.]*)\)"
+            r"(?P<suffix>[-A-Za-z0-9_.]*(?:\?[^\s)]*)?)\)"
         )
-        return re.sub(
-            pattern,
-            lambda match: (
-                f"[{match.group('label')}]"
-                f"({match.group('base')}@{match.group('handle')}{match.group('suffix')})"
-            ),
-            str(description or ""),
-        )
+
+        def replace_link(match):
+            url = (
+                f"{match.group('base')}@{match.group('handle')}"
+                f"{match.group('suffix')}"
+            )
+            label = match.group("label")
+            if html_mode:
+                return (
+                    f'<a href="{html.escape(url, quote=True)}">'
+                    f"{html.escape(label)}</a>"
+                )
+            return f"[{label}]({url})"
+
+        return re.sub(pattern, replace_link, str(description or ""), flags=re.IGNORECASE)
 
     @staticmethod
     def _value(item, key, fallback=None):
@@ -870,12 +890,18 @@ class EntityProfilePage(QWidget):
         facts_column.addStretch(1)
         details_row.addLayout(facts_column, 1)
 
-        description = str(
+        raw_description = str(
             remote.get("description")
             or self._value(record, "description", "")
             or ""
         ).strip()
-        description = self._normalize_profile_description(description)
+        description_has_html = "<" in raw_description and any(
+            token in raw_description.casefold()
+            for token in ("<p", "<br", "<a ", "<b>", "<i>", "<div", "<ul", "<ol")
+        )
+        description = self._normalize_profile_description(
+            raw_description, html_mode=description_has_html
+        )
         if description:
             description_browser = QTextBrowser()
             description_browser.setObjectName("profileDescription")
@@ -888,14 +914,11 @@ class EntityProfilePage(QWidget):
             description_browser.setMinimumHeight(120)
             description_browser.setMaximumHeight(210)
             description_browser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            if "<" in description and any(
-                token in description.casefold()
-                for token in ("<p", "<br", "<a ", "<b>", "<i>", "<div", "<ul", "<ol")
-            ):
+            if description_has_html:
                 description_browser.setHtml(description)
             else:
-                # AniList descriptions use Markdown, including linked labels and
-                # escaped separators. Render it instead of exposing the raw syntax.
+                # AniList descriptions use Markdown, including links and escaped
+                # separators; preserve that formatting instead of showing syntax.
                 description_browser.setMarkdown(description)
             description_browser.setStyleSheet(
                 f"QTextBrowser#profileDescription {{ color:{COLORS['secondary']};"
@@ -922,6 +945,9 @@ class EntityProfilePage(QWidget):
             self._render_media_credits("Appears in", connection, "character")
         elif is_voice_actor:
             self._render_voice_acting_roles(remote.get("characterMedia"), remote)
+            self._render_media_credits(
+                "Staff credits", remote.get("staffMedia"), "staff"
+            )
         else:
             self._render_media_credits(
                 "Staff credits", remote.get("staffMedia"), "staff"
