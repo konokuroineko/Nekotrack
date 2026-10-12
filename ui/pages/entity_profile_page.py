@@ -115,9 +115,26 @@ class MediaCreditCard(QFrame):
         metadata.setStyleSheet(muted_label_stylesheet())
         text_column.addWidget(metadata)
 
-        credit = edge.get("characterRole") if credit_kind == "character" else (
-            edge.get("staffRole") or edge.get("role")
-        )
+        if credit_kind == "character":
+            credit = edge.get("characterRole")
+        elif credit_kind == "voice_actor":
+            characters = edge.get("characters")
+            character_names = []
+            if isinstance(characters, list):
+                for character in characters:
+                    if not isinstance(character, dict):
+                        continue
+                    character_name = character.get("name")
+                    if isinstance(character_name, dict):
+                        character_name = character_name.get("full")
+                    if character_name:
+                        character_names.append(str(character_name))
+            credit = (
+                "Voices: " + ", ".join(character_names[:3])
+                if character_names else edge.get("characterRole")
+            )
+        else:
+            credit = edge.get("staffRole") or edge.get("role")
         if credit:
             role = QLabel(str(credit))
             role.setWordWrap(True)
@@ -370,6 +387,7 @@ class EntityProfilePage(QWidget):
         ]
         self._remote_data = None
         self._remote_error = ""
+        self.page_status.setText("")
         self._render_profile()
         self._start_profile_load(token)
 
@@ -581,15 +599,28 @@ class EntityProfilePage(QWidget):
             connection = remote.get("media")
             self._render_media_credits("Appears in", connection, "character")
         else:
+            if is_voice_actor:
+                self._render_media_credits(
+                    "Voice acting", remote.get("characterMedia"), "voice_actor"
+                )
             self._render_media_credits(
                 "Staff credits", remote.get("staffMedia"), "staff"
             )
 
         if self._remote_error:
+            error_row = QHBoxLayout()
             error_note = QLabel("AniList detail lookup failed; showing cached data.")
             error_note.setWordWrap(True)
             error_note.setStyleSheet(muted_label_stylesheet())
-            self.content_layout.addWidget(error_note)
+            error_row.addWidget(error_note, 1)
+            retry = QPushButton("Retry")
+            retry.setCursor(Qt.PointingHandCursor)
+            retry.clicked.connect(
+                lambda checked=False, token=self._request_token:
+                    self._start_profile_load(token)
+            )
+            error_row.addWidget(retry)
+            self.content_layout.addLayout(error_row)
 
         self.content_layout.addStretch(1)
         self.scroll_area.verticalScrollBar().setValue(0)
