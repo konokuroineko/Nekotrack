@@ -2840,7 +2840,10 @@ class WorkDetailPage(QWidget):
         if requests:
             if self._staff_loading:
                 text = "Loading staff credits…"
-            elif any(work_id in self._staff_page_errors for work_id, _page in requests):
+            elif any(
+                work_id in self._staff_page_errors
+                for work_id, _anilist_id, _page in requests
+            ):
                 text = "Retry loading staff credits"
             else:
                 text = "Load more credits from AniList"
