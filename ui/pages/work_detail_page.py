@@ -2701,14 +2701,21 @@ class WorkDetailPage(QWidget):
                 continue
         if ids and all(work_id < 0 for work_id in ids):
             if title == "Characters":
-                return "MangaBaka does not publish a character cast for this entry."
+                return (
+                    "No character cast is available from this MangaBaka entry "
+                    "or its explicitly linked AniList metadata."
+                )
             if title == "Staff":
                 return (
-                    "MangaBaka does not expose a full staff-credit list for this entry. "
-                    "Available authors and artists are shown in MangaBaka metadata."
+                    "No full staff-credit list is available from this MangaBaka entry "
+                    "or an explicitly linked AniList record. Available authors and "
+                    "artists are shown in MangaBaka metadata."
                 )
             if title == "Relations":
-                return "MangaBaka has no related-work links available for this entry."
+                return (
+                    "Neither MangaBaka nor explicitly linked AniList metadata has "
+                    "related-work links available for this entry."
+                )
         return "Nothing stored locally yet."
 
     def _staff_page_requests(self, detail_ids):
