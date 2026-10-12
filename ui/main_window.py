@@ -996,10 +996,17 @@ class MainWindow(QMainWindow):
             return
         kind = str(entity_type or "").strip().lower()
         if kind in {"voice_actor", "voice actor"}:
-            if self.entity_profile_page.current_type == "character":
+            # Save the character page only when it is the page currently shown;
+            # the stacked widget can retain an old profile while viewing a work.
+            if (
+                self.stack.currentWidget() is self.entity_profile_page
+                and self.entity_profile_page.current_type == "character"
+            ):
                 self._entity_profile_history.append(
                     self.entity_profile_page.profile_state()
                 )
+            else:
+                self._entity_profile_history.clear()
         else:
             self._entity_profile_history.clear()
 
