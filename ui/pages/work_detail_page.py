@@ -2163,9 +2163,9 @@ class WorkDetailPage(QWidget):
         )
         counter.valueChanged.connect(
             lambda value, wid=work_id, kind=item_type, total_hint=total,
-                   status_label=progress_label:
+                   status_label=progress_label, bar=locals().get("progress_bar"):
                 self._reading_progress_changed(
-                    wid, kind, value, total_hint, status_label
+                    wid, kind, value, total_hint, status_label, bar
                 )
         )
         control_row.addWidget(counter, 0, Qt.AlignVCenter)
@@ -2186,7 +2186,7 @@ class WorkDetailPage(QWidget):
         self.bundle_changed.emit()
 
     def _reading_progress_changed(
-        self, work_id, item_type, read_count, total_hint, label
+        self, work_id, item_type, read_count, total_hint, label, progress_bar=None
     ):
         saved_count, _total = set_reading_progress_count(
             work_id, item_type, read_count, total_hint
@@ -2196,6 +2196,8 @@ class WorkDetailPage(QWidget):
             if total_hint
             else f"{saved_count} read · total unknown"
         )
+        if progress_bar is not None and total_hint:
+            progress_bar.setValue(round(100 * min(saved_count, total_hint) / total_hint))
 
     def _reading_member_changed(self, work_id):
         self._selected_episode_work_id = int(work_id)
