@@ -1,6 +1,3 @@
-import html
-import re
-
 from PySide6.QtCore import Qt, Signal, QUrl, QObject, QRunnable, QThreadPool, QRectF, QPoint, QRect, QSize
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
@@ -18,7 +15,7 @@ from PySide6.QtWidgets import (
     QTextBrowser,
 )
 
-from api import get_entity_profile
+from api import get_entity_profile, _normalize_anilist_profile_description
 from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
 from ui.widgets.character_card import CharacterArtwork
 from ui.widgets.person_card import PersonCard
@@ -608,44 +605,10 @@ class EntityProfilePage(QWidget):
 
     @staticmethod
     def _normalize_profile_description(description, html_mode=False):
-        """Repair AniList's nested YouTube links before HTML or Markdown rendering."""
-        value = str(description or "")
-        # AniList may entity-escape Markdown punctuation in HTML-mode descriptions.
-        for encoded, decoded in (
-            (r"&(?:#0*91|#x0*5b|lbrack);", "["),
-            (r"&(?:#0*93|#x0*5d|rbrack);", "]"),
-            (r"&(?:#0*92|#x0*5c|bsol);", "\\"),
-            (r"&(?:#0*40|#x0*28|lpar);", "("),
-            (r"&(?:#0*41|#x0*29|rpar);", ")"),
-        ):
-            value = re.sub(
-                encoded,
-                lambda _match, replacement=decoded: replacement,
-                value,
-                flags=re.IGNORECASE,
-            )
-
-        pattern = (
-            r"\[(?P<label>[^\]]+)\]\s*\\?\(\s*"
-            r"\[(?P<base>https?://(?:www\.)?youtube\.com/)\]"
-            r"\(\s*https?://(?:www\.)?youtube\.com/\s*\\?\)\s*"
-            r"\[@(?P<handle>[A-Za-z0-9_.-]+)\]\s*"
-            r"\(\s*https?://anilist\.co/user/[^)]+?\s*\\?\)"
-            r"(?P<suffix>(?:[-A-Za-z0-9_.]+)?(?:\?[^\s)]*)?)\s*\\?\)"
+        """Normalize malformed provider links through the shared AniList helper."""
+        return _normalize_anilist_profile_description(
+            description, html_mode=html_mode
         )
-
-        def replace_link(match):
-            suffix = html.unescape(match.group("suffix") or "")
-            url = f"{match.group('base')}@{match.group('handle')}{suffix}"
-            label = match.group("label")
-            if html_mode:
-                return (
-                    f'<a href="{html.escape(url, quote=True)}">'
-                    f"{html.escape(label)}</a>"
-                )
-            return f"[{label}]({url})"
-
-        return re.sub(pattern, replace_link, value, flags=re.IGNORECASE)
 
     @staticmethod
     def _value(item, key, fallback=None):
