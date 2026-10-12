@@ -808,7 +808,34 @@ class EntityProfilePage(QWidget):
             )
             for index, actor in enumerate(ordered):
                 person = dict(actor)
-                person.setdefault("role", str(person.get("language") or "Voice actor"))
+                credits = person.get("credits")
+                role_labels = []
+                if isinstance(credits, list):
+                    for credit in credits:
+                        if not isinstance(credit, dict):
+                            continue
+                        work_title = str(credit.get("work_title") or "").strip()
+                        work_id = credit.get("work_id")
+                        if not work_title and work_id is not None:
+                            work_title = f"Work {work_id}"
+                        language = str(credit.get("language") or "").strip()
+                        if language and work_title:
+                            label = f"{language} · {work_title}"
+                        else:
+                            label = language or work_title
+                        if label and label not in role_labels:
+                            role_labels.append(label)
+                languages = person.get("languages")
+                if not role_labels:
+                    if isinstance(languages, (list, tuple)):
+                        role_labels = [
+                            str(language).strip()
+                            for language in languages
+                            if str(language).strip()
+                        ]
+                    if not role_labels and person.get("language"):
+                        role_labels = [str(person["language"]).strip()]
+                person["role"] = " / ".join(role_labels) or "Voice actor"
                 card = PersonCard(person, portrait_size=(90, 120))
                 card.clicked.connect(self.voice_actor_selected.emit)
                 grid.addWidget(card, index // 5, index % 5)

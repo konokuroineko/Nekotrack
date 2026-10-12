@@ -7,7 +7,8 @@ from unittest.mock import patch
 import shiboken6
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QBuffer, QIODevice
+from PySide6.QtCore import Qt, QBuffer, QIODevice
+from PySide6.QtTest import QTest
 from PySide6.QtGui import QPixmap
 from PySide6.QtNetwork import QNetworkReply
 from PySide6.QtWidgets import QApplication, QLabel
@@ -39,6 +40,7 @@ class MemorySettings:
 # the developer's real NekoTrack preferences.
 with patch.object(preferences, "QSettings", MemorySettings):
     from ui.main_window import MainWindow
+    from ui.widgets.person_card import PersonCard
     from ui.pages.library_page import (
         RelationSyncWorker,
         _backfill_automatic_bundle_memberships,
@@ -419,6 +421,93 @@ class UiStartupTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+
+    def test_character_bundle_voice_actors_open_profiles_and_back_returns_to_character(self):
+        MemorySettings.stores = {
+            ("NekoTrack", "NekoTrack"): {
+                preferences._MIGRATION_KEY: True,
+                "_theme_palette_version": preferences._THEME_PALETTE_VERSION,
+                "theme_preset": "Neko",
+                "setup_complete": True,
+            },
+            ("AniTrack", "AniTrack"): {},
+        }
+        actors = [
+            {
+                "person_id": 7001,
+                "name": "Japanese Actor",
+                "language": "Japanese",
+                "languages": ["Japanese"],
+                "image_path": None,
+                "image_url": None,
+                "credits": [{
+                    "work_id": 101,
+                    "work_title": "Adaptation 101",
+                    "language": "Japanese",
+                }],
+            },
+            {
+                "person_id": 7002,
+                "name": "English Actor",
+                "language": "English",
+                "languages": ["English"],
+                "image_path": None,
+                "image_url": None,
+                "credits": [{
+                    "work_id": 102,
+                    "work_title": "Adaptation 102",
+                    "language": "English",
+                }],
+            },
+        ]
+        window = None
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                with patch.object(preferences, "QSettings", MemorySettings), \
+                     patch("ui.main_window.get_bundle_character_voice_actors", return_value=actors) as get_actors, \
+                     patch("ui.pages.entity_profile_page.EntityProfilePage._start_profile_load"):
+                    window = MainWindow()
+                    window.work_detail_page.work = {
+                        "id": 101,
+                        "_series_members": [{"id": 101}, {"id": 102}],
+                    }
+                    window.show_entity_profile(
+                        "character",
+                        {"id": 501, "character_name": "Example Character"},
+                    )
+                    self.assertEqual(
+                        get_actors.call_args.args,
+                        ([101, 102], 501),
+                    )
+
+                    window.show()
+                    self.app.processEvents()
+                    cards = window.entity_profile_page.findChildren(PersonCard)
+                    self.assertEqual(
+                        {card.person["person_id"] for card in cards},
+                        {7001, 7002},
+                    )
+                    QTest.mouseClick(cards[0], Qt.LeftButton)
+                    self.assertEqual(window.entity_profile_page.current_type, "voice_actor")
+                    self.assertIn(
+                        window.entity_profile_page.current_record.get("person_id"),
+                        {7001, 7002},
+                    )
+
+                    window._back_from_entity_profile()
+                    self.assertEqual(window.entity_profile_page.current_type, "character")
+                    self.assertEqual(
+                        {actor["person_id"] for actor in window.entity_profile_page.voice_actors},
+                        {7001, 7002},
+                    )
+            finally:
+                if window is not None:
+                    window.close()
+                    window.deleteLater()
+                    self.app.processEvents()
+                os.chdir(old_cwd)
 
 if __name__ == "__main__":
     unittest.main()

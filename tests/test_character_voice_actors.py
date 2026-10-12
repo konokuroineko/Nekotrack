@@ -66,6 +66,12 @@ class CharacterVoiceActorScopeTests(unittest.TestCase):
             [row["person_id"] for row in database.get_bundle_character_voice_actors([101, 102], 501)],
             [7001],
         )
+        # The first bundle member may have no cast entry; later valid data wins.
+        for ordered_ids in ([102, 101], [101, 102]):
+            with self.subTest(ordered_ids=ordered_ids):
+                preview = database.get_bundle_characters(ordered_ids)
+                self.assertEqual(len(preview), 1)
+                self.assertEqual(preview[0]["person_id"], 7001)
 
     def test_each_adaptation_keeps_its_own_cast_and_bundle_prefers_japanese_actor(self):
         self._add_two_adaptations()
@@ -85,6 +91,52 @@ class CharacterVoiceActorScopeTests(unittest.TestCase):
         self.assertEqual(bundle_reverse[0]["person_id"], 7001)
         all_actors = database.get_bundle_character_voice_actors([102, 101], 501)
         self.assertEqual({row["person_id"] for row in all_actors}, {7001, 7002})
+
+    def test_same_actor_is_deduplicated_but_all_adaptation_credits_are_retained(self):
+        self._add_two_adaptations()
+        database.save_characters(
+            101, [self._character([self._actor(7001, "Shared Voice Actor", "Japanese")])]
+        )
+        database.save_characters(
+            102, [self._character([self._actor(7001, "Shared Voice Actor", "ja")])]
+        )
+
+        actors = database.get_bundle_character_voice_actors([102, 101], 501)
+        self.assertEqual(len(actors), 1)
+        actor = actors[0]
+        self.assertEqual(actor["person_id"], 7001)
+        self.assertEqual(actor["language"], "Japanese")
+        self.assertEqual(actor["languages"], ["Japanese"])
+        self.assertEqual(actor["work_ids"], [101, 102])
+        self.assertEqual(actor["work_titles"], ["Adaptation 101", "Adaptation 102"])
+        self.assertEqual(
+            [
+                (credit["work_id"], credit["work_title"], credit["language"])
+                for credit in actor["credits"]
+            ],
+            [
+                (101, "Adaptation 101", "Japanese"),
+                (102, "Adaptation 102", "Japanese"),
+            ],
+        )
+
+    def test_partial_cast_snapshot_does_not_erase_previously_saved_actors(self):
+        self._add_two_adaptations()
+        database.save_characters(
+            101, [self._character([self._actor(7001, "Previously Saved Actor")])]
+        )
+        partial_character = self._character([])
+        partial_character.pop("voiceActors")
+        database.save_characters(101, [partial_character])
+
+        self.assertFalse(database.characters_are_loaded(101))
+        self.assertEqual(
+            [
+                actor["person_id"]
+                for actor in database.get_bundle_character_voice_actors([101], 501)
+            ],
+            [7001],
+        )
 
     def test_legacy_global_actor_rows_migrate_and_mark_cast_for_refresh(self):
         self._add_two_adaptations()
