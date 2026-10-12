@@ -483,6 +483,7 @@ class MainWindow(QMainWindow):
         self._detail_enrichment_ids = set()
         self._entity_profile_history = []
         self._pending_character_cast_refreshes = {}
+        self._completed_character_cast_refreshes = set()
         self._profile_work_return_state = None
         self._opening_profile_credit_work = False
         self._library_episode_preload_thread = None
@@ -1076,7 +1077,7 @@ class MainWindow(QMainWindow):
             )
 
     def _queue_missing_character_voice_actor_refresh(self, record, work_ids):
-        """Retry only cached anime entries for a character with no saved actors."""
+        """Refresh every anime member when no bundled voice-actor credit is cached."""
         if self._shutdown_requested or self._shutdown_event.is_set():
             return
 
@@ -1100,26 +1101,33 @@ class MainWindow(QMainWindow):
         if not bundle_work_ids:
             return
 
-        # Don't refresh unrelated seasons or works where this character is
-        # absent. Retry only cached entries that have the character but no actor.
+        key = (character_id, tuple(sorted(bundle_work_ids)))
+        if key in self._completed_character_cast_refreshes:
+            log_event(
+                "character.voice_actor_refresh.not_queued",
+                character_id=character_id,
+                bundle_work_count=len(bundle_work_ids),
+                reason="already_refreshed_this_session",
+            )
+            return
+
+        state = self._pending_character_cast_refreshes.get(key)
+        already_pending = (
+            state.get("pending_work_ids", set()) if isinstance(state, dict) else set()
+        )
+
+        # Do not use cached character rows to decide which work to refresh.
+        # A missing row can be the corruption/incompleteness we're recovering
+        # from, and would otherwise exclude the one adaptation holding the
+        # missing actor credit. Since no voice actors are cached for this
+        # character anywhere in the bundle, refresh every anime member.
         candidate_ids = []
         for work_id in bundle_work_ids:
             try:
                 work = get_work(work_id)
                 if work is None or str(work["type"] or "").upper() != "ANIME":
                     continue
-                matching_rows = []
-                for raw_row in get_characters(work_id):
-                    row = dict(raw_row)
-                    try:
-                        row_character_id = int(row.get("id"))
-                    except (TypeError, ValueError, OverflowError):
-                        continue
-                    if row_character_id == character_id:
-                        matching_rows.append(row)
-                if matching_rows and not any(
-                    row.get("person_id") for row in matching_rows
-                ):
+                if work_id not in already_pending:
                     candidate_ids.append(work_id)
             except Exception as error:
                 log_exception(
@@ -1130,23 +1138,13 @@ class MainWindow(QMainWindow):
                 )
 
         if not candidate_ids:
-            log_event(
-                "character.voice_actor_refresh.not_queued",
-                character_id=character_id,
-                bundle_work_count=len(bundle_work_ids),
-                reason="no_cached_anime_character_without_actor",
-            )
-            return
-
-        key = (character_id, tuple(sorted(bundle_work_ids)))
-        state = self._pending_character_cast_refreshes.get(key)
-        already_pending = (
-            state.get("pending_work_ids", set()) if isinstance(state, dict) else set()
-        )
-        candidate_ids = [
-            work_id for work_id in candidate_ids if work_id not in already_pending
-        ]
-        if not candidate_ids:
+            if not already_pending:
+                log_event(
+                    "character.voice_actor_refresh.not_queued",
+                    character_id=character_id,
+                    bundle_work_count=len(bundle_work_ids),
+                    reason="no_cached_anime_bundle_members",
+                )
             return
 
         try:
@@ -1160,6 +1158,12 @@ class MainWindow(QMainWindow):
             )
             return
         if invalidated <= 0:
+            log_event(
+                "character.voice_actor_refresh.not_queued",
+                character_id=character_id,
+                bundle_work_count=len(bundle_work_ids),
+                reason="no_cast_snapshots_invalidated",
+            )
             return
 
         if state is None:
@@ -1170,7 +1174,6 @@ class MainWindow(QMainWindow):
             }
             self._pending_character_cast_refreshes[key] = state
         state["pending_work_ids"].update(candidate_ids)
-        self._detail_enrichment_ids.update(candidate_ids)
 
         log_event(
             "character.voice_actor_refresh.queued",
@@ -1179,6 +1182,10 @@ class MainWindow(QMainWindow):
             refresh_work_ids=candidate_ids,
         )
         self._queue_library_imports(candidate_ids)
+        # Avoid repeatedly re-importing the entire bundle on every profile open
+        # if the provider still has no credit to return. A new app session can
+        # retry after a provider/data update.
+        self._completed_character_cast_refreshes.add(key)
 
     def _complete_pending_character_cast_refresh(self, work_id):
         """Re-read cached actor credits after all targeted cast imports stop."""
