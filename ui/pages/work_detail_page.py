@@ -2124,6 +2124,7 @@ class WorkDetailPage(QWidget):
         header.addWidget(progress_label)
         box.addLayout(header)
 
+        progress_bar = None
         if total > 0:
             progress_bar = QProgressBar()
             progress_bar.setObjectName("readingProgressBar")
@@ -2163,7 +2164,7 @@ class WorkDetailPage(QWidget):
         )
         counter.valueChanged.connect(
             lambda value, wid=work_id, kind=item_type, total_hint=total,
-                   status_label=progress_label, bar=locals().get("progress_bar"):
+                   status_label=progress_label, bar=progress_bar:
                 self._reading_progress_changed(
                     wid, kind, value, total_hint, status_label, bar
                 )
@@ -2176,7 +2177,7 @@ class WorkDetailPage(QWidget):
         """Create library membership first, then enable the persistent counters."""
         try:
             add_to_library(int(work_id), "Planning")
-        except (TypeError, ValueError, RuntimeError) as error:
+        except Exception as error:
             QMessageBox.warning(
                 self, "Could not start reading tracker",
                 f"NekoTrack could not add this work to your Library.\n\n{error}",
