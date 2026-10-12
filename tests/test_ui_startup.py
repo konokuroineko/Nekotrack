@@ -790,6 +790,7 @@ class UiStartupTests(unittest.TestCase):
                 cards = section.findChildren(WorkCard)
                 self.assertEqual(len(cards), 2)
                 self.assertTrue(all(card.objectName() == "posterCard" for card in cards))
+                self.assertTrue(all(card.mode == "library" for card in cards))
                 self.assertFalse(section.findChildren(MediaCreditCard))
             finally:
                 page.close()
