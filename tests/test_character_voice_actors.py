@@ -91,6 +91,7 @@ class CharacterVoiceActorScopeTests(unittest.TestCase):
         actor = self._actor(7001, "Legacy Actor")
         database.save_characters(101, [self._character([actor])])
         database.save_characters(102, [self._character([])])
+        database.save_anime(self._work(103))
 
         connection = database.get_connection()
         try:
@@ -103,6 +104,7 @@ class CharacterVoiceActorScopeTests(unittest.TestCase):
         database.initialize_database()
         self.assertFalse(database.characters_are_loaded(101))
         self.assertFalse(database.characters_are_loaded(102))
+        self.assertTrue(database.characters_are_loaded(103))
         # Fresh cast snapshots can now correct this legacy ambiguous association
         # independently for each adaptation without cross-deleting the actor.
         database.save_characters(102, [self._character([])])
