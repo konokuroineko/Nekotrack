@@ -551,6 +551,25 @@ def get_entity_profile(entity_type, entity_id):
                     }
                     pageInfo { currentPage lastPage hasNextPage }
                 }
+                characterMedia(page: 1, perPage: 12, sort: POPULARITY_DESC) {
+                    edges {
+                        characters {
+                            id
+                            name { full }
+                            image { large }
+                        }
+                        characterRole
+                        node {
+                            id
+                            type
+                            format
+                            title { english romaji native }
+                            coverImage { large }
+                            startDate { year month day }
+                        }
+                    }
+                    pageInfo { currentPage lastPage hasNextPage }
+                }
             }
         }
         """
