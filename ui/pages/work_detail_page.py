@@ -2768,11 +2768,23 @@ class WorkDetailPage(QWidget):
                 # information was cached alongside the initial credit list.
                 if saved_staff_count < 15:
                     continue
-            requests.append((
-                local_work_id,
-                anilist_id,
-                self._staff_next_pages.get(local_work_id, 2),
-            ))
+                saved_next_page = 2
+            else:
+                try:
+                    saved_next_page = max(
+                        2, int(page_info.get("currentPage") or 1) + 1
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    saved_next_page = 2
+
+            # The DB pageInfo is persisted, so use it to resume correctly after
+            # an application restart. The in-memory counter can only move this
+            # forward, never back to an already-imported page.
+            next_page = max(
+                saved_next_page,
+                self._staff_next_pages.get(local_work_id, saved_next_page),
+            )
+            requests.append((local_work_id, anilist_id, next_page))
         return requests
 
     def _staff_section(self, detail_ids, items=None):
