@@ -35,6 +35,36 @@ class EntityProfileApiTests(unittest.TestCase):
         self.assertIn("primaryOccupations", request.call_args.args[0])
         self.assertIn("staffMedia", request.call_args.args[0])
 
+    def test_profile_fetch_repairs_both_malformed_youtube_links(self):
+        malformed = (
+            "[Youtube]\\([https://youtube.com/](https://youtube.com/)"
+            "[@officialyoutubechannel3974]"
+            "(https://anilist.co/user/officialyoutubechannel3974)"
+            "?si=9AjlJ6Ujj2Vw1CiU) "
+            "[YouTube]\\([https://www.youtube.com/](https://www.youtube.com/)"
+            "[@Ueda](https://anilist.co/user/Ueda)-Kana)"
+        )
+        profile = {
+            "id": 456,
+            "name": {"full": "Example Voice Actor"},
+            "description": f"<p>{malformed}</p>",
+            "staffMedia": {"edges": []},
+            "characterMedia": {"edges": []},
+        }
+        with patch("api.anilist_request", return_value={"Staff": profile}):
+            result = api.get_entity_profile("voice_actor", 456)
+
+        description = result["description"]
+        self.assertIn(
+            'href="https://youtube.com/@officialyoutubechannel3974?si=9AjlJ6Ujj2Vw1CiU"',
+            description,
+        )
+        self.assertIn('href="https://www.youtube.com/@Ueda-Kana"', description)
+        self.assertNotIn("https://anilist.co/user/officialyoutubechannel3974", description)
+        self.assertNotIn("https://anilist.co/user/Ueda", description)
+        self.assertNotIn("[Youtube]\\(", description)
+        self.assertNotIn("[YouTube]\\(", description)
+
     def test_invalid_entity_id_is_rejected_before_network_call(self):
         for value in (None, 0, -5, True, "not-an-id", 1 << 40):
             with self.subTest(value=value), patch("api.anilist_request") as request:
