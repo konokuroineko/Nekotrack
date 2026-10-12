@@ -1,5 +1,6 @@
 import copy
 import datetime as _dt
+from email.utils import parsedate_to_datetime
 import hashlib
 import math
 import re
@@ -131,6 +132,26 @@ def _validated_media_id(value):
     return numeric_id
 
 
+def _retry_after_delay(value, fallback, now=None):
+    """Parse Retry-After seconds or HTTP-date, with bounded finite fallback."""
+    try:
+        requested = float(value)
+    except (TypeError, ValueError, OverflowError):
+        try:
+            retry_at = parsedate_to_datetime(str(value))
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=_dt.timezone.utc)
+            current = now or _dt.datetime.now(_dt.timezone.utc)
+            if current.tzinfo is None:
+                current = current.replace(tzinfo=_dt.timezone.utc)
+            requested = (retry_at - current).total_seconds()
+        except (TypeError, ValueError, OverflowError, IndexError):
+            requested = fallback
+    if not math.isfinite(requested):
+        requested = fallback
+    return min(60.0, max(1.0, requested))
+
+
 def anilist_request(query, variables=None):
     """Make a request to AniList GraphQL API with retry logic."""
     last_error = None
@@ -178,20 +199,9 @@ def anilist_request(query, variables=None):
             if response.status_code == 429:
                 retry_after = response.headers.get("Retry-After")
                 fallback_wait = RETRY_DELAY * (2 ** attempt)
-                try:
-                    requested_wait = (
-                        float(retry_after)
-                        if retry_after is not None
-                        else fallback_wait
-                    )
-                    # Keep provider-controlled Retry-After finite and bounded.
-                    wait_time = (
-                        min(60.0, max(1.0, requested_wait))
-                        if math.isfinite(requested_wait)
-                        else fallback_wait
-                    )
-                except (TypeError, ValueError, OverflowError):
-                    wait_time = fallback_wait
+                # HTTP Retry-After accepts either delay seconds or an HTTP-date.
+                # Share the resulting cooldown across every provider caller.
+                wait_time = _retry_after_delay(retry_after, fallback_wait)
 
                 # Every worker observes this cooldown, even after this request
                 # exhausts its own retry budget.

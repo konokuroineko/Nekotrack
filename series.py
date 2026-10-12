@@ -1191,6 +1191,10 @@ def get_library_series():
     ids = {int(row["id"]) for row in rows}
     parent = {work_id: work_id for work_id in ids}
     component_members = {work_id: {work_id} for work_id in ids}
+    # Track the Search snapshots represented by each component. Automatic
+    # relation/title joins may extend one snapshot, but must not collapse two
+    # independently selected Search result groups.
+    component_snapshot_ids = {work_id: set() for work_id in ids}
 
     def find(work_id):
         while parent[work_id] != work_id:
@@ -1198,13 +1202,15 @@ def get_library_series():
             work_id = parent[work_id]
         return work_id
 
-    def union(left, right):
+    def union(left, right, allow_snapshot_merge=False):
         left_root, right_root = find(left), find(right)
         if left_root == right_root:
             return True
 
         left_members = component_members[left_root]
         right_members = component_members[right_root]
+        # Component-wide checks stop indirect relation chains from bypassing
+        # an exclusion the user explicitly added.
         if any(
             tuple(sorted((left_id, right_id))) in excluded_links
             for left_id in left_members
@@ -1212,8 +1218,19 @@ def get_library_series():
         ):
             return False
 
+        left_snapshots = component_snapshot_ids[left_root]
+        right_snapshots = component_snapshot_ids[right_root]
+        if (
+            not allow_snapshot_merge
+            and left_snapshots
+            and right_snapshots
+            and left_snapshots.isdisjoint(right_snapshots)
+        ):
+            return False
+
         parent[right_root] = left_root
         left_members.update(component_members.pop(right_root))
+        left_snapshots.update(component_snapshot_ids.pop(right_root))
         return True
 
     row_by_id = {int(row["id"]): row for row in rows}
@@ -1231,6 +1248,7 @@ def get_library_series():
         work_id = int(membership["work_id"])
         if work_id in ids:
             saved_groups[bundle_id].add(work_id)
+            component_snapshot_ids[work_id].add(bundle_id)
 
     for member_ids in saved_groups.values():
         bundleable_ids = sorted(
@@ -1269,7 +1287,9 @@ def get_library_series():
         source_id = int(link["work_a"])
         target_id = int(link["work_b"])
         if source_id in ids and target_id in ids:
-            union(source_id, target_id)
+            # Explicit user-created manual links may combine automatic
+            # snapshots, but the exclusion check inside union remains active.
+            union(source_id, target_id, allow_snapshot_merge=True)
 
     by_key = {}
     for row in rows:
