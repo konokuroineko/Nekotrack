@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QGridLayout
 
 from ui.pages.entity_profile_page import (
     ClickableCharacterArtwork,
@@ -79,8 +79,15 @@ class EntityProfileUiTests(unittest.TestCase):
         self.assertIsNotNone(role_label)
         self.assertIsNotNone(name_label)
         self.assertEqual(role_label.text(), "Main")
-        text_labels = card.findChildren(QLabel)
-        self.assertLess(text_labels.index(role_label), text_labels.index(name_label))
+        self.assertEqual(name_label.text(), "Example Character")
+        self.assertTrue(role_label.alignment() & Qt.AlignHCenter)
+        self.assertTrue(name_label.alignment() & Qt.AlignVCenter)
+        self.assertEqual(card.toolTip(), "Example Series")
+        self.assertNotIn("Example Series", [label.text() for label in card.findChildren(QLabel)])
+        text_layout = card.layout().itemAt(1).layout()
+        self.assertIsInstance(text_layout, QGridLayout)
+        self.assertEqual(text_layout.getItemPosition(0), (0, 0, 1, 1))
+        self.assertEqual(text_layout.getItemPosition(1), (0, 0, 1, 1))
         QTest.mouseClick(card.character_cards[0], Qt.LeftButton)
         self.assertEqual(len(selected_character), 1)
         self.assertEqual(selected_character[0]["id"], 456)

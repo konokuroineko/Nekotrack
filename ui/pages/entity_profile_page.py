@@ -1,3 +1,5 @@
+import re
+
 from PySide6.QtCore import Qt, Signal, QUrl, QObject, QRunnable, QThreadPool, QRectF, QPoint, QRect, QSize
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
@@ -213,37 +215,41 @@ class MediaCreditCard(QFrame):
         if self._reply is not None:
             self._reply.finished.connect(self._image_finished)
 
-        text_column = QVBoxLayout()
-        text_column.setContentsMargins(0, 0, 0, 0)
-        text_column.setSpacing(5)
-        title_label = QLabel(str(title))
-        title_label.setObjectName("mediaCreditTitle")
-        title_label.setWordWrap(True)
-        title_label.setMaximumHeight(44)
-        title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        title_label.setStyleSheet(
-            f"background:transparent;border:none;color:{COLORS['primary']};"
-            "font-weight:750;font-size:13px;"
-        )
-        text_column.addWidget(title_label)
-
         if self.credit_kind in {"character", "voice_actor"}:
             credit = edge.get("characterRole")
         else:
             credit = edge.get("staffRole") or edge.get("role")
-        if credit:
-            role_text = str(credit).replace("_", " ").strip().title()
-            role = QLabel(role_text)
-            role.setObjectName("mediaCreditRole")
-            role.setWordWrap(True)
-            role.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            role.setStyleSheet(
-                f"color:{COLORS['primary']};font-size:13px;font-weight:700;"
-                "background:transparent;border:none;"
-            )
-            text_column.addWidget(role)
 
         if self.credit_kind == "voice_actor" and character_data is not None:
+            # Mirror CharacterCard's central layout: role anchored at the top and
+            # character name vertically centered in the same text area. The work
+            # title remains available on hover instead of pushing both labels down.
+            self.setToolTip(str(title))
+            self.cover.setToolTip(str(title))
+
+            text_layout = QGridLayout()
+            text_layout.setContentsMargins(0, 0, 0, 0)
+            text_layout.setHorizontalSpacing(18)
+            text_layout.setVerticalSpacing(0)
+            text_layout.setColumnStretch(0, 1)
+
+            if credit:
+                role_text = str(credit).replace("_", " ").title()
+                role = QLabel(role_text)
+                role.setObjectName("mediaCreditRole")
+                role.setWordWrap(True)
+                role.setFrameShape(QFrame.NoFrame)
+                role.setLineWidth(0)
+                role.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                role.setStyleSheet(
+                    f"background: transparent; border: none; color: {COLORS['primary']}; "
+                    "font-size: 13px; font-weight: 700;"
+                )
+                role.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+                text_layout.addWidget(
+                    role, 0, 0, 1, 1, Qt.AlignHCenter | Qt.AlignTop
+                )
+
             raw_name = character_data.get("name")
             if isinstance(raw_name, dict):
                 character_name = raw_name.get("full") or raw_name.get("native") or "Unknown character"
@@ -252,14 +258,53 @@ class MediaCreditCard(QFrame):
             name_label = QLabel(str(character_name))
             name_label.setObjectName("creditCharacterName")
             name_label.setWordWrap(True)
-            name_label.setMaximumHeight(40)
+            name_label.setFrameShape(QFrame.NoFrame)
+            name_label.setLineWidth(0)
+            name_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             name_label.setStyleSheet(
-                f"background:transparent;border:none;color:{COLORS['primary']};"
-                "font-weight:600;"
+                f"background: transparent; border: none; color: {COLORS['primary']}; "
+                "font-weight: 600;"
             )
-            text_column.addWidget(name_label)
-        text_column.addStretch(1)
-        row.addLayout(text_column, 1)
+            name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+            names_row = QHBoxLayout()
+            names_row.setSpacing(18)
+            names_row.addWidget(name_label, 1)
+            names_widget = QWidget()
+            names_widget.setLayout(names_row)
+            # This intentionally overlays the role in the same grid cell, exactly
+            # as CharacterCard does: role top-aligned, name row vertically centered.
+            text_layout.addWidget(names_widget, 0, 0, 1, 1)
+            text_layout.setRowStretch(0, 1)
+            row.addLayout(text_layout, 1)
+        else:
+            text_column = QVBoxLayout()
+            text_column.setContentsMargins(0, 0, 0, 0)
+            text_column.setSpacing(5)
+            title_label = QLabel(str(title))
+            title_label.setObjectName("mediaCreditTitle")
+            title_label.setWordWrap(True)
+            title_label.setMaximumHeight(44)
+            title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            title_label.setStyleSheet(
+                f"background:transparent;border:none;color:{COLORS['primary']};"
+                "font-weight:750;font-size:13px;"
+            )
+            text_column.addWidget(title_label)
+
+            if credit:
+                role_text = str(credit).replace("_", " ").strip().title()
+                role = QLabel(role_text)
+                role.setObjectName("mediaCreditRole")
+                role.setWordWrap(True)
+                role.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                role.setStyleSheet(
+                    f"color:{COLORS['primary']};font-size:13px;font-weight:700;"
+                    "background:transparent;border:none;"
+                )
+                text_column.addWidget(role)
+            text_column.addStretch(1)
+            row.addLayout(text_column, 1)
 
         if self.credit_kind == "voice_actor" and character_data is not None:
             self.character_artwork = ClickableCharacterArtwork(character_data)
@@ -521,6 +566,25 @@ class EntityProfilePage(QWidget):
             updater = getattr(widget, "refresh_theme", None)
             if callable(updater):
                 updater()
+
+    @staticmethod
+    def _normalize_profile_description(description):
+        """Repair AniList's nested YouTube/Staff-link markup before Markdown parsing."""
+        pattern = (
+            r"\[(?P<label>[^\]]+)\]\("
+            r"\[(?P<base>https?://(?:www\.)?youtube\.com/)\]\((?P=base)\)"
+            r"\[@(?P<handle>[A-Za-z0-9_.-]+)\]"
+            r"\(https?://anilist\.co/user/[^)]+\)"
+            r"(?P<suffix>[-A-Za-z0-9_.]*)\)"
+        )
+        return re.sub(
+            pattern,
+            lambda match: (
+                f"[{match.group('label')}]"
+                f"({match.group('base')}@{match.group('handle')}{match.group('suffix')})"
+            ),
+            str(description or ""),
+        )
 
     @staticmethod
     def _value(item, key, fallback=None):
@@ -811,6 +875,7 @@ class EntityProfilePage(QWidget):
             or self._value(record, "description", "")
             or ""
         ).strip()
+        description = self._normalize_profile_description(description)
         if description:
             description_browser = QTextBrowser()
             description_browser.setObjectName("profileDescription")
