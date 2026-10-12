@@ -688,7 +688,7 @@ class UiStartupTests(unittest.TestCase):
                     if (
                         isinstance(frame, QFrame)
                         and frame.objectName() == "profileSection"
-                        (title := frame.findChild(QLabel, "profileSectionTitle")) is not None
+                        and (title := frame.findChild(QLabel, "profileSectionTitle")) is not None
                         and title.text() == "Voice acting roles"
                     )
                 )
@@ -740,7 +740,7 @@ class UiStartupTests(unittest.TestCase):
                     if (
                         isinstance(frame, QFrame)
                         and frame.objectName() == "profileSection"
-                        (title := frame.findChild(QLabel, "profileSectionTitle")) is not None
+                        and (title := frame.findChild(QLabel, "profileSectionTitle")) is not None
                         and title.text() == "Staff credits"
                     )
                 )
