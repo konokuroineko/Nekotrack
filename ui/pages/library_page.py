@@ -1,4 +1,5 @@
 import shutil
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, Signal, QEvent, QTimer, QPropertyAnimation, QEasingCurve, QThread
@@ -94,9 +95,10 @@ def _backfill_automatic_bundle_memberships(work_ids, details_by_id):
 class RelationSyncWorker(QObject):
     finished = Signal(object)
 
-    def __init__(self, work_ids):
+    def __init__(self, work_ids, stop_event=None):
         super().__init__()
         self.work_ids = sorted({int(work_id) for work_id in work_ids})
+        self.stop_event = stop_event
 
     def run(self):
         succeeded_ids = set()
@@ -122,6 +124,8 @@ class RelationSyncWorker(QObject):
             )
 
         for work_id in self.work_ids:
+            if self.stop_event is not None and self.stop_event.is_set():
+                break
             with diagnostic_context(workflow="library_relation_sync", work_id=work_id):
                 log_event("library.relation_sync.item_started")
                 details = details_by_id.get(work_id)
@@ -249,6 +253,7 @@ class LibraryPage(QWidget):
         super().__init__()
         self.all_anime = []; self.anime_list = []; self.current_filter = "All"; self._cards = []; self._empty_label = None
         self._sync_thread = None; self._sync_worker = None; self._sync_done_ids = set(); self._sync_failed_ids = set()
+        self._sync_threads = []; self._shutdown_event = threading.Event(); self._closing = False
         self._resize_timer = QTimer(self); self._resize_timer.setSingleShot(True); self._resize_timer.setInterval(140); self._resize_timer.timeout.connect(self._finish_resize)
         self._resize_layout_was_enabled = True; self._last_target_positions = None; self._animations = []; self._build_shell(); self.refresh()
 
@@ -339,7 +344,32 @@ class LibraryPage(QWidget):
         self._start_relation_sync()
         log_event("library.refresh.completed", visible_group_count=len(self.all_anime))
 
+    def request_shutdown(self):
+        """Stop scheduling relation work and let the active worker finish safely."""
+        self._closing = True
+        self._shutdown_event.set()
+        for thread in list(self._sync_threads):
+            try:
+                thread.quit()
+            except RuntimeError:
+                pass
+
+    def has_running_workers(self):
+        for thread in list(self._sync_threads):
+            try:
+                if thread.isRunning():
+                    return True
+            except RuntimeError:
+                continue
+        return False
+
+    def _relation_thread_finished(self, thread):
+        if thread in self._sync_threads:
+            self._sync_threads.remove(thread)
+
     def _start_relation_sync(self):
+        if self._closing:
+            return
         if self._sync_thread is not None and self._sync_thread.isRunning():
             log_event("library.relation_sync.already_running")
             return
@@ -380,11 +410,15 @@ class LibraryPage(QWidget):
         if not pending:
             return
         self._sync_thread = QThread(self)
-        self._sync_worker = RelationSyncWorker(pending)
+        self._sync_worker = RelationSyncWorker(pending, self._shutdown_event)
         self._sync_worker.moveToThread(self._sync_thread)
         self._sync_thread.started.connect(self._sync_worker.run)
         self._sync_worker.finished.connect(self._relation_sync_finished)
         self._sync_worker.finished.connect(self._sync_thread.quit)
+        self._sync_threads.append(self._sync_thread)
+        self._sync_thread.finished.connect(
+            lambda t=self._sync_thread: self._relation_thread_finished(t)
+        )
         self._sync_thread.finished.connect(self._sync_worker.deleteLater)
         self._sync_thread.finished.connect(self._sync_thread.deleteLater)
         self._sync_thread.start()
@@ -403,6 +437,8 @@ class LibraryPage(QWidget):
         self._sync_failed_ids.update(failed_ids)
         self._sync_thread = None
         self._sync_worker = None
+        if self._closing:
+            return
         self.refresh(retry_failed=False)
 
     def _delete_item(self, group):

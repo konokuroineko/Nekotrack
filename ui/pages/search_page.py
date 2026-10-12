@@ -1127,16 +1127,32 @@ class SearchPage(QWidget):
         self.shutdown_workers()
         super().closeEvent(event)
 
-    def shutdown_workers(self):
+    def request_shutdown(self):
+        """Request cancellation without blocking the GUI's shutdown poll."""
         self._stop_pending_render()
         self._resize_timer.stop()
         self._stop_animations()
         self._stop_enrichment()
         for thread in list(self.search_threads):
-            thread.quit()
-            thread.wait(1500)
+            try:
+                thread.quit()
+            except RuntimeError:
+                pass
         if self.enrichment_thread is not None:
-            self.enrichment_thread.quit()
-            self.enrichment_thread.wait(3000)
-        self.search_threads.clear()
-        self.search_workers.clear()
+            try:
+                self.enrichment_thread.quit()
+            except RuntimeError:
+                pass
+
+    def shutdown_workers(self):
+        # Callers destroying/replacing this widget must not leave QThreads behind.
+        self.request_shutdown()
+        threads = list(self.search_threads)
+        if self.enrichment_thread is not None and self.enrichment_thread not in threads:
+            threads.append(self.enrichment_thread)
+        for thread in threads:
+            try:
+                if thread.isRunning():
+                    thread.wait()
+            except RuntimeError:
+                continue

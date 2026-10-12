@@ -1,3 +1,5 @@
+import threading
+
 from api import (
     cache_tmdb_episode_image,
     get_media_details,
@@ -81,14 +83,17 @@ class EpisodeImageCacheWorker(QObject):
     finished = Signal(int)
     error = Signal(int, str)
 
-    def __init__(self, work_id, episodes):
+    def __init__(self, work_id, episodes, stop_event=None):
         super().__init__()
         self.work_id = int(work_id)
         self.episodes = [dict(episode) for episode in (episodes or [])]
+        self.stop_event = stop_event
 
     def run(self):
         errors = []
         for episode in self.episodes:
+            if self.stop_event is not None and self.stop_event.is_set():
+                break
             number = episode.get("episodeNumber")
             url = episode.get("thumbnail")
             if number is None or not url:
@@ -607,6 +612,7 @@ class WorkDetailPage(QWidget):
         self.mangabaka_volume_records = []
         self.mangabaka_news = []
         self._selected_episode_work_id = None
+        self._shutdown_event = threading.Event()
         self._episode_sync_thread = None
         self._episode_sync_worker = None
         self._episode_sync_work_id = None
@@ -626,6 +632,19 @@ class WorkDetailPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self.scroll_area)
+
+    def request_shutdown(self):
+        """Cancel queued episode-image work and stop detail-page QThreads safely."""
+        self._shutdown_event.set()
+        threads = []
+        if self._episode_sync_thread is not None:
+            threads.append(self._episode_sync_thread)
+        threads.extend(self._episode_image_cache_threads.values())
+        for thread in threads:
+            try:
+                thread.quit()
+            except RuntimeError:
+                pass
 
     def _detail_cache_key(self, work_ids):
         return tuple(int(work_id) for work_id in work_ids)
@@ -2498,7 +2517,7 @@ class WorkDetailPage(QWidget):
         tmdb_season_number,
         media_format=None,
     ):
-        if self._is_reading_media():
+        if self._shutdown_event.is_set() or self._is_reading_media():
             return
         work_id = int(work_id)
 
@@ -2554,6 +2573,8 @@ class WorkDetailPage(QWidget):
 
 
     def _start_episode_image_cache(self, work_id, episodes):
+        if self._shutdown_event.is_set():
+            return
         work_id = int(work_id)
         if work_id in self._episode_image_cache_threads:
             return
@@ -2569,7 +2590,7 @@ class WorkDetailPage(QWidget):
             return
 
         thread = QThread(self)
-        worker = EpisodeImageCacheWorker(work_id, cacheable)
+        worker = EpisodeImageCacheWorker(work_id, cacheable, self._shutdown_event)
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
@@ -2587,6 +2608,8 @@ class WorkDetailPage(QWidget):
     def _episode_image_cache_finished(self, work_id):
         work_id = int(work_id)
         self._episode_image_cache_cleanup(work_id)
+        if self._shutdown_event.is_set():
+            return
 
         if self._selected_episode_work_id == work_id:
             self._replace_episode_section()
@@ -2594,6 +2617,8 @@ class WorkDetailPage(QWidget):
     def _episode_image_cache_error(self, work_id, error):
         work_id = int(work_id)
         self._episode_image_cache_cleanup(work_id)
+        if self._shutdown_event.is_set():
+            return
         print(f"TMDB episode image cache failed for work {work_id}: {error}")
 
         # Some images may have succeeded before one failed. Rebuild the
@@ -2625,6 +2650,8 @@ class WorkDetailPage(QWidget):
             )
         save_episodes(work_id, episodes)
         self._episode_sync_completed.add(work_id)
+        if self._shutdown_event.is_set():
+            return
         self._start_episode_image_cache(work_id, episodes)
 
         if self._selected_episode_work_id == work_id:
@@ -2633,6 +2660,8 @@ class WorkDetailPage(QWidget):
     def _episode_sync_error(self, work_id, error):
         work_id = int(work_id)
         self._episode_sync_errors[work_id] = str(error)
+        if self._shutdown_event.is_set():
+            return
 
         if self._selected_episode_work_id == work_id:
             content = self.scroll_area.widget()

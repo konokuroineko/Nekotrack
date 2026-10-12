@@ -30,6 +30,7 @@ from database import (
     save_tmdb_mapping,
 )
 from image_cache import download_cover
+from library_import_queue import LibraryImportQueue
 from diagnostics import diagnostic_context, log_event, log_exception, log_operation
 from ui.branding import application_icon, logo_pixmap, navigation_icon, wordmark_pixmap
 from ui.navigation import NavigationController
@@ -72,9 +73,13 @@ class LibraryImportWorker(QObject):
     finished = Signal(int, object)
     error = Signal(int, str)
 
-    def __init__(self, work_id):
+    def __init__(self, work_id, stop_event=None):
         super().__init__()
         self.work_id = int(work_id)
+        self.stop_event = stop_event
+
+    def _cancelled(self):
+        return self.stop_event is not None and self.stop_event.is_set()
 
     def run(self):
         with diagnostic_context(workflow="library_import", work_id=self.work_id):
@@ -92,7 +97,7 @@ class LibraryImportWorker(QObject):
             # Pull published volume/work records when MangaBaka has them. The
             # local progress rows stay authoritative; this only fills real
             # titles into the existing volume placeholders.
-            if str(details.get("type") or "").upper() == "MANGA":
+            if not self._cancelled() and str(details.get("type") or "").upper() == "MANGA":
                 mb_id = details.get("_mangabaka_id")
                 if mb_id is None and self.work_id < 0:
                     mb_id = abs(self.work_id)
@@ -123,7 +128,10 @@ class LibraryImportWorker(QObject):
                     # available records, but never block library preparation if
                     # the feed is empty, unavailable, or has changed schema.
                     try:
-                        news_payload = get_mangabaka_series_news(int(mb_id), page=1, limit=10)
+                        news_payload = (
+                            get_mangabaka_series_news(int(mb_id), page=1, limit=10)
+                            if not self._cancelled() else {}
+                        )
                         news_data = (
                             news_payload.get("data", news_payload)
                             if isinstance(news_payload, dict) else news_payload
@@ -166,6 +174,16 @@ class LibraryImportWorker(QObject):
                 else None
             )
             save_staff(self.work_id, staff_edges)
+
+            # Preserve core work data, but don't start further optional provider
+            # requests once the application is closing.
+            if self._cancelled():
+                log_event(
+                    "library.import.optional_data.skipped_shutdown",
+                    work_id=self.work_id,
+                )
+                self.finished.emit(self.work_id, details)
+                return
 
             # TMDB episode feeds apply only to anime. Manga and light novels
             # use chapter/volume placeholders until reading-item metadata is
@@ -284,12 +302,15 @@ class LibraryEpisodePreloadWorker(QObject):
     error = Signal(int, str)
     skipped = Signal(int)
 
-    def __init__(self, work_ids):
+    def __init__(self, work_ids, stop_event=None):
         super().__init__()
         self.work_ids = [int(work_id) for work_id in work_ids]
+        self.stop_event = stop_event
 
     def run(self):
         for work_id in self.work_ids:
+            if self.stop_event is not None and self.stop_event.is_set():
+                break
             log_event("library.episode_preload.started", work_id=work_id)
             try:
                 connection_work = get_work(work_id)
@@ -414,6 +435,12 @@ class MainWindow(QMainWindow):
         self.image_threads = []
         self.library_import_threads = []
         self.library_import_workers = []
+        self._library_import_queue = LibraryImportQueue(max_concurrent=2)
+        self._shutdown_event = threading.Event()
+        self._shutdown_requested = False
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.setInterval(100)
+        self._shutdown_timer.timeout.connect(self._poll_shutdown_workers)
         self.navigation_buttons = {}
         self._settings_rebuild_pending = False
         self._detail_enrichment_ids = set()
@@ -671,6 +698,8 @@ class MainWindow(QMainWindow):
             button.refresh_icon()
 
     def _start_existing_library_episode_preload(self):
+        if self._shutdown_event.is_set():
+            return
         if (
             self._library_episode_preload_thread is not None
             and self._library_episode_preload_thread.isRunning()
@@ -708,7 +737,7 @@ class MainWindow(QMainWindow):
         if not missing_ids:
             return
 
-        worker = LibraryEpisodePreloadWorker(missing_ids)
+        worker = LibraryEpisodePreloadWorker(missing_ids, self._shutdown_event)
         thread = QThread(self)
         worker.moveToThread(thread)
 
@@ -735,6 +764,8 @@ class MainWindow(QMainWindow):
         thread.start()
 
     def _library_episode_preloaded(self, work_id, episodes):
+        if self._shutdown_event.is_set():
+            return
         try:
             self.work_detail_page._start_episode_image_cache(
                 int(work_id),
@@ -778,6 +809,7 @@ class MainWindow(QMainWindow):
             members.append(work)
 
         seen = set()
+        pending_imports = []
         for member in members:
             work_id = member.get("id") if hasattr(member, "get") else None
             try:
@@ -797,23 +829,9 @@ class MainWindow(QMainWindow):
                 continue
 
             self._detail_enrichment_ids.add(work_id)
-            worker = LibraryImportWorker(work_id)
-            thread = QThread(self)
-            worker.moveToThread(thread)
+            pending_imports.append(work_id)
 
-            thread.started.connect(worker.run)
-            worker.finished.connect(self._library_import_finished)
-            worker.error.connect(self._library_import_error)
-            worker.finished.connect(thread.quit)
-            worker.error.connect(thread.quit)
-            thread.finished.connect(worker.deleteLater)
-            thread.finished.connect(
-                lambda t=thread, w=worker: self._library_import_thread_finished(t, w)
-            )
-
-            self.library_import_threads.append(thread)
-            self.library_import_workers.append(worker)
-            thread.start()
+        self._queue_library_imports(pending_imports)
 
 
     def show_search_work(self, work):
@@ -899,40 +917,23 @@ class MainWindow(QMainWindow):
                     for member in bundle_members[:50]
                 ],
             )
+            membership_ids = []
             for member in bundle_members:
                 member_id = int(member["id"])
 
-                # Save the lightweight Search/enriched result immediately so
-                # the Library knows about every bundle member.
+                # Save all lightweight records and Library membership first.
+                # Persist the Search snapshot before starting provider imports.
                 save_anime(member)
                 add_to_library(member_id, "Planning")
+                membership_ids.append(member_id)
 
-                # Fetch the expensive full payload in the background.
-                worker = LibraryImportWorker(member_id)
-                thread = QThread(self)
-                worker.moveToThread(thread)
-
-                thread.started.connect(worker.run)
-                worker.finished.connect(self._library_import_finished)
-                worker.error.connect(self._library_import_error)
-                worker.finished.connect(thread.quit)
-                worker.error.connect(thread.quit)
-                thread.finished.connect(worker.deleteLater)
-                thread.finished.connect(
-                    lambda t=thread, w=worker: self._library_import_thread_finished(t, w)
-                )
-
-                self.library_import_threads.append(thread)
-                self.library_import_workers.append(worker)
-                thread.start()
-
-            membership_ids = [int(member["id"]) for member in bundle_members]
             save_automatic_bundle_membership(primary_id, membership_ids)
             log_event(
                 "library.add_bundle_membership_saved",
                 bundle_id=primary_id,
                 member_count=len(membership_ids),
             )
+            self._queue_library_imports(membership_ids)
 
             button.setText("Added")
             button.setEnabled(False)
@@ -955,6 +956,8 @@ class MainWindow(QMainWindow):
     def _library_import_finished(self, work_id, details):
         work_id = int(work_id)
         self._detail_enrichment_ids.discard(work_id)
+        if self._shutdown_event.is_set():
+            return
 
         # Continue the preload by caching the already-saved TMDB episode
         # artwork. This is entirely background work and also benefits works
@@ -1011,13 +1014,89 @@ class MainWindow(QMainWindow):
         # enrichment fails.
         return
 
-    def _library_import_thread_finished(self, thread, worker):
+    def _queue_library_imports(self, work_ids):
+        """Queue imports and reserve only a bounded number of worker threads."""
+        if self._shutdown_requested or self._shutdown_event.is_set():
+            return
+        for work_id in self._library_import_queue.enqueue(work_ids):
+            self._start_library_import_thread(work_id)
+
+    def _start_library_import_thread(self, work_id):
+        worker = LibraryImportWorker(int(work_id), self._shutdown_event)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._library_import_finished)
+        worker.error.connect(self._library_import_error)
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(
+            lambda t=thread, w=worker, wid=int(work_id):
+                self._library_import_thread_finished(t, w, wid)
+        )
+
+        self.library_import_threads.append(thread)
+        self.library_import_workers.append(worker)
+        thread.start()
+
+    def _library_import_thread_finished(self, thread, worker, work_id):
         if thread in self.library_import_threads:
             self.library_import_threads.remove(thread)
         if worker in self.library_import_workers:
             self.library_import_workers.remove(worker)
         thread.deleteLater()
 
+        next_ids = self._library_import_queue.complete(work_id)
+        if not self._shutdown_requested:
+            for next_id in next_ids:
+                self._start_library_import_thread(next_id)
+
+    def _has_running_worker_threads(self):
+        # Includes nested Search, Library, work-detail, and updater QThreads.
+        for thread in self.findChildren(QThread):
+            try:
+                if thread.isRunning():
+                    return True
+            except RuntimeError:
+                continue
+        return False
+
+    def closeEvent(self, event):
+        self._shutdown_requested = True
+        self._shutdown_event.set()
+        self._library_import_queue.close()
+
+        for search_page in self.findChildren(SearchPage):
+            search_page.request_shutdown()
+        for library_page in self.findChildren(LibraryPage):
+            library_page.request_shutdown()
+        for detail_page in self.findChildren(WorkDetailPage):
+            detail_page.request_shutdown()
+        # Stop each event loop; blocking provider requests still need to return.
+        # This window stays alive until every QThread has actually stopped.
+        for thread in self.findChildren(QThread):
+            try:
+                thread.quit()
+            except RuntimeError:
+                continue
+
+        if self._has_running_worker_threads():
+            self.setEnabled(False)
+            event.ignore()
+            if not self._shutdown_timer.isActive():
+                self._shutdown_timer.start()
+            return
+
+        self._shutdown_timer.stop()
+        event.accept()
+
+    def _poll_shutdown_workers(self):
+        if self._has_running_worker_threads():
+            return
+        self._shutdown_timer.stop()
+        self.close()
 
     def start_cover_download(self, work_id, image_url, button):
         if not image_url:
