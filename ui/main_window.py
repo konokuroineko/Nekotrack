@@ -579,6 +579,9 @@ class MainWindow(QMainWindow):
         self.entity_profile_page.voice_actor_selected.connect(
             lambda actor: self.show_entity_profile("voice_actor", actor)
         )
+        self.entity_profile_page.character_selected.connect(
+            lambda character: self.show_entity_profile("character", character)
+        )
         self.entity_profile_page.work_selected.connect(self.show_profile_credit_work)
         self.entity_profile_page.back_requested.connect(self._back_from_entity_profile)
         self.work_detail_page.relation_selected.connect(self.show_relation)
@@ -1029,18 +1032,13 @@ class MainWindow(QMainWindow):
         if not entity:
             return
         kind = str(entity_type or "").strip().lower()
-        if kind in {"voice_actor", "voice actor"}:
-            # Save the character page only when it is the page currently shown;
-            # the stacked widget can retain an old profile while viewing a work.
-            if (
-                self.stack.currentWidget() is self.entity_profile_page
-                and self.entity_profile_page.current_type == "character"
-            ):
-                self._entity_profile_history.append(
-                    self.entity_profile_page.profile_state()
-                )
-            else:
-                self._entity_profile_history.clear()
+        # Preserve whichever profile launched this one, including character
+        # links opened from a voice actor's voice-acting credits. Back returns
+        # through the same profile path in either direction.
+        if self.stack.currentWidget() is self.entity_profile_page:
+            self._entity_profile_history.append(
+                self.entity_profile_page.profile_state()
+            )
         else:
             self._entity_profile_history.clear()
 

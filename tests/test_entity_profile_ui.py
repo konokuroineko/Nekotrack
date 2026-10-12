@@ -3,10 +3,17 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
-from ui.pages.entity_profile_page import EntityProfilePage, MediaCreditCard
+from ui.pages.entity_profile_page import (
+    ClickableCharacterCredit,
+    EntityProfilePage,
+    MediaCreditCard,
+    RoundedArtworkLabel,
+)
 from ui.widgets.person_card import PersonCard
 
 
@@ -15,8 +22,8 @@ class EntityProfileUiTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_media_credit_opens_internal_work_detail(self):
-        edge = {
+    def test_entire_media_credit_card_opens_internal_work_detail(self):
+        card = MediaCreditCard({
             "node": {
                 "id": 123,
                 "type": "ANIME",
@@ -24,32 +31,69 @@ class EntityProfileUiTests(unittest.TestCase):
                 "format": "TV",
             },
             "characterRole": "MAIN",
-        }
-        card = MediaCreditCard(edge, "character")
+        }, "character")
         selected = []
         card.work_selected.connect(selected.append)
+        card.show()
+        self.app.processEvents()
 
-        button = next(
-            button for button in card.findChildren(QPushButton)
-            if button.text() == "Open in NekoTrack →"
-        )
-        self.assertTrue(button.isEnabled())
-        button.click()
-
+        self.assertFalse(card.findChildren(QPushButton))
+        QTest.mouseClick(card, Qt.LeftButton)
         self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0]["id"], 123)
         self.assertEqual(selected[0]["type"], "ANIME")
+        card.close()
 
-    def test_credit_card_has_no_external_anilist_link(self):
+    def test_media_credit_artwork_uses_rounded_clipping_widget(self):
         card = MediaCreditCard(
-            {"node": {"id": 123, "title": {"romaji": "Series"}}},
-            "staff",
+            {"node": {"id": 123, "title": {"romaji": "Series"}}}, "staff"
         )
-        button_texts = [
-            button.text() for button in card.findChildren(QPushButton)
-        ]
-        self.assertIn("Open in NekoTrack →", button_texts)
-        self.assertFalse(any("AniList" in text for text in button_texts))
+        self.assertIsInstance(card.cover, RoundedArtworkLabel)
+        self.assertEqual((card.cover.width(), card.cover.height()), (72, 102))
+
+    def test_voice_actor_credits_show_clickable_characters_on_the_right(self):
+        card = MediaCreditCard({
+            "node": {
+                "id": 123,
+                "type": "ANIME",
+                "title": {"romaji": "Example Series"},
+            },
+            "characters": [{
+                "id": 456,
+                "name": {"full": "Example Character"},
+                "image": {"large": "https://example.invalid/character.jpg"},
+            }],
+        }, "voice_actor")
+        selected_work = []
+        selected_character = []
+        card.work_selected.connect(selected_work.append)
+        card.character_selected.connect(selected_character.append)
+        card.show()
+        self.app.processEvents()
+
+        self.assertEqual(len(card.character_cards), 1)
+        self.assertEqual(card.character_cards[0].character["character_name"], "Example Character")
+        QTest.mouseClick(card.character_cards[0], Qt.LeftButton)
+        self.assertEqual(len(selected_character), 1)
+        self.assertEqual(selected_character[0]["id"], 456)
+        self.assertEqual(selected_work, [])
+        QTest.mouseClick(card, Qt.LeftButton)
+        self.assertEqual(len(selected_work), 1)
+        self.assertEqual(selected_work[0]["id"], 123)
+        card.close()
+
+    def test_character_credit_card_is_clickable_on_picture_or_text(self):
+        character = ClickableCharacterCredit({
+            "id": 456, "name": {"full": "Character"}
+        })
+        selected = []
+        character.clicked.connect(selected.append)
+        character.show()
+        self.app.processEvents()
+        self.assertIsInstance(character.image, RoundedArtworkLabel)
+        QTest.mouseClick(character.name_label, Qt.LeftButton)
+        self.assertEqual(selected[0]["id"], 456)
+        character.close()
 
     def test_voice_actor_cards_use_portrait_not_square_artwork(self):
         card = PersonCard(
@@ -58,7 +102,7 @@ class EntityProfileUiTests(unittest.TestCase):
         )
         self.assertEqual((card.image.width(), card.image.height()), (90, 120))
 
-    def test_character_and_voice_actor_portraits_fill_their_frames(self):
+    def test_profile_portraits_are_rounded_and_fill_their_frames(self):
         page = EntityProfilePage()
         portrait = QPixmap(420, 180)
         portrait.fill(QColor("#cc2244"))
@@ -70,10 +114,16 @@ class EntityProfileUiTests(unittest.TestCase):
             with self.subTest(entity_type=entity_type):
                 page.set_profile(entity_type, record)
                 target = page._image_label
-                page._set_artwork(portrait)
-                displayed = target.pixmap()
-                self.assertFalse(displayed.isNull())
-                self.assertEqual(displayed.size(), target.size())
+                self.assertIsInstance(target, RoundedArtworkLabel)
+                target.setPixmap(portrait)
+                page.show()
+                self.app.processEvents()
+                rendered = target.grab().toImage()
+                self.assertEqual(rendered.size().width(), target.width())
+                self.assertEqual(rendered.size().height(), target.height())
+                self.assertFalse(rendered.pixelColor(0, 0).red() > 200)
+                page.hide()
+        page.close()
 
     def test_profile_has_no_external_anilist_button(self):
         page = EntityProfilePage()
@@ -83,6 +133,7 @@ class EntityProfileUiTests(unittest.TestCase):
         ]
         self.assertEqual(visible_text, ["← Back"])
         self.assertFalse(any("AniList" in text for text in visible_text))
+        page.close()
 
 
 if __name__ == "__main__":
