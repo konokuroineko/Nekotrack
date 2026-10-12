@@ -7,7 +7,7 @@ from unittest.mock import patch
 import shiboken6
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt, QBuffer, QIODevice
+from PySide6.QtCore import Qt, QBuffer, QIODevice, QEvent, QCoreApplication
 from PySide6.QtTest import QTest
 from PySide6.QtGui import QPixmap
 from PySide6.QtNetwork import QNetworkReply
@@ -608,6 +608,7 @@ class UiStartupTests(unittest.TestCase):
                     "media": {"edges": []},
                 }
                 page._render_profile()
+                QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
                 self.app.processEvents()
 
                 header = page.content.findChild(QFrame, "profileHeader")
@@ -662,6 +663,7 @@ class UiStartupTests(unittest.TestCase):
                     },
                 }
                 page._render_profile()
+                QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
                 self.app.processEvents()
 
                 section_titles = [
@@ -713,6 +715,7 @@ class UiStartupTests(unittest.TestCase):
                     "characterMedia": {"edges": []},
                 }
                 page._render_profile()
+                QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
                 self.app.processEvents()
 
                 section = next(
@@ -763,6 +766,7 @@ class UiStartupTests(unittest.TestCase):
                     "media": {"edges": []},
                 }
                 page._render_profile()
+                QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
                 self.app.processEvents()
                 card = page.content.findChild(PersonCard)
                 self.assertIsNotNone(card)
