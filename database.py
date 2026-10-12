@@ -801,8 +801,8 @@ def get_characters(work_id):
     finally:
         connection.close()
 
-def save_staff(work_id, staff_edges):
-    """Save staff edges and reconcile stale links only for complete snapshots."""
+def save_staff(work_id, staff_edges, replace_snapshot=True):
+    """Save staff edges; allow additional pages to be merged without deleting prior credits."""
     try:
         safe_work_id = _validated_work_id(work_id)
     except (TypeError, ValueError, OverflowError):
@@ -849,7 +849,7 @@ def save_staff(work_id, staff_edges):
     connection = get_connection()
     try:
         old_person_ids = set()
-        if snapshot_valid:
+        if snapshot_valid and replace_snapshot:
             old_person_ids = {
                 row["person_id"]
                 for row in connection.execute(
@@ -857,8 +857,8 @@ def save_staff(work_id, staff_edges):
                     (safe_work_id,),
                 ).fetchall()
             }
-            # Only a well-formed complete edge list may remove stale roles.
-            # A valid empty list is authoritative and clears the old snapshot.
+            # Only a complete snapshot may remove stale roles. Paginated pages
+            # use replace_snapshot=False and only add newly encountered credits.
             connection.execute(
                 "DELETE FROM work_staff WHERE work_id = ?",
                 (safe_work_id,),
@@ -883,7 +883,7 @@ def save_staff(work_id, staff_edges):
                 (safe_work_id, person_id, role),
             )
 
-        if snapshot_valid:
+        if snapshot_valid and replace_snapshot:
             for person_id in old_person_ids:
                 still_referenced = connection.execute(
                     """
@@ -2065,22 +2065,32 @@ def get_relations(work_id):
         connection.close()
 
 def get_bundle_characters(work_ids):
-    """Return unique characters from every work represented by a bundle."""
+    """Return unique characters, preferring their strongest role across a bundle."""
     unique = {}
+    role_priority = {"MAIN": 0, "SUPPORTING": 1, "BACKGROUND": 2}
 
     for work_id in work_ids or []:
         for row in get_characters(work_id):
-            character_id = row["id"]
-            if character_id not in unique:
-                unique[int(character_id)] = dict(row)
+            try:
+                character_id = int(row["id"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            role = str(row.get("character_role") or "").upper()
+            existing = unique.get(character_id)
+            if existing is None:
+                unique[character_id] = dict(row)
+                continue
+
+            # Role is specific to each work. Choose the strongest role in the
+            # entire bundle, regardless of which member was processed first.
+            existing_role = str(existing.get("character_role") or "").upper()
+            if role_priority.get(role, 3) < role_priority.get(existing_role, 3):
+                existing["character_role"] = row.get("character_role")
 
     return sorted(
         unique.values(),
         key=lambda row: (
-            0 if str(row.get("character_role") or "").upper() == "MAIN" else
-            1 if str(row.get("character_role") or "").upper() == "SUPPORTING" else
-            2 if str(row.get("character_role") or "").upper() == "BACKGROUND" else
-            3,
+            role_priority.get(str(row.get("character_role") or "").upper(), 3),
             str(row.get("character_name") or "").lower(),
         ),
     )
