@@ -42,6 +42,7 @@ from ui.pages.library_page import LibraryPage
 from ui.pages.search_page import SearchPage
 from ui.pages.settings_page import SettingsPage
 from ui.pages.work_detail_page import WorkDetailPage
+from ui.pages.entity_profile_page import EntityProfilePage
 
 
 class ImageWorker(QObject):
@@ -500,6 +501,7 @@ class MainWindow(QMainWindow):
         self.library_page = LibraryPage()
         self.search_page = SearchPage(self.add_to_library)
         self.work_detail_page = WorkDetailPage()
+        self.entity_profile_page = EntityProfilePage()
         self.settings_page = SettingsPage()
         self.home_page = HomePage()
         pages = {
@@ -507,6 +509,7 @@ class MainWindow(QMainWindow):
             "collections": self.library_page,
             "search": self.search_page,
             "work_detail": self.work_detail_page,
+            "entity_profile": self.entity_profile_page,
             "settings": self.settings_page,
         }
         for name, page in pages.items():
@@ -530,6 +533,15 @@ class MainWindow(QMainWindow):
         self.search_page.anime_selected.connect(self.show_search_work)
         self.work_detail_page.back_requested.connect(lambda: self.navigation.show("collections"))
         self.work_detail_page.bundle_edit_requested.connect(self.library_page._edit_bundle)
+        self.work_detail_page.character_selected.connect(
+            lambda character: self.show_entity_profile("character", character)
+        )
+        self.work_detail_page.person_selected.connect(
+            lambda person: self.show_entity_profile("staff", person)
+        )
+        self.entity_profile_page.back_requested.connect(
+            lambda: self.navigation.show("work_detail")
+        )
         self.work_detail_page.relation_selected.connect(self.show_relation)
         self.work_detail_page.bundle_changed.connect(self._refresh_library_after_bundle_change)
         self.settings_page.settings_changed.connect(self.apply_settings)
@@ -903,6 +915,17 @@ class MainWindow(QMainWindow):
                           work_id=work.get("id") if hasattr(work, "get") else None)
             self.show_work_details(work)
 
+    def show_entity_profile(self, entity_type, entity):
+        """Open a cached character or staff profile from a work-detail card."""
+        if not entity:
+            return
+        self.entity_profile_page.set_profile(
+            entity_type,
+            entity,
+            source_work=self.work_detail_page.work,
+        )
+        self.navigation.show("entity_profile")
+
     def show_relation(self, relation):
         if not relation:
             return
@@ -1117,6 +1140,8 @@ class MainWindow(QMainWindow):
             library_page.request_shutdown()
         for detail_page in self.findChildren(WorkDetailPage):
             detail_page.request_shutdown()
+        for profile_page in self.findChildren(EntityProfilePage):
+            profile_page.request_shutdown()
         # Stop each event loop; blocking provider requests still need to return.
         # This window stays alive until every QThread has actually stopped.
         for thread in self.findChildren(QThread):
