@@ -6,10 +6,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from ui.pages.entity_profile_page import (
-    ClickableCharacterCredit,
+    ClickableCharacterArtwork,
     EntityProfilePage,
     MediaCreditCard,
     RoundedArtworkLabel,
@@ -49,7 +49,7 @@ class EntityProfileUiTests(unittest.TestCase):
             {"node": {"id": 123, "title": {"romaji": "Series"}}}, "staff"
         )
         self.assertIsInstance(card.cover, RoundedArtworkLabel)
-        self.assertEqual((card.cover.width(), card.cover.height()), (72, 102))
+        self.assertEqual((card.cover.width(), card.cover.height()), (88, 116))
 
     def test_voice_actor_credits_show_clickable_characters_on_the_right(self):
         card = MediaCreditCard({
@@ -82,16 +82,18 @@ class EntityProfileUiTests(unittest.TestCase):
         self.assertEqual(selected_work[0]["id"], 123)
         card.close()
 
-    def test_character_credit_card_is_clickable_on_picture_or_text(self):
-        character = ClickableCharacterCredit({
+    def test_character_credit_artwork_is_clickable_without_nested_name_frame(self):
+        character = ClickableCharacterArtwork({
             "id": 456, "name": {"full": "Character"}
         })
         selected = []
         character.clicked.connect(selected.append)
         character.show()
         self.app.processEvents()
-        self.assertIsInstance(character.image, RoundedArtworkLabel)
-        QTest.mouseClick(character.name_label, Qt.LeftButton)
+        self.assertEqual((character.width(), character.height()), (88, 116))
+        self.assertEqual(character.character["character_name"], "Character")
+        self.assertFalse(character.findChildren(QLabel))
+        QTest.mouseClick(character, Qt.LeftButton)
         self.assertEqual(selected[0]["id"], 456)
         character.close()
 
