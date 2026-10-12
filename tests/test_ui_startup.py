@@ -41,7 +41,7 @@ class MemorySettings:
 with patch.object(preferences, "QSettings", MemorySettings):
     from ui.main_window import MainWindow
     from ui.widgets.person_card import PersonCard
-    from ui.pages.entity_profile_page import EntityProfilePage, ProfileWorkCreditCard
+    from ui.pages.entity_profile_page import EntityProfilePage, MediaCreditCard, ProfileWorkCreditCard
     from ui.widgets.character_card import CharacterCard
     from ui.widgets.work_card import WorkCard
     from ui.pages.library_page import (
@@ -632,7 +632,7 @@ class UiStartupTests(unittest.TestCase):
                 page.deleteLater()
                 self.app.processEvents()
 
-    def test_voice_acting_roles_reuse_character_tab_cards_without_work_extras(self):
+    def test_voice_acting_roles_show_work_left_and_character_right_without_role_badges(self):
         with patch.object(EntityProfilePage, "_start_profile_load"):
             page = EntityProfilePage()
             try:
@@ -650,11 +650,18 @@ class UiStartupTests(unittest.TestCase):
                         "edges": [
                             {
                                 "characterRole": "MAIN",
-                                "characters": [{
-                                    "id": 90185,
-                                    "name": {"full": "Crusch Karsten"},
-                                    "image": {},
-                                }],
+                                "characters": [
+                                    {
+                                        "id": 90185,
+                                        "name": {"full": "Crusch Karsten"},
+                                        "image": {},
+                                    },
+                                    {
+                                        "id": 90186,
+                                        "name": {"full": "Another Character"},
+                                        "image": {},
+                                    },
+                                ],
                                 "node": {
                                     "id": 21355,
                                     "type": "ANIME",
@@ -692,11 +699,83 @@ class UiStartupTests(unittest.TestCase):
                         and title.text() == "Voice acting roles"
                     )
                 )
-                cards = section.findChildren(CharacterCard)
-                self.assertEqual(len(cards), 1)
-                self.assertEqual(cards[0].character["id"], 90185)
-                self.assertEqual(cards[0].character["person_name"], "Yuka Iguchi")
-                self.assertFalse(section.findChildren(ProfileWorkCreditCard))
+                cards = section.findChildren(MediaCreditCard)
+                self.assertEqual(len(cards), 2)
+                self.assertEqual({card.media_id for card in cards}, {21355})
+                self.assertTrue(all(card.width() == 300 for card in cards))
+                self.assertEqual(
+                    {card.character_cards[0].character["id"] for card in cards},
+                    {90185, 90186},
+                )
+                for card in cards:
+                    texts = [label.text() for label in card.findChildren(QLabel)]
+                    self.assertNotIn("MAIN", texts)
+                    self.assertNotIn("CHARACTERS", texts)
+                    self.assertNotIn("TV · 2016", texts)
+                    self.assertFalse(card.findChildren(CharacterCard))
+            finally:
+                page.close()
+                page.deleteLater()
+                self.app.processEvents()
+
+    def test_character_profile_appears_in_uses_shared_poster_cards(self):
+        with patch.object(EntityProfilePage, "_start_profile_load"):
+            page = EntityProfilePage()
+            try:
+                page.set_profile(
+                    "character",
+                    {"id": 90185, "character_name": "Crusch Karsten"},
+                )
+                page._remote_data = {
+                    "id": 90185,
+                    "name": {"full": "Crusch Karsten"},
+                    "image": {},
+                    "description": "",
+                    "media": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "id": 21355,
+                                    "type": "ANIME",
+                                    "format": "TV",
+                                    "title": {"english": "Re:Zero"},
+                                    "coverImage": {},
+                                    "startDate": {"year": 2016},
+                                }
+                            },
+                            {
+                                "node": {
+                                    "id": 21356,
+                                    "type": "ANIME",
+                                    "format": "OVA",
+                                    "title": {"english": "Re:Zero OVA"},
+                                    "coverImage": {},
+                                    "startDate": {"year": 2018},
+                                }
+                            },
+                        ]
+                    },
+                }
+                page._render_profile()
+                active_widgets = [
+                    page.content_layout.itemAt(index).widget()
+                    for index in range(page.content_layout.count())
+                    if page.content_layout.itemAt(index) is not None
+                    and page.content_layout.itemAt(index).widget() is not None
+                ]
+                section = next(
+                    frame for frame in active_widgets
+                    if (
+                        isinstance(frame, QFrame)
+                        and frame.objectName() == "profileSection"
+                        and (title := frame.findChild(QLabel, "profileSectionTitle")) is not None
+                        and title.text() == "Appears in"
+                    )
+                )
+                cards = section.findChildren(WorkCard)
+                self.assertEqual(len(cards), 2)
+                self.assertTrue(all(card.objectName() == "posterCard" for card in cards))
+                self.assertFalse(section.findChildren(MediaCreditCard))
             finally:
                 page.close()
                 page.deleteLater()
@@ -755,7 +834,7 @@ class UiStartupTests(unittest.TestCase):
                 page.deleteLater()
                 self.app.processEvents()
 
-    def test_character_voice_actor_cards_summarize_adaptation_credits(self):
+    def test_character_voice_actor_cards_show_language_without_credit_count(self):
         credits = [
             {"language": "Japanese", "work_id": work_id, "work_title": f"Adaptation {work_id}"}
             for work_id in (101, 102, 103, 104, 105)
@@ -804,7 +883,8 @@ class UiStartupTests(unittest.TestCase):
                 self.assertIsNotNone(card)
                 role = card.findChild(QLabel, "personRole")
                 self.assertIsNotNone(role)
-                self.assertEqual(role.text(), "Japanese · 5 credits")
+                self.assertEqual(role.text(), "Japanese")
+                self.assertNotIn("credit", role.text().casefold())
                 self.assertIn("Adaptation 101", card.toolTip())
             finally:
                 page.close()
