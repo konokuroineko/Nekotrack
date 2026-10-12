@@ -632,7 +632,7 @@ class UiStartupTests(unittest.TestCase):
                 page.deleteLater()
                 self.app.processEvents()
 
-    def test_voice_acting_roles_show_work_left_and_character_right_without_role_badges(self):
+    def test_voice_acting_roles_show_work_left_and_character_right_sorted_by_role(self):
         with patch.object(EntityProfilePage, "_start_profile_load"):
             page = EntityProfilePage()
             try:
@@ -640,6 +640,14 @@ class UiStartupTests(unittest.TestCase):
                     "voice_actor",
                     {"person_id": 7001, "name": "Yuka Iguchi"},
                 )
+                node = {
+                    "id": 21355,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "title": {"english": "Re:Zero"},
+                    "coverImage": {},
+                    "startDate": {"year": 2016},
+                }
                 page._remote_data = {
                     "id": 7001,
                     "name": {"full": "Yuka Iguchi"},
@@ -649,33 +657,36 @@ class UiStartupTests(unittest.TestCase):
                     "characterMedia": {
                         "edges": [
                             {
+                                "characterRole": "SUPPORTING",
+                                "characters": [{
+                                    "id": 90185,
+                                    "name": {"full": "Crusch Karsten"},
+                                    "image": {},
+                                }],
+                                "node": node,
+                            },
+                            {
+                                "characterRole": "BACKGROUND",
+                                "characters": [{
+                                    "id": 90187,
+                                    "name": {"full": "Background Character"},
+                                    "image": {},
+                                }],
+                                "node": node,
+                            },
+                            {
                                 "characterRole": "MAIN",
-                                "characters": [
-                                    {
-                                        "id": 90185,
-                                        "name": {"full": "Crusch Karsten"},
-                                        "image": {},
-                                    },
-                                    {
-                                        "id": 90186,
-                                        "name": {"full": "Another Character"},
-                                        "image": {},
-                                    },
-                                ],
-                                "node": {
-                                    "id": 21355,
-                                    "type": "ANIME",
-                                    "format": "TV",
-                                    "title": {"english": "Re:Zero"},
-                                    "coverImage": {},
-                                    "startDate": {"year": 2016},
-                                },
-                            }
+                                "characters": [{
+                                    "id": 90186,
+                                    "name": {"full": "Main Character"},
+                                    "image": {},
+                                }],
+                                "node": node,
+                            },
                         ]
                     },
                 }
                 page._render_profile()
-
                 active_widgets = [
                     page.content_layout.itemAt(index).widget()
                     for index in range(page.content_layout.count())
@@ -700,19 +711,23 @@ class UiStartupTests(unittest.TestCase):
                     )
                 )
                 cards = section.findChildren(MediaCreditCard)
-                self.assertEqual(len(cards), 2)
-                self.assertEqual({card.media_id for card in cards}, {21355})
+                self.assertEqual(len(cards), 3)
+                self.assertEqual(
+                    [card.character_cards[0].character["id"] for card in cards],
+                    [90186, 90185, 90187],
+                )
                 self.assertTrue(all(card.width() == 300 for card in cards))
                 self.assertEqual(
-                    {card.character_cards[0].character["id"] for card in cards},
-                    {90185, 90186},
+                    [card.findChild(QLabel, "mediaCreditRole").text() for card in cards],
+                    ["MAIN", "SUPPORTING", "BACKGROUND"],
                 )
                 for card in cards:
-                    texts = [label.text() for label in card.findChildren(QLabel)]
-                    self.assertNotIn("MAIN", texts)
-                    self.assertNotIn("CHARACTERS", texts)
-                    self.assertNotIn("TV · 2016", texts)
+                    self.assertEqual(len(card.character_cards), 1)
+                    self.assertEqual(card.findChild(QLabel, "mediaCreditMetadata"), None)
                     self.assertFalse(card.findChildren(CharacterCard))
+                    labels = [label.text() for label in card.findChildren(QLabel)]
+                    self.assertNotIn("CHARACTERS", labels)
+                    self.assertFalse(any("credit" in text.casefold() for text in labels))
             finally:
                 page.close()
                 page.deleteLater()
