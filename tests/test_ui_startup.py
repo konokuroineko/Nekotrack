@@ -654,8 +654,10 @@ class UiStartupTests(unittest.TestCase):
 
     def test_malformed_anilist_youtube_link_renders_as_a_clean_clickable_link(self):
         description = (
-            "[YouTube]([https://www.youtube.com/](https://www.youtube.com/)"
-            "[@Ueda](https://anilist.co/user/Ueda)-Kana)"
+            "[Youtube]\\([https://youtube.com/](https://youtube.com/)"
+            "[@officialyoutubechannel3974]"
+            "(https://anilist.co/user/officialyoutubechannel3974)"
+            "?si=9AjlJ6Ujj2Vw1CiU)"
         )
         with patch.object(EntityProfilePage, "_start_profile_load"):
             page = EntityProfilePage()
@@ -677,10 +679,15 @@ class UiStartupTests(unittest.TestCase):
                 self.assertIsNotNone(bio)
                 self.assertTrue(bio.openExternalLinks())
                 rendered = bio.toHtml()
-                self.assertIn("https://www.youtube.com/@Ueda-Kana", rendered)
-                self.assertIn("YouTube", rendered)
-                self.assertNotIn("https://anilist.co/user/Ueda", rendered)
-                self.assertNotIn("[YouTube](", rendered)
+                self.assertIn(
+                    "https://youtube.com/@officialyoutubechannel3974?si=9AjlJ6Ujj2Vw1CiU",
+                    rendered,
+                )
+                self.assertIn("Youtube", rendered)
+                self.assertNotIn(
+                    "https://anilist.co/user/officialyoutubechannel3974", rendered
+                )
+                self.assertNotIn("[Youtube]\\(", rendered)
             finally:
                 page.close()
                 page.deleteLater()
@@ -707,7 +714,19 @@ class UiStartupTests(unittest.TestCase):
                     "name": {"full": "Yuka Iguchi"},
                     "image": {},
                     "description": "Voice actor biography.",
-                    "staffMedia": {"edges": []},
+                    "staffMedia": {
+                        "edges": [{
+                            "staffRole": "Voice Director",
+                            "node": {
+                                "id": 21356,
+                                "type": "ANIME",
+                                "format": "TV",
+                                "title": {"english": "Example Staff Work"},
+                                "coverImage": {},
+                                "startDate": {"year": 2017},
+                            },
+                        }],
+                    },
                     "characterMedia": {
                         "edges": [
                             {
@@ -754,7 +773,18 @@ class UiStartupTests(unittest.TestCase):
                     and (title := widget.findChild(QLabel, "profileSectionTitle")) is not None
                 ]
                 self.assertIn("Voice acting roles", section_titles)
-                self.assertNotIn("Staff credits", section_titles)
+                self.assertIn("Staff credits", section_titles)
+                staff_section = next(
+                    frame for frame in active_widgets
+                    if (
+                        isinstance(frame, QFrame)
+                        and frame.objectName() == "profileSection"
+                        and (title := frame.findChild(QLabel, "profileSectionTitle")) is not None
+                        and title.text() == "Staff credits"
+                    )
+                )
+                staff_cards = staff_section.findChildren(ProfileWorkCreditCard)
+                self.assertEqual(len(staff_cards), 1)
                 section = next(
                     frame for frame in active_widgets
                     if (
