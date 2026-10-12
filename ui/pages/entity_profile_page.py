@@ -222,28 +222,13 @@ class MediaCreditCard(QFrame):
             credit = edge.get("staffRole") or edge.get("role")
 
         if self.credit_kind == "voice_actor" and character_data is not None:
-            # Keep the anime title visible. Within the remaining area, mirror the
-            # Characters tab: role pinned to the top and the character name centered.
+            # Match CharacterCard's hierarchy: role at top, character name in the
+            # expanding center, and anime title as secondary text underneath.
             self.setToolTip(str(title))
-            text_column = QVBoxLayout()
-            text_column.setContentsMargins(0, 0, 0, 0)
-            text_column.setSpacing(3)
-
-            title_label = QLabel(str(title))
-            title_label.setObjectName("mediaCreditTitle")
-            title_label.setWordWrap(True)
-            title_label.setMaximumHeight(36)
-            title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            title_label.setStyleSheet(
-                f"background:transparent;border:none;color:{COLORS['primary']};"
-                "font-weight:750;font-size:13px;"
-            )
-            text_column.addWidget(title_label)
-
             text_layout = QGridLayout()
             text_layout.setContentsMargins(0, 0, 0, 0)
             text_layout.setHorizontalSpacing(18)
-            text_layout.setVerticalSpacing(0)
+            text_layout.setVerticalSpacing(2)
             text_layout.setColumnStretch(0, 1)
 
             if credit:
@@ -285,11 +270,22 @@ class MediaCreditCard(QFrame):
             names_row.addWidget(name_label, 1)
             names_widget = QWidget()
             names_widget.setLayout(names_row)
-            # As in CharacterCard, the role and name share one expanding grid cell.
             text_layout.addWidget(names_widget, 0, 0, 1, 1)
             text_layout.setRowStretch(0, 1)
-            text_column.addLayout(text_layout, 1)
-            row.addLayout(text_column, 1)
+
+            title_label = QLabel(str(title))
+            title_label.setObjectName("mediaCreditTitle")
+            title_label.setWordWrap(True)
+            title_label.setMaximumHeight(24)
+            title_label.setToolTip(str(title))
+            title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            title_label.setStyleSheet(
+                f"background:transparent;border:none;color:{COLORS['muted']};"
+                "font-size:10px;font-weight:600;"
+            )
+            title_label.setAlignment(Qt.AlignLeft | Qt.AlignBottom)
+            text_layout.addWidget(title_label, 1, 0, 1, 1)
+            row.addLayout(text_layout, 1)
         else:
             text_column = QVBoxLayout()
             text_column.setContentsMargins(0, 0, 0, 0)
@@ -422,7 +418,7 @@ class ProfileFlowLayout(QLayout):
 
 
 class ProfileWorkCreditCard(WorkCard):
-    """Compact poster-style work card with a short, inspectable staff-role label."""
+    """Poster card with staff credits between the title and work metadata."""
 
     def __init__(self, edge, parent=None):
         edge = edge if isinstance(edge, dict) else {}
@@ -436,23 +432,54 @@ class ProfileWorkCreditCard(WorkCard):
         )
 
         raw_role = edge.get("staffRole") or edge.get("role") or ""
-        full_role = " ".join(str(raw_role).split())
+        role_parts = str(raw_role).replace("\n", " · ").split("·")
+        full_role = " · ".join(
+            part.strip() for part in role_parts if part.strip()
+        )
         if not full_role:
             return
 
         role = QLabel(full_role)
         role.setObjectName("profileCreditRole")
         role.setWordWrap(True)
-        role.setFixedHeight(30)
+        role.setMinimumHeight(18)
+        role.setMaximumHeight(38)
         role.setToolTip(full_role)
         role.setStyleSheet(
             f"background:transparent;border:none;color:{COLORS['muted']};"
-            "font-size:10px;"
+            "font-size:10px;font-weight:650;"
         )
-        root = self.layout()
-        root.insertWidget(max(0, root.count() - 1), role)
-        self.setFixedHeight(self.height() + role.height() + root.spacing())
 
+        root = self.layout()
+        content_item = root.itemAt(1) if root.count() > 1 else None
+        content_layout = content_item.layout() if content_item is not None else None
+        if content_layout is None:
+            return
+
+        title_index = next(
+            (
+                index for index in range(content_layout.count())
+                if (widget := content_layout.itemAt(index).widget()) is not None
+                and widget.objectName() == "title"
+            ),
+            -1,
+        )
+        meta_index = next(
+            (
+                index for index in range(content_layout.count())
+                if (widget := content_layout.itemAt(index).widget()) is not None
+                and widget.objectName() == "meta"
+            ),
+            -1,
+        )
+        insert_index = meta_index if meta_index >= 0 else max(0, title_index + 1)
+        content_layout.insertWidget(insert_index, role)
+
+        # WorkCard sets a fixed height before this extra line is inserted.
+        added_height = max(role.sizeHint().height(), role.minimumHeight())
+        self.setFixedHeight(
+            self.height() + added_height + max(0, content_layout.spacing())
+        )
 
 class EntityProfilePage(QWidget):
     """NekoTrack character and voice-actor profiles with internal work navigation."""
@@ -582,20 +609,30 @@ class EntityProfilePage(QWidget):
 
     @staticmethod
     def _normalize_profile_description(description, html_mode=False):
-        """Repair malformed AniList YouTube links while preserving the bio format."""
+        """Repair AniList's nested YouTube links before HTML or Markdown rendering."""
+        value = str(description or "")
+        # AniList may entity-escape Markdown punctuation in HTML-mode descriptions.
+        for encoded, decoded in (
+            (r"&(?:#0*91|#x0*5b|lbrack);", "["),
+            (r"&(?:#0*93|#x0*5d|rbrack);", "]"),
+            (r"&(?:#0*92|#x0*5c|bsol);", "\\"),
+            (r"&(?:#0*40|#x0*28|lpar);", "("),
+            (r"&(?:#0*41|#x0*29|rpar);", ")"),
+        ):
+            value = re.sub(encoded, decoded, value, flags=re.IGNORECASE)
+
         pattern = (
-            r"\[(?P<label>[^\]]+)\]\s*\\?\("
-            r"\[(?P<base>https?://(?:www\.)?youtube\.com/)\]\((?P=base)\)"
-            r"\[@(?P<handle>[A-Za-z0-9_.-]+)\]"
-            r"\(https?://anilist\.co/user/[^)]+\)"
-            r"(?P<suffix>[-A-Za-z0-9_.]*(?:\?[^\s)]*)?)\)"
+            r"\[(?P<label>[^\]]+)\]\s*\\?\(\s*"
+            r"\[(?P<base>https?://(?:www\.)?youtube\.com/)\]"
+            r"\(\s*(?P=base)\s*\\?\)\s*"
+            r"\[@(?P<handle>[A-Za-z0-9_.-]+)\]\s*"
+            r"\(\s*https?://anilist\.co/user/[^)]+?\s*\\?\)"
+            r"(?P<suffix>(?:[-A-Za-z0-9_.]+)?(?:\?[^\s)]*)?)\s*\\?\)"
         )
 
         def replace_link(match):
-            url = (
-                f"{match.group('base')}@{match.group('handle')}"
-                f"{match.group('suffix')}"
-            )
+            suffix = html.unescape(match.group("suffix") or "")
+            url = f"{match.group('base')}@{match.group('handle')}{suffix}"
             label = match.group("label")
             if html_mode:
                 return (
@@ -604,7 +641,7 @@ class EntityProfilePage(QWidget):
                 )
             return f"[{label}]({url})"
 
-        return re.sub(pattern, replace_link, str(description or ""), flags=re.IGNORECASE)
+        return re.sub(pattern, replace_link, value, flags=re.IGNORECASE)
 
     @staticmethod
     def _value(item, key, fallback=None):
@@ -1127,9 +1164,40 @@ class EntityProfilePage(QWidget):
             empty.setStyleSheet(muted_label_stylesheet())
             body.addWidget(empty)
         elif credit_kind == "staff":
+            # One card per work. AniList may send separate edges when the staff
+            # member has several credits on the same title.
+            grouped = {}
+            for edge in edges:
+                if not isinstance(edge, dict):
+                    continue
+                node = edge.get("node")
+                if not isinstance(node, dict):
+                    continue
+                work_id = node.get("id")
+                node_title = node.get("title") if isinstance(node.get("title"), dict) else {}
+                start_date = node.get("startDate") if isinstance(node.get("startDate"), dict) else {}
+                key = ("id", str(work_id)) if work_id else (
+                    "fallback",
+                    str(node_title.get("romaji") or node_title.get("english") or ""),
+                    str(node.get("type") or ""),
+                    str(start_date.get("year") or ""),
+                )
+                entry = grouped.get(key)
+                if entry is None:
+                    entry = dict(edge)
+                    entry["node"] = dict(node)
+                    entry["_merged_roles"] = []
+                    grouped[key] = entry
+                raw_role = edge.get("staffRole") or edge.get("role") or ""
+                for role_text in str(raw_role).replace("\n", " · ").split("·"):
+                    role_text = " ".join(role_text.split()).strip()
+                    if role_text and role_text not in entry["_merged_roles"]:
+                        entry["_merged_roles"].append(role_text)
+
             host = QWidget()
             flow = ProfileFlowLayout(host, h_spacing=10, v_spacing=14)
-            for edge in [edge for edge in edges if isinstance(edge, dict)][:12]:
+            for edge in list(grouped.values())[:12]:
+                edge["staffRole"] = " · ".join(edge.pop("_merged_roles", []))
                 card = ProfileWorkCreditCard(edge)
                 card.clicked.connect(self.work_selected.emit)
                 flow.addWidget(card)
