@@ -255,14 +255,13 @@ class MediaCreditCard(QFrame):
         if self.credit_kind != "voice_actor":
             text_column.addWidget(metadata)
 
-        if self.credit_kind == "character":
+        if self.credit_kind in {"character", "voice_actor"}:
             credit = edge.get("characterRole")
-        elif self.credit_kind == "voice_actor":
-            credit = None
         else:
             credit = edge.get("staffRole") or edge.get("role")
         if credit:
             role = QLabel(str(credit))
+            role.setObjectName("mediaCreditRole")
             role.setWordWrap(True)
             role.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             role.setStyleSheet(
@@ -946,12 +945,12 @@ class EntityProfilePage(QWidget):
         self.content_layout.addWidget(section)
 
     def _render_voice_acting_roles(self, connection, remote):
-        """Show the work on the left and its credited character on the right."""
+        """Show work on the left and each credited character on the right."""
         del remote
         section, body = self._section("Voice acting roles")
         edges = connection.get("edges") if isinstance(connection, dict) else None
-        role_edges = []
-        seen_roles = set()
+        roles_by_pair = {}
+        role_priority = {"MAIN": 0, "SUPPORTING": 1, "BACKGROUND": 2}
 
         if isinstance(edges, list):
             for edge in edges:
@@ -966,6 +965,7 @@ class EntityProfilePage(QWidget):
                 characters = edge.get("characters")
                 if not isinstance(characters, list):
                     continue
+                raw_role = str(edge.get("characterRole") or "").strip().upper()
                 for character in characters:
                     if not isinstance(character, dict):
                         continue
@@ -975,27 +975,42 @@ class EntityProfilePage(QWidget):
                         continue
                     if character_id <= 0:
                         continue
+
                     role_key = (work_id, character_id)
-                    if role_key in seen_roles:
+                    previous = roles_by_pair.get(role_key)
+                    candidate_priority = role_priority.get(raw_role, 3)
+                    previous_priority = role_priority.get(
+                        str(previous.get("characterRole") or "").upper(), 3
+                    ) if previous else 999
+                    if previous is not None and candidate_priority >= previous_priority:
                         continue
-                    seen_roles.add(role_key)
 
-                    # Each card represents one work/character pair. This keeps the
-                    # layout compact and prevents role badges from leaking into it.
                     role_edge = dict(edge)
-                    role_edge.pop("characterRole", None)
+                    role_edge["characterRole"] = raw_role
                     role_edge["characters"] = [dict(character)]
-                    role_edges.append(role_edge)
+                    roles_by_pair[role_key] = role_edge
 
-        if not role_edges:
+        if not roles_by_pair:
             empty = QLabel("No voice-acting character roles were found.")
             empty.setWordWrap(True)
             empty.setStyleSheet(muted_label_stylesheet())
             body.addWidget(empty)
         else:
+            def role_sort_key(edge):
+                node = edge.get("node") if isinstance(edge.get("node"), dict) else {}
+                characters = edge.get("characters") or []
+                character = characters[0] if characters and isinstance(characters[0], dict) else {}
+                return (
+                    role_priority.get(str(edge.get("characterRole") or "").upper(), 3),
+                    str(self._work_title(node)).casefold(),
+                    self._name_from(character.get("name"), "Unknown character").casefold(),
+                    int(node.get("id") or 0),
+                    int(character.get("id") or 0),
+                )
+
             host = QWidget()
             flow = ProfileFlowLayout(host, h_spacing=10, v_spacing=12)
-            for edge in role_edges:
+            for edge in sorted(roles_by_pair.values(), key=role_sort_key):
                 card = MediaCreditCard(edge, "voice_actor")
                 card.work_selected.connect(self.work_selected.emit)
                 card.character_selected.connect(self.character_selected.emit)
