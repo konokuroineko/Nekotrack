@@ -30,6 +30,7 @@ __all__ = [
     "get_media_relations_batch",
     "get_media_episodes",
     "get_media_details",
+    "get_entity_profile",
     "get_tmdb_episode_data",
     "get_tmdb_episode_sample",
     "test_tmdb_connection",
@@ -464,6 +465,119 @@ def get_media_staff_page(media_id, page=2, per_page=15):
             "hasNextPage": has_next and current_page < 100,
         },
     }
+
+
+def get_entity_profile(entity_type, entity_id):
+    """Fetch richer character/staff profile data from AniList."""
+    kind = str(entity_type or "").strip().lower()
+    if kind in {"voice_actor", "voice actor", "person", "people", "staff"}:
+        kind = "Staff"
+    elif kind in {"character", "characters"}:
+        kind = "Character"
+    else:
+        raise ValueError("Entity type must be 'character' or 'staff'.")
+
+    if isinstance(entity_id, bool):
+        raise ValueError("Entity ID must be a positive integer.")
+    try:
+        numeric_id = int(entity_id)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Entity ID must be a positive integer.") from error
+    if numeric_id <= 0 or numeric_id > MAX_ANILIST_MEDIA_ID:
+        raise ValueError("Entity ID is outside the supported AniList range.")
+
+    if kind == "Character":
+        query = """
+        query ($id: Int) {
+            Character(id: $id) {
+                id
+                name { full native alternative }
+                image { large }
+                description(asHtml: false)
+                gender
+                dateOfBirth { year month day }
+                age
+                bloodType
+                siteUrl
+                favourites
+                media(page: 1, perPage: 12, sort: POPULARITY_DESC) {
+                    edges {
+                        characterRole
+                        node {
+                            id
+                            type
+                            format
+                            title { english romaji native }
+                            coverImage { large }
+                            startDate { year month day }
+                        }
+                    }
+                    pageInfo { currentPage lastPage hasNextPage }
+                }
+            }
+        }
+        """
+    else:
+        query = """
+        query ($id: Int) {
+            Staff(id: $id) {
+                id
+                name { full native alternative }
+                languageV2
+                image { large }
+                description(asHtml: false)
+                primaryOccupations
+                gender
+                age
+                dateOfBirth { year month day }
+                dateOfDeath { year month day }
+                yearsActive
+                homeTown
+                bloodType
+                siteUrl
+                favourites
+                staffMedia(page: 1, perPage: 12, sort: POPULARITY_DESC) {
+                    edges {
+                        staffRole
+                        node {
+                            id
+                            type
+                            format
+                            title { english romaji native }
+                            coverImage { large }
+                            startDate { year month day }
+                        }
+                    }
+                    pageInfo { currentPage lastPage hasNextPage }
+                }
+                characterMedia(page: 1, perPage: 12, sort: POPULARITY_DESC) {
+                    edges {
+                        characters {
+                            id
+                            name { full }
+                            image { large }
+                        }
+                        characterRole
+                        node {
+                            id
+                            type
+                            format
+                            title { english romaji native }
+                            coverImage { large }
+                            startDate { year month day }
+                        }
+                    }
+                    pageInfo { currentPage lastPage hasNextPage }
+                }
+            }
+        }
+        """
+
+    payload = anilist_request(query, {"id": numeric_id})
+    entity = payload.get(kind) if isinstance(payload, dict) else None
+    if not isinstance(entity, dict) or entity.get("id") != numeric_id:
+        raise RuntimeError(f"AniList returned no {kind.lower()} profile for ID {numeric_id}.")
+    return entity
 
 
 def parse_anilist_url(value):
@@ -3172,6 +3286,15 @@ def _count_or_none(value):
         return None
     return number if 1 <= number <= maximum else None
 
+def _first_valid_count(*values):
+    """Return the first usable count, skipping null/invalid higher-priority fields."""
+    for value in values:
+        count = _count_or_none(value)
+        if count is not None:
+            return count
+    return None
+
+
 def normalize_mangabaka_series(series, preferred_id=None):
     """Convert a MangaBaka series record to NekoTrack's AniList-like media shape."""
     if not isinstance(series, dict):
@@ -3275,8 +3398,8 @@ def normalize_mangabaka_series(series, preferred_id=None):
         "title": {"english": english or primary, "romaji": romanized, "native": native},
         "format": media_format,
         "episodes": None,
-        "chapters": _count_or_none(series.get("total_chapters", series.get("chapters"))),
-        "volumes": _count_or_none(series.get("final_volume", series.get("total_volumes", series.get("volumes")))),
+        "chapters": _first_valid_count(series.get("total_chapters"), series.get("chapters"), series.get("chapter_count")),
+        "volumes": _first_valid_count(series.get("total_volumes"), series.get("volumes"), series.get("final_volume"), series.get("volume_count")),
         "averageScore": rating,
         "startDate": _date_parts(series),
         "endDate": {"year": None, "month": None, "day": None},

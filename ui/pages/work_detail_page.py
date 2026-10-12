@@ -15,14 +15,14 @@ from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout,
-    QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
+    QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QProgressBar,
     QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 )
 
 from database import (
     add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
-    get_reading_progress, get_staff,
+    get_reading_progress, get_staff, is_work_in_library,
     get_tmdb_mapping, get_work, get_provider_metadata, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
     set_episode_watched, set_reading_progress_count,
@@ -585,6 +585,7 @@ class WorkDetailPage(QWidget):
     back_requested = Signal()
     person_selected = Signal(object)
     character_selected = Signal(object)
+    voice_actor_selected = Signal(object)
     relation_selected = Signal(object)
     bundle_changed = Signal()
     bundle_edit_requested = Signal(object)
@@ -1982,13 +1983,61 @@ class WorkDetailPage(QWidget):
             "MANGA", "NOVEL", "ONE_SHOT",
         }
 
-    @staticmethod
-    def _work_count(work, key):
-        try:
-            value = work[key]
-            return max(0, int(value or 0))
-        except (KeyError, IndexError, TypeError, ValueError):
+    def _work_count(self, work, key):
+        """Read a published count, falling back to saved MangaBaka metadata.
+
+        Older imports can have a blank count when MangaBaka's preferred field
+        existed with a null value. The raw provider payload is retained locally,
+        so use its alternate count fields rather than leaving the tracker unusable.
+        """
+        def parse_count(raw):
+            if raw is None or isinstance(raw, bool):
+                return 0
+            try:
+                count = int(raw)
+                return count if count > 0 else 0
+            except (TypeError, ValueError, OverflowError):
+                pass
+            if isinstance(raw, str):
+                import re
+                match = re.search(r"(?<![-0-9])[0-9]+", raw)
+                if match:
+                    try:
+                        return max(0, int(match.group(0)))
+                    except (TypeError, ValueError, OverflowError):
+                        return 0
             return 0
+
+        try:
+            value = parse_count(work[key])
+        except (KeyError, IndexError, TypeError):
+            value = 0
+        if value:
+            return value
+
+        try:
+            work_id = int(work["id"])
+        except (KeyError, IndexError, TypeError, ValueError, OverflowError):
+            return 0
+        try:
+            metadata = get_provider_metadata(work_id, "mangabaka")
+        except Exception:
+            metadata = None
+        if not isinstance(metadata, dict):
+            return 0
+
+        if key == "chapters":
+            fields = ("total_chapters", "chapters", "chapter_count")
+        elif key == "volumes":
+            fields = ("total_volumes", "volumes", "final_volume", "volume_count")
+        else:
+            fields = ()
+
+        for field in fields:
+            value = parse_count(metadata.get(field))
+            if value:
+                return value
+        return 0
 
     def _reading_section(self):
         """Show honest numeric chapter/volume progress without fictional item cards."""
@@ -2056,18 +2105,23 @@ class WorkDetailPage(QWidget):
             layout.addWidget(empty)
             return frame
 
-        is_in_library = False
-        if selected_work is not None:
-            try:
-                is_in_library = selected_work["status"] is not None
-            except (KeyError, IndexError, TypeError):
-                is_in_library = False
+        is_in_library = is_work_in_library(selected_id)
 
         if not is_in_library:
-            note = QLabel("Add this work to your Library to track reading progress.")
+            note = QLabel(
+                "Reading progress is saved to your Library and restored when you return."
+            )
             note.setWordWrap(True)
             note.setStyleSheet(muted_label_stylesheet())
             layout.addWidget(note)
+
+            track_button = QPushButton("＋  Track this work in Library")
+            track_button.setObjectName("trackReadingWorkButton")
+            track_button.setCursor(Qt.PointingHandCursor)
+            track_button.clicked.connect(
+                lambda checked=False, wid=int(selected_id): self._start_reading_tracking(wid)
+            )
+            layout.addWidget(track_button, 0, Qt.AlignLeft)
 
         chapter_total = self._work_count(selected_work, "chapters")
         volume_total = self._work_count(selected_work, "volumes")
@@ -2099,6 +2153,8 @@ class WorkDetailPage(QWidget):
         header.addStretch(1)
 
         read_count, _ = get_reading_progress(work_id, item_type, total)
+        if total > 0:
+            read_count = min(read_count, total)
         progress_label = QLabel(
             f"{read_count} / {total} read"
             if total
@@ -2110,6 +2166,22 @@ class WorkDetailPage(QWidget):
         )
         header.addWidget(progress_label)
         box.addLayout(header)
+
+        progress_bar = None
+        if total > 0:
+            progress_bar = QProgressBar()
+            progress_bar.setObjectName("readingProgressBar")
+            progress_bar.setRange(0, 100)
+            progress_bar.setValue(round(100 * min(read_count, total) / total))
+            progress_bar.setTextVisible(False)
+            progress_bar.setFixedHeight(7)
+            progress_bar.setStyleSheet(
+                f"QProgressBar {{ background:{COLORS['background_alt']};"
+                f"border:0;border-radius:3px; }}"
+                f"QProgressBar::chunk {{ background:{COLORS['accent']};"
+                "border-radius:3px; }}"
+            )
+            box.addWidget(progress_bar)
 
         control_row = QHBoxLayout()
         description = QLabel(
@@ -2135,17 +2207,30 @@ class WorkDetailPage(QWidget):
         )
         counter.valueChanged.connect(
             lambda value, wid=work_id, kind=item_type, total_hint=total,
-                   status_label=progress_label:
+                   status_label=progress_label, bar=progress_bar:
                 self._reading_progress_changed(
-                    wid, kind, value, total_hint, status_label
+                    wid, kind, value, total_hint, status_label, bar
                 )
         )
         control_row.addWidget(counter, 0, Qt.AlignVCenter)
         box.addLayout(control_row)
         parent_layout.addWidget(section)
 
+    def _start_reading_tracking(self, work_id):
+        """Create library membership first, then enable the persistent counters."""
+        try:
+            add_to_library(int(work_id), "Planning")
+        except Exception as error:
+            QMessageBox.warning(
+                self, "Could not start reading tracker",
+                f"NekoTrack could not add this work to your Library.\n\n{error}",
+            )
+            return
+        self._replace_reading_section()
+        self.bundle_changed.emit()
+
     def _reading_progress_changed(
-        self, work_id, item_type, read_count, total_hint, label
+        self, work_id, item_type, read_count, total_hint, label, progress_bar=None
     ):
         saved_count, _total = set_reading_progress_count(
             work_id, item_type, read_count, total_hint
@@ -2155,6 +2240,8 @@ class WorkDetailPage(QWidget):
             if total_hint
             else f"{saved_count} read · total unknown"
         )
+        if progress_bar is not None and total_hint:
+            progress_bar.setValue(round(100 * min(saved_count, total_hint) / total_hint))
 
     def _reading_member_changed(self, work_id):
         self._selected_episode_work_id = int(work_id)
@@ -2991,6 +3078,8 @@ class WorkDetailPage(QWidget):
             for index, item in enumerate(items):
                 card = cls(item)
                 card.clicked.connect(signal)
+                if isinstance(card, CharacterCard):
+                    card.voice_actor_clicked.connect(self.voice_actor_selected.emit)
                 grid.addWidget(card, index // columns, index % columns)
 
         lay.addWidget(container)
