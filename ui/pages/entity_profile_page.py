@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
 from api import get_entity_profile
 from ui.theme import COLORS, muted_label_stylesheet
 from ui.widgets.person_card import PersonCard
-from ui.widgets.character_card import CharacterCard
 from ui.widgets.work_card import WorkCard
 
 
@@ -208,9 +207,12 @@ class MediaCreditCard(QFrame):
             f"border:1px solid {COLORS['frame']};border-radius:12px; }}"
             f"QFrame#mediaCreditCard:hover {{ border-color:{COLORS['accent']}; }}"
         )
-        self.setMinimumWidth(260)
-        self.setMaximumWidth(1600 if self.credit_kind == "voice_actor" else 420)
-        self.setMinimumHeight(142 if self.credit_kind == "voice_actor" else 125)
+        if self.credit_kind == "voice_actor":
+            self.setFixedSize(300, 150)
+        else:
+            self.setMinimumWidth(260)
+            self.setMaximumWidth(420)
+            self.setMinimumHeight(125)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(10, 10, 10, 10)
@@ -230,7 +232,10 @@ class MediaCreditCard(QFrame):
 
         text_column = QVBoxLayout()
         title_label = QLabel(str(title))
+        title_label.setObjectName("mediaCreditTitle")
         title_label.setWordWrap(True)
+        if self.credit_kind == "voice_actor":
+            title_label.setMaximumHeight(68)
         title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         title_label.setStyleSheet(
             f"background:transparent;border:none;color:{COLORS['primary']};"
@@ -244,9 +249,11 @@ class MediaCreditCard(QFrame):
             year = start.get("year")
         format_text = str(node.get("format") or media_type).replace("_", " ").title()
         metadata = QLabel(" · ".join(str(item) for item in (format_text, year) if item))
+        metadata.setObjectName("mediaCreditMetadata")
         metadata.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         metadata.setStyleSheet(muted_label_stylesheet())
-        text_column.addWidget(metadata)
+        if self.credit_kind != "voice_actor":
+            text_column.addWidget(metadata)
 
         if self.credit_kind == "character":
             credit = edge.get("characterRole")
@@ -280,17 +287,6 @@ class MediaCreditCard(QFrame):
                 if character_id > 0:
                     valid_characters.append(character)
             if valid_characters:
-                cast_container = QWidget()
-                cast_column = QVBoxLayout(cast_container)
-                cast_column.setContentsMargins(4, 0, 0, 0)
-                cast_column.setSpacing(5)
-                cast_title = QLabel("CHARACTERS")
-                cast_title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-                cast_title.setStyleSheet(
-                    f"background:transparent;border:none;color:{COLORS['accent']};"
-                    "font-size:9px;font-weight:850;letter-spacing:1px;"
-                )
-                cast_column.addWidget(cast_title)
                 cast_row = QHBoxLayout()
                 cast_row.setContentsMargins(0, 0, 0, 0)
                 cast_row.setSpacing(6)
@@ -301,27 +297,9 @@ class MediaCreditCard(QFrame):
                     character_card.clicked.connect(self.character_selected.emit)
                     cast_row.addWidget(character_card, 0, Qt.AlignVCenter)
                     self.character_cards.append(character_card)
-                extra_count = len(valid_characters) - len(visible_characters)
-                if extra_count > 0:
-                    extra = QLabel(f"+{extra_count}")
-                    extra.setToolTip(", ".join(
-                        (
-                            item.get("name", {}).get("full", "Unknown character")
-                            if isinstance(item.get("name"), dict)
-                            else str(item.get("name") or "Unknown character")
-                        )
-                        for item in valid_characters[4:]
-                    ))
-                    extra.setStyleSheet(
-                        f"color:{COLORS['muted']};background:transparent;border:none;"
-                        "font-weight:800;"
-                    )
-                    extra.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-                    cast_row.addWidget(extra, 0, Qt.AlignVCenter)
-                cast_column.addLayout(cast_row)
-                row.addWidget(cast_container, 0, Qt.AlignVCenter)
+                row.addLayout(cast_row, 0)
             else:
-                no_cast = QLabel("Character credits unavailable")
+                no_cast = QLabel("Character unavailable")
                 no_cast.setWordWrap(True)
                 no_cast.setAttribute(Qt.WA_TransparentForMouseEvents, True)
                 no_cast.setStyleSheet(muted_label_stylesheet())
@@ -950,27 +928,15 @@ class EntityProfilePage(QWidget):
                 if not language_labels and person.get("language"):
                     language_labels = [str(person["language"]).strip()]
 
-                work_keys = set()
                 credit_tooltip = []
                 for credit in credits:
                     work_title = str(credit.get("work_title") or "").strip()
-                    work_id = credit.get("work_id")
-                    if work_id is not None:
-                        work_keys.add(str(work_id))
-                    elif work_title:
-                        work_keys.add(work_title.casefold())
                     language = str(credit.get("language") or "").strip()
                     line = " · ".join(value for value in (language, work_title) if value)
                     if line and line not in credit_tooltip:
                         credit_tooltip.append(line)
 
-                summary = list(language_labels)
-                credit_count = len(work_keys)
-                if credit_count:
-                    summary.append(
-                        f"{credit_count} {'credit' if credit_count == 1 else 'credits'}"
-                    )
-                person["role"] = " · ".join(summary) or "Voice actor"
+                person["role"] = " · ".join(language_labels) or "Voice actor"
                 card = PersonCard(person, portrait_size=(90, 120))
                 if credit_tooltip:
                     card.setToolTip("\n".join(credit_tooltip))
@@ -980,30 +946,23 @@ class EntityProfilePage(QWidget):
         self.content_layout.addWidget(section)
 
     def _render_voice_acting_roles(self, connection, remote):
-        """Render one Characters-tab-style card per credited voice-acting role."""
+        """Show the work on the left and its credited character on the right."""
+        del remote
         section, body = self._section("Voice acting roles")
         edges = connection.get("edges") if isinstance(connection, dict) else None
-        roles_by_character = {}
-        role_priority = {"MAIN": 0, "SUPPORTING": 1, "BACKGROUND": 2}
-
-        actor = dict(self.current_record or {})
-        actor_id = remote.get("id") or self._value(
-            actor, "person_id", self._value(actor, "id")
-        )
-        actor_name = (
-            self._name_from(remote.get("name"))
-            or str(self._value(actor, "name", "Unknown voice actor") or "Unknown voice actor")
-        )
-        actor_image_url = self._image_url(remote.get("image")) or self._value(
-            actor, "image_url"
-        )
-        actor_image_path = self._value(actor, "image_path")
+        role_edges = []
+        seen_roles = set()
 
         if isinstance(edges, list):
             for edge in edges:
                 if not isinstance(edge, dict):
                     continue
-                role = str(edge.get("characterRole") or "").strip().upper()
+                node = edge.get("node")
+                node = node if isinstance(node, dict) else {}
+                try:
+                    work_id = int(node.get("id") or 0)
+                except (TypeError, ValueError, OverflowError):
+                    work_id = 0
                 characters = edge.get("characters")
                 if not isinstance(characters, list):
                     continue
@@ -1016,64 +975,31 @@ class EntityProfilePage(QWidget):
                         continue
                     if character_id <= 0:
                         continue
+                    role_key = (work_id, character_id)
+                    if role_key in seen_roles:
+                        continue
+                    seen_roles.add(role_key)
 
-                    raw_name = character.get("name")
-                    if isinstance(raw_name, dict):
-                        character_name = (
-                            raw_name.get("full") or raw_name.get("native")
-                            or "Unknown character"
-                        )
-                    else:
-                        character_name = raw_name or "Unknown character"
-                    image = character.get("image")
-                    character_image_url = (
-                        image.get("large") if isinstance(image, dict) else None
-                    )
-                    item = {
-                        "id": character_id,
-                        "character_name": str(character_name),
-                        "character_image_url": character_image_url,
-                        "character_role": role,
-                        "person_id": actor_id,
-                        "person_name": actor_name,
-                        "person_image_path": actor_image_path,
-                        "person_image_url": actor_image_url,
-                        "person_language": remote.get("languageV2"),
-                    }
-                    previous = roles_by_character.get(character_id)
-                    if (
-                        previous is None
-                        or role_priority.get(role, 3)
-                        < role_priority.get(str(previous.get("character_role") or "").upper(), 3)
-                    ):
-                        roles_by_character[character_id] = item
+                    # Each card represents one work/character pair. This keeps the
+                    # layout compact and prevents role badges from leaking into it.
+                    role_edge = dict(edge)
+                    role_edge.pop("characterRole", None)
+                    role_edge["characters"] = [dict(character)]
+                    role_edges.append(role_edge)
 
-        if not roles_by_character:
+        if not role_edges:
             empty = QLabel("No voice-acting character roles were found.")
             empty.setWordWrap(True)
             empty.setStyleSheet(muted_label_stylesheet())
             body.addWidget(empty)
         else:
             host = QWidget()
-            grid = QGridLayout(host)
-            grid.setContentsMargins(0, 0, 0, 0)
-            grid.setHorizontalSpacing(12)
-            grid.setVerticalSpacing(12)
-            ordered = sorted(
-                roles_by_character.values(),
-                key=lambda item: (
-                    role_priority.get(str(item.get("character_role") or "").upper(), 3),
-                    str(item.get("character_name") or "").casefold(),
-                    int(item.get("id") or 0),
-                ),
-            )
-            for index, character in enumerate(ordered):
-                card = CharacterCard(character)
-                card.clicked.connect(self.character_selected.emit)
-                card.voice_actor_clicked.connect(self.voice_actor_selected.emit)
-                grid.addWidget(card, index // 4, index % 4)
-            for column in range(4):
-                grid.setColumnStretch(column, 1)
+            flow = ProfileFlowLayout(host, h_spacing=10, v_spacing=12)
+            for edge in role_edges:
+                card = MediaCreditCard(edge, "voice_actor")
+                card.work_selected.connect(self.work_selected.emit)
+                card.character_selected.connect(self.character_selected.emit)
+                flow.addWidget(card)
             body.addWidget(host)
         self.content_layout.addWidget(section)
 
@@ -1100,16 +1026,15 @@ class EntityProfilePage(QWidget):
             body.addWidget(host)
         else:
             host = QWidget()
-            grid = QGridLayout(host)
-            grid.setContentsMargins(0, 0, 0, 0)
-            grid.setHorizontalSpacing(10)
-            grid.setVerticalSpacing(10)
+            flow = ProfileFlowLayout(host, h_spacing=10, v_spacing=14)
             valid_edges = [edge for edge in edges if isinstance(edge, dict)]
-            for index, edge in enumerate(valid_edges[:12]):
-                card = MediaCreditCard(edge, credit_kind)
-                card.work_selected.connect(self.work_selected.emit)
-                card.character_selected.connect(self.character_selected.emit)
-                grid.addWidget(card, index // 3, index % 3)
+            for edge in valid_edges[:12]:
+                node = edge.get("node")
+                if not isinstance(node, dict) or not node.get("id"):
+                    continue
+                card = WorkCard(dict(node), mode="search", show_add_button=False)
+                card.clicked.connect(self.work_selected.emit)
+                flow.addWidget(card)
             body.addWidget(host)
         self.content_layout.addWidget(section)
 
