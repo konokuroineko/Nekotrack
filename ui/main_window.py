@@ -425,8 +425,11 @@ class NavigationButton(QPushButton):
 
 
 class MainWindow(QMainWindow):
+    _library_import_thread_stopped = Signal(object, object, int)
+
     def __init__(self):
         super().__init__()
+        self._library_import_thread_stopped.connect(self._library_import_thread_finished)
         with log_operation("database.initialize"):
             initialize_database()
         self.setWindowTitle("NekoTrack")
@@ -1070,9 +1073,11 @@ class MainWindow(QMainWindow):
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
+        # Queue completion from the worker thread onto MainWindow's GUI thread
+        # before releasing a slot or creating the next QThread.
         thread.finished.connect(
             lambda t=thread, w=worker, wid=int(work_id):
-                self._library_import_thread_finished(t, w, wid)
+                self._library_import_thread_stopped.emit(t, w, wid)
         )
 
         self.library_import_threads.append(thread)
