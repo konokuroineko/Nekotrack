@@ -174,17 +174,36 @@ class LibraryImportWorker(QObject):
                 if isinstance(staff_connection, dict)
                 else None
             )
-            save_staff(self.work_id, staff_edges)
-            staff_page_info = (
-                staff_connection.get("pageInfo")
-                if isinstance(staff_connection, dict) else None
-            )
-            if self.work_id > 0 and isinstance(staff_page_info, dict):
+            if details.get("_staff_snapshot_valid", True) is False:
+                save_staff(self.work_id, None)
+            else:
+                save_staff(self.work_id, staff_edges)
+
+            try:
+                linked_anilist_id = int(
+                    details.get("_anilist_id") or self.work_id
+                )
+            except (TypeError, ValueError, OverflowError):
+                linked_anilist_id = 0
+            staff_page_info = details.get("_anilist_staff_page_info")
+            if not isinstance(staff_page_info, dict):
+                staff_page_info = (
+                    staff_connection.get("pageInfo")
+                    if isinstance(staff_connection, dict) else None
+                )
+            if linked_anilist_id > 0 and isinstance(staff_page_info, dict):
+                if self.work_id < 0:
+                    save_provider_metadata(
+                        self.work_id,
+                        "anilist_media_id",
+                        {"id": linked_anilist_id},
+                        provider_id=linked_anilist_id,
+                    )
                 save_provider_metadata(
                     self.work_id,
                     "anilist_staff_page_info",
                     staff_page_info,
-                    provider_id=self.work_id,
+                    provider_id=linked_anilist_id,
                 )
 
             # Preserve core work data, but don't start further optional provider
@@ -919,21 +938,40 @@ class MainWindow(QMainWindow):
                 if isinstance(staff_connection, dict)
                 else None
             )
-            save_staff(work["id"], staff_edges)
-            staff_page_info = (
-                staff_connection.get("pageInfo")
-                if isinstance(staff_connection, dict) else None
-            )
             try:
                 work_id = int(work["id"])
             except (KeyError, TypeError, ValueError, OverflowError):
                 work_id = 0
-            if work_id > 0 and isinstance(staff_page_info, dict):
+            if details.get("_staff_snapshot_valid", True) is False:
+                save_staff(work_id, None)
+            else:
+                save_staff(work_id, staff_edges)
+
+            try:
+                linked_anilist_id = int(
+                    details.get("_anilist_id") or work_id
+                )
+            except (TypeError, ValueError, OverflowError):
+                linked_anilist_id = 0
+            staff_page_info = details.get("_anilist_staff_page_info")
+            if not isinstance(staff_page_info, dict):
+                staff_page_info = (
+                    staff_connection.get("pageInfo")
+                    if isinstance(staff_connection, dict) else None
+                )
+            if linked_anilist_id > 0 and isinstance(staff_page_info, dict):
+                if work_id < 0:
+                    save_provider_metadata(
+                        work_id,
+                        "anilist_media_id",
+                        {"id": linked_anilist_id},
+                        provider_id=linked_anilist_id,
+                    )
                 save_provider_metadata(
                     work_id,
                     "anilist_staff_page_info",
                     staff_page_info,
-                    provider_id=work_id,
+                    provider_id=linked_anilist_id,
                 )
             self.show_work_details(get_work(work["id"]) or work)
         except Exception as error:
