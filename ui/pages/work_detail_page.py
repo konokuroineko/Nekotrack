@@ -15,7 +15,7 @@ from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout,
-    QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
+    QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QProgressBar,
     QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 )
 
@@ -585,6 +585,7 @@ class WorkDetailPage(QWidget):
     back_requested = Signal()
     person_selected = Signal(object)
     character_selected = Signal(object)
+    voice_actor_selected = Signal(object)
     relation_selected = Signal(object)
     bundle_changed = Signal()
     bundle_edit_requested = Signal(object)
@@ -2064,10 +2065,20 @@ class WorkDetailPage(QWidget):
                 is_in_library = False
 
         if not is_in_library:
-            note = QLabel("Add this work to your Library to track reading progress.")
+            note = QLabel(
+                "Reading progress is saved to your Library and restored when you return."
+            )
             note.setWordWrap(True)
             note.setStyleSheet(muted_label_stylesheet())
             layout.addWidget(note)
+
+            track_button = QPushButton("＋  Track this work in Library")
+            track_button.setObjectName("trackReadingWorkButton")
+            track_button.setCursor(Qt.PointingHandCursor)
+            track_button.clicked.connect(
+                lambda checked=False, wid=int(selected_id): self._start_reading_tracking(wid)
+            )
+            layout.addWidget(track_button, 0, Qt.AlignLeft)
 
         chapter_total = self._work_count(selected_work, "chapters")
         volume_total = self._work_count(selected_work, "volumes")
@@ -2099,6 +2110,8 @@ class WorkDetailPage(QWidget):
         header.addStretch(1)
 
         read_count, _ = get_reading_progress(work_id, item_type, total)
+        if total > 0:
+            read_count = min(read_count, total)
         progress_label = QLabel(
             f"{read_count} / {total} read"
             if total
@@ -2110,6 +2123,21 @@ class WorkDetailPage(QWidget):
         )
         header.addWidget(progress_label)
         box.addLayout(header)
+
+        if total > 0:
+            progress_bar = QProgressBar()
+            progress_bar.setObjectName("readingProgressBar")
+            progress_bar.setRange(0, 100)
+            progress_bar.setValue(round(100 * min(read_count, total) / total))
+            progress_bar.setTextVisible(False)
+            progress_bar.setFixedHeight(7)
+            progress_bar.setStyleSheet(
+                f"QProgressBar {{ background:{COLORS['background_alt']};"
+                f"border:0;border-radius:3px; }}"
+                f"QProgressBar::chunk {{ background:{COLORS['accent']};"
+                "border-radius:3px; }}"
+            )
+            box.addWidget(progress_bar)
 
         control_row = QHBoxLayout()
         description = QLabel(
@@ -2143,6 +2171,19 @@ class WorkDetailPage(QWidget):
         control_row.addWidget(counter, 0, Qt.AlignVCenter)
         box.addLayout(control_row)
         parent_layout.addWidget(section)
+
+    def _start_reading_tracking(self, work_id):
+        """Create library membership first, then enable the persistent counters."""
+        try:
+            add_to_library(int(work_id), "Planning")
+        except (TypeError, ValueError, RuntimeError) as error:
+            QMessageBox.warning(
+                self, "Could not start reading tracker",
+                f"NekoTrack could not add this work to your Library.\n\n{error}",
+            )
+            return
+        self._replace_reading_section()
+        self.bundle_changed.emit()
 
     def _reading_progress_changed(
         self, work_id, item_type, read_count, total_hint, label
@@ -2991,6 +3032,8 @@ class WorkDetailPage(QWidget):
             for index, item in enumerate(items):
                 card = cls(item)
                 card.clicked.connect(signal)
+                if isinstance(card, CharacterCard):
+                    card.voice_actor_clicked.connect(self.voice_actor_selected.emit)
                 grid.addWidget(card, index // columns, index % columns)
 
         lay.addWidget(container)
