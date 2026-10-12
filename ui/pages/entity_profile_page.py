@@ -618,7 +618,12 @@ class EntityProfilePage(QWidget):
             (r"&(?:#0*40|#x0*28|lpar);", "("),
             (r"&(?:#0*41|#x0*29|rpar);", ")"),
         ):
-            value = re.sub(encoded, decoded, value, flags=re.IGNORECASE)
+            value = re.sub(
+                encoded,
+                lambda _match, replacement=decoded: replacement,
+                value,
+                flags=re.IGNORECASE,
+            )
 
         pattern = (
             r"\[(?P<label>[^\]]+)\]\s*\\?\(\s*"
