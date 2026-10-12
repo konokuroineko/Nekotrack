@@ -1967,7 +1967,10 @@ def get_bundle_characters(work_ids):
     role_priority = {"MAIN": 0, "SUPPORTING": 1, "BACKGROUND": 2}
 
     for work_id in work_ids or []:
-        for row in get_characters(work_id):
+        for raw_row in get_characters(work_id):
+            # sqlite3.Row supports indexed access but not dict.get(); normalize
+            # each provider/database row before merging per-work roles.
+            row = dict(raw_row)
             try:
                 character_id = int(row["id"])
             except (KeyError, TypeError, ValueError, OverflowError):
@@ -1975,7 +1978,7 @@ def get_bundle_characters(work_ids):
             role = str(row.get("character_role") or "").upper()
             existing = unique.get(character_id)
             if existing is None:
-                unique[character_id] = dict(row)
+                unique[character_id] = row
                 continue
 
             # Role is specific to each work. Choose the strongest role in the
