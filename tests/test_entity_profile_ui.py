@@ -58,6 +58,7 @@ class EntityProfileUiTests(unittest.TestCase):
                 "type": "ANIME",
                 "title": {"romaji": "Example Series"},
             },
+            "characterRole": "MAIN",
             "characters": [{
                 "id": 456,
                 "name": {"full": "Example Character"},
@@ -73,6 +74,13 @@ class EntityProfileUiTests(unittest.TestCase):
 
         self.assertEqual(len(card.character_cards), 1)
         self.assertEqual(card.character_cards[0].character["character_name"], "Example Character")
+        role_label = card.findChild(QLabel, "mediaCreditRole")
+        name_label = card.findChild(QLabel, "creditCharacterName")
+        self.assertIsNotNone(role_label)
+        self.assertIsNotNone(name_label)
+        self.assertEqual(role_label.text(), "Main")
+        text_labels = card.findChildren(QLabel)
+        self.assertLess(text_labels.index(role_label), text_labels.index(name_label))
         QTest.mouseClick(card.character_cards[0], Qt.LeftButton)
         self.assertEqual(len(selected_character), 1)
         self.assertEqual(selected_character[0]["id"], 456)
