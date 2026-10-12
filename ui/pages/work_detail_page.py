@@ -645,6 +645,11 @@ class WorkDetailPage(QWidget):
                 thread.quit()
             except RuntimeError:
                 pass
+        if self._cover_reply is not None:
+            try:
+                self._cover_reply.abort()
+            except RuntimeError:
+                pass
 
     def _detail_cache_key(self, work_ids):
         return tuple(int(work_id) for work_id in work_ids)

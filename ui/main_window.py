@@ -623,6 +623,44 @@ class MainWindow(QMainWindow):
         if hasattr(self, "settings_page") and hasattr(self.settings_page, "refresh_theme"):
             self.settings_page.refresh_theme()
 
+    def _request_page_tree_shutdown(self, root):
+        """Ask workers owned by a page tree to stop before that tree is deleted."""
+        if root is None:
+            return
+        for page in root.findChildren(SearchPage):
+            page.request_shutdown()
+        for page in root.findChildren(LibraryPage):
+            page.request_shutdown()
+        for page in root.findChildren(WorkDetailPage):
+            page.request_shutdown()
+        for thread in root.findChildren(QThread):
+            try:
+                thread.quit()
+            except RuntimeError:
+                pass
+
+    def _retire_page_tree_when_idle(self, root):
+        """Delete a replaced page tree only after its own QThreads have stopped."""
+        if root is None:
+            return
+        timer = QTimer(self)
+        timer.setInterval(100)
+
+        def poll():
+            for thread in root.findChildren(QThread):
+                try:
+                    if thread.isRunning():
+                        return
+                except RuntimeError:
+                    continue
+            timer.stop()
+            timer.deleteLater()
+            root.deleteLater()
+
+        timer.timeout.connect(poll)
+        timer.start()
+        poll()
+
     def _rebuild_for_settings(self, changed_key):
         self._settings_rebuild_pending = False
         current_page = "home"
@@ -638,9 +676,9 @@ class MainWindow(QMainWindow):
         was_fullscreen = self.isFullScreen()
         normal_geometry = self.normalGeometry()
 
-        # Stop workers attached to the old page tree before replacing it.
-        if hasattr(self, "search_page"):
-            self.search_page.shutdown_workers()
+        # Request cooperative shutdown without blocking settings changes.
+        # The old root remains alive until every QThread it owns has stopped.
+        self._request_page_tree_shutdown(old_root)
         self.navigation_buttons = {}
 
         # setup_ui() builds an entire new root and leaves the old root visible
@@ -649,7 +687,7 @@ class MainWindow(QMainWindow):
         new_root = self._ui_root_stack.currentWidget()
 
         if old_root is not None and old_root is not new_root:
-            old_root.deleteLater()
+            self._retire_page_tree_when_idle(old_root)
 
         # Only touch the native window state when that setting actually changed.
         # Calling showMaximized()/showNormal() for every theme change causes the
