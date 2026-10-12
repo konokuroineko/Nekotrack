@@ -927,8 +927,34 @@ def get_characters(work_id):
         connection.close()
 
 
+def _voice_actor_language_label(value):
+    """Return a readable, stable language label while preserving actor identity."""
+    if not isinstance(value, str):
+        return ""
+    raw = " ".join(value.strip().replace("_", " ").replace("-", " ").split())
+    if not raw:
+        return ""
+    normalized = raw.casefold()
+    aliases = {
+        "ja": "Japanese",
+        "jpn": "Japanese",
+        "jp": "Japanese",
+        "japanese": "Japanese",
+        "en": "English",
+        "eng": "English",
+        "english": "English",
+    }
+    return aliases.get(normalized, raw.title())
+
+
 def get_bundle_character_voice_actors(work_ids, character_id):
-    """Return the distinct voice actors credited for a character across a bundle."""
+    """Return each distinct actor once, retaining language credits and work attribution.
+
+    AniList can credit the same staff ID across multiple bundled adaptations, and
+    language labels may vary in spelling. Person IDs define identity; individual
+    work/language credits remain available in the credits list instead of multiplying
+    the same person into duplicate profile cards.
+    """
     ids = _validated_work_ids(work_ids)
     if not ids:
         return []
@@ -940,30 +966,133 @@ def get_bundle_character_voice_actors(work_ids, character_id):
     try:
         rows = connection.execute(
             f"""
-            SELECT DISTINCT
+            SELECT
                 people.id AS person_id,
                 people.name AS name,
                 people.image_path AS image_path,
                 people.image_url AS image_url,
-                work_character_voice_actors.language AS language
+                work_character_voice_actors.language AS source_language,
+                work_character_voice_actors.work_id AS work_id,
+                COALESCE(
+                    NULLIF(TRIM(works.title), ''),
+                    'Work ' || CAST(work_character_voice_actors.work_id AS TEXT)
+                ) AS work_title
             FROM work_character_voice_actors
             JOIN people ON people.id = work_character_voice_actors.person_id
+            LEFT JOIN works ON works.id = work_character_voice_actors.work_id
             WHERE work_character_voice_actors.work_id IN ({placeholders})
               AND work_character_voice_actors.character_id = ?
-            ORDER BY
-                CASE
-                    WHEN LOWER(COALESCE(work_character_voice_actors.language, ''))
-                         IN ('japanese', 'ja', 'jpn') THEN 0
-                    ELSE 1
-                END,
-                work_character_voice_actors.language,
-                people.name
+            ORDER BY people.id, work_character_voice_actors.work_id,
+                     work_character_voice_actors.language
             """,
             [*ids, safe_character_id],
         ).fetchall()
-        return [dict(row) for row in rows]
     finally:
         connection.close()
+
+    grouped = {}
+    for raw_row in rows:
+        row = dict(raw_row)
+        person_id = row.get("person_id")
+        if person_id is None:
+            continue
+        try:
+            person_id = int(person_id)
+        except (TypeError, ValueError, OverflowError):
+            continue
+
+        actor = grouped.setdefault(person_id, {
+            "person_id": person_id,
+            "name": row.get("name") or "Unknown voice actor",
+            "image_path": row.get("image_path"),
+            "image_url": row.get("image_url"),
+            "language": None,
+            "languages": [],
+            "work_ids": [],
+            "work_titles": [],
+            "credits": [],
+        })
+
+        source_language = row.get("source_language")
+        language = _voice_actor_language_label(source_language) or None
+        work_id = row.get("work_id")
+        try:
+            work_id = int(work_id)
+        except (TypeError, ValueError, OverflowError):
+            work_id = None
+        work_title = str(row.get("work_title") or "").strip()
+        if not work_title and work_id is not None:
+            work_title = f"Work {work_id}"
+
+        if work_id is not None and work_id not in actor["work_ids"]:
+            actor["work_ids"].append(work_id)
+        if work_title and work_title not in actor["work_titles"]:
+            actor["work_titles"].append(work_title)
+
+        credit = {
+            "work_id": work_id,
+            "work_title": work_title,
+            "language": language,
+            "source_language": (
+                str(source_language).strip()
+                if isinstance(source_language, str) and source_language.strip()
+                else None
+            ),
+        }
+        if not any(
+            old.get("work_id") == credit["work_id"]
+            and old.get("language") == credit["language"]
+            for old in actor["credits"]
+        ):
+            actor["credits"].append(credit)
+
+        if language and language not in actor["languages"]:
+            actor["languages"].append(language)
+        if language and (
+            actor["language"] is None
+            or (language == "Japanese" and actor["language"] != "Japanese")
+        ):
+            actor["language"] = language
+
+    def language_key(language):
+        return (
+            0 if language == "Japanese" else 1,
+            str(language or "").casefold(),
+        )
+
+    result = list(grouped.values())
+    for actor in result:
+        actor["work_ids"].sort()
+        actor["languages"].sort(key=language_key)
+        actor["credits"].sort(key=lambda credit: (
+            credit["work_id"] if credit["work_id"] is not None else _MAX_SQLITE_INTEGER,
+            language_key(credit["language"]),
+            str(credit["work_title"] or "").casefold(),
+        ))
+        if actor["language"] is None and actor["languages"]:
+            actor["language"] = actor["languages"][0]
+
+        # Keep titles in the same deterministic order as their corresponding IDs.
+        titles_by_id = {}
+        for credit in actor["credits"]:
+            work_id = credit["work_id"]
+            title = credit["work_title"]
+            if work_id is not None and title and work_id not in titles_by_id:
+                titles_by_id[work_id] = title
+        actor["work_titles"] = [
+            titles_by_id[work_id]
+            for work_id in actor["work_ids"]
+            if work_id in titles_by_id
+        ]
+
+    return sorted(
+        result,
+        key=lambda actor: (
+            0 if "Japanese" in actor["languages"] else 1,
+            str(actor["name"] or "").casefold(),
+            actor["person_id"],
+        ),
+    )
 
 def save_staff(work_id, staff_edges, replace_snapshot=True):
     """Save staff edges; allow additional pages to be merged without deleting prior credits."""
@@ -2181,10 +2310,19 @@ def get_bundle_characters(work_ids):
                 existing["character_role"] = row.get("character_role")
 
             def voice_priority(item):
-                if not item.get("person_id"):
-                    return 2
-                language = str(item.get("person_language") or "").strip().lower()
-                return 0 if language in {"japanese", "ja", "jpn"} else 1
+                try:
+                    person_id = int(item.get("person_id") or 0)
+                except (TypeError, ValueError, OverflowError):
+                    person_id = 0
+                if person_id <= 0:
+                    return (2, "", 0)
+                language = _voice_actor_language_label(item.get("person_language"))
+                priority = 0 if language == "Japanese" else 1
+                return (
+                    priority,
+                    str(item.get("person_name") or "").casefold(),
+                    person_id,
+                )
 
             if voice_priority(row) < voice_priority(existing):
                 for key in (
