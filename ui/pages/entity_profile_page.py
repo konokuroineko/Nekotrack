@@ -1,6 +1,6 @@
 from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QDesktopServices, QPixmap
-from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -266,7 +266,7 @@ class EntityProfilePage(QWidget):
     def _image_finished(self):
         reply = self._image_reply
         self._image_reply = None
-        if reply is not None and reply.error() == reply.NetworkError.NoError:
+        if reply is not None and reply.error() == QNetworkReply.NetworkError.NoError:
             pixmap = QPixmap()
             if pixmap.loadFromData(reply.readAll()):
                 self._set_artwork(pixmap)
