@@ -280,6 +280,10 @@ def initialize_database():
             FOREIGN KEY (work_id) REFERENCES works(id)
         )
     """)
+    # Older builds generated fictional Chapter N / Volume N rows for progress.
+    # Aggregate counts live in user_library, so remove unnamed placeholder rows
+    # from existing databases while preserving any real provider-titled volumes.
+    cursor.execute("DELETE FROM reading_items WHERE title IS NULL")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS songs (
             id INTEGER PRIMARY KEY, title TEXT NOT NULL, artist TEXT, image_url TEXT
@@ -1153,19 +1157,26 @@ def get_reading_items(work_id, item_type, limit=24, offset=0):
 
 
 def get_reading_progress(work_id, item_type, total_hint=None):
-    """Return read/available counts, using a valid bounded provider total when known."""
+    """Return saved aggregate read progress and the best available total."""
     kind = _reading_item_type(item_type)
     try:
         safe_work_id = _validated_work_id(work_id)
     except (TypeError, ValueError, OverflowError):
         return 0, 0
 
+    progress_column = (
+        "progress_chapters" if kind == "chapter" else "progress_volumes"
+    )
     connection = get_connection()
     try:
         row = connection.execute(
+            f"SELECT COALESCE({progress_column}, 0) AS read_count "
+            "FROM user_library WHERE work_id = ?",
+            (safe_work_id,),
+        ).fetchone()
+        item_row = connection.execute(
             """
-            SELECT COALESCE(SUM(is_read), 0) AS read_count,
-                   COALESCE(MAX(item_number), 0) AS highest_item
+            SELECT COALESCE(MAX(item_number), 0) AS highest_item
             FROM reading_items
             WHERE work_id = ? AND item_type = ?
             """,
@@ -1174,15 +1185,59 @@ def get_reading_progress(work_id, item_type, total_hint=None):
     finally:
         connection.close()
 
-    hinted_total = _safe_optional_integer(
-        total_hint,
-        0,
-        _MAX_TRACKED_EPISODE_NUMBER,
-    ) if total_hint is not None else None
-    total = hinted_total if hinted_total is not None and hinted_total > 0 else int(
-        row["highest_item"] or 0
+    hinted_total = (
+        _safe_optional_integer(total_hint, 0, _MAX_TRACKED_EPISODE_NUMBER)
+        if total_hint is not None else None
     )
-    return int(row["read_count"] or 0), total
+    stored_total = int(item_row["highest_item"] or 0) if item_row else 0
+    total = (
+        hinted_total if hinted_total is not None and hinted_total > 0
+        else stored_total
+    )
+    return (int(row["read_count"] or 0) if row else 0), total
+
+
+def set_reading_progress_count(work_id, item_type, read_count, total_hint=None):
+    """Save chapter/volume progress directly, without generating per-item placeholders."""
+    kind = _reading_item_type(item_type)
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Work ID must be a non-zero SQLite-safe integer.") from error
+
+    parsed_count = _safe_optional_integer(
+        read_count, 0, _MAX_TRACKED_EPISODE_NUMBER
+    )
+    if parsed_count is None or isinstance(read_count, bool):
+        raise ValueError("Read progress must be a non-negative integer.")
+
+    parsed_total = (
+        _safe_optional_integer(total_hint, 0, _MAX_TRACKED_EPISODE_NUMBER)
+        if total_hint is not None else None
+    )
+    if parsed_total is not None and parsed_total > 0:
+        parsed_count = min(parsed_count, parsed_total)
+
+    progress_column = (
+        "progress_chapters" if kind == "chapter" else "progress_volumes"
+    )
+    connection = get_connection()
+    try:
+        connection.execute(
+            f"""
+            UPDATE user_library
+            SET {progress_column} = ?, updated_date = CURRENT_TIMESTAMP
+            WHERE work_id = ?
+            """,
+            (parsed_count, safe_work_id),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    return get_reading_progress(safe_work_id, kind, parsed_total)
 
 
 def set_reading_item_read(work_id, item_type, item_number, is_read):
