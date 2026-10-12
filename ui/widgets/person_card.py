@@ -55,9 +55,18 @@ class PersonArtwork(QFrame):
 class PersonCard(QFrame):
     clicked = Signal(object)
 
-    def __init__(self, person, parent=None):
+    def __init__(self, person, parent=None, portrait_size=None):
         super().__init__(parent)
         self.person = person
+        if (
+            isinstance(portrait_size, (tuple, list))
+            and len(portrait_size) == 2
+        ):
+            self.portrait_width = max(1, int(portrait_size[0]))
+            self.portrait_height = max(1, int(portrait_size[1]))
+        else:
+            self.portrait_width = 120
+            self.portrait_height = 120
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedWidth(180)
         self.setMinimumHeight(215)
@@ -68,7 +77,7 @@ class PersonCard(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
-        self.image = PersonArtwork(120, 120, 14)
+        self.image = PersonArtwork(self.portrait_width, self.portrait_height, 14)
         image_path = self._value("image_path")
         if image_path:
             pixmap = QPixmap(str(image_path))
@@ -115,7 +124,7 @@ class PersonCard(QFrame):
                 role_label.text(),
             ).height()
 
-        content_height = 24 + 120 + 8 + name_height
+        content_height = 24 + self.portrait_height + 8 + name_height
         if role:
             content_height += 8 + role_height
         self.setMinimumHeight(max(215, content_height))
