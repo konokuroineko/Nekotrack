@@ -539,7 +539,6 @@ def get_entity_profile(entity_type, entity_id):
                 staffMedia(page: 1, perPage: 12, sort: POPULARITY_DESC) {
                     edges {
                         staffRole
-                        role
                         node {
                             id
                             type
