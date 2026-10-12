@@ -53,6 +53,7 @@ class EntityProfilePage(QWidget):
 
         self.set_profile("character", {})
 
+    def refresh_theme(self):
         self.setStyleSheet(
             f"""
             QPushButton {{
