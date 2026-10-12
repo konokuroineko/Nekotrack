@@ -213,6 +213,11 @@ class MediaCreditCard(QFrame):
         if self._reply is not None:
             self._reply.finished.connect(self._image_finished)
 
+        if self.credit_kind in {"character", "voice_actor"}:
+            credit = edge.get("characterRole")
+        else:
+            credit = edge.get("staffRole") or edge.get("role")
+
         if self.credit_kind == "voice_actor" and character_data is not None:
             # Mirror CharacterCard's central layout: role anchored at the top and
             # character name vertically centered in the same text area. The work
@@ -285,10 +290,6 @@ class MediaCreditCard(QFrame):
             )
             text_column.addWidget(title_label)
 
-            if self.credit_kind in {"character", "voice_actor"}:
-                credit = edge.get("characterRole")
-            else:
-                credit = edge.get("staffRole") or edge.get("role")
             if credit:
                 role_text = str(credit).replace("_", " ").strip().title()
                 role = QLabel(role_text)
