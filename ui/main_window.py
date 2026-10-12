@@ -665,6 +665,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "work_detail_page") and hasattr(self.work_detail_page, "refresh_theme"):
             self.work_detail_page.refresh_theme()
 
+        if hasattr(self, "entity_profile_page") and hasattr(self.entity_profile_page, "refresh_theme"):
+            self.entity_profile_page.refresh_theme()
+
         if hasattr(self, "settings_page") and hasattr(self.settings_page, "refresh_theme"):
             self.settings_page.refresh_theme()
 
