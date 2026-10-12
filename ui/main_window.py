@@ -1173,6 +1173,7 @@ class MainWindow(QMainWindow):
             }
             self._pending_character_cast_refreshes[key] = state
         state["pending_work_ids"].update(candidate_ids)
+        self._detail_enrichment_ids.update(candidate_ids)
 
         log_event(
             "character.voice_actor_refresh.queued",
