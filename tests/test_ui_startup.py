@@ -745,17 +745,30 @@ class UiStartupTests(unittest.TestCase):
                     "image": {},
                     "description": "Voice actor biography.",
                     "staffMedia": {
-                        "edges": [{
-                            "staffRole": "Voice Director",
-                            "node": {
-                                "id": 21356,
-                                "type": "ANIME",
-                                "format": "TV",
-                                "title": {"english": "Example Staff Work"},
-                                "coverImage": {},
-                                "startDate": {"year": 2017},
+                        "edges": [
+                            {
+                                "staffRole": "Voice Director",
+                                "node": {
+                                    "id": 21356,
+                                    "type": "ANIME",
+                                    "format": "TV",
+                                    "title": {"english": "Example Staff Work"},
+                                    "coverImage": {},
+                                    "startDate": {"year": 2017},
+                                },
                             },
-                        }],
+                            {
+                                "staffRole": "Series Composition",
+                                "node": {
+                                    "id": 21356,
+                                    "type": "ANIME",
+                                    "format": "TV",
+                                    "title": {"english": "Example Staff Work"},
+                                    "coverImage": {},
+                                    "startDate": {"year": 2017},
+                                },
+                            },
+                        ],
                     },
                     "characterMedia": {
                         "edges": [
@@ -815,6 +828,19 @@ class UiStartupTests(unittest.TestCase):
                 )
                 staff_cards = staff_section.findChildren(ProfileWorkCreditCard)
                 self.assertEqual(len(staff_cards), 1)
+                credit_label = staff_cards[0].findChild(QLabel, "profileCreditRole")
+                self.assertIsNotNone(credit_label)
+                self.assertEqual(
+                    credit_label.text(), "Voice Director · Series Composition"
+                )
+                content_layout = staff_cards[0].layout().itemAt(1).layout()
+                content_names = [
+                    content_layout.itemAt(index).widget().objectName()
+                    for index in range(content_layout.count())
+                    if content_layout.itemAt(index).widget() is not None
+                ]
+                self.assertLess(content_names.index("title"), content_names.index("profileCreditRole"))
+                self.assertLess(content_names.index("profileCreditRole"), content_names.index("meta"))
                 section = next(
                     frame for frame in active_widgets
                     if (
