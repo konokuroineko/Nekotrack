@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QGridLayout, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QGridLayout
 
 from ui.pages.entity_profile_page import (
     ClickableCharacterArtwork,
@@ -90,7 +90,6 @@ class EntityProfileUiTests(unittest.TestCase):
         text_layout = card.layout().itemAt(1).layout()
         self.assertIsInstance(text_layout, QGridLayout)
         role_index = text_layout.indexOf(role_label)
-        name_widget = role_label.parentWidget().findChild(QWidget)
         self.assertGreaterEqual(role_index, 0)
         self.assertEqual(text_layout.getItemPosition(role_index), (0, 0, 1, 1))
         name_widget_item = next(
