@@ -14,6 +14,7 @@ from database import (
     add_to_library,
     characters_are_loaded,
     get_alternate_titles,
+    get_bundle_character_voice_actors,
     get_connection,
     get_episodes,
     get_tmdb_mapping,
@@ -478,6 +479,7 @@ class MainWindow(QMainWindow):
         self.navigation_buttons = {}
         self._settings_rebuild_pending = False
         self._detail_enrichment_ids = set()
+        self._entity_profile_history = []
         self._library_episode_preload_thread = None
         self._library_episode_preload_worker = None
         self._ui_root_stack = None
@@ -569,9 +571,13 @@ class MainWindow(QMainWindow):
         self.work_detail_page.person_selected.connect(
             lambda person: self.show_entity_profile("staff", person)
         )
-        self.entity_profile_page.back_requested.connect(
-            lambda: self.navigation.show("work_detail")
+        self.work_detail_page.voice_actor_selected.connect(
+            lambda actor: self.show_entity_profile("voice_actor", actor)
         )
+        self.entity_profile_page.voice_actor_selected.connect(
+            lambda actor: self.show_entity_profile("voice_actor", actor)
+        )
+        self.entity_profile_page.back_requested.connect(self._back_from_entity_profile)
         self.work_detail_page.relation_selected.connect(self.show_relation)
         self.work_detail_page.bundle_changed.connect(self._refresh_library_after_bundle_change)
         self.settings_page.settings_changed.connect(self.apply_settings)
@@ -985,15 +991,55 @@ class MainWindow(QMainWindow):
             self.show_work_details(work)
 
     def show_entity_profile(self, entity_type, entity):
-        """Open a cached character or staff profile from a work-detail card."""
+        """Open a detailed character, staff, or voice-actor profile."""
         if not entity:
             return
+        kind = str(entity_type or "").strip().lower()
+        if kind in {"voice_actor", "voice actor"}:
+            if self.entity_profile_page.current_type == "character":
+                self._entity_profile_history.append(
+                    self.entity_profile_page.profile_state()
+                )
+        else:
+            self._entity_profile_history.clear()
+
+        try:
+            record = dict(entity)
+        except (TypeError, ValueError):
+            record = entity
+        voice_actors = None
+        if kind == "character":
+            try:
+                character_id = record.get("id") if hasattr(record, "get") else record["id"]
+                voice_actors = get_bundle_character_voice_actors(
+                    self.work_detail_page._detail_work_ids(),
+                    character_id,
+                )
+                if isinstance(record, dict):
+                    record["voice_actors"] = voice_actors
+            except (KeyError, TypeError, ValueError, OverflowError):
+                voice_actors = []
+
         self.entity_profile_page.set_profile(
-            entity_type,
-            entity,
+            kind,
+            record,
             source_work=self.work_detail_page.work,
+            voice_actors=voice_actors,
         )
         self.navigation.show("entity_profile")
+
+    def _back_from_entity_profile(self):
+        """Return to the character profile when a voice actor opened from it."""
+        if self._entity_profile_history:
+            state = self._entity_profile_history.pop()
+            self.entity_profile_page.set_profile(
+                state["entity_type"],
+                state["record"],
+                source_work=state["source_work"],
+                voice_actors=state["voice_actors"],
+            )
+            return
+        self.navigation.show("work_detail")
 
     def show_relation(self, relation):
         if not relation:
