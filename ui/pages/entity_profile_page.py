@@ -1,3 +1,5 @@
+import re
+
 from PySide6.QtCore import Qt, Signal, QUrl, QObject, QRunnable, QThreadPool, QRectF, QPoint, QRect, QSize
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
@@ -566,6 +568,25 @@ class EntityProfilePage(QWidget):
                 updater()
 
     @staticmethod
+    def _normalize_profile_description(description):
+        """Repair AniList's nested YouTube/Staff-link markup before Markdown parsing."""
+        pattern = (
+            r"\[(?P<label>[^\]]+)\]\("
+            r"\[(?P<base>https?://(?:www\.)?youtube\.com/)\]\((?P=base)\)"
+            r"\[@(?P<handle>[A-Za-z0-9_.-]+)\]"
+            r"\(https?://anilist\.co/user/[^)]+\)"
+            r"(?P<suffix>[-A-Za-z0-9_.]*)\)"
+        )
+        return re.sub(
+            pattern,
+            lambda match: (
+                f"[{match.group('label')}]"
+                f"({match.group('base')}@{match.group('handle')}{match.group('suffix')})"
+            ),
+            str(description or ""),
+        )
+
+    @staticmethod
     def _value(item, key, fallback=None):
         if hasattr(item, "get"):
             try:
@@ -854,6 +875,7 @@ class EntityProfilePage(QWidget):
             or self._value(record, "description", "")
             or ""
         ).strip()
+        description = self._normalize_profile_description(description)
         if description:
             description_browser = QTextBrowser()
             description_browser.setObjectName("profileDescription")
