@@ -193,6 +193,9 @@ def initialize_database():
             id INTEGER PRIMARY KEY, name TEXT NOT NULL, image_url TEXT, image_path TEXT
         )
     """)
+    voice_actor_scope_existed = cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'work_character_voice_actors'"
+    ).fetchone() is not None
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS work_characters (
             work_id INTEGER NOT NULL, character_id INTEGER NOT NULL, role TEXT,
@@ -212,6 +215,31 @@ def initialize_database():
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS work_character_voice_actors (
+            work_id INTEGER NOT NULL,
+            character_id INTEGER NOT NULL,
+            person_id INTEGER NOT NULL,
+            language TEXT,
+            PRIMARY KEY (work_id, character_id, person_id),
+            FOREIGN KEY (work_id) REFERENCES works(id),
+            FOREIGN KEY (character_id) REFERENCES characters(id),
+            FOREIGN KEY (person_id) REFERENCES people(id)
+        )
+    """)
+    if not voice_actor_scope_existed:
+        # The old cache stored voices globally by character, which lost the
+        # work-specific distinction between adaptations. Seed the new table
+        # with the legacy associations, then refresh each work on demand.
+        cursor.execute("""
+            INSERT OR IGNORE INTO work_character_voice_actors
+                (work_id, character_id, person_id, language)
+            SELECT work_characters.work_id, character_voice_actors.character_id,
+                   character_voice_actors.person_id, character_voice_actors.language
+            FROM work_characters
+            JOIN character_voice_actors
+              ON character_voice_actors.character_id = work_characters.character_id
+        """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS work_staff (
             work_id INTEGER NOT NULL, person_id INTEGER NOT NULL, role TEXT NOT NULL,
             PRIMARY KEY (work_id, person_id, role), FOREIGN KEY (work_id) REFERENCES works(id), FOREIGN KEY (person_id) REFERENCES people(id)
@@ -228,6 +256,10 @@ def initialize_database():
     }.items():
         if column not in column_names:
             cursor.execute(f"ALTER TABLE works ADD COLUMN {column} {definition}")
+    if not voice_actor_scope_existed:
+        cursor.execute(
+            "UPDATE works SET characters_loaded = 0 WHERE characters_loaded = 1"
+        )
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS alternate_titles (
             work_id INTEGER NOT NULL, title TEXT NOT NULL, language TEXT,
@@ -364,7 +396,16 @@ def _cast_provider_id(value):
 
 
 def save_characters(work_id, characters):
-    """Persist a character snapshot, keeping incomplete payloads retryable."""
+    """Persist one work's character and voice-actor snapshot.
+
+    Character identity is shared across titles, but voice-actor credits are not:
+    adaptations may use different casts, so their actor links must be work-scoped.
+    """
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return
+    work_id = safe_work_id
     if not isinstance(characters, (list, tuple)):
         try:
             safe_work_id = _validated_work_id(work_id)
@@ -531,6 +572,8 @@ def save_characters(work_id, characters):
                     """,
                     (actor["id"], actor["name"], actor["image_url"]),
                 )
+                # Keep the legacy global association table as a union for
+                # migrations/cleanup, but read credits from this work-scoped row.
                 connection.execute(
                     """
                     INSERT INTO character_voice_actors (character_id, person_id, language)
@@ -539,6 +582,18 @@ def save_characters(work_id, characters):
                         language = COALESCE(excluded.language, character_voice_actors.language)
                     """,
                     (character["id"], actor["id"], actor["language"]),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO work_character_voice_actors
+                        (work_id, character_id, person_id, language)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(work_id, character_id, person_id) DO UPDATE SET
+                        language = COALESCE(
+                            excluded.language, work_character_voice_actors.language
+                        )
+                    """,
+                    (work_id, character["id"], actor["id"], actor["language"]),
                 )
 
         if snapshot_valid:
@@ -554,6 +609,34 @@ def save_characters(work_id, characters):
                         "DELETE FROM work_characters WHERE work_id = ? AND character_id = ?",
                         (work_id, old_character_id),
                     )
+                    old_scoped_actors = connection.execute(
+                        """
+                        SELECT person_id FROM work_character_voice_actors
+                        WHERE work_id = ? AND character_id = ?
+                        """,
+                        (work_id, old_character_id),
+                    ).fetchall()
+                    connection.execute(
+                        "DELETE FROM work_character_voice_actors WHERE work_id = ? AND character_id = ?",
+                        (work_id, old_character_id),
+                    )
+                    for old_actor_row in old_scoped_actors:
+                        still_assigned = connection.execute(
+                            """
+                            SELECT 1 FROM work_character_voice_actors
+                            WHERE character_id = ? AND person_id = ? LIMIT 1
+                            """,
+                            (old_character_id, old_actor_row["person_id"]),
+                        ).fetchone()
+                        if still_assigned is None:
+                            connection.execute(
+                                """
+                                DELETE FROM character_voice_actors
+                                WHERE character_id = ? AND person_id = ?
+                                """,
+                                (old_character_id, old_actor_row["person_id"]),
+                            )
+                            remove_person_if_orphaned(old_actor_row["person_id"])
                     still_linked = connection.execute(
                         "SELECT 1 FROM work_characters WHERE character_id = ? LIMIT 1",
                         (old_character_id,),
@@ -577,26 +660,43 @@ def save_characters(work_id, characters):
                             (old_character_id,),
                         )
 
-            # Voice-actor mappings are cached by character ID globally. Replace
-            # them only for characters in this complete snapshot; malformed or
-            # partial snapshots leave prior mappings untouched for retry.
+            # A complete snapshot can remove actors from this work, but it must
+            # not erase the same character's valid actor credits in other works.
             for character in normalized:
                 desired_actor_ids = {actor["id"] for actor in character["actors"]}
                 existing_actor_rows = connection.execute(
-                    "SELECT person_id FROM character_voice_actors WHERE character_id = ?",
-                    (character["id"],),
+                    """
+                    SELECT person_id FROM work_character_voice_actors
+                    WHERE work_id = ? AND character_id = ?
+                    """,
+                    (work_id, character["id"]),
                 ).fetchall()
                 for row in existing_actor_rows:
                     old_actor_id = row["person_id"]
                     if old_actor_id not in desired_actor_ids:
                         connection.execute(
                             """
-                            DELETE FROM character_voice_actors
-                            WHERE character_id = ? AND person_id = ?
+                            DELETE FROM work_character_voice_actors
+                            WHERE work_id = ? AND character_id = ? AND person_id = ?
+                            """,
+                            (work_id, character["id"], old_actor_id),
+                        )
+                        still_assigned = connection.execute(
+                            """
+                            SELECT 1 FROM work_character_voice_actors
+                            WHERE character_id = ? AND person_id = ? LIMIT 1
                             """,
                             (character["id"], old_actor_id),
-                        )
-                        remove_person_if_orphaned(old_actor_id)
+                        ).fetchone()
+                        if still_assigned is None:
+                            connection.execute(
+                                """
+                                DELETE FROM character_voice_actors
+                                WHERE character_id = ? AND person_id = ?
+                                """,
+                                (character["id"], old_actor_id),
+                            )
+                            remove_person_if_orphaned(old_actor_id)
 
             connection.execute(
                 "UPDATE works SET characters_loaded = 1 WHERE id = ?",
@@ -754,82 +854,57 @@ def save_person_image_path(person_id, image_path):
 
 
 def get_characters(work_id):
-    """Return one row per character, with the preferred Japanese voice actor when available."""
+    """Return work-specific character credits and the preferred Japanese voice actor."""
     try:
         safe_work_id = _validated_work_id(work_id)
     except (TypeError, ValueError, OverflowError):
         return []
     connection = get_connection()
     try:
-        results = connection.execute("""
+        return connection.execute("""
+            WITH ranked_actors AS (
+                SELECT
+                    work_character_voice_actors.work_id,
+                    work_character_voice_actors.character_id,
+                    people.id AS person_id,
+                    people.name AS person_name,
+                    people.image_path AS person_image_path,
+                    people.image_url AS person_image_url,
+                    work_character_voice_actors.language AS person_language,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY work_character_voice_actors.work_id,
+                                     work_character_voice_actors.character_id
+                        ORDER BY
+                            CASE
+                                WHEN LOWER(COALESCE(work_character_voice_actors.language, ''))
+                                     IN ('japanese', 'ja', 'jpn') THEN 0
+                                ELSE 1
+                            END,
+                            work_character_voice_actors.language,
+                            people.name
+                    ) AS actor_rank
+                FROM work_character_voice_actors
+                JOIN people
+                  ON people.id = work_character_voice_actors.person_id
+                WHERE work_character_voice_actors.work_id = ?
+            )
             SELECT
                 characters.id,
                 characters.name AS character_name,
                 characters.image_path AS character_image_path,
                 characters.image_url AS character_image_url,
                 work_characters.role AS character_role,
-                (
-                    SELECT people.id
-                    FROM character_voice_actors
-                    JOIN people ON people.id = character_voice_actors.person_id
-                    WHERE character_voice_actors.character_id = characters.id
-                    ORDER BY
-                        CASE
-                            WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
-                                 ('japanese', 'ja', 'jpn') THEN 0
-                            ELSE 1
-                        END,
-                        character_voice_actors.language,
-                        people.name
-                    LIMIT 1
-                ) AS person_id,
-                (
-                    SELECT people.name
-                    FROM character_voice_actors
-                    JOIN people ON people.id = character_voice_actors.person_id
-                    WHERE character_voice_actors.character_id = characters.id
-                    ORDER BY
-                        CASE
-                            WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
-                                 ('japanese', 'ja', 'jpn') THEN 0
-                            ELSE 1
-                        END,
-                        character_voice_actors.language,
-                        people.name
-                    LIMIT 1
-                ) AS person_name,
-                (
-                    SELECT people.image_path
-                    FROM character_voice_actors
-                    JOIN people ON people.id = character_voice_actors.person_id
-                    WHERE character_voice_actors.character_id = characters.id
-                    ORDER BY
-                        CASE
-                            WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
-                                 ('japanese', 'ja', 'jpn') THEN 0
-                            ELSE 1
-                        END,
-                        character_voice_actors.language,
-                        people.name
-                    LIMIT 1
-                ) AS person_image_path,
-                (
-                    SELECT people.image_url
-                    FROM character_voice_actors
-                    JOIN people ON people.id = character_voice_actors.person_id
-                    WHERE character_voice_actors.character_id = characters.id
-                    ORDER BY
-                        CASE
-                            WHEN LOWER(COALESCE(character_voice_actors.language, '')) IN
-                                 ('japanese', 'ja', 'jpn') THEN 0
-                            ELSE 1
-                        END,
-                        character_voice_actors.language,
-                        people.name
-                    LIMIT 1
-                ) AS person_image_url
+                ranked_actors.person_id,
+                ranked_actors.person_name,
+                ranked_actors.person_image_path,
+                ranked_actors.person_image_url,
+                ranked_actors.person_language
             FROM work_characters
             JOIN characters ON characters.id = work_characters.character_id
+            LEFT JOIN ranked_actors
+              ON ranked_actors.work_id = work_characters.work_id
+             AND ranked_actors.character_id = work_characters.character_id
+             AND ranked_actors.actor_rank = 1
             WHERE work_characters.work_id = ?
             ORDER BY
                 CASE UPPER(COALESCE(work_characters.role, 'UNKNOWN'))
@@ -839,8 +914,46 @@ def get_characters(work_id):
                     ELSE 3
                 END,
                 characters.name
-        """, (safe_work_id,)).fetchall()
-        return results
+        """, (safe_work_id, safe_work_id)).fetchall()
+    finally:
+        connection.close()
+
+
+def get_bundle_character_voice_actors(work_ids, character_id):
+    """Return the distinct voice actors credited for a character across a bundle."""
+    ids = _validated_work_ids(work_ids)
+    if not ids:
+        return []
+    safe_character_id = _cast_provider_id(character_id)
+    if safe_character_id is None:
+        return []
+    placeholders = ",".join("?" for _ in ids)
+    connection = get_connection()
+    try:
+        rows = connection.execute(
+            f"""
+            SELECT DISTINCT
+                people.id AS person_id,
+                people.name AS name,
+                people.image_path AS image_path,
+                people.image_url AS image_url,
+                work_character_voice_actors.language AS language
+            FROM work_character_voice_actors
+            JOIN people ON people.id = work_character_voice_actors.person_id
+            WHERE work_character_voice_actors.work_id IN ({placeholders})
+              AND work_character_voice_actors.character_id = ?
+            ORDER BY
+                CASE
+                    WHEN LOWER(COALESCE(work_character_voice_actors.language, ''))
+                         IN ('japanese', 'ja', 'jpn') THEN 0
+                    ELSE 1
+                END,
+                work_character_voice_actors.language,
+                people.name
+            """,
+            [*ids, safe_character_id],
+        ).fetchall()
+        return [dict(row) for row in rows]
     finally:
         connection.close()
 
@@ -2043,6 +2156,19 @@ def get_bundle_characters(work_ids):
             if role_priority.get(role, 3) < role_priority.get(existing_role, 3):
                 existing["character_role"] = row.get("character_role")
 
+            def voice_priority(item):
+                if not item.get("person_id"):
+                    return 2
+                language = str(item.get("person_language") or "").strip().lower()
+                return 0 if language in {"japanese", "ja", "jpn"} else 1
+
+            if voice_priority(row) < voice_priority(existing):
+                for key in (
+                    "person_id", "person_name", "person_image_path",
+                    "person_image_url", "person_language",
+                ):
+                    existing[key] = row.get(key)
+
     return sorted(
         unique.values(),
         key=lambda row: (
@@ -2646,6 +2772,7 @@ def delete_work_data(work_id):
             "episodes",
             "reading_items",
             "reading_progress",
+            "work_character_voice_actors",
             "work_characters",
             "work_staff",
             "work_studios",
