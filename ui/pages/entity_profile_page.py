@@ -227,6 +227,22 @@ class MediaCreditCard(QFrame):
         )
         text_column.addWidget(title_label)
 
+        if self.credit_kind in {"character", "voice_actor"}:
+            credit = edge.get("characterRole")
+        else:
+            credit = edge.get("staffRole") or edge.get("role")
+        if credit:
+            role_text = str(credit).replace("_", " ").strip().title()
+            role = QLabel(role_text)
+            role.setObjectName("mediaCreditRole")
+            role.setWordWrap(True)
+            role.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            role.setStyleSheet(
+                f"color:{COLORS['primary']};font-size:13px;font-weight:700;"
+                "background:transparent;border:none;"
+            )
+            text_column.addWidget(role)
+
         if self.credit_kind == "voice_actor" and character_data is not None:
             raw_name = character_data.get("name")
             if isinstance(raw_name, dict):
@@ -239,24 +255,9 @@ class MediaCreditCard(QFrame):
             name_label.setMaximumHeight(40)
             name_label.setStyleSheet(
                 f"background:transparent;border:none;color:{COLORS['primary']};"
-                "font-size:12px;font-weight:650;"
+                "font-weight:600;"
             )
             text_column.addWidget(name_label)
-
-        if self.credit_kind in {"character", "voice_actor"}:
-            credit = edge.get("characterRole")
-        else:
-            credit = edge.get("staffRole") or edge.get("role")
-        if credit:
-            role = QLabel(str(credit))
-            role.setObjectName("mediaCreditRole")
-            role.setWordWrap(True)
-            role.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            role.setStyleSheet(
-                f"color:{COLORS['accent']};font-size:11px;font-weight:800;"
-                "background:transparent;border:none;"
-            )
-            text_column.addWidget(role)
         text_column.addStretch(1)
         row.addLayout(text_column, 1)
 
@@ -828,7 +829,9 @@ class EntityProfilePage(QWidget):
             ):
                 description_browser.setHtml(description)
             else:
-                description_browser.setPlainText(description)
+                # AniList descriptions use Markdown, including linked labels and
+                # escaped separators. Render it instead of exposing the raw syntax.
+                description_browser.setMarkdown(description)
             description_browser.setStyleSheet(
                 f"QTextBrowser#profileDescription {{ color:{COLORS['secondary']};"
                 "background:transparent;border:none;font-size:12px; }"
