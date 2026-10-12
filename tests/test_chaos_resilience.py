@@ -377,47 +377,39 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
     def test_reading_progress_apis_bound_ids_offsets_and_item_numbers(self):
         work_id = 620
         database.save_anime(self.work(work_id, "MANGA", "MANGA"))
+        database.add_to_library(work_id)
 
         with patch.object(database, "get_connection") as get_connection:
             self.assertEqual(
-                database.ensure_reading_placeholders(1 << 100, "chapter", 10),
-                [],
+                database.get_reading_progress(1 << 100, "chapter"),
+                (0, 0),
             )
-            self.assertEqual(
-                database.ensure_reading_placeholders(work_id, "chapter", 10**100),
-                [],
-            )
-            self.assertEqual(
-                database.ensure_reading_placeholders(
-                    work_id, "chapter", 10, offset=10**100
-                ),
-                [],
-            )
-            self.assertEqual(
-                database.get_reading_items(1 << 100, "chapter"),
-                [],
-            )
-            self.assertEqual(
-                database.get_reading_items(work_id, "chapter", offset=10**100),
-                [],
-            )
-            self.assertEqual(database.get_reading_progress(1 << 100, "chapter"), (0, 0))
             with self.assertRaises(ValueError):
-                database.set_reading_item_read(work_id, "chapter", 10**100, True)
+                database.set_reading_progress_count(
+                    1 << 100, "chapter", 1, total_hint=10
+                )
+            with self.assertRaises(ValueError):
+                database.set_reading_progress_count(
+                    work_id, "chapter", 10**100, total_hint=10
+                )
             get_connection.assert_not_called()
 
-        placeholders = database.ensure_reading_placeholders(
-            work_id, "chapter", total_count=4, offset=0, limit=2
-        )
-        self.assertEqual([row["item_number"] for row in placeholders], [1, 2])
         self.assertEqual(
-            [row["item_number"] for row in database.get_reading_items(work_id, "chapter")],
-            [1, 2],
+            database.set_reading_progress_count(
+                work_id, "chapter", 1, total_hint=4
+            ),
+            (1, 4),
         )
-        read_count, total_count = database.set_reading_item_read(
-            work_id, "chapter", 1, True
+        self.assertEqual(
+            database.set_reading_progress_count(
+                work_id, "chapter", 99, total_hint=2
+            ),
+            (2, 2),
         )
-        self.assertEqual((read_count, total_count), (1, 2))
+        self.assertEqual(
+            database.get_reading_progress(work_id, "chapter", total_hint=4),
+            (2, 4),
+        )
 
 
     def test_save_anime_rolls_back_and_closes_when_sql_write_fails(self):
@@ -473,10 +465,8 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         ])
         database.set_episode_watched(work_id, 1, True)
         database.set_episode_watched(work_id, 2, True)
-        database.ensure_reading_placeholders(work_id, "chapter", 5, limit=5)
-        database.ensure_reading_placeholders(work_id, "volume", 3, limit=3)
-        database.set_reading_item_read(work_id, "chapter", 2, True)
-        database.set_reading_item_read(work_id, "volume", 1, True)
+        database.set_reading_progress_count(work_id, "chapter", 2, total_hint=5)
+        database.set_reading_progress_count(work_id, "volume", 1, total_hint=3)
 
         connection = database.get_connection()
         connection.execute(
@@ -512,10 +502,8 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
             {"episodeNumber": 3, "title": "Episode 3"},
         ])
         database.set_episode_watched(work_id, 2, True)
-        database.ensure_reading_placeholders(work_id, "chapter", 6, limit=6)
-        database.ensure_reading_placeholders(work_id, "volume", 4, limit=4)
-        database.set_reading_item_read(work_id, "chapter", 4, True)
-        database.set_reading_item_read(work_id, "volume", 3, True)
+        database.set_reading_progress_count(work_id, "chapter", 4, total_hint=6)
+        database.set_reading_progress_count(work_id, "volume", 3, total_hint=4)
 
         self.assertTrue(database.remove_from_library(work_id))
         database.add_to_library(work_id)
@@ -578,8 +566,7 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         work_id = 505
         database.save_anime(self.work(work_id, "MANGA", "NOVEL"))
         database.add_to_library(work_id)
-        database.ensure_reading_placeholders(work_id, "volume", 3, limit=3)
-        database.set_reading_item_read(work_id, "volume", 2, True)
+        database.set_reading_progress_count(work_id, "volume", 2, total_hint=3)
 
         rows = database.get_all_library()
         row = next(item for item in rows if item["id"] == work_id)
@@ -743,15 +730,15 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
                 database.remove_from_library(work_id)
             elif operation == 2:
                 item_type = rng.choice(["chapter", "volume"])
-                item_number = rng.randint(1, 160)
-                database.set_reading_item_read(work_id, item_type, item_number, bool(rng.getrandbits(1)))
+                read_count = rng.randint(0, 260)
+                database.set_reading_progress_count(
+                    work_id, item_type, read_count, total_hint=260
+                )
             elif operation == 3:
-                database.ensure_reading_placeholders(
-                    work_id,
-                    rng.choice(["chapter", "volume"]),
-                    rng.randint(0, 260),
-                    offset=rng.randint(0, 250),
-                    limit=rng.randint(1, 150),
+                item_type = rng.choice(["chapter", "volume"])
+                read_count = rng.randint(0, 260)
+                database.set_reading_progress_count(
+                    work_id, item_type, read_count, total_hint=260
                 )
             elif operation == 4 and len(active) > 1:
                 other_id = rng.choice([value for value in candidates if value != work_id])
@@ -804,7 +791,6 @@ class DatabaseConcurrencyChaosTests(unittest.TestCase):
                     if step == 0
                     else base_work_id + rng.randint(1, 8)
                 )
-                item_number = rng.randint(1, 36)
                 work = DatabaseStateMachineChaosTests.work(
                     work_id, "MANGA", "MANGA"
                 )
@@ -815,12 +801,9 @@ class DatabaseConcurrencyChaosTests(unittest.TestCase):
 
                 database.save_anime(work)
                 database.add_to_library(work_id)
-                page_offset = ((item_number - 1) // 12) * 12
-                database.ensure_reading_placeholders(
-                    work_id, "chapter", 36, offset=page_offset, limit=12
-                )
-                database.set_reading_item_read(
-                    work_id, "chapter", item_number, bool(rng.getrandbits(1))
+                read_count_to_set = rng.randint(0, 36)
+                database.set_reading_progress_count(
+                    work_id, "chapter", read_count_to_set, total_hint=36
                 )
 
                 read_count, total = database.get_reading_progress(
