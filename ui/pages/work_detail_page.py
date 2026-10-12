@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from database import (
     add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
-    get_reading_progress, get_staff,
+    get_reading_progress, get_staff, is_work_in_library,
     get_tmdb_mapping, get_work, get_provider_metadata, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
     set_episode_watched, set_reading_progress_count,
@@ -2057,12 +2057,7 @@ class WorkDetailPage(QWidget):
             layout.addWidget(empty)
             return frame
 
-        is_in_library = False
-        if selected_work is not None:
-            try:
-                is_in_library = selected_work["status"] is not None
-            except (KeyError, IndexError, TypeError):
-                is_in_library = False
+        is_in_library = is_work_in_library(selected_id)
 
         if not is_in_library:
             note = QLabel(
