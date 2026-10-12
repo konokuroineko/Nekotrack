@@ -652,19 +652,46 @@ class UiStartupTests(unittest.TestCase):
                 self.app.processEvents()
 
 
-    def test_malformed_anilist_youtube_link_renders_as_a_clean_clickable_link(self):
-        malformed_link = (
-            "[Youtube]\\([https://youtube.com/](https://youtube.com/)"
-            "[@officialyoutubechannel3974]"
+    def test_malformed_anilist_youtube_links_render_as_clean_clickable_links(self):
+        malformed_links = [
+            (
+                "[Youtube]\\([https://youtube.com/](https://youtube.com/)"
+                "[@officialyoutubechannel3974]"
+                "(https://anilist.co/user/officialyoutubechannel3974)"
+                "?si=9AjlJ6Ujj2Vw1CiU)",
+                "[Youtube](https://youtube.com/@officialyoutubechannel3974?si=9AjlJ6Ujj2Vw1CiU)",
+                "https://youtube.com/@officialyoutubechannel3974?si=9AjlJ6Ujj2Vw1CiU",
+            ),
+            (
+                "[YouTube]\\([https://www.youtube.com/](https://www.youtube.com/)"
+                "[@Ueda](https://anilist.co/user/Ueda)-Kana)",
+                "[YouTube](https://www.youtube.com/@Ueda-Kana)",
+                "https://www.youtube.com/@Ueda-Kana",
+            ),
+        ]
+        for malformed, expected_markdown, expected_url in malformed_links:
+            with self.subTest(expected_url=expected_url):
+                self.assertEqual(
+                    EntityProfilePage._normalize_profile_description(malformed),
+                    expected_markdown,
+                )
+
+        # Also cover entity-escaped Markdown punctuation in HTML mode.
+        encoded_link = (
+            "&#91;Youtube&#93;&#92;("
+            "&#91;https://youtube.com/&#93;(https://youtube.com/)"
+            "&#91;@officialyoutubechannel3974&#93;"
             "(https://anilist.co/user/officialyoutubechannel3974)"
             "?si=9AjlJ6Ujj2Vw1CiU)"
         )
-        self.assertEqual(
-            EntityProfilePage._normalize_profile_description(malformed_link),
-            "[Youtube](https://youtube.com/@officialyoutubechannel3974?si=9AjlJ6Ujj2Vw1CiU)",
+        self.assertIn(
+            "https://youtube.com/@officialyoutubechannel3974?si=9AjlJ6Ujj2Vw1CiU",
+            EntityProfilePage._normalize_profile_description(encoded_link),
         )
-        # AniList's asHtml=true response can wrap malformed Markdown inside HTML.
-        description = f"<p>{malformed_link}</p>"
+
+        description = "<p>" + "</p><p>".join(
+            raw for raw, _expected, _url in malformed_links
+        ) + "</p>"
         with patch.object(EntityProfilePage, "_start_profile_load"):
             page = EntityProfilePage()
             try:
@@ -685,15 +712,12 @@ class UiStartupTests(unittest.TestCase):
                 self.assertIsNotNone(bio)
                 self.assertTrue(bio.openExternalLinks())
                 rendered = bio.toHtml()
-                self.assertIn(
-                    "https://youtube.com/@officialyoutubechannel3974?si=9AjlJ6Ujj2Vw1CiU",
-                    rendered,
-                )
-                self.assertIn("Youtube", rendered)
-                self.assertNotIn(
-                    "https://anilist.co/user/officialyoutubechannel3974", rendered
-                )
+                for _raw, _expected, expected_url in malformed_links:
+                    self.assertIn(expected_url, rendered)
+                self.assertNotIn("https://anilist.co/user/officialyoutubechannel3974", rendered)
+                self.assertNotIn("https://anilist.co/user/Ueda", rendered)
                 self.assertNotIn("[Youtube]\\(", rendered)
+                self.assertNotIn("[YouTube]\\(", rendered)
             finally:
                 page.close()
                 page.deleteLater()
@@ -721,17 +745,30 @@ class UiStartupTests(unittest.TestCase):
                     "image": {},
                     "description": "Voice actor biography.",
                     "staffMedia": {
-                        "edges": [{
-                            "staffRole": "Voice Director",
-                            "node": {
-                                "id": 21356,
-                                "type": "ANIME",
-                                "format": "TV",
-                                "title": {"english": "Example Staff Work"},
-                                "coverImage": {},
-                                "startDate": {"year": 2017},
+                        "edges": [
+                            {
+                                "staffRole": "Voice Director",
+                                "node": {
+                                    "id": 21356,
+                                    "type": "ANIME",
+                                    "format": "TV",
+                                    "title": {"english": "Example Staff Work"},
+                                    "coverImage": {},
+                                    "startDate": {"year": 2017},
+                                },
                             },
-                        }],
+                            {
+                                "staffRole": "Series Composition",
+                                "node": {
+                                    "id": 21356,
+                                    "type": "ANIME",
+                                    "format": "TV",
+                                    "title": {"english": "Example Staff Work"},
+                                    "coverImage": {},
+                                    "startDate": {"year": 2017},
+                                },
+                            },
+                        ],
                     },
                     "characterMedia": {
                         "edges": [
@@ -791,6 +828,19 @@ class UiStartupTests(unittest.TestCase):
                 )
                 staff_cards = staff_section.findChildren(ProfileWorkCreditCard)
                 self.assertEqual(len(staff_cards), 1)
+                credit_label = staff_cards[0].findChild(QLabel, "profileCreditRole")
+                self.assertIsNotNone(credit_label)
+                self.assertEqual(
+                    credit_label.text(), "Voice Director · Series Composition"
+                )
+                content_layout = staff_cards[0].layout().itemAt(1).layout()
+                content_names = [
+                    content_layout.itemAt(index).widget().objectName()
+                    for index in range(content_layout.count())
+                    if content_layout.itemAt(index).widget() is not None
+                ]
+                self.assertLess(content_names.index("title"), content_names.index("profileCreditRole"))
+                self.assertLess(content_names.index("profileCreditRole"), content_names.index("meta"))
                 section = next(
                     frame for frame in active_widgets
                     if (

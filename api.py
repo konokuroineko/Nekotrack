@@ -1,4 +1,5 @@
 import copy
+import html as _html
 import datetime as _dt
 from email.utils import parsedate_to_datetime
 import hashlib
@@ -467,6 +468,47 @@ def get_media_staff_page(media_id, page=2, per_page=15):
     }
 
 
+def _normalize_anilist_profile_description(description, html_mode=False):
+    """Repair malformed nested YouTube links in AniList's profile descriptions."""
+    value = str(description or "")
+    for encoded, decoded in (
+        (r"&(?:#0*91|#x0*5b|lbrack);", "["),
+        (r"&(?:#0*93|#x0*5d|rbrack);", "]"),
+        (r"&(?:#0*92|#x0*5c|bsol);", "\\"),
+        (r"&(?:#0*40|#x0*28|lpar);", "("),
+        (r"&(?:#0*41|#x0*29|rpar);", ")"),
+    ):
+        value = re.sub(
+            encoded,
+            lambda _match, replacement=decoded: replacement,
+            value,
+            flags=re.IGNORECASE,
+        )
+
+    pattern = re.compile(
+        r"\[(?P<label>[^\]]+)\]\s*\\?\(\s*"
+        r"\[(?P<base>https?://(?:www\.)?youtube\.com/)\]"
+        r"\(\s*https?://(?:www\.)?youtube\.com/\s*\\?\)\s*"
+        r"\[@(?P<handle>[A-Za-z0-9_.-]+)\]\s*"
+        r"\(\s*https?://anilist\.co/user/[^)]+?\s*\\?\)"
+        r"(?P<suffix>(?:[-A-Za-z0-9_.]+)?(?:\?[^\s)]*)?)\s*\\?\)",
+        re.IGNORECASE,
+    )
+
+    def replace_link(match):
+        suffix = _html.unescape(match.group("suffix") or "")
+        url = f"{match.group('base')}@{match.group('handle')}{suffix}"
+        label = match.group("label")
+        if html_mode:
+            return (
+                f'<a href="{_html.escape(url, quote=True)}">'
+                f"{_html.escape(label)}</a>"
+            )
+        return f"[{label}]({url})"
+
+    return pattern.sub(replace_link, value)
+
+
 def get_entity_profile(entity_type, entity_id):
     """Fetch richer character/staff profile data from AniList."""
     kind = str(entity_type or "").strip().lower()
@@ -577,6 +619,13 @@ def get_entity_profile(entity_type, entity_id):
     entity = payload.get(kind) if isinstance(payload, dict) else None
     if not isinstance(entity, dict) or entity.get("id") != numeric_id:
         raise RuntimeError(f"AniList returned no {kind.lower()} profile for ID {numeric_id}.")
+    entity = dict(entity)
+    if isinstance(entity.get("description"), str):
+        # Normalize before profile data is cached or handed to the UI. AniList's
+        # HTML-mode description can still contain malformed Markdown link text.
+        entity["description"] = _normalize_anilist_profile_description(
+            entity["description"], html_mode=True
+        )
     return entity
 
 
