@@ -175,6 +175,17 @@ class LibraryImportWorker(QObject):
                 else None
             )
             save_staff(self.work_id, staff_edges)
+            staff_page_info = (
+                staff_connection.get("pageInfo")
+                if isinstance(staff_connection, dict) else None
+            )
+            if self.work_id > 0 and isinstance(staff_page_info, dict):
+                save_provider_metadata(
+                    self.work_id,
+                    "anilist_staff_page_info",
+                    staff_page_info,
+                    provider_id=self.work_id,
+                )
 
             # Preserve core work data, but don't start further optional provider
             # requests once the application is closing.
@@ -909,6 +920,21 @@ class MainWindow(QMainWindow):
                 else None
             )
             save_staff(work["id"], staff_edges)
+            staff_page_info = (
+                staff_connection.get("pageInfo")
+                if isinstance(staff_connection, dict) else None
+            )
+            try:
+                work_id = int(work["id"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                work_id = 0
+            if work_id > 0 and isinstance(staff_page_info, dict):
+                save_provider_metadata(
+                    work_id,
+                    "anilist_staff_page_info",
+                    staff_page_info,
+                    provider_id=work_id,
+                )
             self.show_work_details(get_work(work["id"]) or work)
         except Exception as error:
             log_exception("work_details.search_enrichment_failed", error,
