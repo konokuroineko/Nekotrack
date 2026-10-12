@@ -24,7 +24,7 @@ from database import (
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
     get_reading_progress, get_staff,
     get_tmdb_mapping, get_work, get_provider_metadata, save_anime, save_characters, save_cover_path,
-    save_episode_thumbnail_path, save_episodes, save_staff, save_tmdb_mapping,
+    save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
     set_episode_watched, set_reading_progress_count,
 )
 from series import get_library_series
@@ -102,6 +102,13 @@ class StaffPageWorker(QObject):
                 if not isinstance(edges, list):
                     raise RuntimeError("AniList returned an invalid staff page.")
                 save_staff(work_id, edges, replace_snapshot=False)
+                if isinstance(page_info, dict):
+                    save_provider_metadata(
+                        work_id,
+                        "anilist_staff_page_info",
+                        page_info,
+                        provider_id=work_id,
+                    )
                 results.append({
                     "work_id": int(work_id),
                     "page": int(page),
@@ -2717,10 +2724,23 @@ class WorkDetailPage(QWidget):
                 saved_staff_count = len(get_staff(work_id))
             except Exception:
                 saved_staff_count = 0
-            # The first AniList request uses perPage=15. A shorter saved page is
-            # not a reason to keep asking for additional pages.
-            if saved_staff_count < 15:
+            try:
+                page_info = get_provider_metadata(
+                    work_id, "anilist_staff_page_info"
+                )
+            except Exception:
+                page_info = None
+            if isinstance(page_info, dict) and page_info.get("hasNextPage") is False:
+                self._staff_exhausted_ids.add(work_id)
                 continue
+            if (
+                not isinstance(page_info, dict)
+                or page_info.get("hasNextPage") is not True
+            ):
+                # Backward compatibility for databases created before page
+                # information was cached alongside the initial credit list.
+                if saved_staff_count < 15:
+                    continue
             requests.append((work_id, self._staff_next_pages.get(work_id, 2)))
         return requests
 
