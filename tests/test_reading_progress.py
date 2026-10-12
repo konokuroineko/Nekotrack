@@ -40,21 +40,47 @@ class ReadingProgressTests(unittest.TestCase):
         )
         database.add_to_library(work_id)
 
-        # Simulate rows left behind by the previous placeholder UI.
-        database.ensure_reading_placeholders(
-            work_id, "chapter", 8, offset=0, limit=3
-        )
-        database.ensure_reading_placeholders(
-            work_id, "volume", 3, offset=0, limit=3
-        )
-        database.set_reading_item_read(work_id, "chapter", 2, True)
-        database.set_reading_item_read(work_id, "volume", 1, True)
-        database.set_reading_item_read(work_id, "volume", 3, True)
+        # Simulate rows and aggregate values left by the previous placeholder UI.
+        connection = database.get_connection()
+        try:
+            connection.executemany(
+                """
+                INSERT INTO reading_items
+                    (work_id, item_type, item_number, title, is_read)
+                VALUES (?, ?, ?, NULL, ?)
+                """,
+                [
+                    (work_id, "chapter", 1, 0),
+                    (work_id, "chapter", 2, 1),
+                    (work_id, "chapter", 3, 0),
+                    (work_id, "volume", 1, 1),
+                    (work_id, "volume", 2, 0),
+                    (work_id, "volume", 3, 1),
+                ],
+            )
+            connection.execute(
+                """
+                UPDATE user_library
+                SET progress_chapters = 1, progress_volumes = 2
+                WHERE work_id = ?
+                """,
+                (work_id,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
 
-        # Startup migration removes fictional cards but must keep aggregate progress.
+        # Startup migration removes fictional cards but keeps progress counts.
         database.initialize_database()
-        self.assertEqual(database.get_reading_items(work_id, "chapter"), [])
-        self.assertEqual(database.get_reading_items(work_id, "volume"), [])
+        connection = database.get_connection()
+        try:
+            synthetic_count = connection.execute(
+                "SELECT COUNT(*) FROM reading_items WHERE work_id = ?",
+                (work_id,),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(synthetic_count, 0)
         self.assertEqual(database.get_reading_progress(work_id, "chapter", 8), (1, 8))
         self.assertEqual(database.get_reading_progress(work_id, "volume", 3), (2, 3))
 
@@ -70,8 +96,17 @@ class ReadingProgressTests(unittest.TestCase):
         stored_work = database.get_work(work_id)
         self.assertEqual(stored_work["progress_chapters"], 4)
         self.assertEqual(stored_work["progress_volumes"], 2)
-        self.assertEqual(database.get_reading_items(work_id, "chapter"), [])
-        self.assertEqual(database.get_reading_items(work_id, "volume"), [])
+        connection = database.get_connection()
+        try:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM reading_items WHERE work_id = ?",
+                    (work_id,),
+                ).fetchone()[0],
+                0,
+            )
+        finally:
+            connection.close()
 
     def test_older_manga_episode_imports_are_removed_but_anime_episodes_remain(self):
         anime_id = 201
