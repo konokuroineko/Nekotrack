@@ -277,7 +277,8 @@ class MediaCreditCard(QFrame):
                 if character_id > 0:
                     valid_characters.append(character)
             if valid_characters:
-                cast_column = QVBoxLayout()
+                cast_container = QWidget()
+                cast_column = QVBoxLayout(cast_container)
                 cast_column.setContentsMargins(4, 0, 0, 0)
                 cast_column.setSpacing(5)
                 cast_title = QLabel("CHARACTERS")
@@ -315,7 +316,7 @@ class MediaCreditCard(QFrame):
                     extra.setAttribute(Qt.WA_TransparentForMouseEvents, True)
                     cast_row.addWidget(extra, 0, Qt.AlignVCenter)
                 cast_column.addLayout(cast_row)
-                row.addLayout(cast_column, 0, Qt.AlignVCenter)
+                row.addWidget(cast_container, 0, Qt.AlignVCenter)
             else:
                 no_cast = QLabel("Character credits unavailable")
                 no_cast.setWordWrap(True)
