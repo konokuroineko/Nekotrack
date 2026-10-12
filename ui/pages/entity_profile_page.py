@@ -11,10 +11,13 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QVBoxLayout,
     QWidget,
+    QSizePolicy,
+    QTextBrowser,
 )
 
 from api import get_entity_profile
-from ui.theme import COLORS, muted_label_stylesheet
+from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
+from ui.widgets.character_card import CharacterArtwork
 from ui.widgets.person_card import PersonCard
 from ui.widgets.work_card import WorkCard
 
@@ -59,7 +62,7 @@ class _ProfileLoadWorker(QRunnable):
 
 
 class RoundedArtworkLabel(QLabel):
-    """Artwork clipped inside a rounded frame, not merely given a rounded border."""
+    """Rounded, center-cropped artwork with the border directly on the image edge."""
 
     def __init__(self, width, height, radius=10, parent=None):
         super().__init__(parent)
@@ -75,39 +78,36 @@ class RoundedArtworkLabel(QLabel):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        outer = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        outer_path = QPainterPath()
-        outer_path.addRoundedRect(outer, self._radius, self._radius)
-        painter.fillPath(outer_path, QColor(COLORS["background_alt"]))
+        artwork_rect = self.rect().adjusted(2, 2, -2, -2)
+        artwork_path = QPainterPath()
+        artwork_path.addRoundedRect(
+            QRectF(artwork_rect), self._radius, self._radius
+        )
+        painter.fillPath(artwork_path, QColor(COLORS["background_alt"]))
 
         pixmap = self.pixmap()
-        inner = outer.toRect().adjusted(2, 2, -2, -2)
-        if pixmap is not None and not pixmap.isNull() and inner.width() > 0 and inner.height() > 0:
-            cropped = _crop_pixmap_to_size(pixmap, inner.size())
+        if pixmap is not None and not pixmap.isNull():
+            cropped = _crop_pixmap_to_size(pixmap, artwork_rect.size())
             if not cropped.isNull():
-                image_rect = QRectF(inner)
-                image_path = QPainterPath()
-                image_path.addRoundedRect(
-                    image_rect, max(1, self._radius - 2), max(1, self._radius - 2)
-                )
                 painter.save()
-                painter.setClipPath(image_path)
-                painter.drawPixmap(inner, cropped)
+                painter.setClipPath(artwork_path)
+                painter.drawPixmap(artwork_rect, cropped, QRectF(cropped.rect()))
                 painter.restore()
 
+        # Overlay the outline on the exact crop boundary. There is no inset inner
+        # image rectangle, so the background cannot appear as a second line.
         painter.setPen(QPen(QColor(COLORS["frame"]), 2.0))
         painter.setBrush(Qt.NoBrush)
-        painter.drawPath(outer_path)
+        painter.drawPath(artwork_path)
         painter.end()
 
 
-class ClickableCharacterCredit(QFrame):
-    """Clickable character portrait displayed beside its voice-acting work."""
+class ClickableCharacterArtwork(CharacterArtwork):
+    """A Characters-tab portrait that opens its character profile when clicked."""
 
     clicked = Signal(object)
 
     def __init__(self, character, parent=None):
-        super().__init__(parent)
         character = character if isinstance(character, dict) else {}
         raw_name = character.get("name")
         if isinstance(raw_name, dict):
@@ -120,36 +120,15 @@ class ClickableCharacterCredit(QFrame):
             character_id = int(character.get("id") or 0)
         except (TypeError, ValueError, OverflowError):
             character_id = 0
+
         self.character = {
             "id": character_id,
             "character_name": str(name),
             "character_image_url": image_url,
         }
-        self.setFixedWidth(84)
-        self.setMinimumHeight(112)
+        super().__init__(88, 116, 14, parent)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip(str(name))
-        self.setObjectName("creditCharacter")
-        self.setStyleSheet(
-            f"QFrame#creditCharacter {{ background:{COLORS['surface']};"
-            f"border:1px solid {COLORS['frame']};border-radius:9px; }}"
-            f"QFrame#creditCharacter:hover {{ border-color:{COLORS['accent']}; }}"
-        )
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(4)
-        self.image = RoundedArtworkLabel(54, 72, 7)
-        self.image.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        layout.addWidget(self.image, 0, Qt.AlignHCenter)
-        self.name_label = QLabel(str(name))
-        self.name_label.setWordWrap(True)
-        self.name_label.setAlignment(Qt.AlignCenter)
-        self.name_label.setStyleSheet(
-            f"background:transparent;border:none;color:{COLORS['primary']};font-size:10px;"
-        )
-        self.name_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        layout.addWidget(self.name_label)
-
         self._network = QNetworkAccessManager(self)
         self._reply = (
             self._network.get(QNetworkRequest(QUrl(str(image_url))))
@@ -164,7 +143,7 @@ class ClickableCharacterCredit(QFrame):
         if reply is not None and reply.error() == QNetworkReply.NetworkError.NoError:
             pixmap = QPixmap()
             if pixmap.loadFromData(reply.readAll()):
-                self.image.setPixmap(pixmap)
+                self.set_pixmap(pixmap)
         if reply is not None:
             reply.deleteLater()
 
@@ -177,7 +156,7 @@ class ClickableCharacterCredit(QFrame):
 
 
 class MediaCreditCard(QFrame):
-    """Fully clickable work card; voice-acting cards expose clickable characters too."""
+    """Characters-tab-style work card: work artwork left, credited character right."""
 
     work_selected = Signal(object)
     character_selected = Signal(object)
@@ -194,48 +173,53 @@ class MediaCreditCard(QFrame):
         self.media_record = dict(node)
         if self.media_id > 0:
             self.media_record["id"] = self.media_id
-        media_type = str(node.get("type") or "ANIME")
+
         title_data = node.get("title") if isinstance(node.get("title"), dict) else {}
         title = (
             title_data.get("english") or title_data.get("romaji")
             or title_data.get("native") or "Untitled work"
         )
+        characters = edge.get("characters")
+        characters = characters if isinstance(characters, list) else []
+        character_data = next(
+            (item for item in characters if isinstance(item, dict) and item.get("id")),
+            None,
+        )
+        self.character_artwork = None
+        self.character_cards = []
+
         self.setObjectName("mediaCreditCard")
         self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet(
-            f"QFrame#mediaCreditCard {{ background:{COLORS['surface']};"
-            f"border:1px solid {COLORS['frame']};border-radius:12px; }}"
-            f"QFrame#mediaCreditCard:hover {{ border-color:{COLORS['accent']}; }}"
-        )
-        if self.credit_kind == "voice_actor":
-            self.setFixedSize(300, 150)
-        else:
-            self.setMinimumWidth(260)
-            self.setMaximumWidth(420)
-            self.setMinimumHeight(125)
+        self.setStyleSheet(card_stylesheet())
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumWidth(430)
+        self.setFixedHeight(140)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(10, 10, 10, 10)
-        row.setSpacing(12)
-        self.cover = RoundedArtworkLabel(72, 102, 8)
+        row.setContentsMargins(12, 12, 12, 12)
+        row.setSpacing(8)
+
+        self.cover = RoundedArtworkLabel(88, 116, 14)
         self.cover.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        row.addWidget(self.cover, 0, Qt.AlignVCenter)
+        row.addWidget(self.cover, 0, Qt.AlignTop)
 
         cover_data = node.get("coverImage")
         cover_url = cover_data.get("large") if isinstance(cover_data, dict) else None
-        if cover_url:
-            self._network = QNetworkAccessManager(self)
-            self._reply = self._network.get(QNetworkRequest(QUrl(str(cover_url))))
+        self._network = QNetworkAccessManager(self)
+        self._reply = (
+            self._network.get(QNetworkRequest(QUrl(str(cover_url))))
+            if cover_url else None
+        )
+        if self._reply is not None:
             self._reply.finished.connect(self._image_finished)
-        else:
-            self._reply = None
 
         text_column = QVBoxLayout()
+        text_column.setContentsMargins(0, 0, 0, 0)
+        text_column.setSpacing(5)
         title_label = QLabel(str(title))
         title_label.setObjectName("mediaCreditTitle")
         title_label.setWordWrap(True)
-        if self.credit_kind == "voice_actor":
-            title_label.setMaximumHeight(68)
+        title_label.setMaximumHeight(44)
         title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         title_label.setStyleSheet(
             f"background:transparent;border:none;color:{COLORS['primary']};"
@@ -243,17 +227,21 @@ class MediaCreditCard(QFrame):
         )
         text_column.addWidget(title_label)
 
-        year = None
-        start = node.get("startDate")
-        if isinstance(start, dict):
-            year = start.get("year")
-        format_text = str(node.get("format") or media_type).replace("_", " ").title()
-        metadata = QLabel(" · ".join(str(item) for item in (format_text, year) if item))
-        metadata.setObjectName("mediaCreditMetadata")
-        metadata.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        metadata.setStyleSheet(muted_label_stylesheet())
-        if self.credit_kind != "voice_actor":
-            text_column.addWidget(metadata)
+        if self.credit_kind == "voice_actor" and character_data is not None:
+            raw_name = character_data.get("name")
+            if isinstance(raw_name, dict):
+                character_name = raw_name.get("full") or raw_name.get("native") or "Unknown character"
+            else:
+                character_name = raw_name or "Unknown character"
+            name_label = QLabel(str(character_name))
+            name_label.setObjectName("creditCharacterName")
+            name_label.setWordWrap(True)
+            name_label.setMaximumHeight(40)
+            name_label.setStyleSheet(
+                f"background:transparent;border:none;color:{COLORS['primary']};"
+                "font-size:12px;font-weight:650;"
+            )
+            text_column.addWidget(name_label)
 
         if self.credit_kind in {"character", "voice_actor"}:
             credit = edge.get("characterRole")
@@ -265,44 +253,18 @@ class MediaCreditCard(QFrame):
             role.setWordWrap(True)
             role.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             role.setStyleSheet(
-                f"color:{COLORS['accent']};font-size:11px;font-weight:750;"
+                f"color:{COLORS['accent']};font-size:11px;font-weight:800;"
                 "background:transparent;border:none;"
             )
             text_column.addWidget(role)
         text_column.addStretch(1)
         row.addLayout(text_column, 1)
 
-        if self.credit_kind == "voice_actor":
-            characters = edge.get("characters")
-            characters = characters if isinstance(characters, list) else []
-            valid_characters = []
-            for character in characters:
-                if not isinstance(character, dict):
-                    continue
-                try:
-                    character_id = int(character.get("id") or 0)
-                except (TypeError, ValueError, OverflowError):
-                    continue
-                if character_id > 0:
-                    valid_characters.append(character)
-            if valid_characters:
-                cast_row = QHBoxLayout()
-                cast_row.setContentsMargins(0, 0, 0, 0)
-                cast_row.setSpacing(6)
-                visible_characters = valid_characters[:4]
-                self.character_cards = []
-                for character in visible_characters:
-                    character_card = ClickableCharacterCredit(character)
-                    character_card.clicked.connect(self.character_selected.emit)
-                    cast_row.addWidget(character_card, 0, Qt.AlignVCenter)
-                    self.character_cards.append(character_card)
-                row.addLayout(cast_row, 0)
-            else:
-                no_cast = QLabel("Character unavailable")
-                no_cast.setWordWrap(True)
-                no_cast.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-                no_cast.setStyleSheet(muted_label_stylesheet())
-                row.addWidget(no_cast, 0, Qt.AlignVCenter)
+        if self.credit_kind == "voice_actor" and character_data is not None:
+            self.character_artwork = ClickableCharacterArtwork(character_data)
+            self.character_artwork.clicked.connect(self.character_selected.emit)
+            self.character_cards = [self.character_artwork]
+            row.addWidget(self.character_artwork, 0, Qt.AlignTop)
 
     def _image_finished(self):
         reply = self._reply
@@ -775,15 +737,24 @@ class EntityProfilePage(QWidget):
             self._load_artwork(image_url)
         row.addWidget(artwork, 0, Qt.AlignTop)
 
-        facts_column = QVBoxLayout()
+        profile_text = QVBoxLayout()
+        profile_text.setContentsMargins(0, 0, 0, 0)
+        profile_text.setSpacing(8)
         kind = QLabel(kind_label)
         kind.setObjectName("profileKind")
-        facts_column.addWidget(kind)
+        profile_text.addWidget(kind)
 
         title = QLabel(name)
         title.setObjectName("profileName")
         title.setWordWrap(True)
-        facts_column.addWidget(title)
+        profile_text.addWidget(title)
+
+        details_row = QHBoxLayout()
+        details_row.setContentsMargins(0, 0, 0, 0)
+        details_row.setSpacing(18)
+        facts_column = QVBoxLayout()
+        facts_column.setContentsMargins(0, 0, 0, 0)
+        facts_column.setSpacing(4)
 
         if is_character:
             role = str(self._value(record, "character_role", "") or "").replace("_", " ").title()
@@ -793,9 +764,13 @@ class EntityProfilePage(QWidget):
             local_roles = str(self._value(record, "role", "") or "")
             occupations = remote.get("primaryOccupations")
             if isinstance(occupations, list) and occupations:
-                facts_column.addWidget(self._fact("Occupation", " · ".join(str(x) for x in occupations if x)))
+                facts_column.addWidget(
+                    self._fact("Occupation", " · ".join(str(x) for x in occupations if x))
+                )
             elif local_roles:
-                facts_column.addWidget(self._fact("Credits in this bundle", local_roles.replace("\n", " · ")))
+                facts_column.addWidget(
+                    self._fact("Credits in this bundle", local_roles.replace("\n", " · "))
+                )
             language = remote.get("languageV2")
             if language:
                 facts_column.addWidget(self._fact("Language", language))
@@ -823,33 +798,54 @@ class EntityProfilePage(QWidget):
         for fact in facts:
             facts_column.addWidget(self._fact("", fact))
 
+        if self.source_work is not None:
+            facts_column.addWidget(
+                self._fact("Opened from", self._work_title(self.source_work))
+            )
+        facts_column.addStretch(1)
+        details_row.addLayout(facts_column, 1)
+
         description = str(
             remote.get("description")
             or self._value(record, "description", "")
             or ""
         ).strip()
         if description:
-            about_title = QLabel("ABOUT")
-            about_title.setObjectName("profileInlineTitle")
-            facts_column.addWidget(about_title)
-            description_label = QLabel(description)
-            description_label.setObjectName("profileDescription")
-            description_label.setWordWrap(True)
-            description_label.setTextFormat(Qt.PlainText)
-            description_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            facts_column.addWidget(description_label)
+            description_browser = QTextBrowser()
+            description_browser.setObjectName("profileDescription")
+            description_browser.setReadOnly(True)
+            description_browser.setOpenExternalLinks(True)
+            description_browser.setFrameShape(QFrame.NoFrame)
+            description_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            description_browser.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            description_browser.document().setDocumentMargin(0)
+            description_browser.setMinimumHeight(120)
+            description_browser.setMaximumHeight(210)
+            description_browser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            if "<" in description and any(
+                token in description.casefold()
+                for token in ("<p", "<br", "<a ", "<b>", "<i>", "<div", "<ul", "<ol")
+            ):
+                description_browser.setHtml(description)
+            else:
+                description_browser.setPlainText(description)
+            description_browser.setStyleSheet(
+                f"QTextBrowser#profileDescription {{ color:{COLORS['secondary']};"
+                "background:transparent;border:none;font-size:12px; }"
+                f"QTextBrowser#profileDescription a {{ color:{COLORS['accent']}; }}"
+            )
+            details_row.addWidget(description_browser, 2)
         elif self._remote_error:
             note = QLabel(
                 "Biography unavailable. Showing the saved profile details."
             )
             note.setWordWrap(True)
             note.setStyleSheet(muted_label_stylesheet())
-            facts_column.addWidget(note)
+            details_row.addWidget(note, 2)
 
-        if self.source_work is not None:
-            facts_column.addWidget(self._fact("Opened from", self._work_title(self.source_work)))
-        facts_column.addStretch(1)
-        row.addLayout(facts_column, 1)
+        profile_text.addLayout(details_row, 1)
+        profile_text.addStretch(1)
+        row.addLayout(profile_text, 1)
         self.content_layout.addWidget(header)
 
         if is_character:
@@ -945,7 +941,7 @@ class EntityProfilePage(QWidget):
         self.content_layout.addWidget(section)
 
     def _render_voice_acting_roles(self, connection, remote):
-        """Show work on the left and each credited character on the right."""
+        """Show full-size work-left/character-right cards, sorted by voice role."""
         del remote
         section, body = self._section("Voice acting roles")
         edges = connection.get("edges") if isinstance(connection, dict) else None
@@ -975,20 +971,18 @@ class EntityProfilePage(QWidget):
                         continue
                     if character_id <= 0:
                         continue
-
-                    role_key = (work_id, character_id)
-                    previous = roles_by_pair.get(role_key)
-                    candidate_priority = role_priority.get(raw_role, 3)
-                    previous_priority = role_priority.get(
+                    key = (work_id, character_id)
+                    previous = roles_by_pair.get(key)
+                    new_priority = role_priority.get(raw_role, 3)
+                    old_priority = role_priority.get(
                         str(previous.get("characterRole") or "").upper(), 3
                     ) if previous else 999
-                    if previous is not None and candidate_priority >= previous_priority:
+                    if previous is not None and new_priority >= old_priority:
                         continue
-
                     role_edge = dict(edge)
                     role_edge["characterRole"] = raw_role
                     role_edge["characters"] = [dict(character)]
-                    roles_by_pair[role_key] = role_edge
+                    roles_by_pair[key] = role_edge
 
         if not roles_by_pair:
             empty = QLabel("No voice-acting character roles were found.")
@@ -1009,12 +1003,19 @@ class EntityProfilePage(QWidget):
                 )
 
             host = QWidget()
-            flow = ProfileFlowLayout(host, h_spacing=10, v_spacing=12)
-            for edge in sorted(roles_by_pair.values(), key=role_sort_key):
+            grid = QGridLayout(host)
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setHorizontalSpacing(12)
+            grid.setVerticalSpacing(12)
+            for index, edge in enumerate(
+                sorted(roles_by_pair.values(), key=role_sort_key)
+            ):
                 card = MediaCreditCard(edge, "voice_actor")
                 card.work_selected.connect(self.work_selected.emit)
                 card.character_selected.connect(self.character_selected.emit)
-                flow.addWidget(card)
+                grid.addWidget(card, index // 2, index % 2)
+            grid.setColumnStretch(0, 1)
+            grid.setColumnStretch(1, 1)
             body.addWidget(host)
         self.content_layout.addWidget(section)
 
