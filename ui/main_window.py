@@ -681,6 +681,8 @@ class MainWindow(QMainWindow):
             page.request_shutdown()
         for page in root.findChildren(WorkDetailPage):
             page.request_shutdown()
+        for page in root.findChildren(EntityProfilePage):
+            page.request_shutdown()
         for thread in root.findChildren(QThread):
             try:
                 thread.quit()
