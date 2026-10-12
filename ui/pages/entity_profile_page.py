@@ -442,8 +442,7 @@ class ProfileWorkCreditCard(WorkCard):
         role = QLabel(full_role)
         role.setObjectName("profileCreditRole")
         role.setWordWrap(True)
-        role.setMinimumHeight(18)
-        role.setMaximumHeight(38)
+        role.setFixedHeight(30)
         role.setToolTip(full_role)
         role.setStyleSheet(
             f"background:transparent;border:none;color:{COLORS['muted']};"
@@ -476,7 +475,7 @@ class ProfileWorkCreditCard(WorkCard):
         content_layout.insertWidget(insert_index, role)
 
         # WorkCard sets a fixed height before this extra line is inserted.
-        added_height = max(role.sizeHint().height(), role.minimumHeight())
+        added_height = role.height()
         self.setFixedHeight(
             self.height() + added_height + max(0, content_layout.spacing())
         )
@@ -624,7 +623,7 @@ class EntityProfilePage(QWidget):
         pattern = (
             r"\[(?P<label>[^\]]+)\]\s*\\?\(\s*"
             r"\[(?P<base>https?://(?:www\.)?youtube\.com/)\]"
-            r"\(\s*(?P=base)\s*\\?\)\s*"
+            r"\(\s*https?://(?:www\.)?youtube\.com/\s*\\?\)\s*"
             r"\[@(?P<handle>[A-Za-z0-9_.-]+)\]\s*"
             r"\(\s*https?://anilist\.co/user/[^)]+?\s*\\?\)"
             r"(?P<suffix>(?:[-A-Za-z0-9_.]+)?(?:\?[^\s)]*)?)\s*\\?\)"
