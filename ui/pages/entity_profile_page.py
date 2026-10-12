@@ -450,6 +450,14 @@ class EntityProfilePage(QWidget):
         self._render_profile()
 
     def _render_profile(self):
+        # Profile data and remote artwork can finish in either order. Cancel the
+        # previous portrait request before replacing its target widget.
+        if self._image_reply is not None:
+            try:
+                self._image_reply.abort()
+            except RuntimeError:
+                pass
+            self._image_reply = None
         self._clear_content()
         record = self.current_record
         remote = self._remote_data if isinstance(self._remote_data, dict) else {}
@@ -707,15 +715,26 @@ class EntityProfilePage(QWidget):
         return fact
 
     def _load_artwork(self, url):
-        self._image_reply = self._network_manager.get(
+        if not url or self._image_label is None:
+            return
+        reply = self._network_manager.get(
             QNetworkRequest(QUrl(str(url)))
         )
-        self._image_reply.finished.connect(self._image_finished)
+        self._image_reply = reply
+        target = self._image_label
+        reply.finished.connect(
+            lambda current=reply, image_target=target:
+                self._image_finished(current, image_target)
+        )
 
-    def _image_finished(self):
-        reply = self._image_reply
-        self._image_reply = None
-        if reply is not None and reply.error() == QNetworkReply.NetworkError.NoError:
+    def _image_finished(self, reply, target):
+        if self._image_reply is reply:
+            self._image_reply = None
+        if (
+            target is self._image_label
+            and reply is not None
+            and reply.error() == QNetworkReply.NetworkError.NoError
+        ):
             pixmap = QPixmap()
             if pixmap.loadFromData(reply.readAll()):
                 self._set_artwork(pixmap)
