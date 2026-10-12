@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QBuffer, QIODevice
 from PySide6.QtTest import QTest
 from PySide6.QtGui import QPixmap
 from PySide6.QtNetwork import QNetworkReply
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QFrame
 
 import ui.preferences as preferences
 
@@ -41,6 +41,9 @@ class MemorySettings:
 with patch.object(preferences, "QSettings", MemorySettings):
     from ui.main_window import MainWindow
     from ui.widgets.person_card import PersonCard
+    from ui.pages.entity_profile_page import EntityProfilePage, ProfileWorkCreditCard
+    from ui.widgets.character_card import CharacterCard
+    from ui.widgets.work_card import WorkCard
     from ui.pages.library_page import (
         RelationSyncWorker,
         _backfill_automatic_bundle_memberships,
@@ -586,6 +589,187 @@ class UiStartupTests(unittest.TestCase):
                     window.deleteLater()
                     self.app.processEvents()
                 os.chdir(old_cwd)
+
+
+    def test_profile_about_description_lives_under_name_in_header(self):
+        description = "A long biography that should use the wide space beside the portrait."
+        with patch.object(EntityProfilePage, "_start_profile_load"):
+            page = EntityProfilePage()
+            try:
+                page.set_profile(
+                    "character",
+                    {"id": 90185, "character_name": "Crusch Karsten"},
+                )
+                page._remote_data = {
+                    "id": 90185,
+                    "name": {"full": "Crusch Karsten"},
+                    "description": description,
+                    "image": {},
+                    "media": {"edges": []},
+                }
+                page._render_profile()
+
+                header = page.content.findChild(QFrame, "profileHeader")
+                self.assertIsNotNone(header)
+                about = header.findChild(QLabel, "profileDescription")
+                self.assertIsNotNone(about)
+                self.assertEqual(about.text(), description)
+                self.assertFalse(
+                    any(
+                        section.isAncestorOf(about)
+                        for section in page.content.findChildren(QFrame, "profileSection")
+                    )
+                )
+            finally:
+                page.close()
+                page.deleteLater()
+                self.app.processEvents()
+
+    def test_voice_acting_roles_reuse_character_tab_cards_without_work_extras(self):
+        with patch.object(EntityProfilePage, "_start_profile_load"):
+            page = EntityProfilePage()
+            try:
+                page.set_profile(
+                    "voice_actor",
+                    {"person_id": 7001, "name": "Yuka Iguchi"},
+                )
+                page._remote_data = {
+                    "id": 7001,
+                    "name": {"full": "Yuka Iguchi"},
+                    "image": {},
+                    "description": "Voice actor biography.",
+                    "staffMedia": {"edges": []},
+                    "characterMedia": {
+                        "edges": [
+                            {
+                                "characterRole": "MAIN",
+                                "characters": [{
+                                    "id": 90185,
+                                    "name": {"full": "Crusch Karsten"},
+                                    "image": {},
+                                }],
+                                "node": {
+                                    "id": 21355,
+                                    "type": "ANIME",
+                                    "format": "TV",
+                                    "title": {"english": "Re:Zero"},
+                                    "coverImage": {},
+                                    "startDate": {"year": 2016},
+                                },
+                            }
+                        ]
+                    },
+                }
+                page._render_profile()
+
+                section_titles = [
+                    label.text()
+                    for label in page.content.findChildren(QLabel, "profileSectionTitle")
+                ]
+                self.assertIn("Voice acting roles", section_titles)
+                self.assertNotIn("Staff credits", section_titles)
+                section = next(
+                    frame for frame in page.content.findChildren(QFrame, "profileSection")
+                    if (
+                        (title := frame.findChild(QLabel, "profileSectionTitle")) is not None
+                        and title.text() == "Voice acting roles"
+                    )
+                )
+                cards = section.findChildren(CharacterCard)
+                self.assertEqual(len(cards), 1)
+                self.assertEqual(cards[0].character["id"], 90185)
+                self.assertEqual(cards[0].character["person_name"], "Yuka Iguchi")
+                self.assertFalse(section.findChildren(ProfileWorkCreditCard))
+            finally:
+                page.close()
+                page.deleteLater()
+                self.app.processEvents()
+
+    def test_staff_profile_credits_use_compact_poster_cards(self):
+        with patch.object(EntityProfilePage, "_start_profile_load"):
+            page = EntityProfilePage()
+            try:
+                page.set_profile("staff", {"person_id": 7002, "name": "Example Staff"})
+                page._remote_data = {
+                    "id": 7002,
+                    "name": {"full": "Example Staff"},
+                    "image": {},
+                    "description": "",
+                    "staffMedia": {
+                        "edges": [{
+                            "staffRole": "Director / Storyboard",
+                            "node": {
+                                "id": 21355,
+                                "type": "ANIME",
+                                "format": "TV",
+                                "title": {"english": "Re:Zero"},
+                                "coverImage": {},
+                                "startDate": {"year": 2016},
+                            },
+                        }]
+                    },
+                    "characterMedia": {"edges": []},
+                }
+                page._render_profile()
+
+                section = next(
+                    frame for frame in page.content.findChildren(QFrame, "profileSection")
+                    if (
+                        (title := frame.findChild(QLabel, "profileSectionTitle")) is not None
+                        and title.text() == "Staff credits"
+                    )
+                )
+                cards = section.findChildren(ProfileWorkCreditCard)
+                self.assertEqual(len(cards), 1)
+                self.assertIsInstance(cards[0], WorkCard)
+                role = cards[0].findChild(QLabel, "profileCreditRole")
+                self.assertIsNotNone(role)
+                self.assertEqual(role.toolTip(), "Director / Storyboard")
+            finally:
+                page.close()
+                page.deleteLater()
+                self.app.processEvents()
+
+    def test_character_voice_actor_cards_summarize_adaptation_credits(self):
+        credits = [
+            {"language": "Japanese", "work_id": work_id, "work_title": f"Adaptation {work_id}"}
+            for work_id in (101, 102, 103, 104, 105)
+        ]
+        actor = {
+            "person_id": 7003,
+            "name": "Example Voice Actor",
+            "language": "Japanese",
+            "languages": ["Japanese"],
+            "credits": credits,
+            "image_path": None,
+            "image_url": None,
+        }
+        with patch.object(EntityProfilePage, "_start_profile_load"):
+            page = EntityProfilePage()
+            try:
+                page.set_profile(
+                    "character",
+                    {"id": 90185, "character_name": "Crusch Karsten"},
+                    voice_actors=[actor],
+                )
+                page._remote_data = {
+                    "id": 90185,
+                    "name": {"full": "Crusch Karsten"},
+                    "image": {},
+                    "description": "",
+                    "media": {"edges": []},
+                }
+                page._render_profile()
+                card = page.content.findChild(PersonCard)
+                self.assertIsNotNone(card)
+                role = card.findChild(QLabel, "personRole")
+                self.assertIsNotNone(role)
+                self.assertEqual(role.text(), "Japanese · 5 credits")
+                self.assertIn("Adaptation 101", card.toolTip())
+            finally:
+                page.close()
+                page.deleteLater()
+                self.app.processEvents()
 
 if __name__ == "__main__":
     unittest.main()
