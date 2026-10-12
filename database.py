@@ -280,9 +280,48 @@ def initialize_database():
             FOREIGN KEY (work_id) REFERENCES works(id)
         )
     """)
-    # Older builds generated fictional Chapter N / Volume N rows for progress.
-    # Aggregate counts live in user_library, so remove unnamed placeholder rows
-    # from existing databases while preserving any real provider-titled volumes.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reading_progress (
+            work_id INTEGER NOT NULL,
+            item_type TEXT NOT NULL CHECK(item_type IN ('chapter', 'volume')),
+            read_count INTEGER NOT NULL DEFAULT 0 CHECK(read_count >= 0),
+            updated_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (work_id, item_type),
+            FOREIGN KEY (work_id) REFERENCES works(id)
+        )
+    """)
+    # Migrate old per-item progress once into durable counters before removing
+    # generated placeholder rows. Counters stay after Library membership is
+    # removed, matching the previous remove/re-add behavior without fake rows.
+    progress_row_count = cursor.execute(
+        "SELECT COUNT(*) FROM reading_progress"
+    ).fetchone()[0]
+    if progress_row_count == 0:
+        cursor.execute("""
+            INSERT INTO reading_progress (work_id, item_type, read_count)
+            SELECT work_id, item_type, SUM(is_read)
+            FROM reading_items
+            GROUP BY work_id, item_type
+            HAVING SUM(is_read) > 0
+        """)
+        for item_type, progress_column in (
+            ("chapter", "progress_chapters"),
+            ("volume", "progress_volumes"),
+        ):
+            cursor.execute(
+                f"""
+                INSERT INTO reading_progress (work_id, item_type, read_count)
+                SELECT work_id, ?, COALESCE({progress_column}, 0)
+                FROM user_library
+                WHERE COALESCE({progress_column}, 0) > 0
+                ON CONFLICT(work_id, item_type) DO UPDATE SET
+                    read_count = MAX(reading_progress.read_count, excluded.read_count)
+                """,
+                (item_type,),
+            )
+    # Unnamed rows were generated as Chapter N / Volume N placeholders.
+    # Keep genuine provider-titled volume metadata, but never render or retain
+    # the old fictional entries after their aggregate counts have been migrated.
     cursor.execute("DELETE FROM reading_items WHERE title IS NULL")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS songs (
@@ -1064,7 +1103,7 @@ def _reading_item_type(value):
 
 
 def get_reading_progress(work_id, item_type, total_hint=None):
-    """Return saved aggregate read progress and the best available total."""
+    """Return durable aggregate read progress and the best available total."""
     kind = _reading_item_type(item_type)
     try:
         safe_work_id = _validated_work_id(work_id)
@@ -1077,9 +1116,15 @@ def get_reading_progress(work_id, item_type, total_hint=None):
     connection = get_connection()
     try:
         row = connection.execute(
-            f"SELECT COALESCE({progress_column}, 0) AS read_count "
-            "FROM user_library WHERE work_id = ?",
-            (safe_work_id,),
+            """
+            SELECT COALESCE(
+                (SELECT read_count FROM reading_progress
+                 WHERE work_id = ? AND item_type = ?),
+                (SELECT progress_chapters FROM user_library
+                 WHERE work_id = ?)
+            , 0) AS read_count
+            """,
+            (safe_work_id, kind, safe_work_id),
         ).fetchone()
         item_row = connection.execute(
             """
@@ -1092,6 +1137,9 @@ def get_reading_progress(work_id, item_type, total_hint=None):
     finally:
         connection.close()
 
+    # Keep this variable reference to the validated dynamic column explicit:
+    # chapter/volume is already normalized and is never used as raw SQL input.
+    del progress_column
     hinted_total = (
         _safe_optional_integer(total_hint, 0, _MAX_TRACKED_EPISODE_NUMBER)
         if total_hint is not None else None
@@ -1105,7 +1153,7 @@ def get_reading_progress(work_id, item_type, total_hint=None):
 
 
 def set_reading_progress_count(work_id, item_type, read_count, total_hint=None):
-    """Save chapter/volume progress directly, without generating per-item placeholders."""
+    """Save chapter/volume progress durably without generating per-item placeholders."""
     kind = _reading_item_type(item_type)
     try:
         safe_work_id = _validated_work_id(work_id)
@@ -1130,6 +1178,16 @@ def set_reading_progress_count(work_id, item_type, read_count, total_hint=None):
     )
     connection = get_connection()
     try:
+        connection.execute(
+            """
+            INSERT INTO reading_progress (work_id, item_type, read_count, updated_date)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(work_id, item_type) DO UPDATE SET
+                read_count = excluded.read_count,
+                updated_date = CURRENT_TIMESTAMP
+            """,
+            (safe_work_id, kind, parsed_count),
+        )
         connection.execute(
             f"""
             UPDATE user_library
@@ -2516,9 +2574,9 @@ def add_to_library(work_id, status="Planning"):
             VALUES (
                 ?, ?,
                 (SELECT COUNT(*) FROM episodes WHERE work_id = ? AND watched = 1),
-                (SELECT COALESCE(SUM(is_read), 0) FROM reading_items
+                (SELECT COALESCE(read_count, 0) FROM reading_progress
                  WHERE work_id = ? AND item_type = 'chapter'),
-                (SELECT COALESCE(SUM(is_read), 0) FROM reading_items
+                (SELECT COALESCE(read_count, 0) FROM reading_progress
                  WHERE work_id = ? AND item_type = 'volume'),
                 CURRENT_TIMESTAMP
             )
@@ -2589,6 +2647,7 @@ def delete_work_data(work_id):
         for table in (
             "episodes",
             "reading_items",
+            "reading_progress",
             "work_characters",
             "work_staff",
             "work_studios",
