@@ -546,7 +546,7 @@ class UiStartupTests(unittest.TestCase):
                          side_effect=lambda work_id: (
                              [{"id": 90185, "person_id": None}] if int(work_id) == 21355 else []
                          ),
-                     ) as get_characters, \\
+                     ) as get_characters, \
                      patch("ui.main_window.invalidate_character_snapshots", return_value=2) as invalidate, \
                      patch.object(MainWindow, "_queue_library_imports") as queue_imports:
                     window = MainWindow()
@@ -559,9 +559,9 @@ class UiStartupTests(unittest.TestCase):
                         {"id": 90185, "character_name": "Crusch Karsten"},
                     )
 
-                     # Refresh must not depend on the target character already being
-                     # present in every member's potentially incomplete cache.
-                     get_characters.assert_not_called()
+                    # Refresh must not depend on the target character already being
+                    # present in every member's potentially incomplete cache.
+                    get_characters.assert_not_called()
 
                     invalidate.assert_called_once_with([21355, 108632])
                     queue_imports.assert_called_once_with([21355, 108632])
