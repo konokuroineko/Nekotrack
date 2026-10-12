@@ -1135,13 +1135,7 @@ class WorkDetailPage(QWidget):
             )
         )
         layout.addWidget(
-            self._grid_section(
-                "Staff",
-                get_bundle_staff(detail_ids),
-                PersonCard,
-                self.person_selected,
-                6,
-            )
+            self._staff_section(detail_ids, get_bundle_staff(detail_ids))
         )
         layout.addWidget(
             self._grid_section(
@@ -1150,6 +1144,7 @@ class WorkDetailPage(QWidget):
                 RelationCard,
                 self.relation_selected,
                 6,
+                empty_message=self._detail_empty_message("Relations", detail_ids),
             )
         )
 
@@ -1221,15 +1216,18 @@ class WorkDetailPage(QWidget):
             items = []
 
         loading.deleteLater()
-        layout.addWidget(
-            self._grid_section(
+        if title == "Staff":
+            section_widget = self._staff_section(detail_ids, items)
+        else:
+            section_widget = self._grid_section(
                 title,
                 items,
                 card_class,
                 signal,
                 columns,
+                empty_message=self._detail_empty_message(title, detail_ids),
             )
-        )
+        layout.addWidget(section_widget)
 
         next_specs = {
             "Characters": (
@@ -2750,7 +2748,200 @@ class WorkDetailPage(QWidget):
             f" QFrame#section {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
         )
 
-    def _grid_section(self, title, items, cls, signal, columns):
+    @staticmethod
+    def _detail_empty_message(title, detail_ids):
+        ids = []
+        for work_id in detail_ids or []:
+            try:
+                ids.append(int(work_id))
+            except (TypeError, ValueError, OverflowError):
+                continue
+        if ids and all(work_id < 0 for work_id in ids):
+            if title == "Characters":
+                return "MangaBaka does not publish a character cast for this entry."
+            if title == "Staff":
+                return (
+                    "MangaBaka does not expose a full staff-credit list for this entry. "
+                    "Available authors and artists are shown in MangaBaka metadata."
+                )
+            if title == "Relations":
+                return "MangaBaka has no related-work links available for this entry."
+        return "Nothing stored locally yet."
+
+    def _staff_page_requests(self, detail_ids):
+        requests = []
+        for work_id in detail_ids or []:
+            try:
+                work_id = int(work_id)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if work_id <= 0 or work_id in self._staff_exhausted_ids:
+                continue
+            try:
+                saved_staff_count = len(get_staff(work_id))
+            except Exception:
+                saved_staff_count = 0
+            # The first AniList request uses perPage=15. A shorter saved page is
+            # not a reason to keep asking for additional pages.
+            if saved_staff_count < 15:
+                continue
+            requests.append((work_id, self._staff_next_pages.get(work_id, 2)))
+        return requests
+
+    def _staff_section(self, detail_ids, items=None):
+        items = list(items if items is not None else get_bundle_staff(detail_ids))
+        section_key = tuple(int(work_id) for work_id in (detail_ids or []))
+        visible_count = self._staff_visible_counts.setdefault(section_key, 12)
+
+        frame = QFrame()
+        frame.setObjectName("section")
+        frame.setProperty("_staff_section", True)
+        frame.setProperty("_detail_section_ids", list(section_key))
+        frame.setStyleSheet(self._detail_section_frame_stylesheet())
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(20, 18, 20, 20)
+        layout.setSpacing(12)
+
+        header = QLabel("Staff")
+        header.setObjectName("detailSectionHeader")
+        header.setStyleSheet(
+            f"font-size:17px;font-weight:800;color:{COLORS['primary']};"
+        )
+        layout.addWidget(header)
+
+        container = QWidget()
+        flow = StaffFlowLayout(container, h_spacing=8, v_spacing=12)
+        if not items:
+            empty = QLabel(self._detail_empty_message("Staff", detail_ids))
+            empty.setWordWrap(True)
+            empty.setStyleSheet(muted_label_stylesheet())
+            flow.addWidget(empty)
+        else:
+            for person in items[:max(0, visible_count)]:
+                card = PersonCard(person)
+                card.clicked.connect(self.person_selected)
+                flow.addWidget(card)
+        layout.addWidget(container)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        if len(items) > visible_count:
+            more_local = QPushButton(
+                f"Show 12 more staff ({len(items) - visible_count} remaining)"
+            )
+            more_local.setObjectName("staffMoreButton")
+            more_local.setCursor(Qt.PointingHandCursor)
+            more_local.clicked.connect(
+                lambda checked=False, ids=list(section_key):
+                    self._show_more_staff(ids)
+            )
+            actions.addWidget(more_local)
+
+        requests = self._staff_page_requests(detail_ids)
+        if requests:
+            if self._staff_loading:
+                text = "Loading staff credits…"
+            elif any(work_id in self._staff_page_errors for work_id, _page in requests):
+                text = "Retry loading staff credits"
+            else:
+                text = "Load more credits from AniList"
+            load_api = QPushButton(text)
+            load_api.setObjectName("staffMoreButton")
+            load_api.setCursor(Qt.PointingHandCursor)
+            load_api.setEnabled(not self._staff_loading)
+            load_api.clicked.connect(self._load_more_staff_pages)
+            actions.addWidget(load_api)
+        if actions.count() > 1:
+            layout.addLayout(actions)
+        return frame
+
+    def _show_more_staff(self, detail_ids):
+        key = tuple(int(work_id) for work_id in (detail_ids or []))
+        self._staff_visible_counts[key] = self._staff_visible_counts.get(key, 12) + 12
+        self._replace_staff_section()
+
+    def _load_more_staff_pages(self):
+        if self._staff_loading or self._shutdown_event.is_set():
+            return
+        detail_ids = self._detail_work_ids()
+        requests = self._staff_page_requests(detail_ids)
+        if not requests:
+            self._replace_staff_section()
+            return
+
+        self._staff_loading = True
+        worker = StaffPageWorker(requests, self._shutdown_event)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.pages_loaded.connect(self._staff_pages_loaded)
+        worker.pages_loaded.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(
+            lambda current_thread=thread, current_worker=worker:
+                self.staff_thread_stopped.emit(current_thread, current_worker)
+        )
+        self._staff_sync_thread = thread
+        self._staff_sync_worker = worker
+        self._replace_staff_section()
+        thread.start()
+
+    def _staff_pages_loaded(self, results):
+        for result in results or []:
+            try:
+                work_id = int(result.get("work_id"))
+            except (TypeError, ValueError, OverflowError, AttributeError):
+                continue
+            if result.get("error"):
+                self._staff_page_errors[work_id] = str(result["error"])
+                continue
+            self._staff_page_errors.pop(work_id, None)
+            page_info = result.get("page_info") or {}
+            try:
+                current_page = int(page_info.get("currentPage") or result.get("page") or 1)
+            except (TypeError, ValueError, OverflowError):
+                current_page = int(result.get("page") or 1)
+            has_next = page_info.get("hasNextPage") is True
+            edge_count = int(result.get("edge_count") or 0)
+            if not has_next or edge_count == 0 or current_page >= 100:
+                self._staff_exhausted_ids.add(work_id)
+            else:
+                self._staff_next_pages[work_id] = current_page + 1
+
+    def _staff_thread_finished(self, thread, worker):
+        if self._staff_sync_thread is thread:
+            self._staff_sync_thread = None
+            self._staff_sync_worker = None
+        self._staff_loading = False
+        try:
+            thread.deleteLater()
+        except RuntimeError:
+            pass
+        self._replace_staff_section()
+
+    def _replace_staff_section(self):
+        contents = [self.scroll_area.widget(), *self._detail_content_cache.values()]
+        seen_contents = set()
+        for content in contents:
+            if content is None or id(content) in seen_contents:
+                continue
+            seen_contents.add(id(content))
+            root = content.layout()
+            if root is None:
+                continue
+            for index in range(root.count()):
+                item = root.itemAt(index)
+                old_frame = item.widget() if item is not None else None
+                if old_frame is None or not old_frame.property("_staff_section"):
+                    continue
+                ids = old_frame.property("_detail_section_ids") or []
+                items = get_bundle_staff(ids)
+                new_frame = self._staff_section(ids, items)
+                root.replaceWidget(old_frame, new_frame)
+                old_frame.deleteLater()
+                break
+
+    def _grid_section(self, title, items, cls, signal, columns, empty_message=None):
         frame = QFrame()
         frame.setObjectName("charactersSection" if title == "Characters" else "section")
         frame.setStyleSheet(self._detail_section_frame_stylesheet())
@@ -2770,7 +2961,8 @@ class WorkDetailPage(QWidget):
             flow = StaffFlowLayout(container, h_spacing=8, v_spacing=12)
 
             if not items:
-                empty = QLabel("Nothing stored locally yet.")
+                empty = QLabel(empty_message or "Nothing stored locally yet.")
+                empty.setWordWrap(True)
                 empty.setStyleSheet(muted_label_stylesheet())
                 flow.addWidget(empty)
             else:
@@ -2789,14 +2981,15 @@ class WorkDetailPage(QWidget):
         grid.setVerticalSpacing(12)
 
         if not items:
-            x = QLabel("Nothing stored locally yet.")
-            x.setStyleSheet(muted_label_stylesheet())
-            grid.addWidget(x, 0, 0)
+            empty = QLabel(empty_message or "Nothing stored locally yet.")
+            empty.setWordWrap(True)
+            empty.setStyleSheet(muted_label_stylesheet())
+            grid.addWidget(empty, 0, 0)
         else:
-            for i, item in enumerate(items):
+            for index, item in enumerate(items):
                 card = cls(item)
                 card.clicked.connect(signal)
-                grid.addWidget(card, i // columns, i % columns)
+                grid.addWidget(card, index // columns, index % columns)
 
         lay.addWidget(container)
         return frame
