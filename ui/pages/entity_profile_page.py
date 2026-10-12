@@ -91,7 +91,7 @@ class RoundedArtworkLabel(QLabel):
             if not cropped.isNull():
                 painter.save()
                 painter.setClipPath(artwork_path)
-                painter.drawPixmap(artwork_rect, cropped, QRectF(cropped.rect()))
+                painter.drawPixmap(QRectF(artwork_rect), cropped, QRectF(cropped.rect()))
                 painter.restore()
 
         # Overlay the outline on the exact crop boundary. There is no inset inner
