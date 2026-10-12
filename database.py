@@ -257,9 +257,17 @@ def initialize_database():
         if column not in column_names:
             cursor.execute(f"ALTER TABLE works ADD COLUMN {column} {definition}")
     if not voice_actor_scope_existed:
-        cursor.execute(
-            "UPDATE works SET characters_loaded = 0 WHERE characters_loaded = 1"
-        )
+        # Only cached works with character associations need a cast refresh;
+        # don't queue MangaBaka-only novels or titles with a valid empty cast.
+        cursor.execute("""
+            UPDATE works
+            SET characters_loaded = 0
+            WHERE characters_loaded = 1
+              AND EXISTS (
+                  SELECT 1 FROM work_characters
+                  WHERE work_characters.work_id = works.id
+              )
+        """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS alternate_titles (
             work_id INTEGER NOT NULL, title TEXT NOT NULL, language TEXT,
