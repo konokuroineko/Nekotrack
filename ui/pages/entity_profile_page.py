@@ -181,6 +181,7 @@ class EntityProfilePage(QWidget):
         self._profile_url = None
         self._request_token = 0
         self._workers = {}
+        self._profile_cache = {}
         self.current_type = "character"
         self.current_record = {}
         self.source_work = None
@@ -405,6 +406,13 @@ class EntityProfilePage(QWidget):
         if entity_id <= 0:
             return
         fetch_kind = "Character" if self.current_type == "character" else "Staff"
+        cached_profile = self._profile_cache.get((fetch_kind, entity_id))
+        if isinstance(cached_profile, dict):
+            self._remote_data = cached_profile
+            self._remote_error = ""
+            self.page_status.setText("AniList profile cached")
+            self._render_profile()
+            return
         self.page_status.setText("Loading AniList profile…")
         worker = _ProfileLoadWorker(token, fetch_kind, entity_id)
         self._workers[token] = worker
@@ -435,6 +443,7 @@ class EntityProfilePage(QWidget):
 
         if isinstance(profile, dict):
             self._remote_data = profile
+            self._profile_cache[(fetch_kind, entity_id)] = profile
             self._remote_error = ""
             self.page_status.setText("AniList profile loaded")
         else:
