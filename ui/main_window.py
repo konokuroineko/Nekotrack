@@ -16,7 +16,6 @@ from database import (
     get_alternate_titles,
     get_bundle_character_voice_actors,
     get_connection,
-    get_characters,
     get_episodes,
     invalidate_character_snapshots,
     get_tmdb_mapping,
