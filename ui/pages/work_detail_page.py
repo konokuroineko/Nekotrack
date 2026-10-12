@@ -3,6 +3,7 @@ import threading
 from api import (
     cache_tmdb_episode_image,
     get_media_details,
+    get_media_staff_page,
     get_tmdb_episode_data,
 )
 from html import escape as html_escape
@@ -15,16 +16,16 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout,
     QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
-    QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget, QWidgetAction
+    QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 )
 
 from database import (
     add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
-    get_reading_progress, ensure_reading_placeholders,
+    get_reading_progress, get_staff,
     get_tmdb_mapping, get_work, get_provider_metadata, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_path, save_episodes, save_staff, save_tmdb_mapping,
-    set_episode_watched, set_reading_item_read,
+    set_episode_watched, set_reading_progress_count,
 )
 from series import get_library_series
 from ui.preferences import get
@@ -77,6 +78,43 @@ class EpisodeSyncWorker(QObject):
             self.finished.emit(self.work_id, payload)
         except Exception as error:
             self.error.emit(self.work_id, str(error))
+
+
+class StaffPageWorker(QObject):
+    """Fetch the next bounded page of AniList credits for each eligible work."""
+
+    pages_loaded = Signal(object)
+
+    def __init__(self, requests, stop_event):
+        super().__init__()
+        self.requests = list(requests or [])[:50]
+        self.stop_event = stop_event
+
+    def run(self):
+        results = []
+        for work_id, page in self.requests:
+            if self.stop_event.is_set():
+                break
+            try:
+                payload = get_media_staff_page(work_id, page=page, per_page=15)
+                edges = payload.get("edges") if isinstance(payload, dict) else None
+                page_info = payload.get("pageInfo") if isinstance(payload, dict) else None
+                if not isinstance(edges, list):
+                    raise RuntimeError("AniList returned an invalid staff page.")
+                save_staff(work_id, edges, replace_snapshot=False)
+                results.append({
+                    "work_id": int(work_id),
+                    "page": int(page),
+                    "edge_count": len(edges),
+                    "page_info": page_info if isinstance(page_info, dict) else {},
+                })
+            except Exception as error:
+                results.append({
+                    "work_id": int(work_id),
+                    "page": int(page),
+                    "error": str(error),
+                })
+        self.pages_loaded.emit(results)
 
 
 class EpisodeImageCacheWorker(QObject):
@@ -303,64 +341,6 @@ class EpisodeCard(QFrame):
             except (ValueError, IndexError):
                 pass
         return text
-
-
-
-
-class ReadingItemCard(QFrame):
-    """A numbered chapter/volume placeholder with individually saved read state."""
-
-    read_changed = Signal(str, int, bool)
-
-    def __init__(self, item, parent=None):
-        super().__init__(parent)
-        self.item_type = str(item["item_type"])
-        self.item_number = int(item["item_number"])
-        self.setObjectName("readingItemCard")
-        self.setMinimumHeight(82)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-        row = QHBoxLayout(self)
-        row.setContentsMargins(12, 10, 12, 10)
-        row.setSpacing(10)
-
-        number = QLabel(
-            f"{self.item_type.upper()} {self.item_number:03d}"
-        )
-        number.setObjectName("readingItemNumber")
-        number.setMinimumWidth(112)
-        row.addWidget(number, 0, Qt.AlignVCenter)
-
-        description = QVBoxLayout()
-        description.setSpacing(3)
-        title = QLabel(
-            str(item["title"] or f"{self.item_type.title()} {self.item_number}")
-        )
-        title.setObjectName("readingItemTitle")
-        title.setWordWrap(True)
-        detail = QLabel(
-            f"{self.item_type.title()} details placeholder — "
-            "titles and artwork can be added later."
-        )
-        detail.setObjectName("readingItemDescription")
-        detail.setWordWrap(True)
-        description.addWidget(title)
-        description.addWidget(detail)
-        row.addLayout(description, 1)
-
-        self.read_checkbox = QCheckBox("Read")
-        self.read_checkbox.setObjectName("readingItemCheck")
-        self.read_checkbox.setCursor(Qt.PointingHandCursor)
-        self.read_checkbox.setChecked(bool(item["is_read"]))
-        self.read_checkbox.toggled.connect(
-            lambda checked: self.read_changed.emit(
-                self.item_type, self.item_number, checked
-            )
-        )
-        row.addWidget(self.read_checkbox, 0, Qt.AlignVCenter)
-
-    def refresh_theme(self):
-        self.update()
 
 
 
@@ -601,6 +581,7 @@ class WorkDetailPage(QWidget):
     relation_selected = Signal(object)
     bundle_changed = Signal()
     bundle_edit_requested = Signal(object)
+    staff_thread_stopped = Signal(object, object)
 
     _cover_cache = {}
     _cover_failures = set()
@@ -618,6 +599,14 @@ class WorkDetailPage(QWidget):
         self._episode_sync_work_id = None
         self._episode_image_cache_threads = {}
         self._episode_image_cache_workers = {}
+        self._staff_next_pages = {}
+        self._staff_exhausted_ids = set()
+        self._staff_page_errors = {}
+        self._staff_visible_counts = {}
+        self._staff_sync_thread = None
+        self._staff_sync_worker = None
+        self._staff_loading = False
+        self.staff_thread_stopped.connect(self._staff_thread_finished)
         self._detail_build_token = 0
         self._detail_content_cache = {}
         self._episode_sync_completed = set()
@@ -639,6 +628,8 @@ class WorkDetailPage(QWidget):
         threads = []
         if self._episode_sync_thread is not None:
             threads.append(self._episode_sync_thread)
+        if self._staff_sync_thread is not None:
+            threads.append(self._staff_sync_thread)
         threads.extend(self._episode_image_cache_threads.values())
         for thread in threads:
             try:
@@ -679,6 +670,10 @@ class WorkDetailPage(QWidget):
     def _prepare_detail_state(self, work):
         self.work = work
         detail_ids = self._detail_work_ids()
+        for work_id in detail_ids:
+            if work_id > 0:
+                self._staff_next_pages.setdefault(work_id, 2)
+        self._staff_visible_counts.setdefault(tuple(detail_ids), 12)
 
         self.mangabaka_metadata = self._value("_mangabaka")
         self.mangabaka_volume_records = []
