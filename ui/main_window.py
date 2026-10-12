@@ -579,6 +579,9 @@ class MainWindow(QMainWindow):
         self.entity_profile_page.voice_actor_selected.connect(
             lambda actor: self.show_entity_profile("voice_actor", actor)
         )
+        self.entity_profile_page.character_selected.connect(
+            lambda character: self.show_entity_profile("character", character)
+        )
         self.entity_profile_page.work_selected.connect(self.show_profile_credit_work)
         self.entity_profile_page.back_requested.connect(self._back_from_entity_profile)
         self.work_detail_page.relation_selected.connect(self.show_relation)
