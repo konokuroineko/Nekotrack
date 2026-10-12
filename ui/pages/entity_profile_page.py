@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt, Signal, QUrl, QObject, QRunnable, QThreadPool
-from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtGui import QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QFrame,
@@ -16,6 +16,20 @@ from PySide6.QtWidgets import (
 from api import get_entity_profile
 from ui.theme import COLORS, muted_label_stylesheet
 from ui.widgets.person_card import PersonCard
+
+
+def _crop_pixmap_to_size(pixmap, size):
+    """Fill a portrait frame and crop overflow instead of letterboxing artwork."""
+    if pixmap is None or pixmap.isNull() or size.width() <= 0 or size.height() <= 0:
+        return QPixmap()
+    scaled = pixmap.scaled(
+        size,
+        Qt.KeepAspectRatioByExpanding,
+        Qt.SmoothTransformation,
+    )
+    x = max(0, (scaled.width() - size.width()) // 2)
+    y = max(0, (scaled.height() - size.height()) // 2)
+    return scaled.copy(x, y, size.width(), size.height())
 
 
 class _ProfileLoadSignals(QObject):
@@ -44,18 +58,21 @@ class _ProfileLoadWorker(QRunnable):
 
 
 class MediaCreditCard(QFrame):
-    """A compact, visual AniList credit card for appearances and staff work."""
+    """A compact internal work-credit card with NekoTrack navigation."""
+    work_selected = Signal(object)
+
     def __init__(self, edge, credit_kind, parent=None):
         super().__init__(parent)
         edge = edge if isinstance(edge, dict) else {}
         node = edge.get("node") if isinstance(edge.get("node"), dict) else {}
-        self.media_id = node.get("id")
-        media_type = str(node.get("type") or "ANIME").lower()
-        self.media_url = (
-            f"https://anilist.co/{media_type}/{int(self.media_id)}"
-            if str(self.media_id or "").isdigit() and int(self.media_id) > 0
-            else None
-        )
+        try:
+            self.media_id = int(node.get("id") or 0)
+        except (TypeError, ValueError, OverflowError):
+            self.media_id = 0
+        self.media_record = dict(node)
+        if self.media_id > 0:
+            self.media_record["id"] = self.media_id
+        media_type = str(node.get("type") or "ANIME")
         title_data = node.get("title") if isinstance(node.get("title"), dict) else {}
         title = (
             title_data.get("english") or title_data.get("romaji")
@@ -143,9 +160,9 @@ class MediaCreditCard(QFrame):
             text_column.addWidget(role)
 
         text_column.addStretch(1)
-        open_button = QPushButton("Open AniList ↗")
+        open_button = QPushButton("Open in NekoTrack →")
         open_button.setCursor(Qt.PointingHandCursor)
-        open_button.setEnabled(bool(self.media_url))
+        open_button.setEnabled(self.media_id > 0)
         open_button.clicked.connect(self._open_media)
         text_column.addWidget(open_button, 0, Qt.AlignLeft)
         row.addLayout(text_column, 1)
@@ -154,29 +171,27 @@ class MediaCreditCard(QFrame):
         if reply is not None and reply.error() == QNetworkReply.NetworkError.NoError:
             pixmap = QPixmap()
             if pixmap.loadFromData(reply.readAll()):
-                label.setPixmap(pixmap.scaled(
-                    label.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
-                ))
+                label.setPixmap(_crop_pixmap_to_size(pixmap, label.size()))
         if reply is not None:
             reply.deleteLater()
 
     def _open_media(self):
-        if self.media_url:
-            QDesktopServices.openUrl(QUrl(self.media_url))
+        if self.media_id > 0:
+            self.work_selected.emit(dict(self.media_record))
 
 
 class EntityProfilePage(QWidget):
-    """Detailed AniList character/staff profile with clickable voice-actor pages."""
+    """NekoTrack character and voice-actor profiles with internal work navigation."""
 
     back_requested = Signal()
     voice_actor_selected = Signal(object)
+    work_selected = Signal(object)
 
     def __init__(self):
         super().__init__()
         self._network_manager = QNetworkAccessManager(self)
         self._image_reply = None
         self._image_label = None
-        self._profile_url = None
         self._request_token = 0
         self._workers = {}
         self._profile_cache = {}
@@ -408,10 +423,10 @@ class EntityProfilePage(QWidget):
         if isinstance(cached_profile, dict):
             self._remote_data = cached_profile
             self._remote_error = ""
-            self.page_status.setText("AniList profile cached")
+            self.page_status.setText("Profile cached")
             self._render_profile()
             return
-        self.page_status.setText("Loading AniList profile…")
+        self.page_status.setText("Loading profile details…")
         worker = _ProfileLoadWorker(token, fetch_kind, entity_id)
         self._workers[token] = worker
         worker.signals.finished.connect(self._profile_loaded)
@@ -443,9 +458,9 @@ class EntityProfilePage(QWidget):
             self._remote_data = profile
             self._profile_cache[(fetch_kind, entity_id)] = profile
             self._remote_error = ""
-            self.page_status.setText("AniList profile loaded")
+            self.page_status.setText("Profile loaded")
         else:
-            self._remote_error = str(error or "AniList could not load this profile.")
+            self._remote_error = str(error or "Profile details could not be loaded.")
             self.page_status.setText("Showing saved information")
         self._render_profile()
 
@@ -468,17 +483,6 @@ class EntityProfilePage(QWidget):
             self._name_from(remote.get("name"))
             or self._name_from(self._value(record, local_name_key), "Unknown profile")
         )
-        raw_id = (
-            self._value(record, "id")
-            if is_character else self._value(
-                record, "person_id", self._value(record, "id")
-            )
-        )
-        try:
-            numeric_id = int(raw_id)
-        except (TypeError, ValueError, OverflowError):
-            numeric_id = 0
-
         kind_label = (
             "CHARACTER PROFILE" if is_character
             else "VOICE ACTOR PROFILE" if is_voice_actor
@@ -492,13 +496,6 @@ class EntityProfilePage(QWidget):
             self._value(record, "character_image_url") if is_character
             else self._value(record, "image_url")
         )
-        self._profile_url = (
-            str(remote.get("siteUrl") or "")
-            if str(remote.get("siteUrl") or "").startswith("https://anilist.co/")
-            else f"https://anilist.co/{'character' if is_character else 'staff'}/{numeric_id}"
-            if numeric_id > 0 else None
-        )
-
         header = QFrame()
         header.setObjectName("profileHeader")
         row = QHBoxLayout(header)
@@ -563,24 +560,13 @@ class EntityProfilePage(QWidget):
                 facts.append(f"Active: {active_text}")
         favourites = remote.get("favourites")
         if isinstance(favourites, int) and favourites > 0:
-            facts.append(f"{favourites:,} AniList favourites")
+            facts.append(f"{favourites:,} favourites")
         for fact in facts:
             facts_column.addWidget(self._fact("", fact))
 
         if self.source_work is not None:
             facts_column.addWidget(self._fact("Opened from", self._work_title(self.source_work)))
-        if numeric_id > 0:
-            facts_column.addWidget(self._fact("AniList ID", str(numeric_id)))
         facts_column.addStretch(1)
-
-        if self._profile_url:
-            open_button = QPushButton("Open full AniList profile ↗")
-            open_button.setCursor(Qt.PointingHandCursor)
-            open_button.clicked.connect(
-                lambda checked=False, url=self._profile_url:
-                    QDesktopServices.openUrl(QUrl(url))
-            )
-            facts_column.addWidget(open_button, 0, Qt.AlignLeft)
         row.addLayout(facts_column, 1)
         self.content_layout.addWidget(header)
 
@@ -597,7 +583,7 @@ class EntityProfilePage(QWidget):
         elif self._remote_error:
             section, layout = self._section("About")
             note = QLabel(
-                "AniList's detailed biography could not be loaded. Your saved character "
+                "The detailed biography could not be loaded. Your saved character "
                 "or staff information is still available below."
             )
             note.setWordWrap(True)
@@ -620,7 +606,7 @@ class EntityProfilePage(QWidget):
 
         if self._remote_error:
             error_row = QHBoxLayout()
-            error_note = QLabel("AniList detail lookup failed; showing cached data.")
+            error_note = QLabel("Profile detail lookup failed; showing cached data.")
             error_note.setWordWrap(True)
             error_note.setStyleSheet(muted_label_stylesheet())
             error_row.addWidget(error_note, 1)
@@ -664,7 +650,7 @@ class EntityProfilePage(QWidget):
             for index, actor in enumerate(ordered):
                 person = dict(actor)
                 person.setdefault("role", str(person.get("language") or "Voice actor"))
-                card = PersonCard(person)
+                card = PersonCard(person, portrait_size=(90, 120))
                 card.clicked.connect(self.voice_actor_selected.emit)
                 grid.addWidget(card, index // 5, index % 5)
             body.addWidget(grid_host)
@@ -677,7 +663,7 @@ class EntityProfilePage(QWidget):
             message = (
                 "No appearance data is available in the saved profile."
                 if heading == "Appears in"
-                else "No additional credits were returned by AniList."
+                else "No additional credits were found."
             )
             empty = QLabel(message)
             empty.setWordWrap(True)
@@ -691,7 +677,9 @@ class EntityProfilePage(QWidget):
             grid.setVerticalSpacing(10)
             valid_edges = [edge for edge in edges if isinstance(edge, dict)]
             for index, edge in enumerate(valid_edges[:12]):
-                grid.addWidget(MediaCreditCard(edge, credit_kind), index // 3, index % 3)
+                card = MediaCreditCard(edge, credit_kind)
+                card.work_selected.connect(self.work_selected.emit)
+                grid.addWidget(card, index // 3, index % 3)
             body.addWidget(host)
         self.content_layout.addWidget(section)
 
@@ -744,12 +732,9 @@ class EntityProfilePage(QWidget):
     def _set_artwork(self, pixmap):
         if self._image_label is None or pixmap.isNull():
             return
-        scaled = pixmap.scaled(
-            self._image_label.size(),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
+        self._image_label.setPixmap(
+            _crop_pixmap_to_size(pixmap, self._image_label.size())
         )
-        self._image_label.setPixmap(scaled)
 
     def request_shutdown(self):
         self._request_token += 1
