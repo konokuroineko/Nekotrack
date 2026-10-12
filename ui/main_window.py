@@ -16,7 +16,9 @@ from database import (
     get_alternate_titles,
     get_bundle_character_voice_actors,
     get_connection,
+    get_characters,
     get_episodes,
+    invalidate_character_snapshots,
     get_tmdb_mapping,
     get_work,
     initialize_database,
@@ -480,6 +482,7 @@ class MainWindow(QMainWindow):
         self._settings_rebuild_pending = False
         self._detail_enrichment_ids = set()
         self._entity_profile_history = []
+        self._pending_character_cast_refreshes = {}
         self._profile_work_return_state = None
         self._opening_profile_credit_work = False
         self._library_episode_preload_thread = None
@@ -1066,6 +1069,204 @@ class MainWindow(QMainWindow):
             voice_actors=voice_actors,
         )
         self.navigation.show("entity_profile")
+        if kind == "character" and not voice_actors:
+            self._queue_missing_character_voice_actor_refresh(
+                record,
+                self.work_detail_page._detail_work_ids(),
+            )
+
+    def _queue_missing_character_voice_actor_refresh(self, record, work_ids):
+        """Retry only cached anime entries for a character with no saved actors."""
+        if self._shutdown_requested or self._shutdown_event.is_set():
+            return
+
+        try:
+            character_id = int(
+                record.get("id") if hasattr(record, "get") else record["id"]
+            )
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return
+        if character_id <= 0:
+            return
+
+        bundle_work_ids = []
+        for raw_id in work_ids or []:
+            try:
+                work_id = int(raw_id)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if work_id > 0 and work_id not in bundle_work_ids:
+                bundle_work_ids.append(work_id)
+        if not bundle_work_ids:
+            return
+
+        # Don't refresh unrelated seasons or works where this character is
+        # absent. Retry only cached entries that have the character but no actor.
+        candidate_ids = []
+        for work_id in bundle_work_ids:
+            try:
+                work = get_work(work_id)
+                if work is None or str(work["type"] or "").upper() != "ANIME":
+                    continue
+                matching_rows = []
+                for raw_row in get_characters(work_id):
+                    row = dict(raw_row)
+                    try:
+                        row_character_id = int(row.get("id"))
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if row_character_id == character_id:
+                        matching_rows.append(row)
+                if matching_rows and not any(
+                    row.get("person_id") for row in matching_rows
+                ):
+                    candidate_ids.append(work_id)
+            except Exception as error:
+                log_exception(
+                    "character.voice_actor_refresh.status_failed",
+                    error,
+                    character_id=character_id,
+                    work_id=work_id,
+                )
+
+        if not candidate_ids:
+            log_event(
+                "character.voice_actor_refresh.not_queued",
+                character_id=character_id,
+                bundle_work_count=len(bundle_work_ids),
+                reason="no_cached_anime_character_without_actor",
+            )
+            return
+
+        key = (character_id, tuple(sorted(bundle_work_ids)))
+        state = self._pending_character_cast_refreshes.get(key)
+        already_pending = (
+            state.get("pending_work_ids", set()) if isinstance(state, dict) else set()
+        )
+        candidate_ids = [
+            work_id for work_id in candidate_ids if work_id not in already_pending
+        ]
+        if not candidate_ids:
+            return
+
+        try:
+            invalidated = invalidate_character_snapshots(candidate_ids)
+        except Exception as error:
+            log_exception(
+                "character.voice_actor_refresh.invalidate_failed",
+                error,
+                character_id=character_id,
+                work_ids=candidate_ids,
+            )
+            return
+        if invalidated <= 0:
+            return
+
+        if state is None:
+            state = {
+                "character_id": character_id,
+                "work_ids": tuple(sorted(bundle_work_ids)),
+                "pending_work_ids": set(),
+            }
+            self._pending_character_cast_refreshes[key] = state
+        state["pending_work_ids"].update(candidate_ids)
+        self._detail_enrichment_ids.update(candidate_ids)
+
+        log_event(
+            "character.voice_actor_refresh.queued",
+            character_id=character_id,
+            bundle_work_count=len(bundle_work_ids),
+            refresh_work_ids=candidate_ids,
+        )
+        self._queue_library_imports(candidate_ids)
+
+    def _complete_pending_character_cast_refresh(self, work_id):
+        """Re-read cached actor credits after all targeted cast imports stop."""
+        try:
+            work_id = int(work_id)
+        except (TypeError, ValueError, OverflowError):
+            return
+
+        completed = []
+        for key, state in list(self._pending_character_cast_refreshes.items()):
+            pending = state.get("pending_work_ids")
+            if not isinstance(pending, set) or work_id not in pending:
+                continue
+            pending.discard(work_id)
+            if not pending:
+                self._pending_character_cast_refreshes.pop(key, None)
+                completed.append(state)
+
+        for state in completed:
+            character_id = state["character_id"]
+            try:
+                voice_actors = get_bundle_character_voice_actors(
+                    state["work_ids"], character_id
+                )
+            except Exception as error:
+                log_exception(
+                    "character.voice_actor_refresh.read_failed",
+                    error,
+                    character_id=character_id,
+                    work_ids=list(state["work_ids"]),
+                )
+                continue
+
+            self._update_character_voice_actor_profiles(character_id, voice_actors)
+
+    def _update_character_voice_actor_profiles(self, character_id, voice_actors):
+        """Refresh visible and saved navigation states for one character profile."""
+        actors = [
+            dict(actor) for actor in (voice_actors or [])
+            if isinstance(actor, dict) or hasattr(actor, "keys")
+        ]
+
+        def matches(state):
+            if not isinstance(state, dict) or state.get("entity_type") != "character":
+                return False
+            record = state.get("record")
+            if not isinstance(record, dict):
+                return False
+            try:
+                return int(record.get("id")) == character_id
+            except (TypeError, ValueError, OverflowError):
+                return False
+
+        def update_saved_state(state):
+            if not matches(state):
+                return
+            record = dict(state["record"])
+            record["voice_actors"] = [dict(actor) for actor in actors]
+            state["record"] = record
+            state["voice_actors"] = [dict(actor) for actor in actors]
+
+        for state in self._entity_profile_history:
+            update_saved_state(state)
+        update_saved_state(self._profile_work_return_state)
+
+        current_record = getattr(self.entity_profile_page, "current_record", {})
+        try:
+            current_id = int(current_record.get("id"))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            current_id = 0
+        if (
+            self.entity_profile_page.current_type == "character"
+            and current_id == character_id
+        ):
+            updated_record = dict(current_record)
+            updated_record["voice_actors"] = [dict(actor) for actor in actors]
+            self.entity_profile_page.set_profile(
+                "character",
+                updated_record,
+                source_work=self.entity_profile_page.source_work,
+                voice_actors=actors,
+            )
+
+        log_event(
+            "character.voice_actor_refresh.completed",
+            character_id=character_id,
+            actor_count=len(actors),
+        )
 
     def _back_from_entity_profile(self):
         """Return to the character profile when a voice actor opened from it."""
@@ -1268,6 +1469,7 @@ class MainWindow(QMainWindow):
             self.library_import_workers.remove(worker)
         thread.deleteLater()
 
+        self._complete_pending_character_cast_refresh(work_id)
         next_ids = self._library_import_queue.complete(work_id)
         if not self._shutdown_requested:
             for next_id in next_ids:

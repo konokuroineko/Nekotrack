@@ -509,5 +509,74 @@ class UiStartupTests(unittest.TestCase):
                     self.app.processEvents()
                 os.chdir(old_cwd)
 
+    def test_missing_character_voice_actor_triggers_targeted_refresh_and_updates_profile(self):
+        MemorySettings.stores = {
+            ("NekoTrack", "NekoTrack"): {
+                preferences._MIGRATION_KEY: True,
+                "_theme_palette_version": preferences._THEME_PALETTE_VERSION,
+                "theme_preset": "Neko",
+                "setup_complete": True,
+            },
+            ("AniTrack", "AniTrack"): {},
+        }
+        actor = {
+            "person_id": 901,
+            "name": "Recovered Voice Actor",
+            "language": "Japanese",
+            "languages": ["Japanese"],
+            "image_path": None,
+            "image_url": None,
+            "credits": [{
+                "work_id": 21355,
+                "work_title": "Re:ZERO -Starting Life in Another World-",
+                "language": "Japanese",
+            }],
+        }
+        window = None
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                with patch.object(preferences, "QSettings", MemorySettings), \
+                     patch("ui.pages.entity_profile_page.EntityProfilePage._start_profile_load"), \
+                     patch("ui.main_window.get_bundle_character_voice_actors", side_effect=[[], [actor]]), \
+                     patch("ui.main_window.get_work", side_effect=lambda work_id: {"id": work_id, "type": "ANIME"}), \
+                     patch("ui.main_window.get_characters", return_value=[{"id": 90185, "person_id": None}]), \
+                     patch("ui.main_window.invalidate_character_snapshots", return_value=2) as invalidate, \
+                     patch.object(MainWindow, "_queue_library_imports") as queue_imports:
+                    window = MainWindow()
+                    window.work_detail_page.work = {
+                        "id": 21355,
+                        "_series_members": [{"id": 21355}, {"id": 108632}],
+                    }
+                    window.show_entity_profile(
+                        "character",
+                        {"id": 90185, "character_name": "Crusch Karsten"},
+                    )
+
+                    invalidate.assert_called_once_with([21355, 108632])
+                    queue_imports.assert_called_once_with([21355, 108632])
+                    self.assertEqual(window.entity_profile_page.voice_actors, [])
+
+                    window._complete_pending_character_cast_refresh(21355)
+                    self.assertEqual(window.entity_profile_page.voice_actors, [])
+                    window._complete_pending_character_cast_refresh(108632)
+
+                    self.assertEqual(
+                        [item["person_id"] for item in window.entity_profile_page.voice_actors],
+                        [901],
+                    )
+                    self.assertEqual(
+                        window.entity_profile_page.current_record["voice_actors"][0]["name"],
+                        "Recovered Voice Actor",
+                    )
+                    self.assertFalse(window._pending_character_cast_refreshes)
+            finally:
+                if window is not None:
+                    window.close()
+                    window.deleteLater()
+                    self.app.processEvents()
+                os.chdir(old_cwd)
+
 if __name__ == "__main__":
     unittest.main()

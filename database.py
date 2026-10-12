@@ -754,6 +754,28 @@ def characters_are_loaded(work_id):
         connection.close()
 
 
+def invalidate_character_snapshots(work_ids):
+    """Mark cached cast snapshots stale so a targeted refresh can retry them."""
+    ids = _validated_work_ids(work_ids)
+    if ids is None or not ids:
+        return 0
+
+    placeholders = ",".join("?" for _ in ids)
+    connection = get_connection()
+    try:
+        cursor = connection.execute(
+            f"UPDATE works SET characters_loaded = 0 WHERE id IN ({placeholders})",
+            ids,
+        )
+        connection.commit()
+        return max(0, cursor.rowcount)
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def get_tmdb_mapping(work_id):
     """Return the cached TMDB series/season mapping for one exact work."""
     try:

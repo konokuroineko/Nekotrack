@@ -138,6 +138,16 @@ class CharacterVoiceActorScopeTests(unittest.TestCase):
             [7001],
         )
 
+    def test_cast_snapshot_can_be_invalidated_without_deleting_saved_characters(self):
+        self._add_two_adaptations()
+        database.save_characters(101, [self._character([])])
+        self.assertTrue(database.characters_are_loaded(101))
+        self.assertEqual(len(database.get_characters(101)), 1)
+
+        self.assertEqual(database.invalidate_character_snapshots([101]), 1)
+        self.assertFalse(database.characters_are_loaded(101))
+        self.assertEqual(len(database.get_characters(101)), 1)
+
     def test_legacy_global_actor_rows_migrate_and_mark_cast_for_refresh(self):
         self._add_two_adaptations()
         actor = self._actor(7001, "Legacy Actor")
