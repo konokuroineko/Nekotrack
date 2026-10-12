@@ -1035,12 +1035,16 @@ def get_media_details(media_id):
                 relations = linked_details.get("relations")
                 if isinstance(characters, dict) and isinstance(characters.get("edges"), list):
                     media["characters"] = characters
-                    media["_characters_snapshot_valid"] = True
+                    media["_characters_snapshot_valid"] = (
+                        linked_details.get("_characters_snapshot_valid", True) is not False
+                    )
                 else:
                     media["_characters_snapshot_valid"] = False
                 if isinstance(staff, dict) and isinstance(staff.get("edges"), list):
                     media["staff"] = staff
-                    media["_staff_snapshot_valid"] = True
+                    media["_staff_snapshot_valid"] = (
+                        linked_details.get("_staff_snapshot_valid", True) is not False
+                    )
                     page_info = staff.get("pageInfo")
                     if isinstance(page_info, dict):
                         media["_anilist_staff_page_info"] = dict(page_info)
