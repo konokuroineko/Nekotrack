@@ -1047,7 +1047,7 @@ class EntityProfilePage(QWidget):
                 node = edge.get("node")
                 if not isinstance(node, dict) or not node.get("id"):
                     continue
-                card = WorkCard(dict(node), mode="search", show_add_button=False)
+                card = WorkCard(dict(node), mode="library", show_add_button=False)
                 card.clicked.connect(self.work_selected.emit)
                 flow.addWidget(card)
             body.addWidget(host)
