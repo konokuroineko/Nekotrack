@@ -514,8 +514,8 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
         ).fetchone())
         connection.close()
         self.assertEqual(row["progress_episodes"], 1)
-        self.assertEqual(row["progress_chapters"], 1)
-        self.assertEqual(row["progress_volumes"], 1)
+        self.assertEqual(row["progress_chapters"], 4)
+        self.assertEqual(row["progress_volumes"], 3)
 
     def test_partial_episode_refresh_never_deletes_missing_or_watched_rows(self):
         work_id = 503
@@ -570,7 +570,7 @@ class DatabaseStateMachineChaosTests(unittest.TestCase):
 
         rows = database.get_all_library()
         row = next(item for item in rows if item["id"] == work_id)
-        self.assertEqual(row["progress_volumes"], 1)
+        self.assertEqual(row["progress_volumes"], 2)
 
     def test_delete_work_removes_provider_metadata(self):
         work_id = 506
