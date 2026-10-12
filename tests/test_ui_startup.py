@@ -652,6 +652,40 @@ class UiStartupTests(unittest.TestCase):
                 self.app.processEvents()
 
 
+    def test_malformed_anilist_youtube_link_renders_as_a_clean_clickable_link(self):
+        description = (
+            "[YouTube]([https://www.youtube.com/](https://www.youtube.com/)"
+            "[@Ueda](https://anilist.co/user/Ueda)-Kana)"
+        )
+        with patch.object(EntityProfilePage, "_start_profile_load"):
+            page = EntityProfilePage()
+            try:
+                page.set_profile(
+                    "character",
+                    {"id": 90185, "character_name": "Crusch Karsten"},
+                )
+                page._remote_data = {
+                    "id": 90185,
+                    "name": {"full": "Crusch Karsten"},
+                    "description": description,
+                    "image": {},
+                    "media": {"edges": []},
+                }
+                page._render_profile()
+                header = page.content_layout.itemAt(0).widget()
+                bio = header.findChild(QTextBrowser, "profileDescription")
+                self.assertIsNotNone(bio)
+                self.assertTrue(bio.openExternalLinks())
+                rendered = bio.toHtml()
+                self.assertIn("https://www.youtube.com/@Ueda-Kana", rendered)
+                self.assertIn(">YouTube</a>", rendered)
+                self.assertNotIn("https://anilist.co/user/Ueda", rendered)
+                self.assertNotIn("[YouTube](", rendered)
+            finally:
+                page.close()
+                page.deleteLater()
+                self.app.processEvents()
+
     def test_voice_acting_roles_show_work_left_and_character_right_sorted_by_role(self):
         with patch.object(EntityProfilePage, "_start_profile_load"):
             page = EntityProfilePage()
