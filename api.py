@@ -1009,28 +1009,82 @@ def get_media_details(media_id):
             raise RuntimeError("MangaBaka returned details for a different series ID.")
 
         media = normalize_mangabaka_series(record, preferred_id=numeric_id)
-        # MangaBaka provides series metadata and related-work links, but its
-        # canonical series schema does not provide AniList-style character cast
-        # or full staff credits. Mark those snapshots as authoritatively absent
-        # so background imports do not retry the same unsupported lookup forever.
-        media["characters"] = {
+        empty_connection = {
             "edges": [],
-            "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+            "pageInfo": {
+                "currentPage": 1,
+                "lastPage": 1,
+                "hasNextPage": False,
+            },
         }
-        media["staff"] = {
-            "edges": [],
-            "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
-        }
+        media["characters"] = dict(empty_connection)
+        media["staff"] = dict(empty_connection)
         media["_characters_snapshot_valid"] = True
-        media["relations"] = {"edges": []}
-        # Bring in the provider's native relationship graph where it exists.
+        media["_staff_snapshot_valid"] = True
+
+        # When MangaBaka's full upstream metadata contains an explicit AniList
+        # ID, reuse AniList's cast, crew, and relation graph while retaining the
+        # existing negative local work ID. Never guess a link from similar titles.
+        linked_anilist_id = get_mangabaka_external_id(record, "anilist")
+        anilist_relation_edges = []
+        if linked_anilist_id is not None:
+            try:
+                linked_details = get_media_details(linked_anilist_id)
+                characters = linked_details.get("characters")
+                staff = linked_details.get("staff")
+                relations = linked_details.get("relations")
+                if isinstance(characters, dict) and isinstance(characters.get("edges"), list):
+                    media["characters"] = characters
+                    media["_characters_snapshot_valid"] = True
+                else:
+                    media["_characters_snapshot_valid"] = False
+                if isinstance(staff, dict) and isinstance(staff.get("edges"), list):
+                    media["staff"] = staff
+                    media["_staff_snapshot_valid"] = True
+                    page_info = staff.get("pageInfo")
+                    if isinstance(page_info, dict):
+                        media["_anilist_staff_page_info"] = dict(page_info)
+                else:
+                    media["_staff_snapshot_valid"] = False
+                if isinstance(relations, dict) and isinstance(relations.get("edges"), list):
+                    anilist_relation_edges = relations["edges"]
+                media["_anilist_id"] = linked_anilist_id
+            except Exception as error:
+                # The MangaBaka record remains usable offline. Mark failed
+                # snapshots incomplete so a later detail import can retry.
+                media["_characters_snapshot_valid"] = False
+                media["_staff_snapshot_valid"] = False
+                print(
+                    "MangaBaka-linked AniList enrichment skipped for "
+                    f"series {abs(numeric_id)} (AniList ID {linked_anilist_id}): {error}"
+                )
+
+        mangabaka_relation_edges = []
         try:
             related_payload = get_mangabaka_related_series(abs(numeric_id))
-            media["relations"] = {
-                "edges": _normalize_mangabaka_related_edges(related_payload)
-            }
+            mangabaka_relation_edges = _normalize_mangabaka_related_edges(related_payload)
         except Exception as error:
             print(f"MangaBaka related-series lookup skipped: {error}")
+
+        # Merge both providers, retaining distinct relation types but avoiding
+        # duplicate edges to the same target with the same relationship label.
+        combined_relation_edges = []
+        seen_relation_keys = set()
+        for edge in [*anilist_relation_edges, *mangabaka_relation_edges]:
+            if not isinstance(edge, dict):
+                continue
+            node = edge.get("node")
+            if not isinstance(node, dict) or node.get("id") is None:
+                continue
+            relation_type = str(
+                edge.get("relationType") or edge.get("relation_type") or "RELATED"
+            ).upper()
+            relation_key = (str(node["id"]), relation_type)
+            if relation_key in seen_relation_keys:
+                continue
+            seen_relation_keys.add(relation_key)
+            combined_relation_edges.append(edge)
+        media["relations"] = {"edges": combined_relation_edges}
         return media
     query = """
     query ($id: Int) {
