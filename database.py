@@ -2096,6 +2096,22 @@ def get_alternate_titles(work_id):
     return [str(row["title"]) for row in rows if str(row["title"] or "").strip()]
 
 
+def is_work_in_library(work_id):
+    """Return actual user-library membership, separate from provider publication status."""
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    connection = get_connection()
+    try:
+        return connection.execute(
+            "SELECT 1 FROM user_library WHERE work_id = ? LIMIT 1",
+            (safe_work_id,),
+        ).fetchone() is not None
+    finally:
+        connection.close()
+
+
 def get_work(work_id):
     try:
         safe_work_id = _validated_work_id(work_id)
