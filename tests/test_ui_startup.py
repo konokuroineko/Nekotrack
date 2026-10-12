@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QBuffer, QIODevice
 from PySide6.QtTest import QTest
 from PySide6.QtGui import QPixmap
 from PySide6.QtNetwork import QNetworkReply
-from PySide6.QtWidgets import QApplication, QLabel, QFrame
+from PySide6.QtWidgets import QApplication, QLabel, QFrame, QTextBrowser
 
 import ui.preferences as preferences
 
@@ -42,8 +42,9 @@ with patch.object(preferences, "QSettings", MemorySettings):
     from ui.main_window import MainWindow
     from ui.widgets.person_card import PersonCard
     from ui.pages.entity_profile_page import EntityProfilePage, MediaCreditCard, ProfileWorkCreditCard
-    from ui.widgets.character_card import CharacterCard
+    from ui.widgets.character_card import CharacterCard, CharacterArtwork
     from ui.widgets.work_card import WorkCard
+    from ui.theme import card_stylesheet
     from ui.pages.library_page import (
         RelationSyncWorker,
         _backfill_automatic_bundle_memberships,
@@ -591,8 +592,22 @@ class UiStartupTests(unittest.TestCase):
                 os.chdir(old_cwd)
 
 
-    def test_profile_about_description_lives_under_name_in_header(self):
-        description = "A long biography that should use the wide space beside the portrait."
+    def test_entity_profile_queries_request_html_descriptions(self):
+        import api
+
+        with patch.object(api, "anilist_request", return_value={
+            "Character": {"id": 9, "description": "<p>bio</p>"}
+        }) as request:
+            profile = api.get_entity_profile("character", 9)
+        self.assertEqual(profile["description"], "<p>bio</p>")
+        self.assertIn("description(asHtml: true)", request.call_args.args[0])
+
+
+    def test_profile_biography_uses_rich_text_and_horizontal_space_without_about_label(self):
+        description = (
+            '<p>A long <strong>formatted</strong> biography with '
+            '<a href="https://example.com/profile">a link</a>.</p>'
+        )
         with patch.object(EntityProfilePage, "_start_profile_load"):
             page = EntityProfilePage()
             try:
@@ -608,7 +623,6 @@ class UiStartupTests(unittest.TestCase):
                     "media": {"edges": []},
                 }
                 page._render_profile()
-
                 active_widgets = [
                     page.content_layout.itemAt(index).widget()
                     for index in range(page.content_layout.count())
@@ -617,20 +631,26 @@ class UiStartupTests(unittest.TestCase):
                 ]
                 header = active_widgets[0] if active_widgets else None
                 self.assertIsNotNone(header)
-                about = header.findChild(QLabel, "profileDescription")
-                self.assertIsNotNone(about)
-                self.assertEqual(about.text(), description)
+                bio = header.findChild(QTextBrowser, "profileDescription")
+                self.assertIsNotNone(bio)
+                self.assertTrue(bio.isReadOnly())
+                self.assertTrue(bio.openExternalLinks())
+                rendered = bio.toHtml()
+                self.assertIn("formatted", rendered)
+                self.assertIn("https://example.com/profile", rendered)
+                self.assertIsNotNone(header.findChild(QLabel, "profileName"))
                 self.assertFalse(
                     any(
-                        section.isAncestorOf(about)
-                        for section in active_widgets
-                        if isinstance(section, QFrame) and section.objectName() == "profileSection"
+                        label.text().strip().casefold() == "about"
+                        for label in header.findChildren(QLabel)
                     )
                 )
+                self.assertLessEqual(bio.maximumHeight(), 210)
             finally:
                 page.close()
                 page.deleteLater()
                 self.app.processEvents()
+
 
     def test_voice_acting_roles_show_work_left_and_character_right_sorted_by_role(self):
         with patch.object(EntityProfilePage, "_start_profile_load"):
@@ -716,14 +736,22 @@ class UiStartupTests(unittest.TestCase):
                     [card.character_cards[0].character["id"] for card in cards],
                     [90186, 90185, 90187],
                 )
-                self.assertTrue(all(card.width() == 300 for card in cards))
+                self.assertTrue(all(card.width() >= 430 for card in cards))
+                self.assertTrue(all(card.height() == 140 for card in cards))
                 self.assertEqual(
                     [card.findChild(QLabel, "mediaCreditRole").text() for card in cards],
                     ["MAIN", "SUPPORTING", "BACKGROUND"],
                 )
                 for card in cards:
                     self.assertEqual(len(card.character_cards), 1)
-                    self.assertEqual(card.findChild(QLabel, "mediaCreditMetadata"), None)
+                    self.assertEqual(card.character_artwork.width(), 88)
+                    self.assertEqual(card.character_artwork.height(), 116)
+                    self.assertIsInstance(card.character_artwork, CharacterArtwork)
+                    self.assertIsNone(card.character_artwork.findChild(QLabel))
+                    self.assertEqual(card.findChild(QLabel, "creditCharacterName").text(), card.character_artwork.character["character_name"])
+                    self.assertEqual(card.cover.width(), 88)
+                    self.assertEqual(card.cover.height(), 116)
+                    self.assertEqual(card.styleSheet(), card_stylesheet())
                     self.assertFalse(card.findChildren(CharacterCard))
                     labels = [label.text() for label in card.findChildren(QLabel)]
                     self.assertNotIn("CHARACTERS", labels)
