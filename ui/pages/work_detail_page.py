@@ -1101,6 +1101,7 @@ class WorkDetailPage(QWidget):
                 CharacterCard,
                 self.character_selected,
                 4,
+                empty_message=self._detail_empty_message("Characters", detail_ids),
             )
         )
         layout.addWidget(
