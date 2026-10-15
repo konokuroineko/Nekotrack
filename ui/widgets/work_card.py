@@ -7,6 +7,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout, QSizePolicy
 
 from database import save_cover_path
+from ui.display_identity import get_display_override
 from ui.preferences import get
 from ui.theme import COLORS
 
@@ -281,6 +282,16 @@ class WorkCard(QFrame):
 
     def _load_cover(self):
         cover_path = self._value("cover_path")
+        members = self._value("_series_members") or []
+        if not isinstance(members, list):
+            members = []
+        # A work-level cover override applies to a single title everywhere,
+        # but a bundle's explicit presentation/cover choice remains intact.
+        if len(members) <= 1:
+            override = get_display_override(self._value("id"))
+            custom_cover = override.get("custom_cover_path")
+            if custom_cover and Path(str(custom_cover)).is_file():
+                cover_path = custom_cover
         bundle_cover_work_id = self._value("_bundle_cover_work_id")
         if bundle_cover_work_id is not None:
             for member in self._value("_series_members") or []:
@@ -351,6 +362,14 @@ class WorkCard(QFrame):
             self.add_callback(self.work, self.sender())
 
     def _title(self):
+        members = self._value("_series_members") or []
+        if not isinstance(members, list):
+            members = []
+        if len(members) <= 1:
+            override = get_display_override(self._value("id"))
+            custom_title = override.get("custom_title")
+            if isinstance(custom_title, str) and custom_title.strip():
+                return custom_title.strip()
         title = self._value("title")
         if isinstance(title, dict):
             english = title.get("english")
