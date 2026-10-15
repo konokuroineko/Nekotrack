@@ -196,12 +196,17 @@ class MediaCreditCard(QFrame):
         self.setMinimumWidth(430)
         self.setFixedHeight(140)
 
-        # Keep the work poster physically left and character portrait right even
-        # when the surrounding application uses a right-to-left layout direction.
-        self.setLayoutDirection(Qt.LeftToRight)
+        voice_actor_layout = (
+            self.credit_kind == "voice_actor" and character_data is not None
+        )
+        if voice_actor_layout:
+            # Keep this work-poster/text/character composition physically left-to-right
+            # even when the surrounding application uses a right-to-left layout.
+            self.setLayoutDirection(Qt.LeftToRight)
 
         row = QHBoxLayout(self)
-        row.setDirection(QBoxLayout.LeftToRight)
+        if voice_actor_layout:
+            row.setDirection(QBoxLayout.LeftToRight)
         row.setContentsMargins(12, 12, 12, 12)
         row.setSpacing(8)
 
@@ -224,7 +229,7 @@ class MediaCreditCard(QFrame):
         else:
             credit = edge.get("staffRole") or edge.get("role")
 
-        if self.credit_kind == "voice_actor" and character_data is not None:
+        if voice_actor_layout:
             # Keep each name beside its matching artwork and click target: anime title left,
             # character name right.
             text_layout = QGridLayout()
