@@ -12,7 +12,7 @@ from api import get_media_recommendations
 from database import get_all_library
 from diagnostics import log_exception
 from ui.preferences import get
-from ui.theme import COLORS, SPACING
+from ui.theme import COLORS
 from ui.widgets.work_card import WorkCard
 
 
