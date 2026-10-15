@@ -593,7 +593,7 @@ class MainWindow(QMainWindow):
             application_stylesheet()
             + f"""
             QFrame#sidebar {{ background:{COLORS['sidebar']}; border-right:1px solid {COLORS['frame']}; }}
-            QFrame#brandBadge {{ background:#cec6d9; border:1px solid #bcb2cf; border-radius:10px; }}
+            QFrame#brandBadge {{ background:transparent; border:none; }}
             QLabel#brandWord {{ background:transparent; border:none; padding:0; }}
             QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:10px; padding:11px 13px; text-align:left; font-size:13px; font-weight:600; }}
             QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
@@ -649,7 +649,7 @@ class MainWindow(QMainWindow):
             application_stylesheet()
             + f"""
             QFrame#sidebar {{ background:{COLORS['sidebar']}; border-right:1px solid {COLORS['frame']}; }}
-            QFrame#brandBadge {{ background:#cec6d9; border:1px solid #bcb2cf; border-radius:10px; }}
+            QFrame#brandBadge {{ background:transparent; border:none; }}
             QLabel#brandWord {{ background:transparent; border:none; padding:0; }}
             QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:10px; padding:11px 13px; text-align:left; font-size:13px; font-weight:600; }}
             QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
@@ -770,7 +770,9 @@ class MainWindow(QMainWindow):
 
     def _update_brand_word(self):
         self.brand_word.setPixmap(
-            wordmark_pixmap(COLORS["accent"], 202, 52)
+            wordmark_pixmap(
+                COLORS["accent"], 202, 52, light_mode=get("light_mode")
+            )
         )
         self.brand_word.setAccessibleName("NekoTrack")
         self.brand_word.setStyleSheet("background:transparent;border:none;padding:0;")

@@ -60,9 +60,11 @@ class UiStartupTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_brand_assets_keep_black_cat_lockup_with_theme_accent_progress(self):
+    def test_brand_assets_and_switch_rendering_on_dark_and_white_surfaces(self):
+        from PySide6.QtGui import QColor
         from ui.branding import application_icon, logo_pixmap, wordmark_pixmap
-        from ui.theme import toggle_stylesheet
+        from ui.preferences import THEME_PRESETS, palette_for_mode
+        from ui.widgets.switch_control import SwitchControl
 
         icon = application_icon()
         self.assertFalse(icon.isNull())
@@ -72,56 +74,97 @@ class UiStartupTests(unittest.TestCase):
         self.assertFalse(app_mark.isNull())
         self.assertEqual(app_mark.toImage().pixelColor(0, 0).alpha(), 0)
 
-        dark_lockup = wordmark_pixmap("#a678ff", 202, 52)
-        light_lockup = wordmark_pixmap("#59c2b6", 202, 52)
+        dark_lockup = wordmark_pixmap("#a678ff", 202, 52, light_mode=False)
+        light_lockup = wordmark_pixmap("#59c2b6", 202, 52, light_mode=True)
         self.assertFalse(dark_lockup.isNull())
         self.assertFalse(light_lockup.isNull())
         self.assertEqual(dark_lockup.size().width(), 202)
         self.assertEqual(light_lockup.toImage().pixelColor(0, 0).alpha(), 0)
 
-        def first_opaque_ink(pixmap):
-            image = pixmap.toImage()
-            for y in range(image.height()):
-                for x in range(image.width()):
-                    color = image.pixelColor(x, y)
-                    if color.alpha() > 220:
-                        return color
-            return None
-
-        dark_ink = first_opaque_ink(dark_lockup)
-        light_ink = first_opaque_ink(light_lockup)
-        self.assertIsNotNone(dark_ink)
-        self.assertIsNotNone(light_ink)
-
-        def count_black_pixels(pixmap):
+        def count_pixels(pixmap, predicate):
             image = pixmap.toImage()
             return sum(
                 1
                 for y in range(image.height())
                 for x in range(image.width())
-                if (
-                    image.pixelColor(x, y).alpha() > 220
-                    and max(
-                        image.pixelColor(x, y).red(),
-                        image.pixelColor(x, y).green(),
-                        image.pixelColor(x, y).blue(),
-                    ) < 30
-                )
+                if predicate(image.pixelColor(x, y))
             )
 
-        self.assertGreater(count_black_pixels(dark_lockup), 100)
-        self.assertGreater(count_black_pixels(light_lockup), 100)
-        switch_css = toggle_stylesheet({
-            "accent": "#59c2b6",
-            "border": "#283b38",
-            "surface_alt": "#17211f",
-            "background_alt": "#101716",
-            "muted": "#728983",
-        })
-        self.assertIn("width:38px", switch_css)
-        self.assertIn("background-color:#59c2b6", switch_css)
-        self.assertIn("toggle-thumb-left.svg", switch_css)
-        self.assertIn("toggle-thumb-right.svg", switch_css)
+        def black_ink(color):
+            return color.alpha() > 220 and max(color.red(), color.green(), color.blue()) < 30
+
+        def pale_outline(color):
+            return (
+                color.alpha() > 220
+                and color.red() > 190
+                and color.green() > 185
+                and color.blue() > 200
+            )
+
+        self.assertGreater(count_pixels(dark_lockup, black_ink), 100)
+        self.assertGreater(count_pixels(light_lockup, black_ink), 100)
+        self.assertGreater(count_pixels(dark_lockup, pale_outline), 100)
+        self.assertLess(
+            count_pixels(light_lockup, pale_outline),
+            count_pixels(dark_lockup, pale_outline),
+        )
+
+        def render(control):
+            pixmap = QPixmap(control.size())
+            pixmap.fill(QColor(0, 0, 0, 0))
+            control.render(pixmap)
+            return pixmap.toImage()
+
+        for light_mode in (False, True):
+            palette = palette_for_mode(THEME_PRESETS["Neko"], light_mode)
+            switch = SwitchControl(palette=palette)
+            switch.setAccessibleName("White mode")
+            switch.resize(switch.sizeHint())
+            switch.show()
+            self.app.processEvents()
+            y = switch.height() // 2
+
+            unchecked = render(switch)
+            self.assertEqual(
+                unchecked.pixelColor(31, y).name(),
+                QColor(palette["surface_alt"]).name(),
+            )
+            unchecked_thumb = unchecked.pixelColor(11, y)
+            self.assertGreater(unchecked_thumb.red(), 230)
+            self.assertGreater(unchecked_thumb.green(), 230)
+            self.assertGreater(unchecked_thumb.blue(), 230)
+
+            switch.setChecked(True)
+            self.app.processEvents()
+            checked = render(switch)
+            self.assertEqual(
+                checked.pixelColor(8, y).name(),
+                QColor(palette["accent"]).name(),
+            )
+            checked_thumb = checked.pixelColor(29, y)
+            self.assertGreater(checked_thumb.red(), 230)
+            self.assertGreater(checked_thumb.green(), 230)
+            self.assertGreater(checked_thumb.blue(), 230)
+
+            switch.setEnabled(False)
+            self.app.processEvents()
+            disabled = render(switch)
+            self.assertEqual(
+                disabled.pixelColor(8, y).name(),
+                QColor(palette["background_alt"]).name(),
+            )
+            disabled_thumb = disabled.pixelColor(29, y)
+            self.assertEqual(
+                disabled_thumb.name(), QColor(palette["muted"]).name()
+            )
+
+            switch.setEnabled(True)
+            switch.click()
+            self.assertFalse(switch.isChecked())
+            self.assertTrue(switch.isCheckable())
+            switch.close()
+            switch.deleteLater()
+            self.app.processEvents()
 
     def test_library_uses_the_bundle_saved_from_search_before_relation_sync_finishes(self):
         import os
@@ -429,7 +472,8 @@ class UiStartupTests(unittest.TestCase):
                     self.assertIsNotNone(wizard.findChild(QCheckBox, "lightModeToggle"))
                     settings_toggle = settings_page.findChild(QCheckBox, "lightModeToggle")
                     self.assertIsNotNone(settings_toggle)
-                    self.assertIn("width:38px", settings_page.styleSheet())
+                    from ui.widgets.switch_control import SwitchControl
+                    self.assertIsInstance(settings_toggle, SwitchControl)
 
                     original_theme = preferences.get("theme_preset")
                     original_accent = preferences.get("accent")
@@ -440,7 +484,7 @@ class UiStartupTests(unittest.TestCase):
                     settings_toggle.setChecked(False)
                     wizard.light_mode_toggle.setChecked(True)
                     self.assertTrue(wizard.light_mode)
-                    self.assertIn("width:38px", wizard.styleSheet())
+                    self.assertIsInstance(wizard.light_mode_toggle, SwitchControl)
 
                     wizard.bundle_checkboxes["bundle_include_ovas"].setChecked(True)
                     self.assertTrue(wizard.bundle_options["bundle_include_ovas"])

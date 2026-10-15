@@ -24,7 +24,8 @@ from ui.preferences import (
     reset,
     set_value,
 )
-from ui.theme import COLORS, SPACING, refresh_theme, retint_widget_styles, toggle_stylesheet
+from ui.theme import COLORS, SPACING, refresh_theme, retint_widget_styles
+from ui.widgets.switch_control import SwitchControl
 
 
 class ThemePresetCard(QFrame):
@@ -518,7 +519,7 @@ class SettingsPage(QWidget):
             QRadioButton {{
                 background:transparent;
             }}
-            """ + toggle_stylesheet(COLORS)
+            """
         )
 
     def _section(self, name, widgets):
@@ -684,7 +685,9 @@ class SettingsPage(QWidget):
         return self._row(name, description, combo)
 
     def _check_row(self, name, description, key):
-        check = QCheckBox()
+        check = SwitchControl()
+        check.setAccessibleName(name)
+        check.setToolTip(description)
         check.setChecked(get(key))
         if key == "light_mode":
             check.setObjectName("lightModeToggle")

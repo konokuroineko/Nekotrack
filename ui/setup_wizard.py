@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.branding import application_icon, wordmark_pixmap
-from ui.theme import toggle_stylesheet
+from ui.widgets.switch_control import SwitchControl
 from ui.bundle_options import BUNDLE_OPTION_GROUPS, BUNDLE_OPTION_KEYS
 from ui.preferences import (
     THEME_PRESETS,
@@ -290,8 +290,9 @@ class SetupWizard(QDialog):
         mode_layout = QHBoxLayout(mode_row)
         mode_layout.setContentsMargins(0, 2, 0, 0)
         mode_layout.setSpacing(12)
-        self.light_mode_toggle = QCheckBox("White mode")
+        self.light_mode_toggle = SwitchControl("White mode")
         self.light_mode_toggle.setObjectName("lightModeToggle")
+        self.light_mode_toggle.setAccessibleName("White mode")
         self.light_mode_toggle.setChecked(self.light_mode)
         self.light_mode_toggle.toggled.connect(self._set_light_mode)
         mode_description = QLabel(
@@ -523,8 +524,12 @@ class SetupWizard(QDialog):
         theme = palette_for_mode(THEME_PRESETS[self.selected_theme], self.light_mode)
         if hasattr(self, "setup_brand"):
             self.setup_brand.setPixmap(
-                wordmark_pixmap(theme["accent"], 187, 49)
+                wordmark_pixmap(
+                    theme["accent"], 187, 49, light_mode=self.light_mode
+                )
             )
+        if hasattr(self, "light_mode_toggle"):
+            self.light_mode_toggle.set_color_palette(theme)
         self.setStyleSheet(
             f"""
             QDialog {{
@@ -544,9 +549,8 @@ class SetupWizard(QDialog):
                 font-family:"Segoe UI";
             }}
             QFrame#setupBrandBadge {{
-                background:#cec6d9;
-                border:1px solid #bcb2cf;
-                border-radius:10px;
+                background:transparent;
+                border:none;
             }}
             QLabel#setupBrand {{
                 background:transparent;
@@ -687,5 +691,5 @@ class SetupWizard(QDialog):
             QLabel#setupStatus[success="false"] {{
                 color:{theme['danger']};
             }}
-            """ + toggle_stylesheet(theme)
+            """
         )
