@@ -3,6 +3,7 @@ from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QFrame,
+    QBoxLayout,
     QGridLayout,
     QLayout,
     QHBoxLayout,
@@ -221,7 +222,6 @@ class MediaCreditCard(QFrame):
         if self.credit_kind == "voice_actor" and character_data is not None:
             # Match CharacterCard directly: role spans the text area at the top;
             # character name is left, anime title is right on the same name row.
-            self.setToolTip(str(title))
             text_layout = QGridLayout()
             text_layout.setContentsMargins(0, 0, 0, 0)
             text_layout.setHorizontalSpacing(18)
@@ -266,7 +266,6 @@ class MediaCreditCard(QFrame):
             title_label.setWordWrap(True)
             title_label.setFrameShape(QFrame.NoFrame)
             title_label.setLineWidth(0)
-            title_label.setToolTip(str(title))
             title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             title_label.setStyleSheet(
                 f"background: transparent; border: none; color: {COLORS['primary']}; "
@@ -275,10 +274,12 @@ class MediaCreditCard(QFrame):
             title_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
             names_row = QHBoxLayout()
+            names_row.setDirection(QBoxLayout.LeftToRight)
             names_row.setSpacing(18)
             names_row.addWidget(name_label, 1)
             names_row.addWidget(title_label, 1)
             names_widget = QWidget()
+            names_widget.setLayoutDirection(Qt.LeftToRight)
             names_widget.setLayout(names_row)
             text_layout.addWidget(names_widget, 0, 0, 1, 2)
             text_layout.setColumnStretch(0, 1)
