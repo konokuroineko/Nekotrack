@@ -310,6 +310,16 @@ def initialize_database():
     if "thumbnail_url" not in episode_column_names:
         cursor.execute("ALTER TABLE episodes ADD COLUMN thumbnail_url TEXT")
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS release_reminders (
+            work_id INTEGER NOT NULL,
+            episode_number INTEGER NOT NULL CHECK (episode_number >= 1),
+            notified_date TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (work_id, episode_number),
+            FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS reading_items (
             work_id INTEGER NOT NULL,
             item_type TEXT NOT NULL CHECK(item_type IN ('chapter', 'volume')),
@@ -3138,6 +3148,139 @@ def get_library_by_status(status):
     """, (status,)).fetchall()
     connection.close()
     return results
+
+
+
+def set_release_reminder(work_id, episode_number, enabled=True):
+    """Enable or remove a reminder for one cached episode release date."""
+    safe_work_id = _validated_work_id(work_id)
+    if isinstance(episode_number, bool):
+        raise ValueError("Episode number must be a positive integer.")
+    try:
+        number = int(episode_number)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Episode number must be a positive integer.") from error
+    if number < 1 or number > _MAX_TRACKED_EPISODE_NUMBER:
+        raise ValueError("Episode number must be a positive integer.")
+    if not isinstance(enabled, bool):
+        raise ValueError("Reminder enabled state must be boolean.")
+
+    connection = get_connection()
+    try:
+        exists = connection.execute(
+            "SELECT 1 FROM episodes WHERE work_id = ? AND episode_number = ?",
+            (safe_work_id, number),
+        ).fetchone()
+        if exists is None:
+            raise ValueError("A reminder can only be set for a cached episode.")
+        if enabled:
+            connection.execute("""
+                INSERT INTO release_reminders (work_id, episode_number, notified_date, updated_at)
+                VALUES (?, ?, NULL, CURRENT_TIMESTAMP)
+                ON CONFLICT(work_id, episode_number) DO UPDATE SET
+                    notified_date = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (safe_work_id, number))
+        else:
+            connection.execute(
+                "DELETE FROM release_reminders WHERE work_id = ? AND episode_number = ?",
+                (safe_work_id, number),
+            )
+        connection.commit()
+        return enabled
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def get_release_reminders():
+    """Return enabled reminders with their current cached episode and title data."""
+    connection = get_connection()
+    try:
+        return connection.execute("""
+            SELECT
+                reminders.work_id, reminders.episode_number,
+                reminders.notified_date, reminders.updated_at,
+                episodes.title AS episode_title, episodes.air_date,
+                works.title AS work_title, works.type, works.cover_url, works.cover_path
+            FROM release_reminders AS reminders
+            JOIN episodes
+              ON episodes.work_id = reminders.work_id
+             AND episodes.episode_number = reminders.episode_number
+            JOIN works ON works.id = reminders.work_id
+            ORDER BY episodes.air_date, works.title, reminders.episode_number
+        """).fetchall()
+    finally:
+        connection.close()
+
+
+def get_due_release_reminders(today=None):
+    """Return reminders whose release date is today and have not notified today."""
+    import datetime
+
+    if today is None:
+        today = datetime.date.today().isoformat()
+    try:
+        parsed = datetime.date.fromisoformat(str(today))
+    except (TypeError, ValueError):
+        raise ValueError("today must be a valid ISO date.")
+    date_text = parsed.isoformat()
+    connection = get_connection()
+    try:
+        return connection.execute("""
+            SELECT
+                reminders.work_id, reminders.episode_number,
+                episodes.title AS episode_title, episodes.air_date,
+                works.title AS work_title
+            FROM release_reminders AS reminders
+            JOIN episodes
+              ON episodes.work_id = reminders.work_id
+             AND episodes.episode_number = reminders.episode_number
+            JOIN works ON works.id = reminders.work_id
+            WHERE episodes.air_date = ?
+              AND (reminders.notified_date IS NULL OR reminders.notified_date != ?)
+            ORDER BY works.title, reminders.episode_number
+        """, (date_text, date_text)).fetchall()
+    finally:
+        connection.close()
+
+
+def mark_release_reminder_notified(work_id, episode_number, notified_date=None):
+    """Record that today's desktop notification has already been attempted."""
+    import datetime
+
+    safe_work_id = _validated_work_id(work_id)
+    if isinstance(episode_number, bool):
+        raise ValueError("Episode number must be a positive integer.")
+    try:
+        number = int(episode_number)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Episode number must be a positive integer.") from error
+    if number < 1 or number > _MAX_TRACKED_EPISODE_NUMBER:
+        raise ValueError("Episode number must be a positive integer.")
+    if notified_date is None:
+        notified_date = datetime.date.today().isoformat()
+    try:
+        date_text = datetime.date.fromisoformat(str(notified_date)).isoformat()
+    except (TypeError, ValueError):
+        raise ValueError("notified_date must be a valid ISO date.")
+
+    connection = get_connection()
+    try:
+        cursor = connection.execute("""
+            UPDATE release_reminders
+            SET notified_date = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE work_id = ? AND episode_number = ?
+        """, (date_text, safe_work_id, number))
+        connection.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def get_all_library():
