@@ -43,8 +43,8 @@ _PROFILE_METADATA_LABELS = {
 _PROFILE_METADATA_VALUE_PATTERNS = {
     "height": re.compile(
         r"(?:\d{2,3}(?:\.\d+)?\s*(?:cm|centimeters?|mm|m|meters?|metres?)"
-        r"|\d{1,2}\s*(?:ft|feet|foot)(?:\s*\d{1,2}\s*(?:in|inches|[\""′″]))?"
-        r"|\d{1,2}\s*(?:in|inches|[\""′″]))",
+        r"|\d{1,2}\s*(?:ft|feet|foot)(?:\s*\d{1,2}\s*(?:in|inches))?"
+        r"|\d{1,2}\s*(?:in|inches))",
         re.IGNORECASE,
     ),
     "weight": re.compile(
@@ -1060,14 +1060,39 @@ class EntityProfilePage(QWidget):
         title.setWordWrap(True)
         profile_text.addWidget(title)
 
-        # Keep all profile information in one vertical flow: facts should not
-        # be separated from the biography into competing left/right columns.
+        # Some AniList character biographies begin with compact, labeled facts
+        # (for example Height or Weight) that belong with the structured profile
+        # details rather than in the prose. Only recognize known labels/values at
+        # the very start, stopping as soon as normal biography text begins.
+        html_description = remote.get("descriptionHtml")
+        has_original_html = isinstance(html_description, str) and bool(
+            html_description.strip()
+        )
+        raw_description = str(
+            html_description
+            or remote.get("description")
+            or self._value(record, "description", "")
+            or ""
+        ).strip()
+        description_has_html = has_original_html or (
+            "<" in raw_description and any(
+                token in raw_description.casefold()
+                for token in ("<p", "<br", "<a ", "<b>", "<i>", "<div", "<ul", "<ol")
+            )
+        )
+        metadata_facts, raw_description = _extract_leading_profile_metadata(
+            raw_description,
+            html_mode=description_has_html,
+        )
+
         facts_column = QVBoxLayout()
         facts_column.setContentsMargins(0, 0, 0, 0)
         facts_column.setSpacing(4)
 
         if is_character:
-            role = str(self._value(record, "character_role", "") or "").replace("_", " ").title()
+            role = str(
+                self._value(record, "character_role", "") or ""
+            ).replace("_", " ").title()
             if role:
                 facts_column.addWidget(self._fact("Role in this bundle", role))
         else:
@@ -1075,11 +1100,17 @@ class EntityProfilePage(QWidget):
             occupations = remote.get("primaryOccupations")
             if isinstance(occupations, list) and occupations:
                 facts_column.addWidget(
-                    self._fact("Occupation", " · ".join(str(x) for x in occupations if x))
+                    self._fact(
+                        "Occupation",
+                        " · ".join(str(item) for item in occupations if item),
+                    )
                 )
             elif local_roles:
                 facts_column.addWidget(
-                    self._fact("Credits in this bundle", local_roles.replace("\n", " · "))
+                    self._fact(
+                        "Credits in this bundle",
+                        local_roles.replace("\n", " · "),
+                    )
                 )
             language = remote.get("languageV2")
             if language:
@@ -1099,7 +1130,9 @@ class EntityProfilePage(QWidget):
             if value and value != "None":
                 facts.append(f"{label}: {value}")
         if isinstance(years_active, list) and years_active:
-            active_text = "–".join(str(item) for item in years_active if item is not None)
+            active_text = "–".join(
+                str(item) for item in years_active if item is not None
+            )
             if active_text:
                 facts.append(f"Active: {active_text}")
         favourites = remote.get("favourites")
@@ -1108,44 +1141,55 @@ class EntityProfilePage(QWidget):
         for fact in facts:
             facts_column.addWidget(self._fact("", fact))
 
-        if facts_column.count():
-            profile_text.addLayout(facts_column)
+        # AniList already supplies some of these details in dedicated fields.
+        # Strip duplicate bio copies, but only add a fact when no API field
+        # currently displays the same category.
+        existing_metadata_keys = set()
+        if gender and gender != "None":
+            existing_metadata_keys.add("gender")
+        if age and age != "None":
+            existing_metadata_keys.add("age")
+        if birth:
+            existing_metadata_keys.add("birthday")
+        if blood_type and blood_type != "None":
+            existing_metadata_keys.add("blood_type")
+        for metadata_key, display_label, value in metadata_facts:
+            if metadata_key not in existing_metadata_keys:
+                facts_column.addWidget(self._fact(display_label, value))
+                existing_metadata_keys.add(metadata_key)
 
-        # AniList provides both forms: use its original HTML to retain the
-        # provider's paragraph/list/spacing choices, and repair only malformed
-        # link fragments in that HTML. Raw Markdown remains available for older
-        # responses and locally saved descriptions.
-        html_description = remote.get("descriptionHtml")
-        has_original_html = isinstance(html_description, str) and bool(
-            html_description.strip()
-        )
-        raw_description = str(
-            html_description
-            or remote.get("description")
-            or self._value(record, "description", "")
-            or ""
-        ).strip()
-        description_has_html = has_original_html or (
-            "<" in raw_description and any(
-                token in raw_description.casefold()
-                for token in ("<p", "<br", "<a ", "<b>", "<i>", "<div", "<ul", "<ol")
-            )
-        )
+        details_row = QHBoxLayout()
+        details_row.setContentsMargins(0, 0, 0, 0)
+        details_row.setSpacing(16)
+
+        if facts_column.count():
+            facts_host = QWidget()
+            facts_host.setObjectName("profileFactsColumn")
+            facts_host.setLayout(facts_column)
+            facts_host.setMinimumWidth(170)
+            facts_host.setMaximumWidth(245)
+            facts_host.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+            details_row.addWidget(facts_host, 0, Qt.AlignTop)
+
+        # Render the remaining biography beside the facts in the same profile
+        # header. It grows to its content height, leaving only the page itself
+        # scrollable instead of nesting a second scroll area inside the header.
         description = self._normalize_profile_description(
-            raw_description, html_mode=description_has_html
+            raw_description,
+            html_mode=description_has_html,
         )
         if description:
-            description_browser = QTextBrowser()
+            description_browser = ProfileDescriptionBrowser()
             description_browser.setObjectName("profileDescription")
             description_browser.setReadOnly(True)
             description_browser.setOpenExternalLinks(True)
             description_browser.setFrameShape(QFrame.NoFrame)
             description_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            description_browser.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            description_browser.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             description_browser.document().setDocumentMargin(0)
-            description_browser.setMinimumHeight(120)
-            description_browser.setMaximumHeight(210)
-            description_browser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            description_browser.setSizePolicy(
+                QSizePolicy.Expanding, QSizePolicy.Preferred
+            )
             if description_has_html:
                 description_browser.setHtml(description)
             else:
@@ -1157,17 +1201,22 @@ class EntityProfilePage(QWidget):
                 "background:transparent;border:none;font-size:12px; }"
                 f"QTextBrowser#profileDescription a {{ color:{COLORS['accent']}; }}"
             )
-            profile_text.addWidget(description_browser, 1)
+            description_browser.update_content_height()
+            details_row.addWidget(description_browser, 1)
         elif self._remote_error:
             note = QLabel(
                 "Biography unavailable. Showing the saved profile details."
             )
             note.setWordWrap(True)
             note.setStyleSheet(muted_label_stylesheet())
-            profile_text.addWidget(note, 1)
+            details_row.addWidget(note, 1)
+
+        if details_row.count():
+            profile_text.addLayout(details_row, 1)
 
         profile_text.addStretch(1)
         row.addLayout(profile_text, 1)
+
         self.content_layout.addWidget(header)
 
         if is_character:
