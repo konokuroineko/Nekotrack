@@ -115,7 +115,7 @@ class CalendarPage(QWidget):
             for row in events:
                 event_day = row["_release_date"]
                 if event_day != current_day:
-                    day_header = QLabel(event_day.strftime("%A · %B %-d" if os_name_is_posix() else "%A · %B %#d"))
+                    day_header = QLabel(event_day.strftime("%A · %B %d"))
                     day_header.setObjectName("calendarDayHeader")
                     self.layout.addWidget(day_header)
                     current_day = event_day
@@ -243,11 +243,6 @@ class CalendarPage(QWidget):
             }}
             QPushButton#calendarReminderOn {{ color:{COLORS['accent']}; }}
         """)
-
-
-def os_name_is_posix():
-    """Use platform-neutral day formatting without depending on %-d/#d extensions."""
-    return os.name != "nt"
 
 
 __all__ = ["CalendarPage"]

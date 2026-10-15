@@ -134,7 +134,6 @@ class RecommendationsPage(QWidget):
         self._loaded = False
         self._results = []
         self._build()
-        self.refresh()
 
     def _build(self):
         outer = QVBoxLayout(self)
