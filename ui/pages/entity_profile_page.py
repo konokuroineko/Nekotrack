@@ -196,7 +196,12 @@ class MediaCreditCard(QFrame):
         self.setMinimumWidth(430)
         self.setFixedHeight(140)
 
+        # Keep the work poster physically left and character portrait right even
+        # when the surrounding application uses a right-to-left layout direction.
+        self.setLayoutDirection(Qt.LeftToRight)
+
         row = QHBoxLayout(self)
+        row.setDirection(QBoxLayout.LeftToRight)
         row.setContentsMargins(12, 12, 12, 12)
         row.setSpacing(8)
 
