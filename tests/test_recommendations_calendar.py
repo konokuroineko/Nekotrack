@@ -1,5 +1,4 @@
 import datetime
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -173,6 +172,8 @@ class ReleaseReminderDatabaseTests(unittest.TestCase):
             database.set_release_reminder(101, 88, True)
         with self.assertRaises(ValueError):
             database.set_release_reminder(101, True, True)
+        with self.assertRaises(ValueError):
+            database.set_release_reminder(101, 5.5, True)
         with self.assertRaisesRegex(ValueError, "ISO date"):
             database.get_due_release_reminders("not-a-date")
         with self.assertRaisesRegex(ValueError, "ISO date"):

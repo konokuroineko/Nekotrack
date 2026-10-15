@@ -71,12 +71,12 @@ class CalendarPage(QWidget):
 
         today = datetime.date.today()
         last_date = today + datetime.timedelta(days=self.HORIZON_DAYS)
-        reminders = {
-            (int(row["work_id"]), int(row["episode_number"]))
-            for row in get_release_reminders()
-        }
         events = []
         try:
+            reminders = {
+                (int(row["work_id"]), int(row["episode_number"]))
+                for row in get_release_reminders()
+            }
             library = [dict(row) for row in (get_all_library() or [])]
             for work in library:
                 if str(work.get("type") or "").upper() != "ANIME":

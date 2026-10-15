@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from api import get_media_recommendations
 from database import get_all_library
 from diagnostics import log_exception
+from ui.preferences import get
 from ui.theme import COLORS, SPACING
 from ui.widgets.work_card import WorkCard
 
@@ -103,14 +104,14 @@ class RecommendationWorker(QObject):
             except (TypeError, ValueError, OverflowError):
                 score = 0
             return (
-                int(item.get("_recommendation_count") or 0),
-                int(item.get("_recommendation_rating") or 0),
-                score,
+                -int(item.get("_recommendation_count") or 0),
+                -int(item.get("_recommendation_rating") or 0),
+                -score,
                 str((item.get("title") or {}).get("english") or
                     (item.get("title") or {}).get("romaji") or "").casefold(),
             )
 
-        ordered = sorted(suggestions.values(), key=ranking, reverse=True)
+        ordered = sorted(suggestions.values(), key=ranking)
         self.finished.emit(ordered[:40])
 
     @staticmethod
@@ -201,9 +202,7 @@ class RecommendationsPage(QWidget):
         ):
             self._loaded = True
             self._results = []
-            self._render_empty(
-                "Add a few anime or manga titles to your library first, and NekoTrack can find related recommendations."
-            )
+            self._render_results()
             return
 
         worker = RecommendationWorker(rows, self._stop_event)
@@ -289,7 +288,9 @@ class RecommendationsPage(QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(22)
-        columns = 5
+        available_width = max(100, self.scroll.viewport().width() or self.width() - 320)
+        poster_width = int(get("card_size") or 210) + 8
+        columns = max(2, min(5, (available_width - 50) // (poster_width + 16)))
         for index, work in enumerate(self._results):
             tile = QFrame()
             tile.setObjectName("recommendationsTile")
@@ -334,6 +335,8 @@ class RecommendationsPage(QWidget):
 
     def refresh_theme(self):
         self._apply_theme()
+        for card in self.findChildren(WorkCard):
+            card.refresh_theme()
 
     def _apply_theme(self):
         self.setStyleSheet(f"""

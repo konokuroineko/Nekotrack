@@ -3154,13 +3154,10 @@ def get_library_by_status(status):
 def set_release_reminder(work_id, episode_number, enabled=True):
     """Enable or remove a reminder for one cached episode release date."""
     safe_work_id = _validated_work_id(work_id)
-    if isinstance(episode_number, bool):
-        raise ValueError("Episode number must be a positive integer.")
-    try:
-        number = int(episode_number)
-    except (TypeError, ValueError, OverflowError) as error:
-        raise ValueError("Episode number must be a positive integer.") from error
-    if number < 1 or number > _MAX_TRACKED_EPISODE_NUMBER:
+    number = _safe_optional_integer(
+        episode_number, 1, _MAX_TRACKED_EPISODE_NUMBER
+    )
+    if number is None or isinstance(episode_number, bool):
         raise ValueError("Episode number must be a positive integer.")
     if not isinstance(enabled, bool):
         raise ValueError("Reminder enabled state must be boolean.")
@@ -3252,13 +3249,10 @@ def mark_release_reminder_notified(work_id, episode_number, notified_date=None):
     import datetime
 
     safe_work_id = _validated_work_id(work_id)
-    if isinstance(episode_number, bool):
-        raise ValueError("Episode number must be a positive integer.")
-    try:
-        number = int(episode_number)
-    except (TypeError, ValueError, OverflowError) as error:
-        raise ValueError("Episode number must be a positive integer.") from error
-    if number < 1 or number > _MAX_TRACKED_EPISODE_NUMBER:
+    number = _safe_optional_integer(
+        episode_number, 1, _MAX_TRACKED_EPISODE_NUMBER
+    )
+    if number is None or isinstance(episode_number, bool):
         raise ValueError("Episode number must be a positive integer.")
     if notified_date is None:
         notified_date = datetime.date.today().isoformat()
