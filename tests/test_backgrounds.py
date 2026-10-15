@@ -95,6 +95,19 @@ class BackgroundManagerTests(unittest.TestCase):
         restored.deleteLater()
         self.app.processEvents()
 
+    def test_missing_interval_preference_defaults_to_visible_static_background(self):
+        MemorySettings.stores[("NekoTrack", "NekoTrack")].pop(
+            "background_slideshow_interval", None
+        )
+        manager = self._manager()
+        self.assertEqual(manager.interval, 0)
+        source = self._image("default-background.png", "#d35c79")
+        self.assertEqual(manager.add_images([str(source)]), 1)
+        self.assertIsNotNone(manager.display_pixmap)
+        manager._timer.stop()
+        manager.deleteLater()
+        self.app.processEvents()
+
     def test_slideshow_interval_static_off_and_overlay_persist(self):
         first = self._image("first.png", "#e95a73")
         second = self._image("second.png", "#459ad7")

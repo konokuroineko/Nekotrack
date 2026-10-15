@@ -207,7 +207,7 @@ _DEFAULTS = {
     "maximized": True,
     "tmdb_api_token": "",
     "background_image_paths_json": "[]",
-    "background_slideshow_interval": -1,
+    "background_slideshow_interval": 0,
     "background_overlay_opacity": 62,
     "bundle_mode": "main",
     **{key: False for key in BUNDLE_OPTION_KEYS},
