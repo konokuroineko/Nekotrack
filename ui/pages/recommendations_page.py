@@ -193,7 +193,7 @@ class RecommendationsPage(QWidget):
             (
                 str(row.get("id") or ""),
                 str(row.get("type") or "").upper(),
-                RecommendationsPage._title(row),
+                RecommendationWorker._title(row),
             )
             for row in rows
         )
