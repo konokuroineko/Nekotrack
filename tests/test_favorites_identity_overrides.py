@@ -205,7 +205,12 @@ class FavoritesIdentityOverrideTests(unittest.TestCase):
             button.click()
             self.app.processEvents()
             remove.assert_called_once_with(102, False)
-            self.assertIsNotNone(page.findChild(QLabel, "favoritesEmptyTitle"))
+            self.assertTrue(
+                any(
+                    label.text() == "Nothing favorited yet"
+                    for label in page.findChildren(QLabel)
+                )
+            )
             page.close()
             page.deleteLater()
             self.app.processEvents()

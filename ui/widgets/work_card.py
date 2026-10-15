@@ -227,6 +227,22 @@ class WorkCard(QFrame):
 
         return f"{first}\n{second}" if second else f"{first}\n{metrics.elidedText(' '.join(words[first_end:]), Qt.TextElideMode.ElideRight, width)}"
 
+    def refresh_display_identity(self):
+        """Re-read shared title/cover overrides on an already-built poster."""
+        if not hasattr(self, "title_label"):
+            return
+        full_title = self._title()
+        self.title_label.setText(
+            self._fit_title_to_two_lines(
+                full_title,
+                self.width() - 12,
+                self.title_label.font(),
+            )
+        )
+        self.title_label.setToolTip(full_title)
+        self.cover.set_pixmap(QPixmap())
+        self._load_cover()
+
     def refresh_theme(self):
         hover_css = (
             f"background: {COLORS['surface_hover']}; border-color: {COLORS['frame']};"

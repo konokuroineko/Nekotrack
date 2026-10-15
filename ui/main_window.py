@@ -682,6 +682,13 @@ class MainWindow(QMainWindow):
             # Refresh the local snapshot only when returning to the dashboard;
             # do not rebuild its artwork cards on every Home click.
             self.home_page.refresh()
+        elif page_name == "search":
+            # Discover can keep its result widgets alive while a detail-page
+            # override is edited. Reapply global identity overrides on return.
+            for card in self.search_page.findChildren(QFrame):
+                refresh_identity = getattr(card, "refresh_display_identity", None)
+                if callable(refresh_identity):
+                    refresh_identity()
         if page_name == "recommendations":
             self.recommendations_page.refresh()
         elif page_name == "calendar":
