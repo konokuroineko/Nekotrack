@@ -519,32 +519,82 @@ def _normalize_anilist_profile_description(description, html_mode=False):
         r"(?P<suffix>(?:[-A-Za-z0-9_.]+)?(?:\?[^\s)]*)?)\s*\\?\)",
         re.IGNORECASE,
     )
-    # With asHtml=True, AniList may render the two inner Markdown links as
-    # <a> elements but leave the outer label/parentheses as literal text.
+    # AniList's HTML output is not stable enough to depend on one exact anchor
+    # spelling/attribute order. Match the two nested links structurally, then
+    # inspect their hrefs; allow nested inline tags and whitespace in link text.
     html_pattern = re.compile(
         r"\[(?P<label>[^\]]+)\]\s*\\?\(\s*"
-        rf'<a\b(?=[^>]*\bhref\s*=\s*"(?P<base_href>{root_url})")[^>]*>'
-        rf"\s*(?P<base_text>{root_url})\s*</a>\s*"
-        r'<a\b(?=[^>]*\bhref\s*=\s*"https?://(?:www\.)?anilist\.co/user/(?P<profile_handle>[A-Za-z0-9_.-]+)")[^>]*>'
-        r"\s*@?(?P<handle>[A-Za-z0-9_.-]+)\s*</a>"
-        r"(?P<suffix>(?:[-A-Za-z0-9_.]+)?(?:\?[^\s)<]*)?)\s*\\?\)",
-        re.IGNORECASE,
+        r"<a\b(?P<base_attrs>[^>]*)>(?P<base_text>.*?)</a>"
+        r"(?:\s|<br\b[^>]*>|</?(?:span|strong|em|b|i|small|u)\b[^>]*>)*"
+        r"<a\b(?P<profile_attrs>[^>]*)>(?P<profile_text>.*?)</a>"
+        r"(?P<suffix>(?:[-A-Za-z0-9_.]+)?(?:\?[^<\s)]*)?)\s*\\?\)",
+        re.IGNORECASE | re.DOTALL,
     )
+
+    def html_attribute(attrs, name):
+        attribute = re.search(
+            rf"\b{re.escape(name)}\s*=\s*(?:"
+            r'"(?P<double>[^"]*)"|'
+            r"'(?P<single>[^']*)'|"
+            r"(?P<bare>[^\s>]+)",
+            str(attrs or ""),
+            re.IGNORECASE | re.DOTALL,
+        )
+        if attribute is None:
+            return ""
+        return _html.unescape(
+            attribute.group("double")
+            or attribute.group("single")
+            or attribute.group("bare")
+            or ""
+        )
+
+    def html_text(fragment):
+        return _html.unescape(re.sub(r"<[^>]*>", "", str(fragment or ""))).strip()
 
     def replace_link(match, force_html=False):
         base_group = "base" if match.groupdict().get("base") else "base_text"
-        base = _html.unescape(match.group(base_group) or "")
-        base_href = _html.unescape(match.group("base_href") or "")
-        handle = _html.unescape(match.group("handle") or "")
-        profile_handle = _html.unescape(match.group("profile_handle") or "")
+        if base_group == "base":
+            base = _html.unescape(match.group("base") or "")
+            base_href = _html.unescape(match.group("base_href") or "")
+            handle = _html.unescape(match.group("handle") or "")
+            profile_handle = _html.unescape(match.group("profile_handle") or "")
+        else:
+            base = html_text(match.group("base_text"))
+            base_href = html_attribute(match.group("base_attrs"), "href")
+            profile_href = html_attribute(match.group("profile_attrs"), "href")
+            handle = html_text(match.group("profile_text")).lstrip("@").strip()
+            parsed_profile = urlparse(profile_href)
+            hostname = (parsed_profile.hostname or "").casefold()
+            if hostname.removeprefix("www.") != "anilist.co":
+                return match.group(0)
+            profile_match = re.fullmatch(
+                r"/user/([A-Za-z0-9_.-]+)/?",
+                parsed_profile.path,
+                re.IGNORECASE,
+            )
+            if profile_match is None:
+                return match.group(0)
+            profile_handle = profile_match.group(1)
+
         # Only merge links when the displayed root and destination are the same,
         # and the @handle agrees with the linked AniList account. This avoids
         # accidentally rewriting ordinary independent links in a biography.
+        parsed_base = urlparse(base_href)
+        if (
+            parsed_base.scheme.casefold() not in {"http", "https"}
+            or not parsed_base.netloc
+            or parsed_base.path not in {"", "/"}
+            or parsed_base.query
+            or parsed_base.fragment
+        ):
+            return match.group(0)
         if base.rstrip("/").casefold() != base_href.rstrip("/").casefold():
             return match.group(0)
         if handle.casefold() != profile_handle.casefold():
             return match.group(0)
 
+        base = base_href
         suffix = _html.unescape(match.group("suffix") or "")
         url = f"{base}@{handle}{suffix}"
         label = match.group("label")
