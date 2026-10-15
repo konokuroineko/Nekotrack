@@ -536,7 +536,7 @@ def _normalize_anilist_profile_description(description, html_mode=False):
             rf"\b{re.escape(name)}\s*=\s*(?:"
             r'"(?P<double>[^"]*)"|'
             r"'(?P<single>[^']*)'|"
-            r"(?P<bare>[^\s>]+)",
+            r"(?P<bare>[^\s>]+))",
             str(attrs or ""),
             re.IGNORECASE | re.DOTALL,
         )
