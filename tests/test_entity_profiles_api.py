@@ -82,7 +82,6 @@ class EntityProfileApiTests(unittest.TestCase):
                 "media": {"edges": []},
                 "staffMedia": {"edges": []},
                 "characterMedia": {"edges": []},
-                "staffMedia": {"edges": []},
             }
             with self.subTest(entity_type=entity_type), patch(
                 "api.anilist_request", return_value={payload_key: profile}
@@ -100,7 +99,8 @@ class EntityProfileApiTests(unittest.TestCase):
                 )
                 for _malformed, expected_markdown, expected_url in malformed_links:
                     self.assertIn(expected_markdown, result["description"])
-                    self.assertNotIn("https://anilist.co/user/", result["description"])
+                    self.assertIn(f"]({expected_url})", result["description"])
+                self.assertNotIn("https://anilist.co/user/", result["description"])
                 self.assertNotIn(r"\([https://", result["description"])
 
     def test_normalizer_can_also_repair_legacy_mixed_html_bios(self):
