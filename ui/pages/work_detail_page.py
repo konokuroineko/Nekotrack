@@ -23,7 +23,7 @@ from database import (
     add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
     get_reading_progress, get_staff, is_work_in_library, is_work_favorite,
-    get_tmdb_mapping, get_work, get_provider_metadata, get_work_display_override,
+    get_tmdb_mapping, get_work, get_provider_metadata,
     save_work_display_override, set_work_favorite, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
     set_episode_watched, set_reading_progress_count,
@@ -1490,10 +1490,13 @@ class WorkDetailPage(QWidget):
             except (TypeError, ValueError, OverflowError):
                 favorite_work_id = None
             if favorite_work_id is not None:
-                favorite_button = QPushButton("♥ Favorited" if is_work_favorite(favorite_work_id) else "♡ Favorite")
+                favorite_enabled = is_work_favorite(favorite_work_id)
+                favorite_button = QPushButton(
+                    "♥ Favorited" if favorite_enabled else "♡ Favorite"
+                )
                 favorite_button.setObjectName("detailFavoriteButton")
                 favorite_button.setCheckable(True)
-                favorite_button.setChecked(is_work_favorite(favorite_work_id))
+                favorite_button.setChecked(favorite_enabled)
                 favorite_button.setAccessibleName("Toggle favorite")
                 favorite_button.setToolTip("Save this title independently of Library membership")
                 favorite_button.clicked.connect(
