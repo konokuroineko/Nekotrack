@@ -86,22 +86,19 @@ class EntityProfileUiTests(unittest.TestCase):
         title_label = card.findChild(QLabel, "mediaCreditTitle")
         self.assertIsNotNone(title_label)
         self.assertEqual(title_label.text(), "Example Series")
-        self.assertEqual(title_label.parentWidget(), card)
+        self.assertTrue(title_label.alignment() & Qt.AlignRight)
+        self.assertEqual(title_label.parentWidget(), name_label.parentWidget())
+        self.assertEqual(title_label.font().pointSize(), name_label.font().pointSize())
         text_layout = card.layout().itemAt(1).layout()
         self.assertIsInstance(text_layout, QGridLayout)
         role_index = text_layout.indexOf(role_label)
         self.assertGreaterEqual(role_index, 0)
-        self.assertEqual(text_layout.getItemPosition(role_index), (0, 0, 1, 1))
-        name_widget_item = next(
+        self.assertEqual(text_layout.getItemPosition(role_index), (0, 0, 1, 2))
+        names_widget_item = next(
             index for index in range(text_layout.count())
             if text_layout.itemAt(index).widget() is name_label.parentWidget()
         )
-        title_item = next(
-            index for index in range(text_layout.count())
-            if text_layout.itemAt(index).widget() is title_label
-        )
-        self.assertEqual(text_layout.getItemPosition(name_widget_item), (0, 0, 1, 1))
-        self.assertEqual(text_layout.getItemPosition(title_item), (1, 0, 1, 1))
+        self.assertEqual(text_layout.getItemPosition(names_widget_item), (0, 0, 1, 2))
         QTest.mouseClick(card.character_cards[0], Qt.LeftButton)
         self.assertEqual(len(selected_character), 1)
         self.assertEqual(selected_character[0]["id"], 456)

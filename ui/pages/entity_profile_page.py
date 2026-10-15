@@ -219,14 +219,13 @@ class MediaCreditCard(QFrame):
             credit = edge.get("staffRole") or edge.get("role")
 
         if self.credit_kind == "voice_actor" and character_data is not None:
-            # Match CharacterCard's hierarchy: role at top, character name in the
-            # expanding center, and anime title as secondary text underneath.
+            # Match CharacterCard directly: role spans the text area at the top;
+            # character name is left, anime title is right on the same name row.
             self.setToolTip(str(title))
             text_layout = QGridLayout()
             text_layout.setContentsMargins(0, 0, 0, 0)
             text_layout.setHorizontalSpacing(18)
-            text_layout.setVerticalSpacing(2)
-            text_layout.setColumnStretch(0, 1)
+            text_layout.setVerticalSpacing(0)
 
             if credit:
                 role_text = str(credit).replace("_", " ").title()
@@ -242,7 +241,7 @@ class MediaCreditCard(QFrame):
                 )
                 role.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
                 text_layout.addWidget(
-                    role, 0, 0, 1, 1, Qt.AlignHCenter | Qt.AlignTop
+                    role, 0, 0, 1, 2, Qt.AlignHCenter | Qt.AlignTop
                 )
 
             raw_name = character_data.get("name")
@@ -262,26 +261,29 @@ class MediaCreditCard(QFrame):
             )
             name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
-            names_row = QHBoxLayout()
-            names_row.setSpacing(18)
-            names_row.addWidget(name_label, 1)
-            names_widget = QWidget()
-            names_widget.setLayout(names_row)
-            text_layout.addWidget(names_widget, 0, 0, 1, 1)
-            text_layout.setRowStretch(0, 1)
-
             title_label = QLabel(str(title))
             title_label.setObjectName("mediaCreditTitle")
             title_label.setWordWrap(True)
-            title_label.setMaximumHeight(24)
+            title_label.setFrameShape(QFrame.NoFrame)
+            title_label.setLineWidth(0)
             title_label.setToolTip(str(title))
             title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             title_label.setStyleSheet(
-                f"background:transparent;border:none;color:{COLORS['muted']};"
-                "font-size:10px;font-weight:600;"
+                f"background: transparent; border: none; color: {COLORS['primary']}; "
+                "font-weight: 600;"
             )
-            title_label.setAlignment(Qt.AlignLeft | Qt.AlignBottom)
-            text_layout.addWidget(title_label, 1, 0, 1, 1)
+            title_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+            names_row = QHBoxLayout()
+            names_row.setSpacing(18)
+            names_row.addWidget(name_label, 1)
+            names_row.addWidget(title_label, 1)
+            names_widget = QWidget()
+            names_widget.setLayout(names_row)
+            text_layout.addWidget(names_widget, 0, 0, 1, 2)
+            text_layout.setColumnStretch(0, 1)
+            text_layout.setColumnStretch(1, 1)
+            text_layout.setRowStretch(0, 1)
             row.addLayout(text_layout, 1)
         else:
             text_column = QVBoxLayout()
