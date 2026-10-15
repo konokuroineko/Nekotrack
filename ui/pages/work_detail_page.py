@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QLineEdit, QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 )
 
+from diagnostics import log_exception
+
 from database import (
     add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
