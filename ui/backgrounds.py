@@ -130,6 +130,20 @@ class BackgroundManager(QObject):
             return None
         return resolved if resolved.is_file() else None
 
+    def _managed_cache_key(self, stored_path):
+        """Return a safe normalized key even if its managed file is missing."""
+        if not isinstance(stored_path, str) or not stored_path.strip():
+            return None
+        candidate = Path(stored_path.strip())
+        if not candidate.is_absolute():
+            candidate = self._working_directory / candidate
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(self.storage_directory)
+        except (OSError, ValueError, RuntimeError):
+            return None
+        return str(resolved)
+
     def _relative_path(self, path):
         try:
             return Path(path).resolve().relative_to(self._working_directory).as_posix()
@@ -276,9 +290,11 @@ class BackgroundManager(QObject):
             self._refresh_pixmap()
             self._restart_timer()
             self.images_changed.emit()
+            cache_key = self._managed_cache_key(stored_path)
+            if cache_key is not None:
+                self._pixmap_cache.pop(cache_key, None)
             path = self._resolve_managed_path(stored_path)
             if path is not None:
-                self._pixmap_cache.pop(str(path), None)
                 path.unlink(missing_ok=True)
             return True
         except (OSError, ValueError, RuntimeError) as error:
@@ -292,7 +308,10 @@ class BackgroundManager(QObject):
         for _ in range(len(self._paths)):
             self._index = (self._index + 1) % len(self._paths)
             stored = self._paths[self._index]
+            cache_key = self._managed_cache_key(stored)
             path = self._resolve_managed_path(stored)
+            if path is None and cache_key is not None:
+                self._pixmap_cache.pop(cache_key, None)
             pixmap = self._read_pixmap(path) if path else QPixmap()
             if not pixmap.isNull():
                 self._pixmap = pixmap
