@@ -634,6 +634,92 @@ class WorkDetailPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self.scroll_area)
 
+    def _skeleton_block(self, height=10, width=None, object_name="detailSkeletonBlock"):
+        block = QFrame()
+        block.setObjectName(object_name)
+        block.setFixedHeight(int(height))
+        if width is not None:
+            block.setFixedWidth(int(width))
+        else:
+            block.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        return block
+
+    def _detail_section_skeleton(self, title, card_count=4, variant="portrait"):
+        """Build a stable card-shaped placeholder for one pending detail section."""
+        frame = QFrame()
+        frame.setObjectName("detailSkeletonSection")
+        frame.setProperty("_skeleton_section_title", str(title))
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(20, 18, 20, 20)
+        layout.setSpacing(14)
+
+        heading_row = QHBoxLayout()
+        heading = QLabel(str(title))
+        heading.setObjectName("detailSkeletonHeading")
+        heading_row.addWidget(heading)
+        heading_row.addStretch(1)
+        heading_row.addWidget(self._skeleton_block(9, 72))
+        layout.addLayout(heading_row)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(14)
+        cover_height = 88 if variant == "poster" else 112
+        columns = 4
+        for index in range(max(1, int(card_count))):
+            card = QFrame()
+            card.setObjectName("detailSkeletonCard")
+            card.setFixedWidth(145)
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(8, 8, 8, 10)
+            card_layout.setSpacing(8)
+            card_layout.addWidget(
+                self._skeleton_block(cover_height, None, "detailSkeletonCover")
+            )
+            card_layout.addWidget(self._skeleton_block(9, 104))
+            card_layout.addWidget(self._skeleton_block(8, 76))
+            card_layout.addStretch(1)
+            grid.addWidget(card, index // columns, index % columns, Qt.AlignTop)
+        layout.addLayout(grid)
+        return frame
+
+    def _episode_skeleton_strip(self):
+        """Build horizontal episode placeholders without starting network work."""
+        strip = QWidget()
+        strip.setObjectName("detailSkeletonEpisodeStrip")
+        layout = QHBoxLayout(strip)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(12)
+        for _index in range(4):
+            card = QFrame()
+            card.setObjectName("detailSkeletonEpisodeCard")
+            card.setFixedWidth(156)
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(8, 8, 8, 10)
+            card_layout.setSpacing(8)
+            card_layout.addWidget(
+                self._skeleton_block(82, None, "detailSkeletonCover")
+            )
+            card_layout.addWidget(self._skeleton_block(10, 112))
+            card_layout.addWidget(self._skeleton_block(8, 76))
+            layout.addWidget(card, 0, Qt.AlignTop)
+        layout.addStretch(1)
+        return strip
+
+    def _set_cover_placeholder(self, label, loading, text):
+        """Switch the hero cover between skeleton and honest missing-cover states."""
+        if label is None or not isValid(label):
+            return
+        label.setPixmap(QPixmap())
+        label.setProperty("coverLoading", bool(loading))
+        label.setText(str(text))
+        style = label.style()
+        if style is not None:
+            style.unpolish(label)
+            style.polish(label)
+        label.update()
+
     def request_shutdown(self):
         """Cancel queued episode-image work and stop detail-page QThreads safely."""
         self._shutdown_event.set()
@@ -790,7 +876,11 @@ class WorkDetailPage(QWidget):
             episode_host.deleteLater()
             episode_host = ready_episode_frame
         else:
-            episode_layout.addWidget(QLabel("Loading episode data…"))
+            loading_episodes = QLabel("Loading episode data…")
+            loading_episodes.setObjectName("detailEpisodeLoadingLabel")
+            loading_episodes.setWordWrap(True)
+            episode_layout.addWidget(loading_episodes)
+            episode_layout.addWidget(self._episode_skeleton_strip())
         root.addWidget(episode_host)
 
         mangabaka_section = self._mangabaka_section()
@@ -813,9 +903,15 @@ class WorkDetailPage(QWidget):
             detail_layout = QVBoxLayout(detail_host)
             detail_layout.setContentsMargins(0, 0, 0, 0)
             detail_layout.setSpacing(22)
-            loading_details = QLabel("Loading details…")
-            loading_details.setStyleSheet(muted_label_stylesheet())
-            detail_layout.addWidget(loading_details)
+            detail_layout.addWidget(
+                self._detail_section_skeleton("Characters", 4, "portrait")
+            )
+            detail_layout.addWidget(
+                self._detail_section_skeleton("Staff", 6, "portrait")
+            )
+            detail_layout.addWidget(
+                self._detail_section_skeleton("Relations", 6, "poster")
+            )
         root.addWidget(detail_host)
         root.addStretch()
 
@@ -953,6 +1049,47 @@ class WorkDetailPage(QWidget):
                 background: {COLORS['surface_hover']};
                 border-color: {COLORS['border_hover']};
             }}
+            QFrame#detailSkeletonSection {{
+                background:{COLORS['surface']};
+                border:1px solid {COLORS['frame']};
+                border-radius:16px;
+            }}
+            QFrame#detailSkeletonCard, QFrame#detailSkeletonEpisodeCard {{
+                background:{COLORS['surface_alt']};
+                border:1px solid {COLORS['border']};
+                border-radius:10px;
+            }}
+            QFrame#detailSkeletonBlock, QFrame#detailSkeletonCover {{
+                background:{COLORS['surface_hover']};
+                border:1px solid {COLORS['border']};
+                border-radius:6px;
+            }}
+            QFrame#detailSkeletonCover {{ border-radius:8px; }}
+            QLabel#detailSkeletonHeading {{
+                color:{COLORS['primary']};
+                background:transparent;
+                font-size:16px;
+                font-weight:850;
+            }}
+            QLabel#detailEpisodeLoadingLabel {{
+                color:{COLORS['muted']};
+                background:transparent;
+                font-size:11px;
+                font-weight:700;
+            }}
+            QLabel#detailHeroCover {{
+                color:{COLORS['muted']};
+                background:{COLORS['background_alt']};
+                border-radius:14px;
+            }}
+            QLabel#detailHeroCover[coverLoading="true"] {{
+                color:{COLORS['muted']};
+                background:{COLORS['surface_alt']};
+                border:1px solid {COLORS['border']};
+                border-radius:14px;
+                font-size:11px;
+                font-weight:750;
+            }}
             QFrame#readingKindSection {{
                 background:{COLORS['surface_alt']};
                 border:1px solid {COLORS['border']};
@@ -1023,7 +1160,6 @@ class WorkDetailPage(QWidget):
                     updater()
 
             label_styles = {
-                "detailHeroCover": f"color:{COLORS['muted']};background:{COLORS['background_alt']};border-radius:14px;",
                 "detailHeroTitle": f"font-size:34px;font-weight:850;color:{COLORS['primary']};letter-spacing:-1px;",
                 "detailHeroNativeTitle": muted_label_stylesheet(),
                 "detailHeroMetadata": f"color:{COLORS['secondary']};font-size:13px;",
@@ -1143,15 +1279,24 @@ class WorkDetailPage(QWidget):
         if layout is None:
             return
 
-        while layout.count():
-            item = layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-
-        loading = QLabel("Loading characters…")
-        loading.setStyleSheet(muted_label_stylesheet())
-        layout.addWidget(loading)
+        loading = None
+        for index in range(layout.count()):
+            candidate = layout.itemAt(index).widget()
+            if (
+                candidate is not None
+                and candidate.property("_skeleton_section_title") == "Characters"
+            ):
+                loading = candidate
+                break
+        if loading is None:
+            loading = self._detail_section_skeleton("Characters", 4, "portrait")
+            layout.insertWidget(0, loading)
+            layout.insertWidget(
+                1, self._detail_section_skeleton("Staff", 6, "portrait")
+            )
+            layout.insertWidget(
+                2, self._detail_section_skeleton("Relations", 6, "poster")
+            )
 
         QTimer.singleShot(
             0,
@@ -1199,7 +1344,9 @@ class WorkDetailPage(QWidget):
             print(f"{title} section failed to load: {error}")
             items = []
 
-        loading.deleteLater()
+        loading_index = layout.indexOf(loading)
+        if loading_index < 0:
+            return
         if title == "Staff":
             section_widget = self._staff_section(detail_ids, items)
         else:
@@ -1211,7 +1358,9 @@ class WorkDetailPage(QWidget):
                 columns,
                 empty_message=self._detail_empty_message(title, detail_ids),
             )
-        layout.addWidget(section_widget)
+        layout.insertWidget(loading_index, section_widget)
+        layout.removeWidget(loading)
+        loading.deleteLater()
 
         next_specs = {
             "Characters": (
@@ -1220,6 +1369,7 @@ class WorkDetailPage(QWidget):
                 PersonCard,
                 self.person_selected,
                 6,
+                "portrait",
             ),
             "Staff": (
                 "Relations",
@@ -1227,16 +1377,29 @@ class WorkDetailPage(QWidget):
                 RelationCard,
                 self.relation_selected,
                 6,
+                "poster",
             ),
         }
         spec = next_specs.get(title)
         if spec is None:
             return
 
-        next_title, next_getter, next_class, next_signal, next_columns = spec
-        next_loading = QLabel(f"Loading {next_title.lower()}…")
-        next_loading.setStyleSheet(muted_label_stylesheet())
-        layout.addWidget(next_loading)
+        next_title, next_getter, next_class, next_signal, next_columns, variant = spec
+        next_loading = None
+        for index in range(layout.count()):
+            candidate = layout.itemAt(index).widget()
+            if (
+                candidate is not None
+                and candidate.property("_skeleton_section_title") == next_title
+            ):
+                next_loading = candidate
+                break
+        if next_loading is None:
+            section_index = layout.indexOf(section_widget)
+            next_loading = self._detail_section_skeleton(
+                next_title, next_columns, variant
+            )
+            layout.insertWidget(section_index + 1, next_loading)
 
         QTimer.singleShot(
             0,
@@ -1452,8 +1615,11 @@ class WorkDetailPage(QWidget):
     def _hero(self):
         hero = QFrame(); hero.setObjectName("hero")
         box = QHBoxLayout(hero); box.setContentsMargins(24, 24, 28, 24); box.setSpacing(30)
-        cover = QLabel(); cover.setObjectName("detailHeroCover"); cover.setFixedSize(235, 335); cover.setAlignment(Qt.AlignCenter)
-        cover.setStyleSheet(f"background:{COLORS['background_alt']}; border-radius:14px;")
+        cover = QLabel()
+        cover.setObjectName("detailHeroCover")
+        cover.setFixedSize(235, 335)
+        cover.setAlignment(Qt.AlignCenter)
+        cover.setProperty("coverLoading", False)
         members = self._value("_series_members") or []
         is_bundle = len(members) > 1
         try:
@@ -1466,8 +1632,6 @@ class WorkDetailPage(QWidget):
             pix = QPixmap(str(path))
             if not pix.isNull(): cover.setPixmap(self._cropped_cover(pix, cover.size(), 14))
         if cover.pixmap() is None or cover.pixmap().isNull():
-            cover.setText("NO COVER")
-            cover.setStyleSheet(f"color:{COLORS['muted']}; background:{COLORS['background_alt']}; border-radius:14px;")
             self._load_remote_cover(cover)
         box.addWidget(cover, alignment=Qt.AlignTop)
 
@@ -1561,12 +1725,22 @@ class WorkDetailPage(QWidget):
     def _load_remote_cover(self, label):
         work_id = self._value("id")
         cover_url = self._value("cover_url") or (self._value("coverImage") or {}).get("large")
-        if not work_id or not cover_url: return
+        if not work_id or not cover_url:
+            self._set_cover_placeholder(label, False, "NO COVER")
+            return
         cover_url = str(cover_url)
         cached = self._cover_cache.get(cover_url)
         if cached is not None and not cached.isNull():
-            label.setPixmap(self._cropped_cover(cached, label.size(), 14)); return
-        if cover_url in self._cover_failures: return
+            label.setProperty("coverLoading", False)
+            label.setText("")
+            label.setPixmap(self._cropped_cover(cached, label.size(), 14))
+            label.style().unpolish(label)
+            label.style().polish(label)
+            return
+        if cover_url in self._cover_failures:
+            self._set_cover_placeholder(label, False, "COVER UNAVAILABLE")
+            return
+        self._set_cover_placeholder(label, True, "Loading artwork…")
         reply = self._cover_manager.get(QNetworkRequest(QUrl(cover_url)))
         self._cover_reply = reply
         reply.finished.connect(
@@ -1594,8 +1768,12 @@ class WorkDetailPage(QWidget):
                 # touch an invalid C++ widget wrapper.
                 if label is not None and isValid(label):
                     try:
+                        label.setProperty("coverLoading", False)
                         label.setText("")
                         label.setPixmap(self._cropped_cover(pix, label.size(), 14))
+                        label.style().unpolish(label)
+                        label.style().polish(label)
+                        label.update()
                     except RuntimeError:
                         pass
 
@@ -1608,8 +1786,12 @@ class WorkDetailPage(QWidget):
                     pass
             else:
                 self._cover_failures.add(cover_url)
+                if label is not None and isValid(label):
+                    self._set_cover_placeholder(label, False, "COVER UNAVAILABLE")
         else:
             self._cover_failures.add(cover_url)
+            if label is not None and isValid(label):
+                self._set_cover_placeholder(label, False, "COVER UNAVAILABLE")
 
         if reply is not None:
             reply.deleteLater()
@@ -2480,20 +2662,29 @@ class WorkDetailPage(QWidget):
 
         if not episodes:
             sync_error = self._episode_sync_errors.get(int(selected_id)) if selected_id is not None else None
+            loading_state = (
+                not sync_error
+                and selected_work is not None
+                and int(selected_work["episodes"] or 0) > 0
+            )
             message = (
                 f"Could not load episode data: {sync_error}"
                 if sync_error
                 else (
                     "Loading episode data…"
-                    if selected_work is not None
-                    and int(selected_work["episodes"] or 0) > 0
+                    if loading_state
                     else "No episode data is available for this season."
                 )
             )
-            x = QLabel(message)
-            x.setStyleSheet(muted_label_stylesheet())
-            x.setWordWrap(True)
-            lay.addWidget(x)
+            label = QLabel(message)
+            label.setObjectName(
+                "detailEpisodeLoadingLabel" if loading_state else "detailEpisodeMessage"
+            )
+            label.setStyleSheet(muted_label_stylesheet())
+            label.setWordWrap(True)
+            lay.addWidget(label)
+            if loading_state:
+                lay.addWidget(self._episode_skeleton_strip())
             return frame
 
         if defer_cards:
@@ -2756,12 +2947,23 @@ class WorkDetailPage(QWidget):
                     widget = item.widget() if item is not None else None
                     if widget is None or not widget.property("_episodes_section"):
                         continue
-                    labels = widget.findChildren(QLabel)
+                    labels = widget.findChildren(QLabel, "detailEpisodeLoadingLabel")
                     for label in labels:
-                        if label.text() == "Loading episode data…":
-                            label.setText(f"Could not load episode data: {error}")
-                            label.setStyleSheet(muted_label_stylesheet())
-                            break
+                        label.setText(f"Could not load episode data: {error}")
+                        label.setObjectName("detailEpisodeMessage")
+                        label.setStyleSheet(muted_label_stylesheet())
+                        label.style().unpolish(label)
+                        label.style().polish(label)
+                        layout = widget.layout()
+                        if layout is not None:
+                            for child_index in range(layout.count()):
+                                child_item = layout.itemAt(child_index)
+                                child = child_item.widget() if child_item is not None else None
+                                if child is not None and child.objectName() == "detailSkeletonEpisodeStrip":
+                                    layout.removeWidget(child)
+                                    child.deleteLater()
+                                    break
+                        break
                     break
 
     def _replace_episode_section(self):
