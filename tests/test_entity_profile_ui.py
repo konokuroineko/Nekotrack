@@ -248,7 +248,8 @@ class EntityProfileUiTests(unittest.TestCase):
             page.show()
             self.app.processEvents()
 
-            header = page.findChild(QFrame, "profileHeader")
+            header_item = page.content_layout.itemAt(0)
+            header = header_item.widget() if header_item is not None else None
             self.assertIsNotNone(header)
             bio = header.findChild(QTextBrowser, "profileDescription")
             self.assertIsNotNone(bio)
