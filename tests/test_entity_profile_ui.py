@@ -229,6 +229,10 @@ class EntityProfileUiTests(unittest.TestCase):
                 page.set_profile(
                     "voice_actor",
                     {"person_id": 456, "name": "Example Voice Actor"},
+                    source_work={
+                        "id": 123,
+                        "title": {"english": "Source Work"},
+                    },
                 )
             page._remote_data = {
                 "id": 456,
@@ -268,6 +272,11 @@ class EntityProfileUiTests(unittest.TestCase):
 
             fact_labels = header.findChildren(QLabel, "profileFacts")
             self.assertTrue(fact_labels)
+            self.assertFalse(
+                any(label.text().startswith("Opened from:") for label in fact_labels),
+                "Source-work context must not appear as a visible profile fact",
+            )
+            self.assertEqual(page.profile_state()["source_work"]["id"], 123)
             facts_index = next(
                 index
                 for index in range(profile_layout.count())
