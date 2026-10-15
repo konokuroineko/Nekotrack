@@ -34,7 +34,7 @@ from database import (
 from image_cache import download_cover
 from library_import_queue import LibraryImportQueue
 from diagnostics import diagnostic_context, log_event, log_exception, log_operation
-from ui.branding import application_icon, logo_pixmap, navigation_icon, wordmark_pixmap
+from ui.branding import application_icon, navigation_icon, wordmark_pixmap
 from ui.navigation import NavigationController
 from ui.preferences import get
 from ui.setup_wizard import SetupWizard
