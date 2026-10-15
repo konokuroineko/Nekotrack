@@ -66,6 +66,23 @@ class AniListRecommendationsTests(unittest.TestCase):
 
 
 class RecommendationWorkerTests(unittest.TestCase):
+    def test_library_signature_uses_the_worker_title_normalizer(self):
+        from ui.pages.recommendations_page import RecommendationsPage
+
+        rows = [
+            {"id": 12, "type": "ANIME", "title": {"english": "English title"}},
+            {"id": 13, "type": "MANGA", "title": {"romaji": "Romanized title"}},
+            {"id": 14, "type": "MANGA", "title": "Plain title"},
+        ]
+        self.assertEqual(
+            RecommendationsPage._rows_signature(rows),
+            (
+                ("12", "ANIME", "English title"),
+                ("13", "MANGA", "Romanized title"),
+                ("14", "MANGA", "Plain title"),
+            ),
+        )
+
     def test_worker_excludes_library_entries_and_ranks_repeat_suggestions_first(self):
         from ui.pages.recommendations_page import RecommendationWorker
 
