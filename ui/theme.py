@@ -214,8 +214,8 @@ def retint_widget_styles(
 def toggle_stylesheet(theme=None):
     """Return a consistent, accent-colored switch style for Qt checkboxes."""
     palette = theme if isinstance(theme, dict) else COLORS
-    left_thumb = resource_path("assets/toggle-thumb-left.svg").as_posix()
-    right_thumb = resource_path("assets/toggle-thumb-right.svg").as_posix()
+    left_thumb = resource_path("assets/toggle-thumb-left.svg").as_uri()
+    right_thumb = resource_path("assets/toggle-thumb-right.svg").as_uri()
     accent = palette.get("accent", COLORS["accent"])
     border = palette.get("border", COLORS["border"])
     track = palette.get("surface_alt", COLORS["surface_alt"])
