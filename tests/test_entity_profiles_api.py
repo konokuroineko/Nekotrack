@@ -121,6 +121,47 @@ class EntityProfileApiTests(unittest.TestCase):
         self.assertNotIn("https://anilist.co/user/OfficialChannel", description)
         self.assertNotIn('<a href="https://www.youtube.com/">', description)
 
+    def test_anilist_request_normalizes_nested_descriptions_everywhere(self):
+        malformed = (
+            r"[YouTube]\([https://www.youtube.com/](https://www.youtube.com/)"
+            r"[@Ueda](https://anilist.co/user/Ueda)-Kana)"
+        )
+        expected = "[YouTube](https://www.youtube.com/@Ueda-Kana)"
+        payload = {
+            "data": {
+                "Media": {
+                    "description": malformed,
+                    "relations": {
+                        "edges": [
+                            {"node": {"description": malformed}},
+                        ],
+                    },
+                },
+                "Staff": {"description": malformed},
+            },
+        }
+
+        class FakeResponse:
+            status_code = 200
+            headers = {}
+            reason = "OK"
+
+            @staticmethod
+            def json():
+                return payload
+
+        with patch("api._wait_for_anilist_slot"), patch(
+            "api.requests.post", return_value=FakeResponse()
+        ):
+            result = api.anilist_request("query { Media { description } }")
+
+        self.assertEqual(result["Media"]["description"], expected)
+        self.assertEqual(
+            result["Media"]["relations"]["edges"][0]["node"]["description"],
+            expected,
+        )
+        self.assertEqual(result["Staff"]["description"], expected)
+
     def test_invalid_entity_id_is_rejected_before_network_call(self):
         for value in (None, 0, -5, True, "not-an-id", 1 << 40):
             with self.subTest(value=value), patch("api.anilist_request") as request:
