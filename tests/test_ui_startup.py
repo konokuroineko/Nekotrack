@@ -127,7 +127,10 @@ class UiStartupTests(unittest.TestCase):
             unchecked = render(switch)
             self.assertEqual(
                 unchecked.pixelColor(31, y).name(),
-                QColor(palette["surface_alt"]).name(),
+                QColor(
+                    palette["surface_hover"] if switch.underMouse()
+                    else palette["surface_alt"]
+                ).name(),
             )
             unchecked_thumb = unchecked.pixelColor(11, y)
             self.assertGreater(unchecked_thumb.red(), 230)
