@@ -119,7 +119,7 @@ class EntityProfileApiTests(unittest.TestCase):
         )
         self.assertIn(">YouTube</a>", description)
         self.assertNotIn("https://anilist.co/user/OfficialChannel", description)
-        self.assertNotIn("<a href=\"https://www.youtube.com/\">", description)
+        self.assertNotIn('<a href="https://www.youtube.com/">', description)
 
     def test_invalid_entity_id_is_rejected_before_network_call(self):
         for value in (None, 0, -5, True, "not-an-id", 1 << 40):
