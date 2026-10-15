@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QBuffer, QIODevice
 from PySide6.QtTest import QTest
 from PySide6.QtGui import QPixmap
 from PySide6.QtNetwork import QNetworkReply
-from PySide6.QtWidgets import QApplication, QLabel, QFrame, QTextBrowser
+from PySide6.QtWidgets import QApplication, QLabel, QFrame, QTextBrowser, QCheckBox
 
 import ui.preferences as preferences
 
