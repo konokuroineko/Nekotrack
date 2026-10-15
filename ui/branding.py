@@ -49,10 +49,10 @@ def logo_pixmap(size=128):
 
 
 @lru_cache(maxsize=128)
-def wordmark_pixmap(primary, width=312, height=60):
-    """Render the transparent monochrome lockup in contrasting theme-aware ink."""
-    ink_color = "#ffffff" if QColor(primary).lightness() >= 128 else "#111111"
-    svg = _wordmark_svg().replace("__INK__", ink_color)
+def wordmark_pixmap(accent, width=312, height=60):
+    """Render the black transparent lockup with theme-colored progress markers."""
+    accent_color = QColor(accent).name(QColor.NameFormat.HexRgb)
+    svg = _wordmark_svg().replace("__ACCENT__", accent_color)
     return _render_svg(svg, (max(16, int(width)), max(16, int(height))))
 
 
