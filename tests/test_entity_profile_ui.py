@@ -222,6 +222,55 @@ class EntityProfileUiTests(unittest.TestCase):
                 page.hide()
         page.close()
 
+    def test_profile_facts_and_biography_use_one_vertical_column(self):
+        page = EntityProfilePage()
+        try:
+            with patch.object(EntityProfilePage, "_start_profile_load"):
+                page.set_profile(
+                    "voice_actor",
+                    {"person_id": 456, "name": "Example Voice Actor"},
+                )
+            page._remote_data = {
+                "id": 456,
+                "name": {"full": "Example Voice Actor"},
+                "primaryOccupations": ["Voice Actor", "Singer"],
+                "languageV2": "Japanese",
+                "gender": "Female",
+                "description": "Biography text.",
+                "descriptionHtml": (
+                    "<p><strong>Biography text</strong> should follow the facts.</p>"
+                ),
+                "image": {},
+                "staffMedia": {"edges": []},
+                "characterMedia": {"edges": []},
+            }
+            page._render_profile()
+            page.show()
+            self.app.processEvents()
+
+            header = page.findChild(QFrame, "profileHeader")
+            self.assertIsNotNone(header)
+            bio = header.findChild(QTextBrowser, "profileDescription")
+            self.assertIsNotNone(bio)
+            fact_labels = header.findChildren(QLabel, "profileFacts")
+            self.assertTrue(fact_labels)
+            last_fact = max(fact_labels, key=lambda label: label.geometry().bottom())
+
+            self.assertLess(
+                last_fact.geometry().bottom(),
+                bio.geometry().top(),
+                "All structured facts must appear above the biography, not beside it",
+            )
+            self.assertLessEqual(
+                abs(last_fact.geometry().x() - bio.geometry().x()),
+                4,
+                "Facts and biography should share the same left edge",
+            )
+            self.assertIn("Biography text", bio.toPlainText())
+        finally:
+            page.close()
+            page.deleteLater()
+
     def test_voice_actor_bio_links_are_fixed_without_changing_html_formatting(self):
         raw_description = "\n".join((
             r"[YouTube]\([https://www.youtube.com/](https://www.youtube.com/)"
