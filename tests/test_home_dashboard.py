@@ -18,7 +18,7 @@ class HomeDashboardTests(unittest.TestCase):
     def test_home_removes_hero_and_summary_cards_and_embeds_recommendations(self):
         with (
             patch.object(HomePage, "_read_library", return_value=[]),
-            patch.object(RecommendationsPage, "refresh", autospec=True),
+            patch.object(RecommendationsPage, "refresh", autospec=True) as refresh_mock,
         ):
             page = HomePage()
 
@@ -27,6 +27,9 @@ class HomeDashboardTests(unittest.TestCase):
             self.app.processEvents()
             self.assertTrue(page.recommendations_page.embedded)
             self.assertEqual(page.content_layout.indexOf(page.recommendations_page), 2)
+            refresh_mock.assert_called_once_with(
+                page.recommendations_page, library_rows=[]
+            )
             self.assertIs(
                 page.content.findChild(RecommendationsPage),
                 page.recommendations_page,
