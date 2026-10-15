@@ -30,6 +30,7 @@ __all__ = [
     "get_media_relations",
     "get_media_relations_batch",
     "get_media_episodes",
+    "get_media_recommendations",
     "get_media_details",
     "get_entity_profile",
     "get_tmdb_episode_data",
@@ -1118,6 +1119,84 @@ def get_media_relations_batch(media_ids):
             result[local_id] = details
 
     return result
+
+
+def get_media_recommendations(media_id, per_page=12):
+    """Return validated AniList recommendations for one positive media ID."""
+    try:
+        numeric_id = _validated_media_id(media_id)
+    except ValueError:
+        return []
+    if numeric_id < 1:
+        return []
+
+    try:
+        per_page = int(per_page)
+    except (TypeError, ValueError, OverflowError):
+        per_page = 12
+    per_page = max(1, min(25, per_page))
+
+    query = """
+    query ($id: Int, $perPage: Int) {
+        Media(id: $id) {
+            recommendations(sort: [RATING_DESC], page: 1, perPage: $perPage) {
+                nodes {
+                    rating
+                    mediaRecommendation {
+                        id
+                        idMal
+                        type
+                        format
+                        status
+                        episodes
+                        averageScore
+                        seasonYear
+                        startDate { year }
+                        title { romaji english native }
+                        coverImage { large }
+                    }
+                }
+            }
+        }
+    }
+    """
+    data = anilist_request(query, {"id": numeric_id, "perPage": per_page})
+    media = data.get("Media") if isinstance(data, dict) else None
+    connection = media.get("recommendations") if isinstance(media, dict) else None
+    nodes = connection.get("nodes") if isinstance(connection, dict) else None
+    if not isinstance(nodes, list):
+        return []
+
+    results = []
+    seen = set()
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        recommendation = node.get("mediaRecommendation")
+        if not isinstance(recommendation, dict):
+            continue
+        try:
+            recommended_id = _validated_media_id(recommendation.get("id"))
+        except ValueError:
+            continue
+        if recommended_id < 1 or recommended_id == numeric_id or recommended_id in seen:
+            continue
+        seen.add(recommended_id)
+        result = dict(recommendation)
+        cover = result.get("coverImage")
+        if isinstance(cover, dict) and cover.get("large"):
+            result["cover_url"] = cover["large"]
+        start_date = result.get("startDate")
+        if isinstance(start_date, dict) and start_date.get("year") is not None:
+            result["start_year"] = start_date["year"]
+        rating = node.get("rating")
+        try:
+            rating = int(rating) if rating is not None else None
+        except (TypeError, ValueError, OverflowError):
+            rating = None
+        result["_recommendation_rating"] = rating if rating is not None and 0 <= rating <= 100 else None
+        results.append(result)
+    return results
 
 
 def get_media_episodes(media_id):
