@@ -42,19 +42,39 @@ class PreferenceMigrationTests(unittest.TestCase):
             },
         }
 
-    def test_light_theme_is_registered_and_applies_all_palette_values(self):
-        theme = preferences.THEME_PRESETS["Light"]
-        self.assertGreater(int(theme["background"].lstrip("#")[:2], 16), 230)
-        self.assertLess(int(theme["primary"].lstrip("#")[:2], 16), 60)
+    def test_white_mode_preserves_the_selected_theme_accent(self):
+        self.assertNotIn("Light", preferences.THEME_PRESETS)
+        for name, theme in preferences.THEME_PRESETS.items():
+            palette = preferences.palette_for_mode(theme, True)
+            self.assertEqual(palette["accent"], theme["accent"], name)
+            self.assertEqual(palette["accent_hover"], theme["accent_hover"], name)
+            self.assertGreater(int(palette["background"].lstrip("#")[:2], 16), 230)
+            self.assertLess(int(palette["primary"].lstrip("#")[:2], 16), 60)
+            self.assertNotEqual(palette["accent_soft"], theme["accent_soft"], name)
 
         with patch.object(preferences, "QSettings", MemorySettings):
-            preferences.apply_theme_preset("Light")
+            preferences.apply_theme_preset("Ocean")
+            preferences.set_value("light_mode", True)
             settings = preferences.settings()
 
-        self.assertEqual(settings.value("theme_preset"), "Light")
-        for key, value in theme.items():
-            if key != "description":
-                self.assertEqual(settings.value(key), value, key)
+        self.assertEqual(settings.value("theme_preset"), "Ocean")
+        self.assertTrue(settings.value("light_mode"))
+        self.assertEqual(settings.value("accent"), preferences.THEME_PRESETS["Ocean"]["accent"])
+
+    def test_short_lived_light_preset_migrates_to_white_mode(self):
+        MemorySettings.stores[("NekoTrack", "NekoTrack")].update({
+            "theme_preset": "Light",
+            "_theme_palette_version": "8",
+        })
+        MemorySettings.stores[("NekoTrack", "NekoTrack")].pop("light_mode", None)
+
+        with patch.object(preferences, "QSettings", MemorySettings):
+            settings = preferences.settings()
+
+        self.assertEqual(settings.value("theme_preset"), "Neko")
+        self.assertTrue(settings.value("light_mode"))
+        self.assertEqual(settings.value("accent"), preferences.THEME_PRESETS["Neko"]["accent"])
+        self.assertEqual(settings.value("_theme_palette_version"), preferences._THEME_PALETTE_VERSION)
 
     def test_old_extras_mode_migrates_to_all_individual_options(self):
         MemorySettings.stores[("NekoTrack", "NekoTrack")]["bundle_mode"] = "extras"
