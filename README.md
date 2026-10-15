@@ -18,7 +18,7 @@ Track what you watch and read, manage your library, and keep your collection org
 - Local cover caching
 - Work relationships and franchise connections shown in work details
 - Character, voice-actor, and staff information shown in work details
-- Configurable dark desktop interface built with PySide6
+- Configurable desktop interface with dark and light themes, built with PySide6
 - Library card sizing, spacing, hover, and resize animation preferences
 - Maximized startup preference and scrollable settings page
 

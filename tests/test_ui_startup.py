@@ -60,6 +60,40 @@ class UiStartupTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_brand_assets_render_and_lockup_switches_ink_for_light_mode(self):
+        from ui.branding import application_icon, logo_pixmap, wordmark_pixmap
+
+        icon = application_icon()
+        self.assertFalse(icon.isNull())
+        self.assertTrue(icon.availableSizes())
+
+        app_mark = logo_pixmap(96)
+        self.assertFalse(app_mark.isNull())
+        self.assertEqual(app_mark.toImage().pixelColor(0, 0).alpha(), 0)
+
+        dark_lockup = wordmark_pixmap("#f5f0fb", 202, 52)
+        light_lockup = wordmark_pixmap("#28232f", 202, 52)
+        self.assertFalse(dark_lockup.isNull())
+        self.assertFalse(light_lockup.isNull())
+        self.assertEqual(dark_lockup.size().width(), 202)
+        self.assertEqual(light_lockup.toImage().pixelColor(0, 0).alpha(), 0)
+
+        def first_opaque_ink(pixmap):
+            image = pixmap.toImage()
+            for y in range(image.height()):
+                for x in range(image.width()):
+                    color = image.pixelColor(x, y)
+                    if color.alpha() > 220:
+                        return color
+            return None
+
+        dark_ink = first_opaque_ink(dark_lockup)
+        light_ink = first_opaque_ink(light_lockup)
+        self.assertIsNotNone(dark_ink)
+        self.assertIsNotNone(light_ink)
+        self.assertGreater(dark_ink.red(), 240)
+        self.assertLess(light_ink.red(), 30)
+
     def test_library_uses_the_bundle_saved_from_search_before_relation_sync_finishes(self):
         import os
         import tempfile
@@ -404,7 +438,6 @@ class UiStartupTests(unittest.TestCase):
                         },
                     )
                     self.assertFalse(window.windowIcon().isNull())
-                    self.assertFalse(window.brand_mark.pixmap().isNull())
                     self.assertFalse(window.brand_word.pixmap().isNull())
                     self.assertEqual(window.brand_word.accessibleName(), "NekoTrack")
                     self.assertEqual(

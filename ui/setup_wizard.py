@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ui.branding import application_icon, logo_pixmap, wordmark_pixmap
+from ui.branding import application_icon, wordmark_pixmap
 from ui.bundle_options import BUNDLE_OPTION_GROUPS, BUNDLE_OPTION_KEYS
 from ui.preferences import (
     THEME_PRESETS,
@@ -117,25 +117,14 @@ class SetupWizard(QDialog):
         side.setContentsMargins(25, 28, 22, 28)
         side.setSpacing(4)
 
-        brand_row = QHBoxLayout()
-        brand_row.setSpacing(9)
-        mark = QLabel()
-        mark.setObjectName("setupMark")
-        mark.setFixedSize(38, 38)
-        mark.setPixmap(logo_pixmap(96))
-        mark.setScaledContents(True)
-        mark.setStyleSheet("background:transparent;border:none;padding:0;")
         brand = QLabel()
         brand.setObjectName("setupBrand")
         brand.setAccessibleName("NekoTrack")
-        brand.setFixedSize(156, 30)
+        brand.setFixedSize(203, 53)
         brand.setScaledContents(True)
         brand.setStyleSheet("background:transparent;border:none;padding:0;")
         self.setup_brand = brand
-        brand_row.addWidget(mark)
-        brand_row.addWidget(brand)
-        brand_row.addStretch(1)
-        side.addLayout(brand_row)
+        side.addWidget(brand)
         side.addSpacing(42)
 
         side_intro = QLabel("SETUP")
@@ -492,7 +481,7 @@ class SetupWizard(QDialog):
         theme = THEME_PRESETS[self.selected_theme]
         if hasattr(self, "setup_brand"):
             self.setup_brand.setPixmap(
-                wordmark_pixmap(theme["accent"], theme["primary"], 312, 60)
+                wordmark_pixmap(theme["primary"], 203, 53)
             )
         self.setStyleSheet(
             f"""
