@@ -1,3 +1,7 @@
+import html as html_lib
+import re
+from math import ceil
+
 from PySide6.QtCore import Qt, Signal, QUrl, QObject, QRunnable, QThreadPool, QRectF, QPoint, QRect, QSize
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
@@ -21,6 +25,176 @@ from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
 from ui.widgets.character_card import CharacterArtwork
 from ui.widgets.person_card import PersonCard
 from ui.widgets.work_card import WorkCard
+
+
+_PROFILE_METADATA_LABEL_PATTERN = re.compile(
+    r"(?P<label>Blood\s+Type|Date\s+of\s+Birth|Birthday|Height|Weight|Age|Gender)\s*:\s*",
+    re.IGNORECASE,
+)
+_PROFILE_METADATA_LABELS = {
+    "blood type": ("blood_type", "Blood type"),
+    "date of birth": ("birthday", "Birthday"),
+    "birthday": ("birthday", "Birthday"),
+    "height": ("height", "Height"),
+    "weight": ("weight", "Weight"),
+    "age": ("age", "Age"),
+    "gender": ("gender", "Gender"),
+}
+_PROFILE_METADATA_VALUE_PATTERNS = {
+    "height": re.compile(
+        r"(?:\d{2,3}(?:\.\d+)?\s*(?:cm|centimeters?|mm|m|meters?|metres?)"
+        r"|\d{1,2}\s*(?:ft|feet|foot)(?:\s*\d{1,2}\s*(?:in|inches|[\""′″]))?"
+        r"|\d{1,2}\s*(?:in|inches|[\""′″]))",
+        re.IGNORECASE,
+    ),
+    "weight": re.compile(
+        r"\d{1,3}(?:\.\d+)?\s*(?:kg|kilograms?|lb|lbs|pounds?)",
+        re.IGNORECASE,
+    ),
+    "birthday": re.compile(
+        r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?"
+        r"|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?"
+        r"|Dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?"
+        r"|\d{1,2}(?:st|nd|rd|th)?\s+(?:January|February|March|April|May|June"
+        r"|July|August|September|October|November|December)(?:\s+\d{4})?"
+        r"|\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?|\d{4}",
+        re.IGNORECASE,
+    ),
+    "age": re.compile(
+        r"(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?(?:\s*(?:years? old|y/o))?"
+        r"|unknown|unspecified|\?)",
+        re.IGNORECASE,
+    ),
+    "gender": re.compile(
+        r"(?:male\s*/\s*female|female\s*/\s*male|non[- ]?binary|genderfluid"
+        r"|androgynous|genderless|agender|unknown|other|male|female)",
+        re.IGNORECASE,
+    ),
+    "blood_type": re.compile(r"(?:AB|A|B|O)[+-]?", re.IGNORECASE),
+}
+
+
+def _description_visible_text_and_map(description, html_mode):
+    """Return visible description text with offsets back into its original source."""
+    source = str(description or "")
+    if not html_mode:
+        return source, [(index, index + 1) for index in range(len(source))]
+
+    visible = []
+    source_map = []
+    tokens = re.compile(
+        r"(?is)<[^>]*>|&(?:#(?:x[0-9a-f]+|\d+)|[a-z][a-z0-9]+);|."
+    )
+    block_tags = {"p", "div", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6"}
+    for match in tokens.finditer(source):
+        token = match.group(0)
+        if token.startswith("<"):
+            tag_match = re.match(r"<\s*(/?)\s*([a-z0-9]+)", token, re.IGNORECASE)
+            if tag_match is None:
+                continue
+            closing, tag_name = tag_match.groups()
+            should_break = tag_name.casefold() == "br" or (
+                bool(closing) and tag_name.casefold() in block_tags
+            )
+            if should_break and (not visible or visible[-1] != "\n"):
+                visible.append("\n")
+                source_map.append((match.start(), match.end()))
+        elif token.startswith("&"):
+            decoded = html_lib.unescape(token)
+            for character in decoded:
+                visible.append(character)
+                source_map.append((match.start(), match.end()))
+        else:
+            visible.append(token)
+            source_map.append((match.start(), match.end()))
+
+    return "".join(visible), source_map
+
+
+def _extract_leading_profile_metadata(description, html_mode=False):
+    """Extract confident, labeled metadata from the beginning of a character bio.
+
+    Only known labels with recognizable values are considered. Once ordinary prose
+    starts, the remaining description is left untouched.
+    """
+    source = str(description or "")
+    if not source.strip():
+        return [], source
+
+    visible, source_map = _description_visible_text_and_map(source, html_mode)
+    cursor = 0
+    facts = []
+    first_fact_start = None
+    last_fact_end = None
+
+    while cursor < len(visible):
+        while cursor < len(visible) and visible[cursor].isspace():
+            cursor += 1
+        if cursor >= len(visible):
+            break
+
+        label_match = _PROFILE_METADATA_LABEL_PATTERN.match(visible, cursor)
+        if label_match is None:
+            break
+
+        label_key = " ".join(label_match.group("label").casefold().split())
+        metadata_key, display_label = _PROFILE_METADATA_LABELS[label_key]
+        value_start = label_match.end()
+        value_match = _PROFILE_METADATA_VALUE_PATTERNS[metadata_key].match(
+            visible, value_start
+        )
+        if value_match is None:
+            break
+
+        value = value_match.group(0).strip()
+        value_end = value_match.end()
+        if (
+            value_end < len(visible)
+            and not visible[value_end].isspace()
+            and visible[value_end] not in ",.;|·)"
+        ):
+            break
+
+        if first_fact_start is None:
+            first_fact_start = cursor
+        facts.append((metadata_key, display_label, value))
+        last_fact_end = value_end
+        cursor = value_end
+
+        lookahead = cursor
+        while lookahead < len(visible) and visible[lookahead].isspace():
+            lookahead += 1
+        if _PROFILE_METADATA_LABEL_PATTERN.match(visible, lookahead) is None:
+            break
+        cursor = lookahead
+
+    if not facts or first_fact_start is None or last_fact_end is None:
+        return [], source
+
+    start_offset = source_map[first_fact_start][0]
+    end_offset = source_map[last_fact_end - 1][1]
+    cleaned = source[:start_offset] + source[end_offset:]
+
+    if html_mode:
+        # The removed prefix may leave empty paragraphs or a leading line break.
+        for _ in range(8):
+            cleaned, count = re.subn(
+                r"(?is)^\s*<(p|div)\b[^>]*>\s*</\1\s*>\s*",
+                "",
+                cleaned,
+                count=1,
+            )
+            if not count:
+                break
+        cleaned = re.sub(
+            r"(?is)^(\s*<(?:p|div)\b[^>]*>)\s*(?:<br\b[^>]*>\s*)+",
+            r"\1",
+            cleaned,
+            count=1,
+        )
+        cleaned = re.sub(r"(?is)^\s*(?:<br\b[^>]*>\s*)+", "", cleaned)
+
+    return facts, cleaned.strip()
 
 
 def _crop_pixmap_to_size(pixmap, size):
