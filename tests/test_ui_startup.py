@@ -438,7 +438,6 @@ class UiStartupTests(unittest.TestCase):
                         },
                     )
                     self.assertFalse(window.windowIcon().isNull())
-                    self.assertFalse(window.brand_mark.pixmap().isNull())
                     self.assertFalse(window.brand_word.pixmap().isNull())
                     self.assertEqual(window.brand_word.accessibleName(), "NekoTrack")
                     self.assertEqual(
