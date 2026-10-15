@@ -1151,10 +1151,9 @@ class EntityProfilePage(QWidget):
         title.setWordWrap(True)
         profile_text.addWidget(title)
 
-        # Some AniList character biographies begin with compact, labeled facts
-        # (for example Height or Weight) that belong with the structured profile
-        # details rather than in the prose. Only recognize known labels/values at
-        # the very start, stopping as soon as normal biography text begins.
+        # AniList biographies sometimes start with short X: Y facts (including
+        # hobbies or other nonstandard labels). Move a consecutive leading block
+        # into profile facts, and stop at the first ordinary prose segment.
         html_description = remote.get("descriptionHtml")
         has_original_html = isinstance(html_description, str) and bool(
             html_description.strip()
@@ -1244,6 +1243,18 @@ class EntityProfilePage(QWidget):
             existing_metadata_keys.add("birthday")
         if blood_type and blood_type != "None":
             existing_metadata_keys.add("blood_type")
+        if not is_character:
+            if hometown and hometown != "None":
+                existing_metadata_keys.add("hometown")
+            if remote.get("languageV2"):
+                existing_metadata_keys.add("language")
+            occupations = remote.get("primaryOccupations")
+            if isinstance(occupations, list) and any(occupations):
+                existing_metadata_keys.add("occupation")
+            if isinstance(years_active, list) and years_active:
+                existing_metadata_keys.add("years_active")
+            if isinstance(favourites, int) and favourites > 0:
+                existing_metadata_keys.add("favourites")
         for metadata_key, display_label, value in metadata_facts:
             if metadata_key not in existing_metadata_keys:
                 facts_column.addWidget(self._fact(display_label, value))
