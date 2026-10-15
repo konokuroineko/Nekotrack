@@ -81,20 +81,20 @@ class EntityProfileUiTests(unittest.TestCase):
         self.assertEqual(role_label.text(), "Main")
         self.assertEqual(name_label.text(), "Example Character")
         self.assertTrue(role_label.alignment() & Qt.AlignHCenter)
-        self.assertTrue(name_label.alignment() & Qt.AlignVCenter)
+        self.assertTrue(name_label.alignment() & Qt.AlignRight)
         self.assertEqual(card.toolTip(), "")
         title_label = card.findChild(QLabel, "mediaCreditTitle")
         self.assertIsNotNone(title_label)
         self.assertEqual(title_label.text(), "Example Series")
         self.assertEqual(title_label.toolTip(), "")
-        self.assertTrue(title_label.alignment() & Qt.AlignRight)
+        self.assertTrue(title_label.alignment() & Qt.AlignLeft)
         self.assertEqual(title_label.parentWidget(), name_label.parentWidget())
         self.assertEqual(title_label.font().pointSize(), name_label.font().pointSize())
         names_layout = name_label.parentWidget().layout()
         self.assertEqual(names_layout.direction(), QBoxLayout.LeftToRight)
         self.assertEqual(name_label.parentWidget().layoutDirection(), Qt.LeftToRight)
-        self.assertIs(names_layout.itemAt(0).widget(), name_label)
-        self.assertIs(names_layout.itemAt(1).widget(), title_label)
+        self.assertIs(names_layout.itemAt(0).widget(), title_label)
+        self.assertIs(names_layout.itemAt(1).widget(), name_label)
         text_layout = card.layout().itemAt(1).layout()
         self.assertIsInstance(text_layout, QGridLayout)
         role_index = text_layout.indexOf(role_label)
@@ -141,9 +141,9 @@ class EntityProfileUiTests(unittest.TestCase):
             self.assertEqual(name_label.layoutDirection(), Qt.LeftToRight)
             self.assertEqual(title_label.layoutDirection(), Qt.LeftToRight)
             self.assertLess(
-                name_label.geometry().center().x(),
                 title_label.geometry().center().x(),
-                "Character name must render physically left of the anime title",
+                name_label.geometry().center().x(),
+                "Anime title must render physically left of the character name",
             )
             self.assertEqual(card.toolTip(), "")
             self.assertEqual(title_label.toolTip(), "")
