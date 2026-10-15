@@ -1077,6 +1077,11 @@ class WorkDetailPage(QWidget):
                 font-size:11px;
                 font-weight:700;
             }}
+            QLabel#detailHeroCover {{
+                color:{COLORS['muted']};
+                background:{COLORS['background_alt']};
+                border-radius:14px;
+            }}
             QLabel#detailHeroCover[coverLoading="true"] {{
                 color:{COLORS['muted']};
                 background:{COLORS['surface_alt']};
@@ -1274,21 +1279,15 @@ class WorkDetailPage(QWidget):
         if layout is None:
             return
 
-        while layout.count():
-            item = layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-
-        loading = next(
-            (
-                item.widget()
-                for index in range(layout.count())
-                if (item := layout.itemAt(index)).widget() is not None
-                and item.widget().property("_skeleton_section_title") == "Characters"
-            ),
-            None,
-        )
+        loading = None
+        for index in range(layout.count()):
+            candidate = layout.itemAt(index).widget()
+            if (
+                candidate is not None
+                and candidate.property("_skeleton_section_title") == "Characters"
+            ):
+                loading = candidate
+                break
         if loading is None:
             loading = self._detail_section_skeleton("Characters", 4, "portrait")
             layout.insertWidget(0, loading)
@@ -1386,15 +1385,15 @@ class WorkDetailPage(QWidget):
             return
 
         next_title, next_getter, next_class, next_signal, next_columns, variant = spec
-        next_loading = next(
-            (
-                item.widget()
-                for index in range(layout.count())
-                if (item := layout.itemAt(index)).widget() is not None
-                and item.widget().property("_skeleton_section_title") == next_title
-            ),
-            None,
-        )
+        next_loading = None
+        for index in range(layout.count()):
+            candidate = layout.itemAt(index).widget()
+            if (
+                candidate is not None
+                and candidate.property("_skeleton_section_title") == next_title
+            ):
+                next_loading = candidate
+                break
         if next_loading is None:
             section_index = layout.indexOf(section_widget)
             next_loading = self._detail_section_skeleton(
