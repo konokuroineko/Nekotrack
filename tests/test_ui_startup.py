@@ -615,7 +615,7 @@ class UiStartupTests(unittest.TestCase):
                         set(window.navigation.pages),
                         {
                             "home", "collections", "search", "recommendations",
-                            "calendar", "work_detail", "entity_profile", "settings",
+                            "calendar", "favorites", "work_detail", "entity_profile", "settings",
                         },
                     )
                     self.assertFalse(window.windowIcon().isNull())
@@ -629,6 +629,7 @@ class UiStartupTests(unittest.TestCase):
                             "search": "Discover",
                             "recommendations": "Recommendations",
                             "calendar": "Calendar",
+                            "favorites": "Favorites",
                             "settings": "Settings",
                         },
                     )
