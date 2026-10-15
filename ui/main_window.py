@@ -549,18 +549,39 @@ class MainWindow(QMainWindow):
 
         self._section(
             side,
-            "LIBRARY",
+            "YOUR SPACE",
             [
                 ("home", "Home", "home"),
                 ("library", "Library", "collections"),
-                ("search", "Search", "search"),
+            ],
+        )
+        self._section(
+            side,
+            "DISCOVERY",
+            [
+                ("search", "Discover", "search"),
             ],
         )
         side.addStretch()
-        self._add_nav(side, "settings", "Settings", "settings")
+        self._section(
+            side,
+            "PREFERENCES",
+            [
+                ("settings", "Settings", "settings"),
+            ],
+        )
 
+        if not hasattr(self, "_last_navigation_page"):
+            self._last_navigation_page = None
         self.navigation.page_changed.connect(self.update_navigation_state)
         self.navigation.page_changed.connect(self._page_changed)
+        self.home_page.work_selected.connect(self.show_work_details)
+        self.home_page.search_requested.connect(
+            lambda: self.navigation.show("search")
+        )
+        self.home_page.library_requested.connect(
+            lambda: self.navigation.show("collections")
+        )
         self.library_page.work_selected.connect(self.show_work_details)
         self.search_page.anime_selected.connect(self.show_search_work)
         self.work_detail_page.back_requested.connect(self._back_from_work_detail)
@@ -622,10 +643,16 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.library_page.refresh)
 
     def _page_changed(self, page_name):
+        previous_page = self._last_navigation_page
+        if page_name == "home" and previous_page not in (None, "home"):
+            # Refresh the local snapshot only when returning to the dashboard;
+            # do not rebuild its artwork cards on every Home click.
+            self.home_page.refresh()
         if page_name == "collections":
             # Rebuild the library when returning to it so relation-sync failures
             # can be retried through the normal page refresh path.
             self.library_page.refresh()
+        self._last_navigation_page = page_name
 
     def open_setup_wizard(self):
         wizard = SetupWizard(self)

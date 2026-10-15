@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -148,32 +149,77 @@ class SettingsPage(QWidget):
     def _build(self):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(
-            SPACING["xxl"],
-            SPACING["xxl"],
-            SPACING["xxl"],
-            SPACING["xxl"],
+        header = QWidget(self)
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(
+            SPACING["xxl"], SPACING["xxl"], SPACING["xxl"], SPACING["md"]
         )
-        layout.setSpacing(22)
-
+        header_layout.setSpacing(7)
         title = QLabel("Settings")
         title.setObjectName("settingsTitle")
-        layout.addWidget(title)
-
-        subtitle = QLabel("Personalize NekoTrack without digging through raw values.")
+        subtitle = QLabel(
+            "Everything that makes NekoTrack yours, organized by what it controls."
+        )
         subtitle.setObjectName("settingsSubtitle")
-        layout.addWidget(subtitle)
+        subtitle.setWordWrap(True)
+        header_layout.addWidget(title)
+        header_layout.addWidget(subtitle)
+        outer.addWidget(header)
 
-        layout.addWidget(self._section(
-            "Appearance",
+        self.category_tabs = QTabWidget(self)
+        self.category_tabs.setObjectName("settingsTabs")
+        self.category_tabs.setDocumentMode(True)
+        outer.addWidget(self.category_tabs, 1)
+        self._category_layouts = {}
+
+        def add_category(name):
+            tab = QWidget()
+            tab.setObjectName(
+                "settingsCategory_"
+                + name.lower().replace(" ", "_").replace("&", "and")
+            )
+            tab_outer = QVBoxLayout(tab)
+            tab_outer.setContentsMargins(0, 0, 0, 0)
+            scroll = QScrollArea(tab)
+            scroll.setObjectName("settingsCategoryScroll")
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            content = QWidget()
+            content.setObjectName("settingsCategoryContent")
+            content_layout = QVBoxLayout(content)
+            content_layout.setContentsMargins(
+                SPACING["xxl"], SPACING["lg"], SPACING["xxl"], SPACING["xxl"]
+            )
+            content_layout.setSpacing(18)
+            scroll.setWidget(content)
+            tab_outer.addWidget(scroll)
+            self.category_tabs.addTab(tab, name)
+            self._category_layouts[name] = content_layout
+            return content_layout
+
+        general = add_category("General")
+        appearance = add_category("Appearance")
+        library = add_category("Library")
+        integrations = add_category("Integrations")
+        data_storage = add_category("Data & Storage")
+        advanced = add_category("Advanced")
+
+        general.addWidget(self._section(
+            "Startup",
+            [
+                self._check_row(
+                    "Open maximized",
+                    "Start NekoTrack maximized.",
+                    "maximized",
+                ),
+            ],
+        ))
+
+        appearance.addWidget(self._section(
+            "Theme",
             [
                 self._theme_selector(),
                 self._check_row(
@@ -181,6 +227,11 @@ class SettingsPage(QWidget):
                     "Use light surfaces while keeping your selected theme and accent color.",
                     "light_mode",
                 ),
+            ],
+        ))
+        appearance.addWidget(self._section(
+            "Cards and surfaces",
+            [
                 self._combo_row(
                     "Card size",
                     "Choose how large Library posters should appear.",
@@ -193,7 +244,7 @@ class SettingsPage(QWidget):
                     ],
                 ),
                 self._combo_row(
-                    "UI scale",
+                    "Interface text size",
                     "Adjust the overall interface text size.",
                     "font_size",
                     [
@@ -218,8 +269,8 @@ class SettingsPage(QWidget):
             ],
         ))
 
-        layout.addWidget(self._section(
-            "Behavior",
+        library.addWidget(self._section(
+            "Card behavior",
             [
                 self._check_row(
                     "Hover highlighting",
@@ -243,70 +294,73 @@ class SettingsPage(QWidget):
                         ("Slow", 520),
                     ],
                 ),
-                self._check_row(
-                    "Open maximized",
-                    "Start NekoTrack maximized.",
-                    "maximized",
-                ),
-                self._bundle_options_row(),
             ],
+        ))
+        library.addWidget(self._section(
+            "Bundling",
+            [self._bundle_options_row()],
         ))
 
         token_input = QLineEdit()
-        token_input.setEchoMode(QLineEdit.Password)
+        token_input.setEchoMode(QLineEdit.EchoMode.Password)
         token_input.setPlaceholderText("TMDB API Read Access Token")
         token_input.setText(str(get("tmdb_api_token") or ""))
+        token_input.setAccessibleName("TMDB API Read Access Token")
 
-        save_token = QPushButton("Save")
+        save_token = QPushButton("Save token")
         save_token.setObjectName("settingsAction")
         save_token.clicked.connect(
             lambda: self._save_tmdb_token(token_input.text())
         )
-
         token_row = QHBoxLayout()
         token_row.setSpacing(10)
         token_row.addWidget(token_input, 1)
         token_row.addWidget(save_token)
-
         token_wrapper = QWidget()
         token_wrapper.setLayout(token_row)
-
-        layout.addWidget(self._section(
-            "TMDB",
+        integrations.addWidget(self._section(
+            "TMDB episode metadata",
             [
                 self._row(
                     "API Read Access Token",
                     "Used for episode metadata and episode artwork. Stored locally in NekoTrack settings.",
                     token_wrapper,
-                )
+                ),
             ],
         ))
 
         data_rows = [
             self._info_row("Library", f"{len(list(get_all_library()))} saved titles"),
-            self._info_row("Storage", "Local SQLite database"),
-            self._info_row("Artwork", "Cached locally when downloaded"),
-            self._info_row("Metadata", "AniList + TMDB"),
+            self._info_row("Database", "Local SQLite · anime_tracker.db"),
+            self._info_row("Artwork", "Cached on this device when downloaded"),
+            self._info_row("Catalog metadata", "AniList + MangaBaka + TMDB"),
         ]
-        layout.addWidget(self._section("Data", data_rows))
+        data_storage.addWidget(self._section("Local data", data_rows))
 
-        actions = QHBoxLayout()
         setup_button = QPushButton("Run setup wizard again")
         setup_button.setObjectName("settingsAction")
         setup_button.clicked.connect(self.setup_requested.emit)
-
         reset_button = QPushButton("Restore defaults")
         reset_button.setObjectName("settingsSecondaryAction")
         reset_button.clicked.connect(self._reset)
+        advanced.addWidget(self._section(
+            "Application",
+            [
+                self._row(
+                    "Setup",
+                    "Reopen first-run configuration without deleting your library.",
+                    setup_button,
+                ),
+                self._row(
+                    "Preferences",
+                    "Reset preferences to their defaults. Your saved library and progress are kept.",
+                    reset_button,
+                ),
+            ],
+        ))
 
-        actions.addWidget(setup_button)
-        actions.addWidget(reset_button)
-        actions.addStretch(1)
-        layout.addLayout(actions)
-
-        layout.addStretch(1)
-        scroll.setWidget(content)
-        outer.addWidget(scroll)
+        for category_layout in self._category_layouts.values():
+            category_layout.addStretch(1)
 
         self.refresh_theme()
 
@@ -482,6 +536,37 @@ class SettingsPage(QWidget):
                 color:{COLORS['muted']};
                 font-size:10px;
                 background:transparent;
+            }}
+            QTabWidget#settingsTabs::pane {{
+                background:transparent;
+                border:1px solid {COLORS['border']};
+                border-radius:12px;
+                top:-1px;
+            }}
+            QTabBar::tab {{
+                background:{COLORS['surface_alt']};
+                color:{COLORS['secondary']};
+                border:1px solid {COLORS['border']};
+                border-bottom:none;
+                border-top-left-radius:9px;
+                border-top-right-radius:9px;
+                padding:10px 14px;
+                margin-right:4px;
+                font-size:11px;
+                font-weight:750;
+            }}
+            QTabBar::tab:selected {{
+                background:{COLORS['accent_soft']};
+                color:{COLORS['nav_selected_text']};
+                border-color:{COLORS['accent']};
+            }}
+            QTabBar::tab:hover:!selected {{
+                background:{COLORS['surface_hover']};
+                color:{COLORS['primary']};
+            }}
+            QTabWidget#settingsTabs QScrollArea#settingsCategoryScroll {{
+                background:transparent;
+                border:none;
             }}
             QComboBox {{
                 min-width:120px;

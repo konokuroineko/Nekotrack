@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QBuffer, QIODevice
 from PySide6.QtTest import QTest
 from PySide6.QtGui import QPixmap
 from PySide6.QtNetwork import QNetworkReply
-from PySide6.QtWidgets import QApplication, QLabel, QFrame, QTextBrowser, QCheckBox
+from PySide6.QtWidgets import QApplication, QLabel, QFrame, QTextBrowser, QCheckBox, QPushButton
 
 import ui.preferences as preferences
 
@@ -50,6 +50,7 @@ with patch.object(preferences, "QSettings", MemorySettings):
         _backfill_automatic_bundle_memberships,
         pending_relation_sync_ids,
     )
+    from ui.pages.home_page import HomePage
     from ui.pages.settings_page import SettingsPage
     from ui.pages.work_detail_page import WorkDetailPage
     from ui.setup_wizard import SetupWizard
@@ -179,6 +180,74 @@ class UiStartupTests(unittest.TestCase):
                 self.assertEqual(white["frame_color"], "#ded8e7")
                 dark = palette_for_mode(theme, False)
                 self.assertEqual(dark["frame_color"], theme["frame_color"])
+
+    def test_home_dashboard_uses_real_library_counts_progress_and_empty_states(self):
+        rows = [
+            {
+                "id": 101, "title": "Watching Work", "type": "ANIME", "format": "TV",
+                "status": "Watching", "episodes": 12, "progress_episodes": 4,
+                "progress_chapters": 0, "progress_volumes": 0, "chapters": None,
+                "volumes": None, "start_year": 2024, "cover_url": None,
+                "cover_path": None, "added_date": "2026-10-12",
+            },
+            {
+                "id": 102, "title": "Finished Work", "type": "ANIME", "format": "TV",
+                "status": "Completed", "episodes": 8, "progress_episodes": 8,
+                "progress_chapters": 0, "progress_volumes": 0, "chapters": None,
+                "volumes": None, "start_year": 2023, "cover_url": None,
+                "cover_path": None, "added_date": "2026-10-10",
+            },
+            {
+                "id": -103, "title": "Reading Work", "type": "MANGA", "format": "NOVEL",
+                "status": "Reading", "episodes": None, "progress_episodes": 0,
+                "progress_chapters": 6, "progress_volumes": 1, "chapters": 30,
+                "volumes": 4, "start_year": 2022, "cover_url": None,
+                "cover_path": None, "added_date": "2026-10-09",
+            },
+        ]
+        with patch("ui.pages.home_page.get_all_library", return_value=rows):
+            page = HomePage()
+            self.app.processEvents()
+            self.assertEqual(
+                page._home_counts,
+                {"all": 3, "in_progress": 2, "completed": 1, "planned": 0},
+            )
+            self.assertEqual(page._continue_ids, {101, -103})
+            self.assertEqual(page._recent_ids, [101, 102, -103])
+            values = [
+                label.text()
+                for label in page.findChildren(QLabel, "homeStatValue")
+            ]
+            self.assertEqual(values, ["3", "2", "1", "0"])
+            captions = [
+                label.text()
+                for label in page.findChildren(QLabel, "homeTrackProgress")
+            ]
+            self.assertIn("Next episode 5 · 4/12 logged", captions)
+            self.assertTrue(any("6/30 chapters" in text for text in captions))
+            self.assertTrue(any("1/4 volumes" in text for text in captions))
+
+            requested = []
+            page.search_requested.connect(lambda: requested.append("discover"))
+            page.findChild(QPushButton, "homePrimaryAction").click()
+            self.assertEqual(requested, ["discover"])
+            page.close()
+            page.deleteLater()
+            self.app.processEvents()
+
+        with patch("ui.pages.home_page.get_all_library", return_value=[]):
+            empty_page = HomePage()
+            self.app.processEvents()
+            self.assertEqual(
+                empty_page._home_counts,
+                {"all": 0, "in_progress": 0, "completed": 0, "planned": 0},
+            )
+            self.assertIsNotNone(
+                empty_page.findChild(QLabel, "homeEmptyState")
+            )
+            empty_page.close()
+            empty_page.deleteLater()
+            self.app.processEvents()
 
     def test_library_uses_the_bundle_saved_from_search_before_relation_sync_finishes(self):
         import os
@@ -480,6 +549,16 @@ class UiStartupTests(unittest.TestCase):
                 with patch.object(preferences, "QSettings", MemorySettings):
                     wizard = SetupWizard()
                     settings_page = SettingsPage()
+                    self.assertEqual(
+                        [
+                            settings_page.category_tabs.tabText(index)
+                            for index in range(settings_page.category_tabs.count())
+                        ],
+                        [
+                            "General", "Appearance", "Library",
+                            "Integrations", "Data & Storage", "Advanced",
+                        ],
+                    )
                     expected = set(preferences.BUNDLE_OPTION_KEYS)
                     self.assertEqual(set(wizard.bundle_checkboxes), expected)
                     self.assertEqual(set(settings_page.bundle_checkboxes), expected)
