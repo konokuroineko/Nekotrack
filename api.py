@@ -154,6 +154,21 @@ def _retry_after_delay(value, fallback, now=None):
     return min(60.0, max(1.0, requested))
 
 
+def _normalize_anilist_description_fields(value):
+    """Repair malformed social links in every nested AniList description field."""
+    if isinstance(value, dict):
+        normalized = {}
+        for key, item in value.items():
+            if str(key).casefold() == "description" and isinstance(item, str):
+                normalized[key] = _normalize_anilist_profile_description(item)
+            else:
+                normalized[key] = _normalize_anilist_description_fields(item)
+        return normalized
+    if isinstance(value, list):
+        return [_normalize_anilist_description_fields(item) for item in value]
+    return value
+
+
 def anilist_request(query, variables=None):
     """Make a request to AniList GraphQL API with retry logic."""
     last_error = None
@@ -252,7 +267,9 @@ def anilist_request(query, variables=None):
                 raise RuntimeError(
                     "AniList returned an unexpected GraphQL response: missing data object."
                 )
-            return result
+            # Normalize descriptions recursively at the shared AniList boundary so
+            # malformed bio links are repaired wherever the returned data is used.
+            return _normalize_anilist_description_fields(result)
 
         except (
             requests.exceptions.ConnectionError,
