@@ -469,7 +469,14 @@ def get_media_staff_page(media_id, page=2, per_page=15):
 
 
 def _normalize_anilist_profile_description(description, html_mode=False):
-    """Repair malformed nested YouTube links in AniList's profile descriptions."""
+    """Repair malformed nested social links in AniList profile descriptions.
+
+    AniList can return a partially rendered description where a social-site root
+    and an AniList user link have been nested into a single, broken outer link.
+    Handle both the original Markdown form and the mixed HTML returned by
+    description(asHtml=True). This shared boundary covers character, staff, and
+    voice-actor bios rather than repairing one profile in the UI only.
+    """
     value = str(description or "")
     for encoded, decoded in (
         (r"&(?:#0*91|#x0*5b|lbrack);", "["),
@@ -485,28 +492,54 @@ def _normalize_anilist_profile_description(description, html_mode=False):
             flags=re.IGNORECASE,
         )
 
-    pattern = re.compile(
+    root_url = r"https?://(?:www\.)?[A-Za-z0-9.-]+/"
+    markdown_pattern = re.compile(
         r"\[(?P<label>[^\]]+)\]\s*\\?\(\s*"
-        r"\[(?P<base>https?://(?:www\.)?youtube\.com/)\]"
-        r"\(\s*https?://(?:www\.)?youtube\.com/\s*\\?\)\s*"
+        rf"\[(?P<base>{root_url})\]"
+        rf"\(\s*(?P<base_href>{root_url})\s*\\?\)\s*"
         r"\[@(?P<handle>[A-Za-z0-9_.-]+)\]\s*"
-        r"\(\s*https?://anilist\.co/user/[^)]+?\s*\\?\)"
+        r"\(\s*https?://(?:www\.)?anilist\.co/user/(?P<profile_handle>[A-Za-z0-9_.-]+)\s*\\?\)"
         r"(?P<suffix>(?:[-A-Za-z0-9_.]+)?(?:\?[^\s)]*)?)\s*\\?\)",
         re.IGNORECASE,
     )
+    # With asHtml=True, AniList may render the two inner Markdown links as
+    # <a> elements but leave the outer label/parentheses as literal text.
+    html_pattern = re.compile(
+        r"\[(?P<label>[^\]]+)\]\s*\\?\(\s*"
+        rf"<a\b(?=[^>]*\bhref\s*=\s*['""](?P<base_href>{root_url})['""])[^>]*>"
+        rf"\s*(?P<base_text>{root_url})\s*</a>\s*"
+        r"<a\b(?=[^>]*\bhref\s*=\s*['""]https?://(?:www\.)?anilist\.co/user/(?P<profile_handle>[A-Za-z0-9_.-]+)['""])[^>]*>"
+        r"\s*@?(?P<handle>[A-Za-z0-9_.-]+)\s*</a>"
+        r"(?P<suffix>(?:[-A-Za-z0-9_.]+)?(?:\?[^\s)<]*)?)\s*\\?\)",
+        re.IGNORECASE,
+    )
 
-    def replace_link(match):
+    def replace_link(match, force_html=False):
+        base_group = "base" if match.groupdict().get("base") else "base_text"
+        base = _html.unescape(match.group(base_group) or "")
+        base_href = _html.unescape(match.group("base_href") or "")
+        handle = _html.unescape(match.group("handle") or "")
+        profile_handle = _html.unescape(match.group("profile_handle") or "")
+        # Only merge links when the displayed root and destination are the same,
+        # and the @handle agrees with the linked AniList account. This avoids
+        # accidentally rewriting ordinary independent links in a biography.
+        if base.rstrip("/").casefold() != base_href.rstrip("/").casefold():
+            return match.group(0)
+        if handle.casefold() != profile_handle.casefold():
+            return match.group(0)
+
         suffix = _html.unescape(match.group("suffix") or "")
-        url = f"{match.group('base')}@{match.group('handle')}{suffix}"
+        url = f"{base}@{handle}{suffix}"
         label = match.group("label")
-        if html_mode:
+        if html_mode or force_html:
             return (
                 f'<a href="{_html.escape(url, quote=True)}">'
                 f"{_html.escape(label)}</a>"
             )
         return f"[{label}]({url})"
 
-    return pattern.sub(replace_link, value)
+    value = html_pattern.sub(lambda match: replace_link(match, force_html=True), value)
+    return markdown_pattern.sub(replace_link, value)
 
 
 def get_entity_profile(entity_type, entity_id):
