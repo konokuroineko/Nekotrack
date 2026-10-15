@@ -8,7 +8,7 @@ from api import (
 )
 from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer, QSize
 
-from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout
 
 from database import (
     add_to_library,
@@ -17,6 +17,7 @@ from database import (
     get_bundle_character_voice_actors,
     get_connection,
     get_episodes,
+    get_due_release_reminders,
     invalidate_character_snapshots,
     get_tmdb_mapping,
     get_work,
@@ -28,6 +29,7 @@ from database import (
     save_episodes,
     save_provider_metadata,
     save_reading_item_metadata,
+    mark_release_reminder_notified,
     save_staff,
     save_tmdb_mapping,
 )
@@ -40,8 +42,10 @@ from ui.navigation import NavigationController
 from ui.preferences import get
 from ui.setup_wizard import SetupWizard
 from ui.theme import COLORS, application_stylesheet, refresh_theme
+from ui.pages.calendar_page import CalendarPage
 from ui.pages.home_page import HomePage
 from ui.pages.library_page import LibraryPage
+from ui.pages.recommendations_page import RecommendationsPage
 from ui.pages.search_page import SearchPage
 from ui.pages.settings_page import SettingsPage
 from ui.pages.work_detail_page import WorkDetailPage
@@ -490,8 +494,17 @@ class MainWindow(QMainWindow):
         self._library_episode_preload_worker = None
         self._ui_root_stack = None
         self.background_manager = BackgroundManager(self)
+        self._release_reminder_tray = QSystemTrayIcon(application_icon(), self)
+        self._release_reminder_tray.setToolTip("NekoTrack release reminders")
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self._release_reminder_tray.show()
+        self._release_reminder_timer = QTimer(self)
+        self._release_reminder_timer.setInterval(60_000)
+        self._release_reminder_timer.timeout.connect(self._check_release_reminders)
+        self._release_reminder_timer.start()
         self.setup_ui()
         QTimer.singleShot(250, self._start_existing_library_episode_preload)
+        QTimer.singleShot(5_000, self._check_release_reminders)
 
     def setup_ui(self, initial_page="home"):
         refresh_theme()
@@ -538,10 +551,14 @@ class MainWindow(QMainWindow):
         self.entity_profile_page = EntityProfilePage()
         self.settings_page = SettingsPage(background_manager=self.background_manager)
         self.home_page = HomePage()
+        self.recommendations_page = RecommendationsPage(self.add_to_library)
+        self.calendar_page = CalendarPage()
         pages = {
             "home": self.home_page,
             "collections": self.library_page,
             "search": self.search_page,
+            "recommendations": self.recommendations_page,
+            "calendar": self.calendar_page,
             "work_detail": self.work_detail_page,
             "entity_profile": self.entity_profile_page,
             "settings": self.settings_page,
@@ -555,6 +572,7 @@ class MainWindow(QMainWindow):
             [
                 ("home", "Home", "home"),
                 ("library", "Library", "collections"),
+                ("calendar", "Calendar", "calendar"),
             ],
         )
         self._section(
@@ -562,6 +580,7 @@ class MainWindow(QMainWindow):
             "DISCOVERY",
             [
                 ("search", "Discover", "search"),
+                ("recommendations", "Recommendations", "recommendations"),
             ],
         )
         side.addStretch()
@@ -583,6 +602,10 @@ class MainWindow(QMainWindow):
         )
         self.home_page.library_requested.connect(
             lambda: self.navigation.show("collections")
+        )
+        self.recommendations_page.work_selected.connect(self.show_work_details)
+        self.recommendations_page.search_requested.connect(
+            lambda: self.navigation.show("search")
         )
         self.library_page.work_selected.connect(self.show_work_details)
         self.search_page.anime_selected.connect(self.show_search_work)
@@ -650,6 +673,10 @@ class MainWindow(QMainWindow):
             # Refresh the local snapshot only when returning to the dashboard;
             # do not rebuild its artwork cards on every Home click.
             self.home_page.refresh()
+        if page_name == "recommendations":
+            self.recommendations_page.refresh()
+        elif page_name == "calendar":
+            self.calendar_page.refresh()
         if page_name == "collections":
             # Rebuild the library when returning to it so relation-sync failures
             # can be retried through the normal page refresh path.
@@ -711,6 +738,10 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "settings_page") and hasattr(self.settings_page, "refresh_theme"):
             self.settings_page.refresh_theme()
+        if hasattr(self, "calendar_page"):
+            self.calendar_page.refresh_theme()
+        if hasattr(self, "recommendations_page"):
+            self.recommendations_page.refresh_theme()
 
     def _request_page_tree_shutdown(self, root):
         """Ask workers owned by a page tree to stop before that tree is deleted."""
@@ -723,6 +754,8 @@ class MainWindow(QMainWindow):
         for page in root.findChildren(WorkDetailPage):
             page.request_shutdown()
         for page in root.findChildren(EntityProfilePage):
+            page.request_shutdown()
+        for page in root.findChildren(RecommendationsPage):
             page.request_shutdown()
         for thread in root.findChildren(QThread):
             try:
@@ -1510,8 +1543,46 @@ class MainWindow(QMainWindow):
             for next_id in next_ids:
                 self._start_library_import_thread(next_id)
 
+    def _check_release_reminders(self):
+        """Show enabled reminders once on their stored air date."""
+        if self._shutdown_requested or not self._release_reminder_tray.isVisible():
+            return
+        try:
+            due = [dict(row) for row in get_due_release_reminders()]
+        except Exception as error:
+            log_exception("release_reminders.check_failed", error)
+            return
+        if not due:
+            return
+        display_lines = []
+        for item in due[:5]:
+            title = str(item.get("work_title") or "Untitled")
+            try:
+                number = int(item.get("episode_number") or 0)
+            except (TypeError, ValueError, OverflowError):
+                number = 0
+            display_lines.append(f"{title} · Episode {number}")
+        if len(due) > 5:
+            display_lines.append(f"and {len(due) - 5} more")
+        self._release_reminder_tray.showMessage(
+            "NekoTrack · Releases today",
+            "\n".join(display_lines),
+            QSystemTrayIcon.MessageIcon.Information,
+            10_000,
+        )
+        for item in due:
+            try:
+                mark_release_reminder_notified(item["work_id"], item["episode_number"])
+            except Exception as error:
+                log_exception(
+                    "release_reminders.mark_notified_failed",
+                    error,
+                    work_id=item.get("work_id"),
+                    episode_number=item.get("episode_number"),
+                )
+
     def _has_running_worker_threads(self):
-        # Includes nested Search, Library, work-detail, and updater QThreads.
+        # Includes nested Search, Library, recommendation, and detail QThreads.
         for thread in self.findChildren(QThread):
             try:
                 if thread.isRunning():
@@ -1533,6 +1604,8 @@ class MainWindow(QMainWindow):
             detail_page.request_shutdown()
         for profile_page in self.findChildren(EntityProfilePage):
             profile_page.request_shutdown()
+        for recommendations_page in self.findChildren(RecommendationsPage):
+            recommendations_page.request_shutdown()
         # Stop each event loop; blocking provider requests still need to return.
         # This window stays alive until every QThread has actually stopped.
         for thread in self.findChildren(QThread):
@@ -1549,6 +1622,9 @@ class MainWindow(QMainWindow):
             return
 
         self._shutdown_timer.stop()
+        self._release_reminder_timer.stop()
+        if self._release_reminder_tray.isVisible():
+            self._release_reminder_tray.hide()
         event.accept()
 
     def _poll_shutdown_workers(self):
