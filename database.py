@@ -2969,8 +2969,12 @@ def delete_work_data(work_id):
                 SELECT custom_cover_path
                 FROM bundle_overrides
                 WHERE bundle_anchor_id = ? OR cover_work_id = ?
+                UNION ALL
+                SELECT custom_cover_path
+                FROM work_display_overrides
+                WHERE work_id = ?
                 """,
-                (work_id, work_id),
+                (work_id, work_id, work_id),
             ).fetchall()
             if item["custom_cover_path"]
         ]
@@ -3029,6 +3033,17 @@ def delete_work_data(work_id):
             "DELETE FROM user_library WHERE work_id = ?",
             (work_id,),
         )
+        # A permanent deletion removes independent favorites and display identity
+        # customizations too. Removing a work from Library uses remove_from_library
+        # instead and deliberately leaves these preferences untouched.
+        connection.execute(
+            "DELETE FROM user_favorites WHERE work_id = ?",
+            (work_id,),
+        )
+        connection.execute(
+            "DELETE FROM work_display_overrides WHERE work_id = ?",
+            (work_id,),
+        )
         connection.execute(
             "DELETE FROM works WHERE id = ?",
             (work_id,),
@@ -3039,6 +3054,8 @@ def delete_work_data(work_id):
         checks = (
             ("works", "SELECT 1 FROM works WHERE id = ? LIMIT 1"),
             ("user_library", "SELECT 1 FROM user_library WHERE work_id = ? LIMIT 1"),
+            ("user_favorites", "SELECT 1 FROM user_favorites WHERE work_id = ? LIMIT 1"),
+            ("work_display_overrides", "SELECT 1 FROM work_display_overrides WHERE work_id = ? LIMIT 1"),
             (
                 "automatic_bundle_memberships",
                 "SELECT 1 FROM automatic_bundle_memberships WHERE bundle_id = ? OR work_id = ? LIMIT 1",
@@ -3099,6 +3116,7 @@ def delete_work_data(work_id):
         managed_image_roots = (
             (Path("data") / "images" / "works").resolve(),
             (Path("data") / "images" / "bundles").resolve(),
+            (Path("data") / "display_overrides").resolve(),
         )
         connection = get_connection()
         try:
@@ -3110,6 +3128,10 @@ def delete_work_data(work_id):
                 UNION ALL
                 SELECT custom_cover_path AS stored_path
                 FROM bundle_overrides
+                WHERE custom_cover_path IS NOT NULL
+                UNION ALL
+                SELECT custom_cover_path AS stored_path
+                FROM work_display_overrides
                 WHERE custom_cover_path IS NOT NULL
                 """
             ).fetchall()

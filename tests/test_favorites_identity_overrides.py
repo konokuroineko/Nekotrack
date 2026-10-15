@@ -124,6 +124,21 @@ class FavoritesIdentityOverrideTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             database.save_work_display_override(103, "Valid title", "../outside.png")
 
+
+    def test_permanent_work_deletion_clears_favorite_and_global_override(self):
+        source = self._image(Path(self._directory.name) / "delete-cover.png")
+        stored_cover = copy_custom_cover(str(source))
+        database.set_work_favorite(103, True, {"id": 103, "title": "Identity Title"})
+        database.save_work_display_override(103, "Custom Identity Title", stored_cover)
+        managed_cover = Path.cwd() / stored_cover
+        self.assertTrue(managed_cover.is_file())
+        self.assertTrue(database.is_work_favorite(103))
+
+        self.assertTrue(database.delete_work_data(103))
+        self.assertFalse(database.is_work_favorite(103))
+        self.assertEqual(database.get_work_display_override(103), {})
+        self.assertFalse(managed_cover.exists())
+
     def test_poster_cards_and_detail_titles_use_global_override_but_bundles_do_not(self):
         cover = self._image(Path(self._directory.name) / "global-cover.png")
         with patch(
