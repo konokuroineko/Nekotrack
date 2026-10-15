@@ -320,6 +320,21 @@ def initialize_database():
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_favorites (
+            work_id INTEGER PRIMARY KEY,
+            work_data_json TEXT NOT NULL DEFAULT '{}',
+            added_date DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS work_display_overrides (
+            work_id INTEGER PRIMARY KEY,
+            custom_title TEXT,
+            custom_cover_path TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS reading_items (
             work_id INTEGER NOT NULL,
             item_type TEXT NOT NULL CHECK(item_type IN ('chapter', 'volume')),
@@ -3275,6 +3290,267 @@ def mark_release_reminder_notified(work_id, episode_number, notified_date=None):
         raise
     finally:
         connection.close()
+
+
+
+def _favorite_snapshot(work_data):
+    """Keep only small, display-oriented fields so favorites survive cache eviction."""
+    if not isinstance(work_data, dict):
+        return {}
+    allowed = (
+        "id", "title", "type", "format", "episodes", "chapters", "volumes",
+        "description", "cover_url", "coverImage", "cover_path", "start_year",
+        "startDate", "score", "averageScore", "seasonYear", "status",
+        "progress_episodes", "progress_chapters", "progress_volumes",
+        "_series_count", "_bundle_summary", "_bundle_cover_work_id",
+        "_bundle_default_member_id",
+    )
+    snapshot = {
+        key: work_data[key]
+        for key in allowed
+        if key in work_data and work_data[key] is not None
+    }
+    members = work_data.get("_series_members")
+    if isinstance(members, list):
+        snapshot["_series_members"] = [
+            {
+                key: member[key]
+                for key in (
+                    "id", "title", "type", "format", "episodes", "chapters",
+                    "volumes", "cover_url", "cover_path", "start_year",
+                )
+                if key in member and member[key] is not None
+            }
+            for member in members[:24]
+            if isinstance(member, dict)
+        ]
+    try:
+        json.dumps(snapshot, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        safe_title = snapshot.get("title")
+        snapshot = {"id": snapshot.get("id"), "title": safe_title}
+        if snapshot.get("id") is None:
+            snapshot.pop("id", None)
+    return snapshot
+
+
+def is_work_favorite(work_id):
+    """Return whether a title is saved as a favorite, even if its cache is cold."""
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    connection = get_connection()
+    try:
+        return connection.execute(
+            "SELECT 1 FROM user_favorites WHERE work_id = ? LIMIT 1",
+            (safe_work_id,),
+        ).fetchone() is not None
+    finally:
+        connection.close()
+
+
+def set_work_favorite(work_id, favorite, work_data=None):
+    """Persist favorite state independently of Library membership."""
+    safe_work_id = _validated_work_id(work_id)
+    if not isinstance(favorite, bool):
+        raise ValueError("Favorite state must be boolean.")
+    snapshot = _favorite_snapshot(work_data)
+    if snapshot.get("id") is not None:
+        try:
+            snapshot["id"] = _validated_work_id(snapshot["id"])
+        except (TypeError, ValueError, OverflowError):
+            snapshot.pop("id", None)
+    try:
+        payload = json.dumps(snapshot, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, OverflowError, RecursionError) as error:
+        raise ValueError("Favorite metadata could not be serialized safely.") from error
+    if len(payload) > 512 * 1024:
+        raise ValueError("Favorite metadata is too large to store.")
+
+    connection = get_connection()
+    try:
+        if favorite:
+            connection.execute("""
+                INSERT INTO user_favorites (work_id, work_data_json, added_date)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(work_id) DO UPDATE SET
+                    work_data_json = CASE
+                        WHEN excluded.work_data_json != '{}' THEN excluded.work_data_json
+                        ELSE user_favorites.work_data_json
+                    END
+            """, (safe_work_id, payload))
+        else:
+            connection.execute(
+                "DELETE FROM user_favorites WHERE work_id = ?",
+                (safe_work_id,),
+            )
+        connection.commit()
+        return favorite
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def get_favorite_works():
+    """Return favorite cards using a stored snapshot with cached data when available."""
+    connection = get_connection()
+    try:
+        rows = connection.execute("""
+            SELECT
+                favorites.work_id, favorites.work_data_json, favorites.added_date,
+                works.title AS cached_title, works.type AS cached_type,
+                works.format AS cached_format, works.episodes AS cached_episodes,
+                works.chapters AS cached_chapters, works.volumes AS cached_volumes,
+                works.score AS cached_score, works.start_year AS cached_start_year,
+                works.cover_url AS cached_cover_url, works.cover_path AS cached_cover_path,
+                works.description AS cached_description,
+                user_library.status, user_library.progress_episodes,
+                user_library.progress_chapters, user_library.progress_volumes,
+                user_library.rating, user_library.notes,
+                user_library.updated_date
+            FROM user_favorites AS favorites
+            LEFT JOIN works ON works.id = favorites.work_id
+            LEFT JOIN user_library ON user_library.work_id = favorites.work_id
+            ORDER BY favorites.added_date DESC, works.title
+        """).fetchall()
+    finally:
+        connection.close()
+
+    results = []
+    for row in rows:
+        try:
+            snapshot = json.loads(row["work_data_json"] or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            snapshot = {}
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+        work = dict(snapshot)
+        work["id"] = int(row["work_id"])
+        is_bundle = len(work.get("_series_members") or []) > 1
+        if not is_bundle:
+            if row["cached_title"]:
+                work["title"] = row["cached_title"]
+            for target, source in (
+                ("type", "cached_type"),
+                ("format", "cached_format"),
+                ("episodes", "cached_episodes"),
+                ("chapters", "cached_chapters"),
+                ("volumes", "cached_volumes"),
+                ("cover_url", "cached_cover_url"),
+                ("cover_path", "cached_cover_path"),
+                ("description", "cached_description"),
+                ("start_year", "cached_start_year"),
+            ):
+                if row[source] is not None:
+                    work[target] = row[source]
+            if row["cached_score"] is not None:
+                work["score"] = row["cached_score"]
+                work["averageScore"] = row["cached_score"]
+        for key in (
+            "status", "progress_episodes", "progress_chapters", "progress_volumes",
+            "rating", "notes", "updated_date",
+        ):
+            work[key] = row[key]
+        work["_is_favorite"] = True
+        work["_favorite_added_date"] = row["added_date"]
+        results.append(work)
+    return results
+
+
+def get_work_display_override(work_id):
+    """Return a title/cover override only for a safe, managed custom-cover path."""
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return {}
+    connection = get_connection()
+    try:
+        row = connection.execute("""
+            SELECT work_id, custom_title, custom_cover_path, updated_at
+            FROM work_display_overrides WHERE work_id = ?
+        """, (safe_work_id,)).fetchone()
+    finally:
+        connection.close()
+    if row is None:
+        return {}
+    result = dict(row)
+    stored_path = result.get("custom_cover_path")
+    if stored_path:
+        candidate = Path(stored_path)
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        try:
+            resolved = candidate.resolve()
+            managed_root = (Path.cwd() / "data" / "display_overrides").resolve()
+            resolved.relative_to(managed_root)
+            if resolved.is_file():
+                result["custom_cover_path"] = resolved.as_posix()
+            else:
+                result["custom_cover_path"] = None
+        except (OSError, ValueError, RuntimeError):
+            result["custom_cover_path"] = None
+    return result
+
+
+def save_work_display_override(work_id, custom_title=None, custom_cover_path=None):
+    """Save a global title/cover override; custom artwork must be app-managed."""
+    safe_work_id = _validated_work_id(work_id)
+    if custom_title is not None:
+        if not isinstance(custom_title, str):
+            raise ValueError("Custom title must be text.")
+        custom_title = " ".join(custom_title.split()).strip() or None
+        if custom_title and (len(custom_title) > 200 or any(ord(char) < 32 for char in custom_title)):
+            raise ValueError("Custom title must be at most 200 printable characters.")
+
+    stored_cover = None
+    if custom_cover_path is not None:
+        if not isinstance(custom_cover_path, str) or not custom_cover_path.strip():
+            raise ValueError("Custom cover path must be a valid managed image.")
+        candidate = Path(custom_cover_path.strip())
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        try:
+            resolved = candidate.resolve()
+            managed_root = (Path.cwd() / "data" / "display_overrides").resolve()
+            resolved.relative_to(managed_root)
+        except (OSError, ValueError, RuntimeError) as error:
+            raise ValueError("Custom cover must live in NekoTrack's display-overrides folder.") from error
+        if not resolved.is_file():
+            raise ValueError("Custom cover file could not be found.")
+        stored_cover = resolved.relative_to(Path.cwd().resolve()).as_posix()
+
+    connection = get_connection()
+    try:
+        if custom_title is None and stored_cover is None:
+            connection.execute(
+                "DELETE FROM work_display_overrides WHERE work_id = ?",
+                (safe_work_id,),
+            )
+        else:
+            connection.execute("""
+                INSERT INTO work_display_overrides
+                    (work_id, custom_title, custom_cover_path, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(work_id) DO UPDATE SET
+                    custom_title = excluded.custom_title,
+                    custom_cover_path = excluded.custom_cover_path,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (safe_work_id, custom_title, stored_cover))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    return get_work_display_override(safe_work_id)
+
+
+def clear_work_display_override(work_id):
+    """Remove all global title/cover overrides for one title."""
+    return save_work_display_override(work_id, None, None)
 
 
 def get_all_library():
