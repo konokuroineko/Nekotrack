@@ -907,10 +907,6 @@ class EntityProfilePage(QWidget):
         for fact in facts:
             facts_column.addWidget(self._fact("", fact))
 
-        if self.source_work is not None:
-            facts_column.addWidget(
-                self._fact("Opened from", self._work_title(self.source_work))
-            )
         if facts_column.count():
             profile_text.addLayout(facts_column)
 
