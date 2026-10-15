@@ -609,7 +609,7 @@ class UiStartupTests(unittest.TestCase):
         self.assertIn("descriptionHtml: description(asHtml: true)", query)
 
 
-    def test_profile_biography_uses_rich_text_and_horizontal_space_without_about_label(self):
+    def test_profile_biography_uses_rich_text_without_about_label(self):
         description = (
             '<p>A long <strong>formatted</strong> biography with '
             '<a href="https://example.com/profile">a link</a>.</p>'
