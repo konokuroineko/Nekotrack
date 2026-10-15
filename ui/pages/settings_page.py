@@ -20,10 +20,11 @@ from ui.preferences import (
     apply_theme_preset,
     defaults,
     get,
+    palette_for_mode,
     reset,
     set_value,
 )
-from ui.theme import COLORS, SPACING, refresh_theme, retint_widget_styles
+from ui.theme import COLORS, SPACING, refresh_theme, retint_widget_styles, toggle_stylesheet
 
 
 class ThemePresetCard(QFrame):
@@ -43,26 +44,19 @@ class ThemePresetCard(QFrame):
 
         preview = QFrame()
         preview.setFixedSize(56, 56)
-        preview.setStyleSheet(
-            f"background:{theme['background']};"
-            f"border:1px solid {theme['border']};"
-            f"border-radius:12px;"
-        )
+        self.preview = preview
         preview_layout = QVBoxLayout(preview)
         preview_layout.setContentsMargins(7, 7, 7, 7)
         preview_layout.setSpacing(5)
 
         top = QFrame()
-        top.setStyleSheet(
-            f"background:{theme['accent']};border-radius:4px;"
-        )
         preview_layout.addWidget(top, 1)
 
         bottom = QFrame()
-        bottom.setStyleSheet(
-            f"background:{theme['surface']};border-radius:4px;"
-        )
         preview_layout.addWidget(bottom, 1)
+        self.top_swatch = top
+        self.bottom_swatch = bottom
+        self.set_preview_mode(get("light_mode"))
 
         layout.addWidget(preview)
 
@@ -79,6 +73,19 @@ class ThemePresetCard(QFrame):
         text.addWidget(description)
         text.addStretch(1)
         layout.addLayout(text, 1)
+
+    def set_preview_mode(self, light_mode):
+        palette = palette_for_mode(self.theme, light_mode)
+        self.preview.setStyleSheet(
+            f"background:{palette['background']};"
+            f"border:1px solid {palette['border']};border-radius:12px;"
+        )
+        self.top_swatch.setStyleSheet(
+            f"background:{palette['accent']};border-radius:4px;"
+        )
+        self.bottom_swatch.setStyleSheet(
+            f"background:{palette['surface']};border-radius:4px;"
+        )
 
     def refresh_theme(self, selected=False):
         # Apply these colors directly to the card, instead of relying only on
@@ -168,6 +175,11 @@ class SettingsPage(QWidget):
             "Appearance",
             [
                 self._theme_selector(),
+                self._check_row(
+                    "White mode",
+                    "Use light surfaces while keeping your selected theme and accent color.",
+                    "light_mode",
+                ),
                 self._combo_row(
                     "Card size",
                     "Choose how large Library posters should appear.",
@@ -303,6 +315,7 @@ class SettingsPage(QWidget):
         for name, card in getattr(self, "theme_cards", {}).items():
             selected = name == current
             card.setProperty("selected", selected)
+            card.set_preview_mode(get("light_mode"))
             card.refresh_theme(selected)
 
         # Give section headers and action buttons explicit theme colors. These
@@ -505,7 +518,7 @@ class SettingsPage(QWidget):
             QRadioButton {{
                 background:transparent;
             }}
-            """
+            """ + toggle_stylesheet(COLORS)
         )
 
     def _section(self, name, widgets):
@@ -673,10 +686,29 @@ class SettingsPage(QWidget):
     def _check_row(self, name, description, key):
         check = QCheckBox()
         check.setChecked(get(key))
-        check.stateChanged.connect(
-            lambda state, k=key: self._changed(k, bool(state))
-        )
+        if key == "light_mode":
+            check.setObjectName("lightModeToggle")
+            check.toggled.connect(self._set_light_mode)
+        else:
+            check.toggled.connect(
+                lambda checked, k=key: self._changed(k, bool(checked))
+            )
         return self._row(name, description, check)
+
+    def _set_light_mode(self, enabled):
+        old_mode = bool(get("light_mode"))
+        new_mode = bool(enabled)
+        if old_mode == new_mode:
+            return
+        theme_name = str(get("theme_preset") or "Neko")
+        set_value("light_mode", new_mode)
+        retint_widget_styles(
+            theme_name,
+            theme_name,
+            old_light_mode=old_mode,
+            new_light_mode=new_mode,
+        )
+        self._apply("light_mode")
 
     def _info_row(self, name, value):
         value_label = QLabel(value)
