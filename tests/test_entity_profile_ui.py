@@ -114,6 +114,44 @@ class EntityProfileUiTests(unittest.TestCase):
         self.assertEqual(selected_work[0]["id"], 123)
         card.close()
 
+    def test_voice_credit_names_keep_physical_left_right_order_under_rtl(self):
+        previous_direction = self.app.layoutDirection()
+        self.app.setLayoutDirection(Qt.RightToLeft)
+        card = None
+        try:
+            card = MediaCreditCard({
+                "node": {
+                    "id": 123,
+                    "type": "ANIME",
+                    "title": {"romaji": "Example Series"},
+                },
+                "characterRole": "MAIN",
+                "characters": [{
+                    "id": 456,
+                    "name": {"full": "Example Character"},
+                }],
+            }, "voice_actor")
+            card.show()
+            self.app.processEvents()
+
+            name_label = card.findChild(QLabel, "creditCharacterName")
+            title_label = card.findChild(QLabel, "mediaCreditTitle")
+            self.assertIsNotNone(name_label)
+            self.assertIsNotNone(title_label)
+            self.assertEqual(name_label.layoutDirection(), Qt.LeftToRight)
+            self.assertEqual(title_label.layoutDirection(), Qt.LeftToRight)
+            self.assertLess(
+                name_label.geometry().center().x(),
+                title_label.geometry().center().x(),
+                "Character name must render physically left of the anime title",
+            )
+            self.assertEqual(card.toolTip(), "")
+            self.assertEqual(title_label.toolTip(), "")
+        finally:
+            if card is not None:
+                card.close()
+            self.app.setLayoutDirection(previous_direction)
+
     def test_character_credit_artwork_is_clickable_without_nested_name_frame(self):
         character = ClickableCharacterArtwork({
             "id": 456, "name": {"full": "Character"}
