@@ -1,7 +1,7 @@
 """A responsive, data-driven home dashboard for NekoTrack."""
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets (
+from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
