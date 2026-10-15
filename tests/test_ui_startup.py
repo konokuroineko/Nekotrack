@@ -169,6 +169,17 @@ class UiStartupTests(unittest.TestCase):
             switch.deleteLater()
             self.app.processEvents()
 
+    def test_white_palette_uses_light_frame_colors_for_every_theme(self):
+        from ui.preferences import THEME_PRESETS, palette_for_mode
+
+        for name, theme in THEME_PRESETS.items():
+            with self.subTest(theme=name):
+                white = palette_for_mode(theme, True)
+                self.assertEqual(white["frame_color"], white["border"])
+                self.assertEqual(white["frame_color"], "#ded8e7")
+                dark = palette_for_mode(theme, False)
+                self.assertEqual(dark["frame_color"], theme["frame_color"])
+
     def test_library_uses_the_bundle_saved_from_search_before_relation_sync_finishes(self):
         import os
         import tempfile
