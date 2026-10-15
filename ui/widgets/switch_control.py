@@ -59,6 +59,10 @@ class SwitchControl(QCheckBox):
         super().focusOutEvent(event)
         self.update()
 
+    def hitButton(self, position):
+        """Use the full switch rectangle as its clickable target."""
+        return self.rect().contains(position)
+
     def paintEvent(self, event):
         del event
         colors = self._colors()

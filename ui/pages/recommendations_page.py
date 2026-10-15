@@ -126,9 +126,10 @@ class RecommendationsPage(QWidget):
     work_selected = Signal(object)
     search_requested = Signal()
 
-    def __init__(self, add_callback=None):
+    def __init__(self, add_callback=None, embedded=False):
         super().__init__()
         self.add_callback = add_callback
+        self.embedded = bool(embedded)
         self._thread = None
         self._worker = None
         self._stop_event = threading.Event()
@@ -139,18 +140,27 @@ class RecommendationsPage(QWidget):
     def _build(self):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        self.scroll = QScrollArea(self)
-        self.scroll.setObjectName("recommendationsScroll")
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.content = QWidget()
         self.content.setObjectName("recommendationsContent")
         self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(34, 28, 34, 34)
-        self.content_layout.setSpacing(18)
-        self.scroll.setWidget(self.content)
-        outer.addWidget(self.scroll)
+
+        if self.embedded:
+            # Home already owns the page-level scroll area, so embedded
+            # recommendations must not create a second vertical scroll area.
+            self.content_layout.setContentsMargins(0, 0, 0, 0)
+            self.content_layout.setSpacing(18)
+            self.scroll = None
+            outer.addWidget(self.content)
+        else:
+            self.scroll = QScrollArea(self)
+            self.scroll.setObjectName("recommendationsScroll")
+            self.scroll.setWidgetResizable(True)
+            self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+            self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.content_layout.setContentsMargins(34, 28, 34, 34)
+            self.content_layout.setSpacing(18)
+            self.scroll.setWidget(self.content)
+            outer.addWidget(self.scroll)
         self._apply_theme()
 
     def _header(self):
@@ -288,7 +298,10 @@ class RecommendationsPage(QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(22)
-        available_width = max(100, self.scroll.viewport().width() or self.width() - 320)
+        available_width = max(
+            100,
+            self.width() if self.embedded else (self.scroll.viewport().width() or self.width() - 320),
+        )
         poster_width = int(get("card_size") or 210) + 8
         columns = max(2, min(5, (available_width - 50) // (poster_width + 16)))
         for index, work in enumerate(self._results):
