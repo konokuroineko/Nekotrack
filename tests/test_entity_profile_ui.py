@@ -327,12 +327,13 @@ class EntityProfileUiTests(unittest.TestCase):
                 "name": {"full": "Sample Character"},
                 "description": (
                     "Birthday:Apr 14\nAge:17-18\nGender:Male\n"
-                    "Height: 165 cm A third year student with a lot of friends."
+                    "Height: 165 cm\nHobbies: Drawing fan art, reading manga\n"
+                    "A third year student with a lot of friends."
                 ),
                 "descriptionHtml": (
                     "<p>Birthday:Apr 14<br/>Age:17-18<br/>Gender:Male<br/>"
-                    "Height: 165 cm A third year student with "
-                    "<strong>many friends</strong>.</p>"
+                    "Height: 165 cm<br/>Hobbies: Drawing fan art, reading manga<br/>"
+                    "A third year student with <strong>many friends</strong>.</p>"
                 ),
                 "gender": None,
                 "age": None,
@@ -351,6 +352,7 @@ class EntityProfileUiTests(unittest.TestCase):
             self.assertIn("Age: 17-18", facts)
             self.assertIn("Gender: Male", facts)
             self.assertIn("Height: 165 cm", facts)
+            self.assertIn("Hobbies: Drawing fan art, reading manga", facts)
 
             bio = page.findChild(QTextBrowser, "profileDescription")
             self.assertIsNotNone(bio)
@@ -359,6 +361,7 @@ class EntityProfileUiTests(unittest.TestCase):
             self.assertNotIn("Age:", rendered_text)
             self.assertNotIn("Gender:", rendered_text)
             self.assertNotIn("Height:", rendered_text)
+            self.assertNotIn("Hobbies:", rendered_text)
             self.assertIn("A third year student with many friends.", rendered_text)
             formatted = bio.document().find("many friends")
             self.assertFalse(formatted.isNull())
