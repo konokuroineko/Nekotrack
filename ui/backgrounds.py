@@ -140,10 +140,11 @@ class BackgroundManager(QObject):
         cache_key = None
         try:
             path = Path(path)
+            cache_key = str(path.resolve())
             if not path.is_file():
+                self._pixmap_cache.pop(cache_key, None)
                 return QPixmap()
             stat = path.stat()
-            cache_key = str(path.resolve())
             signature = (stat.st_mtime_ns, stat.st_size)
             cached = self._pixmap_cache.get(cache_key)
             if cached is not None and cached[0] == signature:
