@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QGridLayout, QBoxLayout, QTextBrowser
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QGridLayout, QBoxLayout, QTextBrowser, QVBoxLayout
 
 from ui.pages.entity_profile_page import (
     ClickableCharacterArtwork,
@@ -221,6 +221,77 @@ class EntityProfileUiTests(unittest.TestCase):
                 self.assertFalse(rendered.pixelColor(0, 0).red() > 200)
                 page.hide()
         page.close()
+
+    def test_profile_facts_and_biography_use_one_vertical_column(self):
+        page = EntityProfilePage()
+        try:
+            with patch.object(EntityProfilePage, "_start_profile_load"):
+                page.set_profile(
+                    "voice_actor",
+                    {"person_id": 456, "name": "Example Voice Actor"},
+                )
+            page._remote_data = {
+                "id": 456,
+                "name": {"full": "Example Voice Actor"},
+                "primaryOccupations": ["Voice Actor", "Singer"],
+                "languageV2": "Japanese",
+                "gender": "Female",
+                "description": "Biography text.",
+                "descriptionHtml": (
+                    "<p><strong>Biography text</strong> should follow the facts.</p>"
+                ),
+                "image": {},
+                "staffMedia": {"edges": []},
+                "characterMedia": {"edges": []},
+            }
+            page._render_profile()
+
+            header_item = page.content_layout.itemAt(0)
+            header = header_item.widget() if header_item is not None else None
+            self.assertIsNotNone(header)
+            bio = header.findChild(QTextBrowser, "profileDescription")
+            profile_name = header.findChild(QLabel, "profileName")
+            self.assertIsNotNone(bio)
+            self.assertIsNotNone(profile_name)
+
+            header_row = header.layout()
+            profile_layout = next(
+                (
+                    item.layout()
+                    for index in range(header_row.count())
+                    if (item := header_row.itemAt(index)).layout() is not None
+                    and item.layout().indexOf(profile_name) >= 0
+                ),
+                None,
+            )
+            self.assertIsInstance(profile_layout, QVBoxLayout)
+
+            fact_labels = header.findChildren(QLabel, "profileFacts")
+            self.assertTrue(fact_labels)
+            facts_index = next(
+                index
+                for index in range(profile_layout.count())
+                if (item := profile_layout.itemAt(index)).layout() is not None
+                and any(
+                    item.layout().itemAt(child_index).widget() in fact_labels
+                    for child_index in range(item.layout().count())
+                    if item.layout().itemAt(child_index).widget() is not None
+                )
+            )
+            bio_index = next(
+                index
+                for index in range(profile_layout.count())
+                if profile_layout.itemAt(index).widget() is bio
+            )
+            self.assertLess(
+                facts_index,
+                bio_index,
+                "Profile facts must be stacked above the biography in one vertical layout",
+            )
+            self.assertIn("Biography text", bio.toPlainText())
+        finally:
+            page.close()
+            page.deleteLater()
 
     def test_voice_actor_bio_links_are_fixed_without_changing_html_formatting(self):
         raw_description = "\n".join((

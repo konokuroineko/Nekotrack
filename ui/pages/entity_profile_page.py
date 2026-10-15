@@ -859,9 +859,8 @@ class EntityProfilePage(QWidget):
         title.setWordWrap(True)
         profile_text.addWidget(title)
 
-        details_row = QHBoxLayout()
-        details_row.setContentsMargins(0, 0, 0, 0)
-        details_row.setSpacing(18)
+        # Keep all profile information in one vertical flow: facts should not
+        # be separated from the biography into competing left/right columns.
         facts_column = QVBoxLayout()
         facts_column.setContentsMargins(0, 0, 0, 0)
         facts_column.setSpacing(4)
@@ -912,8 +911,8 @@ class EntityProfilePage(QWidget):
             facts_column.addWidget(
                 self._fact("Opened from", self._work_title(self.source_work))
             )
-        facts_column.addStretch(1)
-        details_row.addLayout(facts_column, 1)
+        if facts_column.count():
+            profile_text.addLayout(facts_column)
 
         # AniList provides both forms: use its original HTML to retain the
         # provider's paragraph/list/spacing choices, and repair only malformed
@@ -961,16 +960,15 @@ class EntityProfilePage(QWidget):
                 "background:transparent;border:none;font-size:12px; }"
                 f"QTextBrowser#profileDescription a {{ color:{COLORS['accent']}; }}"
             )
-            details_row.addWidget(description_browser, 2)
+            profile_text.addWidget(description_browser, 1)
         elif self._remote_error:
             note = QLabel(
                 "Biography unavailable. Showing the saved profile details."
             )
             note.setWordWrap(True)
             note.setStyleSheet(muted_label_stylesheet())
-            details_row.addWidget(note, 2)
+            profile_text.addWidget(note, 1)
 
-        profile_text.addLayout(details_row, 1)
         profile_text.addStretch(1)
         row.addLayout(profile_text, 1)
         self.content_layout.addWidget(header)
