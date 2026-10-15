@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QFileDialog,
     QCheckBox,
     QComboBox,
     QFrame,
@@ -7,8 +10,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QScrollArea,
+    QSlider,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -141,8 +147,14 @@ class SettingsPage(QWidget):
     settings_changed = Signal(str)
     setup_requested = Signal()
 
-    def __init__(self):
+    def __init__(self, background_manager=None):
         super().__init__()
+        self.background_manager = background_manager
+        self._background_list = None
+        self._background_status = None
+        self._background_interval = None
+        self._background_overlay_slider = None
+        self._background_overlay_value = None
         self.setMinimumSize(0, 0)
         self._build()
 
@@ -269,6 +281,11 @@ class SettingsPage(QWidget):
             ],
         ))
 
+        appearance.addWidget(self._section(
+            "Background image",
+            [self._background_options_widget()],
+        ))
+
         library.addWidget(self._section(
             "Card behavior",
             [
@@ -363,6 +380,151 @@ class SettingsPage(QWidget):
             category_layout.addStretch(1)
 
         self.refresh_theme()
+
+    def _background_options_widget(self):
+        wrapper = QWidget(self)
+        wrapper.setObjectName("backgroundOptions")
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        if self.background_manager is None:
+            note = QLabel("Background customization is unavailable in this view.")
+            note.setObjectName("backgroundStatus")
+            note.setWordWrap(True)
+            layout.addWidget(note)
+            return wrapper
+
+        intro = QLabel(
+            "Choose local artwork. NekoTrack stores a validated copy in its own user-data folder."
+        )
+        intro.setObjectName("backgroundIntro")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self._background_list = QListWidget()
+        self._background_list.setObjectName("backgroundImageList")
+        self._background_list.setMinimumHeight(78)
+        self._background_list.setMaximumHeight(135)
+        self._background_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self._background_list.setAccessibleName("Selected background images")
+        layout.addWidget(self._background_list)
+
+        image_actions = QHBoxLayout()
+        add_button = QPushButton("Add images…")
+        add_button.setObjectName("backgroundAddImages")
+        add_button.clicked.connect(self._choose_background_images)
+        remove_button = QPushButton("Remove selected")
+        remove_button.setObjectName("backgroundRemoveImage")
+        remove_button.clicked.connect(self._remove_selected_background)
+        image_actions.addWidget(add_button)
+        image_actions.addWidget(remove_button)
+        image_actions.addStretch(1)
+        layout.addLayout(image_actions)
+
+        timing_row = QHBoxLayout()
+        timing_label = QLabel("Background behavior")
+        timing_label.setObjectName("backgroundControlLabel")
+        self._background_interval = QComboBox()
+        self._background_interval.setObjectName("backgroundInterval")
+        self._background_interval.setAccessibleName("Background slideshow interval")
+        for label, value in (
+            ("Off", -1), ("Static image", 0), ("Every 30 seconds", 30),
+            ("Every 1 minute", 60), ("Every 5 minutes", 300),
+            ("Every 15 minutes", 900), ("Every 30 minutes", 1800),
+        ):
+            self._background_interval.addItem(label, value)
+        current = self._background_interval.findData(self.background_manager.interval)
+        self._background_interval.setCurrentIndex(current if current >= 0 else 0)
+        self._background_interval.currentIndexChanged.connect(
+            lambda index: self.background_manager.set_interval(
+                self._background_interval.itemData(index)
+            )
+        )
+        timing_row.addWidget(timing_label)
+        timing_row.addWidget(self._background_interval, 1)
+        layout.addLayout(timing_row)
+
+        overlay_row = QHBoxLayout()
+        overlay_label = QLabel("Contrast overlay")
+        overlay_label.setObjectName("backgroundControlLabel")
+        self._background_overlay_slider = QSlider(Qt.Orientation.Horizontal)
+        self._background_overlay_slider.setObjectName("backgroundOverlay")
+        self._background_overlay_slider.setRange(35, 90)
+        self._background_overlay_slider.setValue(self.background_manager.overlay_opacity)
+        self._background_overlay_slider.setAccessibleName("Background contrast overlay percentage")
+        self._background_overlay_value = QLabel(f"{self.background_manager.overlay_opacity}%")
+        self._background_overlay_value.setObjectName("backgroundOverlayValue")
+        self._background_overlay_slider.valueChanged.connect(self._background_overlay_changed)
+        overlay_row.addWidget(overlay_label)
+        overlay_row.addWidget(self._background_overlay_slider, 1)
+        overlay_row.addWidget(self._background_overlay_value)
+        layout.addLayout(overlay_row)
+
+        self._background_status = QLabel()
+        self._background_status.setObjectName("backgroundStatus")
+        self._background_status.setWordWrap(True)
+        layout.addWidget(self._background_status)
+        self.background_manager.images_changed.connect(self._refresh_background_list)
+        self._refresh_background_list()
+        return wrapper
+
+    def _refresh_background_list(self):
+        if self._background_list is None or self.background_manager is None:
+            return
+        selected = self.background_manager.selected_path
+        self._background_list.clear()
+        selected_row = -1
+        for index, path in enumerate(self.background_manager.paths):
+            item = QListWidgetItem(Path(path).name)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            item.setToolTip(path)
+            self._background_list.addItem(item)
+            if path == selected:
+                selected_row = index
+        if selected_row >= 0:
+            self._background_list.setCurrentRow(selected_row)
+
+    def _choose_background_images(self):
+        if self.background_manager is None:
+            return
+        paths, _filter = QFileDialog.getOpenFileNames(
+            self, "Choose background images", "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
+        )
+        if not paths:
+            return
+        added = self.background_manager.add_images(paths)
+        self._refresh_background_list()
+        if self._background_status is not None:
+            if self.background_manager.last_errors:
+                self._background_status.setText(
+                    f"Added {added} image(s). {len(self.background_manager.last_errors)} file(s) were skipped; "
+                    "use a readable PNG, JPG, WEBP, or BMP up to 20 MiB."
+                )
+            elif added:
+                self._background_status.setText(f"Added {added} image(s) to NekoTrack's background collection.")
+            else:
+                self._background_status.setText("Nothing new was added; these images may already be selected.")
+
+    def _remove_selected_background(self):
+        if self.background_manager is None or self._background_list is None:
+            return
+        item = self._background_list.currentItem()
+        if item is None:
+            if self._background_status is not None:
+                self._background_status.setText("Select an image to remove it.")
+            return
+        removed = self.background_manager.remove_image(item.data(Qt.ItemDataRole.UserRole))
+        if self._background_status is not None:
+            self._background_status.setText(
+                "Background image removed." if removed else "The background image could not be removed."
+            )
+
+    def _background_overlay_changed(self, value):
+        if self._background_overlay_value is not None:
+            self._background_overlay_value.setText(f"{int(value)}%")
+        if self.background_manager is not None:
+            self.background_manager.set_overlay_opacity(value)
 
     def refresh_theme(self):
         self._apply_page_style()
@@ -567,6 +729,26 @@ class SettingsPage(QWidget):
             QTabWidget#settingsTabs QScrollArea#settingsCategoryScroll {{
                 background:transparent;
                 border:none;
+            }}
+            QListWidget#backgroundImageList {{
+                background:{COLORS['surface_alt']};
+                color:{COLORS['primary']};
+                border:1px solid {COLORS['border']};
+                border-radius:9px;
+                padding:4px;
+            }}
+            QListWidget#backgroundImageList::item {{ padding:6px 8px; border-radius:6px; }}
+            QListWidget#backgroundImageList::item:selected {{
+                background:{COLORS['accent_soft']}; color:{COLORS['nav_selected_text']};
+            }}
+            QLabel#backgroundIntro, QLabel#backgroundStatus {{
+                color:{COLORS['muted']}; background:transparent; font-size:11px;
+            }}
+            QLabel#backgroundControlLabel {{
+                color:{COLORS['secondary']}; background:transparent; font-size:11px; font-weight:700;
+            }}
+            QLabel#backgroundOverlayValue {{
+                color:{COLORS['accent']}; background:transparent; font-size:11px; font-weight:800; min-width:34px;
             }}
             QComboBox {{
                 min-width:120px;

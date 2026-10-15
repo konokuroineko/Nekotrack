@@ -206,6 +206,9 @@ _DEFAULTS = {
     "animation_speed": 260,
     "maximized": True,
     "tmdb_api_token": "",
+    "background_image_paths_json": "[]",
+    "background_slideshow_interval": 0,
+    "background_overlay_opacity": 62,
     "bundle_mode": "main",
     **{key: False for key in BUNDLE_OPTION_KEYS},
     "setup_complete": False,
@@ -348,6 +351,8 @@ _INTEGER_BOUNDS = {
     "card_gap": (0, 120),
     "corner_radius": (0, 64),
     "animation_speed": (0, 2000),
+    "background_slideshow_interval": (-1, 1800),
+    "background_overlay_opacity": (35, 90),
 }
 
 

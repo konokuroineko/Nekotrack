@@ -8,7 +8,7 @@ from api import (
 )
 from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer, QSize
 
-from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QVBoxLayout
 
 from database import (
     add_to_library,
@@ -34,6 +34,7 @@ from database import (
 from image_cache import download_cover
 from library_import_queue import LibraryImportQueue
 from diagnostics import diagnostic_context, log_event, log_exception, log_operation
+from ui.backgrounds import BackgroundCanvas, BackgroundManager
 from ui.branding import application_icon, navigation_icon, wordmark_pixmap
 from ui.navigation import NavigationController
 from ui.preferences import get
@@ -488,6 +489,7 @@ class MainWindow(QMainWindow):
         self._library_episode_preload_thread = None
         self._library_episode_preload_worker = None
         self._ui_root_stack = None
+        self.background_manager = BackgroundManager(self)
         self.setup_ui()
         QTimer.singleShot(250, self._start_existing_library_episode_preload)
 
@@ -498,7 +500,7 @@ class MainWindow(QMainWindow):
             self._ui_root_stack = QStackedWidget()
             self._ui_root_stack.setObjectName("uiRootStack")
             self.setCentralWidget(self._ui_root_stack)
-        root = QWidget()
+        root = BackgroundCanvas(self.background_manager)
         root_layout = QHBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
@@ -534,7 +536,7 @@ class MainWindow(QMainWindow):
         self.search_page = SearchPage(self.add_to_library)
         self.work_detail_page = WorkDetailPage()
         self.entity_profile_page = EntityProfilePage()
-        self.settings_page = SettingsPage()
+        self.settings_page = SettingsPage(background_manager=self.background_manager)
         self.home_page = HomePage()
         pages = {
             "home": self.home_page,
@@ -671,6 +673,8 @@ class MainWindow(QMainWindow):
 
     def _apply_theme_live(self):
         refresh_theme()
+        if hasattr(self, "background_manager"):
+            self.background_manager.refresh_theme()
 
         self.setStyleSheet(
             application_stylesheet()
