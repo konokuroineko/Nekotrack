@@ -28,19 +28,33 @@ from ui.widgets.work_card import WorkCard
 
 
 _PROFILE_METADATA_LABEL_PATTERN = re.compile(
-    r"(?P<label>Blood\s+Type|Date\s+of\s+Birth|Birthday|Height|Weight|Age|Gender)\s*:\s*",
-    re.IGNORECASE,
+    r"(?P<label>[A-Za-z][A-Za-z0-9 /&()'’.-]{0,27}?)[ \t]*:[ \t]*"
 )
-_PROFILE_METADATA_LABELS = {
+_PROFILE_METADATA_INLINE_FIELD_PATTERN = re.compile(
+    r"(?:[ \t]*(?:\||[•·]|;)[ \t]*)(?P<label>[A-Za-z][A-Za-z0-9 /&()'’.-]{0,27}?)[ \t]*:[ \t]*"
+)
+_PROFILE_METADATA_ALIASES = {
     "blood type": ("blood_type", "Blood type"),
     "date of birth": ("birthday", "Birthday"),
+    "dob": ("birthday", "Birthday"),
     "birthday": ("birthday", "Birthday"),
     "height": ("height", "Height"),
     "weight": ("weight", "Weight"),
     "age": ("age", "Age"),
     "gender": ("gender", "Gender"),
+    "hometown": ("hometown", "Hometown"),
+    "home town": ("hometown", "Hometown"),
+    "language": ("language", "Language"),
+    "occupation": ("occupation", "Occupation"),
+    "occupations": ("occupation", "Occupation"),
+    "years active": ("years_active", "Years active"),
+    "active": ("years_active", "Years active"),
+    "favourite": ("favourites", "Favourites"),
+    "favourites": ("favourites", "Favourites"),
+    "favorite": ("favourites", "Favourites"),
+    "favorites": ("favourites", "Favourites"),
 }
-_PROFILE_METADATA_VALUE_PATTERNS = {
+_PROFILE_METADATA_TYPED_VALUE_PATTERNS = {
     "height": re.compile(
         r"(?:\d{2,3}(?:\.\d+)?\s*(?:cm|centimeters?|mm|m|meters?|metres?)"
         r"|\d{1,2}\s*(?:ft|feet|foot)(?:\s*\d{1,2}\s*(?:in|inches))?"
@@ -57,7 +71,7 @@ _PROFILE_METADATA_VALUE_PATTERNS = {
         r"|Dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?"
         r"|\d{1,2}(?:st|nd|rd|th)?\s+(?:January|February|March|April|May|June"
         r"|July|August|September|October|November|December)(?:\s+\d{4})?"
-        r"|\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?|\d{4}",
+        r"|\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?|\d{4}|[A-Za-z]{3,9}\s+\d{1,2}",
         re.IGNORECASE,
     ),
     "age": re.compile(
@@ -111,11 +125,28 @@ def _description_visible_text_and_map(description, html_mode):
     return "".join(visible), source_map
 
 
-def _extract_leading_profile_metadata(description, html_mode=False):
-    """Extract confident, labeled metadata from the beginning of a character bio.
+def _profile_metadata_label(label):
+    """Return a normalized key and readable label for a simple X: Y field."""
+    cleaned = " ".join(str(label or "").split()).strip(" .:-")
+    normalized = cleaned.casefold()
+    if not cleaned:
+        return "", ""
+    alias = _PROFILE_METADATA_ALIASES.get(normalized)
+    if alias:
+        return alias
+    key = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
+    return key, cleaned[0].upper() + cleaned[1:]
 
-    Only known labels with recognizable values are considered. Once ordinary prose
-    starts, the remaining description is left untouched.
+
+def _extract_leading_profile_metadata(description, html_mode=False):
+    """Extract consecutive leading X: Y fields, leaving the remaining biography intact.
+
+    Metadata labels are generic so fields such as Hobbies, Likes, or other
+    AniList-specific details work without adding a hardcoded label for each one.
+    Known labels with strongly recognizable value formats (for example Height)
+    can end before prose that starts on the same line. Otherwise, a field must
+    be separated by a line break or explicit field separator. Parsing stops at
+    the first ordinary prose segment.
     """
     source = str(description or "")
     if not source.strip():
@@ -128,7 +159,9 @@ def _extract_leading_profile_metadata(description, html_mode=False):
     last_fact_end = None
 
     while cursor < len(visible):
-        while cursor < len(visible) and visible[cursor].isspace():
+        while cursor < len(visible) and (
+            visible[cursor].isspace() or visible[cursor] in "|•·;"
+        ):
             cursor += 1
         if cursor >= len(visible):
             break
@@ -137,33 +170,90 @@ def _extract_leading_profile_metadata(description, html_mode=False):
         if label_match is None:
             break
 
-        label_key = " ".join(label_match.group("label").casefold().split())
-        metadata_key, display_label = _PROFILE_METADATA_LABELS[label_key]
+        label_key, display_label = _profile_metadata_label(label_match.group("label"))
+        if not label_key:
+            break
         value_start = label_match.end()
-        value_match = _PROFILE_METADATA_VALUE_PATTERNS[metadata_key].match(
-            visible, value_start
-        )
-        if value_match is None:
-            break
 
-        value = value_match.group(0).strip()
-        value_end = value_match.end()
-        if (
-            value_end < len(visible)
-            and not visible[value_end].isspace()
-            and visible[value_end] not in ",.;|·)"
-        ):
-            break
+        value_end = None
+        typed_pattern = _PROFILE_METADATA_TYPED_VALUE_PATTERNS.get(label_key)
+        if typed_pattern is not None:
+            value_match = typed_pattern.match(visible, value_start)
+            if value_match is not None:
+                candidate_end = value_match.end()
+                if (
+                    candidate_end == len(visible)
+                    or visible[candidate_end].isspace()
+                    or visible[candidate_end] in ",.;|•·);"
+                ):
+                    value_end = candidate_end
+                    # Include a sentence-ending period so removing a field from
+                    # "Height: 165 cm. This person..." does not leave ". This...".
+                    if (
+                        value_end < len(visible)
+                        and visible[value_end] == "."
+                        and (
+                            value_end + 1 == len(visible)
+                            or visible[value_end + 1].isspace()
+                        )
+                    ):
+                        value_end += 1
 
+        if value_end is None:
+            line_end = visible.find("\n", value_start)
+            if line_end < 0:
+                line_end = len(visible)
+            segment_end = line_end
+
+            inline_field = _PROFILE_METADATA_INLINE_FIELD_PATTERN.search(
+                visible, value_start, line_end
+            )
+            if inline_field is not None:
+                segment_end = inline_field.start()
+
+            # A generic value with one clear sentence followed by normal prose
+            # should not absorb the prose. Dotted/abbreviated titles remain rare
+            # here, but this conservative boundary is useful for common biographies.
+            sentence_boundary = re.search(
+                r"(?<=[.!?])[ \t]+(?=(?:I|He|She|They|This|That|The|A|An|My|His|Her|Their|Born|Known|Voiced|Worked|Was|Is)\b)",
+                visible[value_start:segment_end],
+            )
+            if sentence_boundary is not None:
+                segment_end = min(
+                    segment_end, value_start + sentence_boundary.start()
+                )
+
+            value_end = segment_end
+            while value_end > value_start and visible[value_end - 1].isspace():
+                value_end -= 1
+
+            value = visible[value_start:value_end].strip()
+            if not value or len(value) > 180:
+                break
+            # Don't turn a complete prose sentence into a fact just because it
+            # begins with a colon-bearing phrase like "Introduction: ...".
+            if re.search(r"\.\s+[A-Z]", value):
+                break
+        else:
+            value = visible[value_start:value_end].strip()
+
+        if not value:
+            break
         if first_fact_start is None:
             first_fact_start = cursor
-        facts.append((metadata_key, display_label, value))
+        facts.append((label_key, display_label, value))
         last_fact_end = value_end
         cursor = value_end
 
+        # A next field must begin after a line break or an explicit visual
+        # separator; ordinary comma-separated values (e.g. hobby lists) stay intact.
         lookahead = cursor
         while lookahead < len(visible) and visible[lookahead].isspace():
             lookahead += 1
+        while lookahead < len(visible) and visible[lookahead] in "|•·;":
+            lookahead += 1
+            while lookahead < len(visible) and visible[lookahead].isspace():
+                lookahead += 1
         if _PROFILE_METADATA_LABEL_PATTERN.match(visible, lookahead) is None:
             break
         cursor = lookahead
@@ -195,6 +285,7 @@ def _extract_leading_profile_metadata(description, html_mode=False):
         cleaned = re.sub(r"(?is)^\s*(?:<br\b[^>]*>\s*)+", "", cleaned)
 
     return facts, cleaned.strip()
+
 
 
 def _crop_pixmap_to_size(pixmap, size):
