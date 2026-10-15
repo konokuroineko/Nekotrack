@@ -222,7 +222,7 @@ class EntityProfileUiTests(unittest.TestCase):
                 page.hide()
         page.close()
 
-    def test_voice_actor_bio_social_links_render_as_clickable_markdown(self):
+    def test_voice_actor_bio_links_are_fixed_without_changing_html_formatting(self):
         raw_description = "\n".join((
             r"[YouTube]\([https://www.youtube.com/](https://www.youtube.com/)"
             r"[@Ueda](https://anilist.co/user/Ueda)-Kana)",
@@ -232,6 +232,19 @@ class EntityProfileUiTests(unittest.TestCase):
             r"[Youtube]\([https://www.youtube.com/](https://www.youtube.com/)"
             r"[@OfficialChannel](https://anilist.co/user/OfficialChannel)-eu5sl)",
         ))
+        # Model AniList's HTML response, including HTML structure around the
+        # malformed Markdown links. Only those link fragments should be changed.
+        html_description = "\n".join((
+            "<p><strong>Biography formatting</strong> must stay intact.</p>",
+            r'<p>[YouTube]\(<a href="https://www.youtube.com/">https://www.youtube.com/</a>'
+            r'<a href="https://anilist.co/user/Ueda">@Ueda</a>-Kana)</p>',
+            r'<p>[Youtube]\(<a href="https://youtube.com/">https://youtube.com/</a>'
+            r'<a href="https://anilist.co/user/officialyoutubechannel3974">'
+            r'@officialyoutubechannel3974</a>?si=9AjlJ6Ujj2Vw1CiU)</p>',
+            r'<p>[Youtube]\(<a href="https://www.youtube.com/">https://www.youtube.com/</a>'
+            r'<a href="https://anilist.co/user/OfficialChannel">@OfficialChannel</a>-eu5sl)</p>',
+            "<ul><li>Keep this original list item.</li></ul>",
+        ))
         expected_urls = (
             "https://www.youtube.com/@Ueda-Kana",
             "https://youtube.com/@officialyoutubechannel3974?si=9AjlJ6Ujj2Vw1CiU",
@@ -240,8 +253,6 @@ class EntityProfileUiTests(unittest.TestCase):
 
         page = EntityProfilePage()
         try:
-            # Isolate rendering from network behavior: this models the exact raw
-            # Markdown returned by AniList after requesting description (not asHtml).
             with patch.object(EntityProfilePage, "_start_profile_load"):
                 page.set_profile(
                     "voice_actor",
@@ -251,6 +262,7 @@ class EntityProfileUiTests(unittest.TestCase):
                 "id": 456,
                 "name": {"full": "Example Voice Actor"},
                 "description": raw_description,
+                "descriptionHtml": html_description,
                 "image": {},
                 "staffMedia": {"edges": []},
                 "characterMedia": {"edges": []},
@@ -269,6 +281,13 @@ class EntityProfileUiTests(unittest.TestCase):
             self.assertNotIn(r"\([https://", rendered)
             self.assertNotIn("[YouTube]", rendered)
             self.assertNotIn("[Youtube]", rendered)
+
+            # HTML-only formatting and structure outside links must survive.
+            self.assertIn("Biography formatting", bio.toPlainText())
+            self.assertIn("Keep this original list item.", bio.toPlainText())
+            formatted = bio.document().find("Biography formatting")
+            self.assertFalse(formatted.isNull())
+            self.assertGreaterEqual(formatted.charFormat().fontWeight(), 600)
         finally:
             page.close()
             page.deleteLater()
