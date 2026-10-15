@@ -3,7 +3,6 @@ import re
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication, QDialog, QWidget
 
-from ui.branding import resource_path
 from ui.preferences import THEME_PRESETS, get, palette_for_mode
 
 
@@ -111,11 +110,11 @@ def retint_widget_styles(
     old_light_mode=None,
     new_light_mode=None,
 ):
-    """Retint cached styles when either the theme or white mode changes.
+    """Retint inline styles from the previous active palette to the new one.
 
-    Many widgets build stylesheets once from COLORS during construction. Their
-    existing rules are remapped from any known dark/light preset palette to the
-    requested palette before the pages regenerate their own stylesheets.
+    Widgets often build stylesheets once from COLORS. Map only colors from the
+    previous theme and mode; searching every preset creates false ambiguities
+    and leaves stale dark colors behind in White mode.
     """
     if old_light_mode is None:
         old_light_mode = get("light_mode")
@@ -127,6 +126,10 @@ def retint_widget_styles(
     base_theme = THEME_PRESETS.get(str(new_theme_name))
     if not base_theme:
         return
+    old_base_theme = THEME_PRESETS.get(
+        str(old_theme_name), THEME_PRESETS["Neko"]
+    )
+    old_theme = palette_for_mode(old_base_theme, old_light_mode)
     new_theme = palette_for_mode(base_theme, new_light_mode)
     if (
         str(old_theme_name) == str(new_theme_name)
@@ -134,22 +137,21 @@ def retint_widget_styles(
     ):
         return
 
-    # Stale inline styles may come from any preset and from either mode.
+    # Match each color in its previous semantic role. Do not mix palettes from
+    # unrelated themes, where a coincidentally repeated hex value can map to
+    # several different destinations.
     candidates = {}
-    for preset in THEME_PRESETS.values():
-        for source_mode in (False, True):
-            source_palette = palette_for_mode(preset, source_mode)
-            for key in COLOR_KEYS:
-                old_color = source_palette.get(key)
-                new_color = new_theme.get(key)
-                if (
-                    isinstance(old_color, str)
-                    and isinstance(new_color, str)
-                    and old_color.startswith("#")
-                    and new_color.startswith("#")
-                    and old_color.lower() != new_color.lower()
-                ):
-                    candidates.setdefault(old_color.lower(), set()).add(new_color)
+    for key in COLOR_KEYS:
+        old_color = old_theme.get(key)
+        new_color = new_theme.get(key)
+        if (
+            isinstance(old_color, str)
+            and isinstance(new_color, str)
+            and old_color.startswith("#")
+            and new_color.startswith("#")
+            and old_color.lower() != new_color.lower()
+        ):
+            candidates.setdefault(old_color.lower(), set()).add(new_color)
 
     # If the same literal represents different semantic roles in the theme
     # catalog, leave it untouched rather than guessing which role it meant.
@@ -211,42 +213,6 @@ def retint_widget_styles(
         widget.update()
 
 
-def toggle_stylesheet(theme=None):
-    """Return a consistent, accent-colored switch style for Qt checkboxes."""
-    palette = theme if isinstance(theme, dict) else COLORS
-    left_thumb = resource_path("assets/toggle-thumb-left.svg").as_uri()
-    right_thumb = resource_path("assets/toggle-thumb-right.svg").as_uri()
-    accent = palette.get("accent", COLORS["accent"])
-    border = palette.get("border", COLORS["border"])
-    track = palette.get("surface_alt", COLORS["surface_alt"])
-    disabled_track = palette.get("background_alt", COLORS["background_alt"])
-    muted = palette.get("muted", COLORS["muted"])
-    return f"""
-        QCheckBox::indicator {{
-            width:38px;
-            height:22px;
-            border:1px solid {border};
-            border-radius:11px;
-            background-color:{track};
-            image:url("{left_thumb}");
-        }}
-        QCheckBox::indicator:checked {{
-            border-color:{accent};
-            background-color:{accent};
-            image:url("{right_thumb}");
-        }}
-        QCheckBox::indicator:disabled {{
-            border-color:{border};
-            background-color:{disabled_track};
-        }}
-        QCheckBox::indicator:checked:disabled {{
-            border-color:{muted};
-            background-color:{muted};
-            image:url("{right_thumb}");
-        }}
-    """
-
-
 def application_stylesheet():
     radius = get("corner_radius")
     return f"""
@@ -271,7 +237,7 @@ def application_stylesheet():
         QScrollBar:horizontal {{ background: transparent; height: 8px; }}
         QScrollBar::handle:horizontal {{ background: {COLORS['border']}; border-radius: 4px; min-width: 36px; }}
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
-    """ + toggle_stylesheet(COLORS)
+    """
 
 
 def panel_stylesheet(radius=None):

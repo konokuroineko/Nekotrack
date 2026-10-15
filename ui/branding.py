@@ -49,10 +49,17 @@ def logo_pixmap(size=128):
 
 
 @lru_cache(maxsize=128)
-def wordmark_pixmap(accent, width=312, height=60):
-    """Render the black transparent lockup with theme-colored progress markers."""
+def wordmark_pixmap(accent, width=312, height=60, light_mode=False):
+    """Render a transparent black-cat lockup with surface-aware contrast."""
     accent_color = QColor(accent).name(QColor.NameFormat.HexRgb)
-    svg = _wordmark_svg().replace("__ACCENT__", accent_color)
+    # Keep the cat and lettering black. On dark surfaces, a restrained pale
+    # contour makes the original silhouette legible without inverting it.
+    outline = "none" if light_mode else "#d8cfe6"
+    svg = (
+        _wordmark_svg()
+        .replace("__ACCENT__", accent_color)
+        .replace("__OUTLINE__", outline)
+    )
     return _render_svg(svg, (max(16, int(width)), max(16, int(height))))
 
 

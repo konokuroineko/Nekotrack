@@ -236,6 +236,7 @@ def palette_for_mode(theme, light_mode=False):
         "surface_hover": "#ece7f3",
         "border": "#ded8e7",
         "border_hover": "#c9bdd8",
+        "frame_color": "#ded8e7",
         "primary": "#28232f",
         "secondary": "#5f5868",
         "muted": "#82798c",
