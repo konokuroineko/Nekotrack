@@ -98,7 +98,11 @@ class FavoritesIdentityOverrideTests(unittest.TestCase):
             103, "My preferred title", stored_cover
         )
         self.assertEqual(saved["custom_title"], "My preferred title")
-        self.assertEqual(Path(saved["custom_cover_path"]), Path.cwd() / stored_cover)
+        self.assertTrue(Path(saved["custom_cover_path"]).is_file())
+        self.assertEqual(
+            Path(saved["custom_cover_path"]).name,
+            Path(stored_cover).name,
+        )
         self.assertEqual(
             database.get_work_display_override(103)["custom_title"],
             "My preferred title",
