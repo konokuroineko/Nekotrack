@@ -592,15 +592,21 @@ class UiStartupTests(unittest.TestCase):
                 os.chdir(old_cwd)
 
 
-    def test_entity_profile_queries_request_html_descriptions(self):
+    def test_entity_profile_queries_request_raw_markdown_descriptions(self):
         import api
 
         with patch.object(api, "anilist_request", return_value={
-            "Character": {"id": 9, "description": "<p>bio</p>"}
+            "Character": {"id": 9, "description": "[YouTube]([https://youtube.com/](https://youtube.com/)[@Example](https://anilist.co/user/Example)-channel)"}
         }) as request:
             profile = api.get_entity_profile("character", 9)
-        self.assertEqual(profile["description"], "<p>bio</p>")
-        self.assertIn("description(asHtml: true)", request.call_args.args[0])
+
+        self.assertEqual(
+            profile["description"],
+            "[YouTube](https://youtube.com/@Example-channel)",
+        )
+        query = request.call_args.args[0]
+        self.assertIn("description", query)
+        self.assertNotIn("description(asHtml: true)", query)
 
 
     def test_profile_biography_uses_rich_text_and_horizontal_space_without_about_label(self):

@@ -154,6 +154,21 @@ def _retry_after_delay(value, fallback, now=None):
     return min(60.0, max(1.0, requested))
 
 
+def _normalize_anilist_description_fields(value):
+    """Repair malformed social links in every nested AniList description field."""
+    if isinstance(value, dict):
+        normalized = {}
+        for key, item in value.items():
+            if str(key).casefold() == "description" and isinstance(item, str):
+                normalized[key] = _normalize_anilist_profile_description(item)
+            else:
+                normalized[key] = _normalize_anilist_description_fields(item)
+        return normalized
+    if isinstance(value, list):
+        return [_normalize_anilist_description_fields(item) for item in value]
+    return value
+
+
 def anilist_request(query, variables=None):
     """Make a request to AniList GraphQL API with retry logic."""
     last_error = None
@@ -252,7 +267,9 @@ def anilist_request(query, variables=None):
                 raise RuntimeError(
                     "AniList returned an unexpected GraphQL response: missing data object."
                 )
-            return result
+            # Normalize descriptions recursively at the shared AniList boundary so
+            # malformed bio links are repaired wherever the returned data is used.
+            return _normalize_anilist_description_fields(result)
 
         except (
             requests.exceptions.ConnectionError,
@@ -568,7 +585,7 @@ def get_entity_profile(entity_type, entity_id):
                 id
                 name { full native alternative }
                 image { large }
-                description(asHtml: true)
+                description
                 gender
                 dateOfBirth { year month day }
                 age
@@ -600,7 +617,7 @@ def get_entity_profile(entity_type, entity_id):
                 name { full native alternative }
                 languageV2
                 image { large }
-                description(asHtml: true)
+                description
                 primaryOccupations
                 gender
                 age
@@ -654,10 +671,11 @@ def get_entity_profile(entity_type, entity_id):
         raise RuntimeError(f"AniList returned no {kind.lower()} profile for ID {numeric_id}.")
     entity = dict(entity)
     if isinstance(entity.get("description"), str):
-        # Normalize before profile data is cached or handed to the UI. AniList's
-        # HTML-mode description can still contain malformed Markdown link text.
+        # Keep AniList's original Markdown until the shared normalizer repairs
+        # malformed nested links. Pre-rendering with asHtml=True can change the
+        # nested link structure before we can reliably repair it.
         entity["description"] = _normalize_anilist_profile_description(
-            entity["description"], html_mode=True
+            entity["description"]
         )
     return entity
 

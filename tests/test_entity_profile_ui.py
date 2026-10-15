@@ -1,12 +1,13 @@
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QGridLayout, QBoxLayout
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QGridLayout, QBoxLayout, QTextBrowser
 
 from ui.pages.entity_profile_page import (
     ClickableCharacterArtwork,
@@ -220,6 +221,57 @@ class EntityProfileUiTests(unittest.TestCase):
                 self.assertFalse(rendered.pixelColor(0, 0).red() > 200)
                 page.hide()
         page.close()
+
+    def test_voice_actor_bio_social_links_render_as_clickable_markdown(self):
+        raw_description = "\n".join((
+            r"[YouTube]\([https://www.youtube.com/](https://www.youtube.com/)"
+            r"[@Ueda](https://anilist.co/user/Ueda)-Kana)",
+            r"[Youtube]\([https://youtube.com/](https://youtube.com/)"
+            r"[@officialyoutubechannel3974](https://anilist.co/user/officialyoutubechannel3974)"
+            r"?si=9AjlJ6Ujj2Vw1CiU)",
+            r"[Youtube]\([https://www.youtube.com/](https://www.youtube.com/)"
+            r"[@OfficialChannel](https://anilist.co/user/OfficialChannel)-eu5sl)",
+        ))
+        expected_urls = (
+            "https://www.youtube.com/@Ueda-Kana",
+            "https://youtube.com/@officialyoutubechannel3974?si=9AjlJ6Ujj2Vw1CiU",
+            "https://www.youtube.com/@OfficialChannel-eu5sl",
+        )
+
+        page = EntityProfilePage()
+        try:
+            # Isolate rendering from network behavior: this models the exact raw
+            # Markdown returned by AniList after requesting description (not asHtml).
+            with patch.object(EntityProfilePage, "_start_profile_load"):
+                page.set_profile(
+                    "voice_actor",
+                    {"person_id": 456, "name": "Example Voice Actor"},
+                )
+            page._remote_data = {
+                "id": 456,
+                "name": {"full": "Example Voice Actor"},
+                "description": raw_description,
+                "image": {},
+                "staffMedia": {"edges": []},
+                "characterMedia": {"edges": []},
+            }
+            page._render_profile()
+            self.app.processEvents()
+
+            bio = page.findChild(QTextBrowser, "profileDescription")
+            self.assertIsNotNone(bio)
+            self.assertTrue(bio.openExternalLinks())
+            rendered = bio.toHtml()
+            for url in expected_urls:
+                with self.subTest(url=url):
+                    self.assertIn(f'href="{url}"', rendered)
+            self.assertNotIn("https://anilist.co/user/", rendered)
+            self.assertNotIn(r"\([https://", rendered)
+            self.assertNotIn("[YouTube]", rendered)
+            self.assertNotIn("[Youtube]", rendered)
+        finally:
+            page.close()
+            page.deleteLater()
 
     def test_profile_has_no_external_anilist_button(self):
         page = EntityProfilePage()
