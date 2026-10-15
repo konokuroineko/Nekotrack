@@ -220,8 +220,8 @@ class MediaCreditCard(QFrame):
             credit = edge.get("staffRole") or edge.get("role")
 
         if self.credit_kind == "voice_actor" and character_data is not None:
-            # Match CharacterCard directly: role spans the text area at the top;
-            # character name is left, anime title is right on the same name row.
+            # Keep each name beside its matching artwork and click target: anime title left,
+            # character name right.
             text_layout = QGridLayout()
             text_layout.setContentsMargins(0, 0, 0, 0)
             text_layout.setHorizontalSpacing(18)
@@ -263,7 +263,7 @@ class MediaCreditCard(QFrame):
             # mirrors left/right alignment when the application uses an RTL locale.
             name_label.setLayoutDirection(Qt.LeftToRight)
             name_label.setAlignment(
-                Qt.AlignLeft | Qt.AlignVCenter | Qt.AlignAbsolute
+                Qt.AlignRight | Qt.AlignVCenter | Qt.AlignAbsolute
             )
 
             title_label = QLabel(str(title))
@@ -278,14 +278,14 @@ class MediaCreditCard(QFrame):
             )
             title_label.setLayoutDirection(Qt.LeftToRight)
             title_label.setAlignment(
-                Qt.AlignRight | Qt.AlignVCenter | Qt.AlignAbsolute
+                Qt.AlignLeft | Qt.AlignVCenter | Qt.AlignAbsolute
             )
 
             names_row = QHBoxLayout()
             names_row.setDirection(QBoxLayout.LeftToRight)
             names_row.setSpacing(18)
-            names_row.addWidget(name_label, 1)
             names_row.addWidget(title_label, 1)
+            names_row.addWidget(name_label, 1)
             names_widget = QWidget()
             names_widget.setLayoutDirection(Qt.LeftToRight)
             names_widget.setLayout(names_row)
