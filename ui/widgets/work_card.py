@@ -280,14 +280,18 @@ class WorkCard(QFrame):
                 return member
         return None
 
+    def _is_bundle_card(self):
+        members = self._value("_series_members") or []
+        try:
+            return len(members) > 1 or int(self._value("_series_count") or 0) > 1
+        except (TypeError, ValueError, OverflowError):
+            return len(members) > 1
+
     def _load_cover(self):
         cover_path = self._value("cover_path")
-        members = self._value("_series_members") or []
-        if not isinstance(members, list):
-            members = []
         # A work-level cover override applies to a single title everywhere,
         # but a bundle's explicit presentation/cover choice remains intact.
-        if len(members) <= 1:
+        if not self._is_bundle_card():
             override = get_display_override(self._value("id"))
             custom_cover = override.get("custom_cover_path")
             if custom_cover and Path(str(custom_cover)).is_file():
@@ -362,10 +366,7 @@ class WorkCard(QFrame):
             self.add_callback(self.work, self.sender())
 
     def _title(self):
-        members = self._value("_series_members") or []
-        if not isinstance(members, list):
-            members = []
-        if len(members) <= 1:
+        if not self._is_bundle_card():
             override = get_display_override(self._value("id"))
             custom_title = override.get("custom_title")
             if isinstance(custom_title, str) and custom_title.strip():
