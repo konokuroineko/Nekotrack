@@ -672,6 +672,33 @@ class ProfileWorkCreditCard(WorkCard):
             self.height() + added_height + max(0, content_layout.spacing())
         )
 
+class ProfileDescriptionBrowser(QTextBrowser):
+    """Rich biography view that grows with its content instead of scrolling internally."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._updating_content_height = False
+        self.document().contentsChanged.connect(self.update_content_height)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_content_height()
+
+    def update_content_height(self):
+        if self._updating_content_height or self.width() <= 0:
+            return
+        viewport_width = max(1, self.viewport().width())
+        self._updating_content_height = True
+        try:
+            document = self.document()
+            document.setTextWidth(viewport_width)
+            content_height = ceil(document.documentLayout().documentSize().height()) + 8
+            if abs(self.minimumHeight() - content_height) > 1:
+                self.setMinimumHeight(content_height)
+        finally:
+            self._updating_content_height = False
+
+
 class EntityProfilePage(QWidget):
     """NekoTrack character and voice-actor profiles with internal work navigation."""
 
