@@ -606,7 +606,7 @@ class UiStartupTests(unittest.TestCase):
         )
         query = request.call_args.args[0]
         self.assertIn("description", query)
-        self.assertNotIn("description(asHtml: true)", query)
+        self.assertIn("descriptionHtml: description(asHtml: true)", query)
 
 
     def test_profile_biography_uses_rich_text_and_horizontal_space_without_about_label(self):

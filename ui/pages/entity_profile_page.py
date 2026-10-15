@@ -915,14 +915,25 @@ class EntityProfilePage(QWidget):
         facts_column.addStretch(1)
         details_row.addLayout(facts_column, 1)
 
+        # AniList provides both forms: use its original HTML to retain the
+        # provider's paragraph/list/spacing choices, and repair only malformed
+        # link fragments in that HTML. Raw Markdown remains available for older
+        # responses and locally saved descriptions.
+        html_description = remote.get("descriptionHtml")
+        has_original_html = isinstance(html_description, str) and bool(
+            html_description.strip()
+        )
         raw_description = str(
-            remote.get("description")
+            html_description
+            or remote.get("description")
             or self._value(record, "description", "")
             or ""
         ).strip()
-        description_has_html = "<" in raw_description and any(
-            token in raw_description.casefold()
-            for token in ("<p", "<br", "<a ", "<b>", "<i>", "<div", "<ul", "<ol")
+        description_has_html = has_original_html or (
+            "<" in raw_description and any(
+                token in raw_description.casefold()
+                for token in ("<p", "<br", "<a ", "<b>", "<i>", "<div", "<ul", "<ol")
+            )
         )
         description = self._normalize_profile_description(
             raw_description, html_mode=description_has_html
