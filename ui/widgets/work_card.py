@@ -7,6 +7,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout, QSizePolicy
 
 from database import save_cover_path
+from ui.display_identity import get_display_override
 from ui.preferences import get
 from ui.theme import COLORS
 
@@ -226,6 +227,22 @@ class WorkCard(QFrame):
 
         return f"{first}\n{second}" if second else f"{first}\n{metrics.elidedText(' '.join(words[first_end:]), Qt.TextElideMode.ElideRight, width)}"
 
+    def refresh_display_identity(self):
+        """Re-read shared title/cover overrides on an already-built poster."""
+        if not hasattr(self, "title_label"):
+            return
+        full_title = self._title()
+        self.title_label.setText(
+            self._fit_title_to_two_lines(
+                full_title,
+                self.width() - 12,
+                self.title_label.font(),
+            )
+        )
+        self.title_label.setToolTip(full_title)
+        self.cover.set_pixmap(QPixmap())
+        self._load_cover()
+
     def refresh_theme(self):
         hover_css = (
             f"background: {COLORS['surface_hover']}; border-color: {COLORS['frame']};"
@@ -279,8 +296,22 @@ class WorkCard(QFrame):
                 return member
         return None
 
+    def _is_bundle_card(self):
+        members = self._value("_series_members") or []
+        try:
+            return len(members) > 1 or int(self._value("_series_count") or 0) > 1
+        except (TypeError, ValueError, OverflowError):
+            return len(members) > 1
+
     def _load_cover(self):
         cover_path = self._value("cover_path")
+        # A work-level cover override applies to a single title everywhere,
+        # but a bundle's explicit presentation/cover choice remains intact.
+        if not self._is_bundle_card():
+            override = get_display_override(self._value("id"))
+            custom_cover = override.get("custom_cover_path")
+            if custom_cover and Path(str(custom_cover)).is_file():
+                cover_path = custom_cover
         bundle_cover_work_id = self._value("_bundle_cover_work_id")
         if bundle_cover_work_id is not None:
             for member in self._value("_series_members") or []:
@@ -351,6 +382,11 @@ class WorkCard(QFrame):
             self.add_callback(self.work, self.sender())
 
     def _title(self):
+        if not self._is_bundle_card():
+            override = get_display_override(self._value("id"))
+            custom_title = override.get("custom_title")
+            if isinstance(custom_title, str) and custom_title.strip():
+                return custom_title.strip()
         title = self._value("title")
         if isinstance(title, dict):
             english = title.get("english")

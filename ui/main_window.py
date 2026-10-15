@@ -43,6 +43,7 @@ from ui.preferences import get
 from ui.setup_wizard import SetupWizard
 from ui.theme import COLORS, application_stylesheet, refresh_theme
 from ui.pages.calendar_page import CalendarPage
+from ui.pages.favorites_page import FavoritesPage
 from ui.pages.home_page import HomePage
 from ui.pages.library_page import LibraryPage
 from ui.pages.recommendations_page import RecommendationsPage
@@ -489,6 +490,7 @@ class MainWindow(QMainWindow):
         self._pending_character_cast_refreshes = {}
         self._completed_character_cast_refreshes = set()
         self._profile_work_return_state = None
+        self._work_detail_return_page = None
         self._opening_profile_credit_work = False
         self._library_episode_preload_thread = None
         self._library_episode_preload_worker = None
@@ -553,12 +555,14 @@ class MainWindow(QMainWindow):
         self.home_page = HomePage()
         self.recommendations_page = RecommendationsPage(self.add_to_library)
         self.calendar_page = CalendarPage()
+        self.favorites_page = FavoritesPage()
         pages = {
             "home": self.home_page,
             "collections": self.library_page,
             "search": self.search_page,
             "recommendations": self.recommendations_page,
             "calendar": self.calendar_page,
+            "favorites": self.favorites_page,
             "work_detail": self.work_detail_page,
             "entity_profile": self.entity_profile_page,
             "settings": self.settings_page,
@@ -573,6 +577,7 @@ class MainWindow(QMainWindow):
                 ("home", "Home", "home"),
                 ("library", "Library", "collections"),
                 ("calendar", "Calendar", "calendar"),
+                ("favorites", "Favorites", "favorites"),
             ],
         )
         self._section(
@@ -605,6 +610,10 @@ class MainWindow(QMainWindow):
         )
         self.recommendations_page.work_selected.connect(self.show_work_details)
         self.recommendations_page.search_requested.connect(
+            lambda: self.navigation.show("search")
+        )
+        self.favorites_page.work_selected.connect(self.show_work_details)
+        self.favorites_page.search_requested.connect(
             lambda: self.navigation.show("search")
         )
         self.library_page.work_selected.connect(self.show_work_details)
@@ -673,10 +682,19 @@ class MainWindow(QMainWindow):
             # Refresh the local snapshot only when returning to the dashboard;
             # do not rebuild its artwork cards on every Home click.
             self.home_page.refresh()
+        elif page_name == "search":
+            # Discover can keep its result widgets alive while a detail-page
+            # override is edited. Reapply global identity overrides on return.
+            for card in self.search_page.findChildren(QFrame):
+                refresh_identity = getattr(card, "refresh_display_identity", None)
+                if callable(refresh_identity):
+                    refresh_identity()
         if page_name == "recommendations":
             self.recommendations_page.refresh()
         elif page_name == "calendar":
             self.calendar_page.refresh()
+        elif page_name == "favorites":
+            self.favorites_page.refresh()
         if page_name == "collections":
             # Rebuild the library when returning to it so relation-sync failures
             # can be retried through the normal page refresh path.
@@ -742,6 +760,8 @@ class MainWindow(QMainWindow):
             self.calendar_page.refresh_theme()
         if hasattr(self, "recommendations_page"):
             self.recommendations_page.refresh_theme()
+        if hasattr(self, "favorites_page"):
+            self.favorites_page.refresh_theme()
 
     def _request_page_tree_shutdown(self, root):
         """Ask workers owned by a page tree to stop before that tree is deleted."""
@@ -959,6 +979,17 @@ class MainWindow(QMainWindow):
 
 
     def show_work_details(self, work):
+        # Remember the originating destination so Back can return to Favorites,
+        # Discover, or Home rather than always throwing the user into Library.
+        current_widget = self.stack.currentWidget() if hasattr(self, "stack") else None
+        if current_widget is not self.work_detail_page:
+            self._work_detail_return_page = next(
+                (
+                    name for name, page in self.navigation.pages.items()
+                    if page is current_widget
+                ),
+                "collections",
+            )
         # A normal work selection starts a new navigation path. Preserve the
         # profile return target only while opening a work from a profile credit.
         if not self._opening_profile_credit_work:
@@ -1089,7 +1120,12 @@ class MainWindow(QMainWindow):
             )
             self.navigation.show("entity_profile")
             return
-        self.navigation.show("collections")
+        target = self._work_detail_return_page
+        self._work_detail_return_page = None
+        if target in self.navigation.pages and target not in {"work_detail", "entity_profile"}:
+            self.navigation.show(target)
+        else:
+            self.navigation.show("collections")
 
     def show_entity_profile(self, entity_type, entity):
         """Open a detailed character, staff, or voice-actor profile."""
