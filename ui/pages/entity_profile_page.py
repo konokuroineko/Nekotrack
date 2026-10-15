@@ -28,10 +28,10 @@ from ui.widgets.work_card import WorkCard
 
 
 _PROFILE_METADATA_LABEL_PATTERN = re.compile(
-    r"(?P<label>[A-Za-z][A-Za-z0-9 /&()'’.-]{0,27}?)[ \t]*:[ \t]*"
+    r"(?P<label>[A-Za-z][A-Za-z0-9 /&()'’-]{0,27}?)[ \t]*:[ \t]*"
 )
 _PROFILE_METADATA_INLINE_FIELD_PATTERN = re.compile(
-    r"(?:[ \t]*(?:\||[•·]|;)[ \t]*)(?P<label>[A-Za-z][A-Za-z0-9 /&()'’.-]{0,27}?)[ \t]*:[ \t]*"
+    r"(?:[ \t]*(?:\||[•·]|;)[ \t]*)(?P<label>[A-Za-z][A-Za-z0-9 /&()'’-]{0,27}?)[ \t]*:[ \t]*"
 )
 _PROFILE_METADATA_ALIASES = {
     "blood type": ("blood_type", "Blood type"),
