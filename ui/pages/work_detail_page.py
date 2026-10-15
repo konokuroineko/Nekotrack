@@ -14,20 +14,22 @@ from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThr
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout,
+    QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout,
     QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QProgressBar,
-    QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
+    QLineEdit, QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 )
 
 from database import (
     add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
-    get_reading_progress, get_staff, is_work_in_library,
-    get_tmdb_mapping, get_work, get_provider_metadata, save_anime, save_characters, save_cover_path,
+    get_reading_progress, get_staff, is_work_in_library, is_work_favorite,
+    get_tmdb_mapping, get_work, get_provider_metadata, get_work_display_override,
+    save_work_display_override, set_work_favorite, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
     set_episode_watched, set_reading_progress_count,
 )
 from series import get_library_series
+from ui.display_identity import copy_custom_cover, get_display_override, invalidate_display_override
 from ui.preferences import get
 from ui.pages.search_page import SearchPage
 from ui.theme import COLORS, muted_label_stylesheet
@@ -968,6 +970,16 @@ class WorkDetailPage(QWidget):
             }}
             QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:2px solid transparent; border-radius:{get('corner_radius') + 2}px; font-size:30px; font-weight:900; padding:0; }}
             QToolButton#detailMenu:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
+            QPushButton#detailFavoriteButton, QPushButton#detailCustomizeButton {{
+                background:{COLORS['surface_alt']}; color:{COLORS['primary']}; border:1px solid {COLORS['border']};
+                border-radius:8px; padding:8px 10px; font-size:11px; font-weight:800;
+            }}
+            QPushButton#detailFavoriteButton:hover, QPushButton#detailCustomizeButton:hover {{
+                background:{COLORS['accent_soft']}; border-color:{COLORS['accent']};
+            }}
+            QPushButton#detailFavoriteButton:checked {{
+                background:{COLORS['accent_soft']}; color:{COLORS['accent']}; border-color:{COLORS['accent']};
+            }}
             QFrame#deleteOverlay {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}
             QLabel#deleteTitle {{ color:{COLORS['primary']}; font-size:19px; font-weight:850; }}
             QLabel#deleteMessage {{ color:{COLORS['secondary']}; font-size:12px; }}
@@ -1440,7 +1452,14 @@ class WorkDetailPage(QWidget):
         box = QHBoxLayout(hero); box.setContentsMargins(24, 24, 28, 24); box.setSpacing(30)
         cover = QLabel(); cover.setObjectName("detailHeroCover"); cover.setFixedSize(235, 335); cover.setAlignment(Qt.AlignCenter)
         cover.setStyleSheet(f"background:{COLORS['background_alt']}; border-radius:14px;")
-        path = self._value("cover_path")
+        members = self._value("_series_members") or []
+        is_bundle = len(members) > 1
+        try:
+            is_bundle = is_bundle or int(self._value("_series_count") or 0) > 1
+        except (TypeError, ValueError, OverflowError):
+            pass
+        override = get_display_override(self._value("id")) if not is_bundle else {}
+        path = override.get("custom_cover_path") or self._value("cover_path")
         if path:
             pix = QPixmap(str(path))
             if not pix.isNull(): cover.setPixmap(self._cropped_cover(pix, cover.size(), 14))
@@ -1464,6 +1483,38 @@ class WorkDetailPage(QWidget):
             menu_button.setCursor(Qt.PointingHandCursor)
             menu_button.clicked.connect(self._show_detail_menu)
             title_row.addWidget(menu_button, 0, Qt.AlignTop)
+
+        if self._value("id") is not None:
+            try:
+                favorite_work_id = int(self._value("id"))
+            except (TypeError, ValueError, OverflowError):
+                favorite_work_id = None
+            if favorite_work_id is not None:
+                favorite_button = QPushButton("♥ Favorited" if is_work_favorite(favorite_work_id) else "♡ Favorite")
+                favorite_button.setObjectName("detailFavoriteButton")
+                favorite_button.setCheckable(True)
+                favorite_button.setChecked(is_work_favorite(favorite_work_id))
+                favorite_button.setAccessibleName("Toggle favorite")
+                favorite_button.setToolTip("Save this title independently of Library membership")
+                favorite_button.clicked.connect(
+                    lambda checked, work_id=favorite_work_id, button=favorite_button:
+                        self._toggle_favorite(work_id, checked, button)
+                )
+                title_row.addWidget(favorite_button, 0, Qt.AlignTop)
+
+                members = self._value("_series_members") or []
+                is_bundle = len(members) > 1
+                try:
+                    is_bundle = is_bundle or int(self._value("_series_count") or 0) > 1
+                except (TypeError, ValueError, OverflowError):
+                    pass
+                if not is_bundle:
+                    customize_button = QPushButton("Customize")
+                    customize_button.setObjectName("detailCustomizeButton")
+                    customize_button.setAccessibleName("Customize title and cover")
+                    customize_button.setToolTip("Set a global display title or cover for this title")
+                    customize_button.clicked.connect(self._open_display_identity_editor)
+                    title_row.addWidget(customize_button, 0, Qt.AlignTop)
         info.addLayout(title_row)
         alt = self._value("native") or self._value("title_native") or ""
         if alt:
@@ -3121,7 +3172,185 @@ class WorkDetailPage(QWidget):
         try: return self.work[key]
         except (KeyError, IndexError, TypeError): return None
 
+    def _toggle_favorite(self, work_id, favorite, button):
+        try:
+            try:
+                snapshot = dict(self.work)
+            except (TypeError, ValueError):
+                snapshot = {}
+            set_work_favorite(work_id, bool(favorite), snapshot)
+        except Exception as error:
+            log_exception("favorites.toggle_failed", error, work_id=work_id)
+            QMessageBox.warning(
+                self,
+                "Favorite could not be saved",
+                "NekoTrack could not update this title's favorite state.",
+            )
+            button.setChecked(not bool(favorite))
+            return
+        button.setText("♥ Favorited" if favorite else "♡ Favorite")
+        button.setToolTip(
+            "Remove this title from Favorites" if favorite
+            else "Save this title independently of Library membership"
+        )
+
+    def _refresh_identity_after_edit(self, work_id):
+        current_work = self.work
+        try:
+            numeric_id = int(work_id)
+        except (TypeError, ValueError, OverflowError):
+            return
+        invalidate_display_override(numeric_id)
+        self.invalidate_detail_cache([numeric_id])
+        current_content = self.scroll_area.takeWidget()
+        if current_content is not None:
+            current_content.deleteLater()
+        self.set_work(current_work)
+
+    def _open_display_identity_editor(self):
+        raw_work_id = self._value("id")
+        try:
+            work_id = int(raw_work_id)
+        except (TypeError, ValueError, OverflowError):
+            return
+
+        override = get_display_override(work_id)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Customize title and cover")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(440)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(12)
+
+        title_label = QLabel("Global display title")
+        title_label.setObjectName("identityEditorLabel")
+        title_input = QLineEdit()
+        title_input.setObjectName("customDisplayTitle")
+        title_input.setAccessibleName("Global display title")
+        title_input.setPlaceholderText("Leave blank to use the provider title")
+        title_input.setMaxLength(200)
+        title_input.setText(str(override.get("custom_title") or ""))
+
+        cover_label = QLabel("Custom cover artwork")
+        cover_label.setObjectName("identityEditorLabel")
+        chosen_source = {"path": None}
+        existing_cover = override.get("custom_cover_path")
+        cover_preview = QLabel(
+            Path(str(existing_cover)).name if existing_cover
+            else "Using provider artwork"
+        )
+        cover_preview.setObjectName("identityCoverName")
+        cover_preview.setWordWrap(True)
+        cover_choice = QCheckBox("Use provider's default cover")
+        cover_choice.setObjectName("identityProviderCover")
+        cover_choice.setChecked(not bool(existing_cover))
+
+        browse_button = QPushButton("Choose image…")
+        browse_button.setObjectName("identityBrowseCover")
+
+        def browse_cover():
+            source, _selected_filter = QFileDialog.getOpenFileName(
+                dialog,
+                "Choose custom cover artwork",
+                "",
+                "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
+            )
+            if not source:
+                return
+            chosen_source["path"] = source
+            cover_choice.setChecked(False)
+            cover_preview.setText(Path(source).name)
+
+        browse_button.clicked.connect(browse_cover)
+        cover_choice.toggled.connect(
+            lambda checked: cover_preview.setText(
+                "Using provider artwork" if checked
+                else Path(str(chosen_source["path"] or existing_cover or "Selected image")).name
+            )
+        )
+        layout.addWidget(title_label)
+        layout.addWidget(title_input)
+        layout.addWidget(cover_label)
+        layout.addWidget(cover_preview)
+        layout.addWidget(browse_button, 0, Qt.AlignLeft)
+        layout.addWidget(cover_choice)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        reset_button = QPushButton("Reset")
+        reset_button.setObjectName("identityReset")
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        actions.addWidget(reset_button)
+        actions.addWidget(button_box)
+        layout.addLayout(actions)
+
+        def persist_override():
+            try:
+                if cover_choice.isChecked():
+                    cover_path = None
+                elif chosen_source["path"]:
+                    cover_path = copy_custom_cover(chosen_source["path"])
+                else:
+                    cover_path = existing_cover
+                title_value = " ".join(title_input.text().split()).strip() or None
+                save_work_display_override(work_id, title_value, cover_path)
+                self._refresh_identity_after_edit(work_id)
+                dialog.accept()
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                QMessageBox.warning(
+                    dialog,
+                    "Customization could not be saved",
+                    str(error),
+                )
+
+        def reset_override():
+            try:
+                save_work_display_override(work_id, None, None)
+                self._refresh_identity_after_edit(work_id)
+                dialog.accept()
+            except Exception as error:
+                log_exception("display_identity.reset_failed", error, work_id=work_id)
+                QMessageBox.warning(
+                    dialog,
+                    "Customization could not be reset",
+                    "NekoTrack could not reset this title's display overrides.",
+                )
+
+        button_box.accepted.connect(persist_override)
+        button_box.rejected.connect(dialog.reject)
+        reset_button.clicked.connect(reset_override)
+
+        dialog.setStyleSheet(f"""
+            QLabel#identityEditorLabel {{
+                color:{COLORS['primary']}; background:transparent; font-size:12px; font-weight:800;
+            }}
+            QLabel#identityCoverName {{
+                color:{COLORS['secondary']}; background:{COLORS['surface_alt']};
+                border:1px solid {COLORS['border']}; border-radius:8px; padding:10px;
+            }}
+            QPushButton#identityBrowseCover, QPushButton#identityReset {{
+                background:{COLORS['surface_alt']}; color:{COLORS['primary']};
+                border:1px solid {COLORS['border']}; border-radius:8px; padding:8px 10px;
+            }}
+        """)
+        dialog.exec()
+
     def _title(self):
+        members = self._value("_series_members") or []
+        is_bundle = len(members) > 1
+        try:
+            is_bundle = is_bundle or int(self._value("_series_count") or 0) > 1
+        except (TypeError, ValueError, OverflowError):
+            pass
+        if not is_bundle:
+            override = get_display_override(self._value("id"))
+            custom_title = override.get("custom_title")
+            if isinstance(custom_title, str) and custom_title.strip():
+                return custom_title.strip()
         title = self._value("title")
         if isinstance(title, dict): return title.get("english") or title.get("romaji") or title.get("native") or "Untitled"
         return title or "Untitled"
