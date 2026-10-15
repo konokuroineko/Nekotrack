@@ -651,7 +651,8 @@ class UiStartupTests(unittest.TestCase):
                         for label in header.findChildren(QLabel)
                     )
                 )
-                self.assertLessEqual(bio.maximumHeight(), 210)
+                self.assertEqual(bio.verticalScrollBarPolicy(), Qt.ScrollBarAlwaysOff)
+                self.assertGreater(bio.maximumHeight(), 210)
             finally:
                 page.close()
                 page.deleteLater()
