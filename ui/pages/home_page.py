@@ -114,19 +114,31 @@ class HomePage(QWidget):
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             widget = item.widget()
-            if widget is None:
-                continue
-            if widget is self.recommendations_page:
+            if widget is not None:
                 widget.setParent(None)
-            else:
-                widget.setParent(None)
-                widget.deleteLater()
+                if widget is not self.recommendations_page:
+                    widget.deleteLater()
 
         library = self._read_library()
+        statuses = [self._status(work) for work in library]
+        self._home_counts = {
+            "all": len(library),
+            "in_progress": sum(
+                status in {"watching", "rewatching", "reading", "in progress"}
+                for status in statuses
+            ),
+            "completed": sum(status == "completed" for status in statuses),
+            "planned": sum(
+                status in {"planning", "plan to watch", "plan to read"}
+                for status in statuses
+            ),
+        }
         continue_items = [
             work for work in library
             if self._status(work) in {"watching", "rewatching", "reading", "in progress"}
         ]
+        self._continue_ids = {self._integer(work.get("id")) for work in continue_items}
+        self._recent_ids = [self._integer(work.get("id")) for work in library[:5]]
 
         self.content_layout.addWidget(
             self._work_section(
@@ -144,8 +156,10 @@ class HomePage(QWidget):
                 kind="recent",
             )
         )
+        # Reuse the already-loaded local rows instead of querying SQLite a
+        # second time just to seed recommendations.
         self.content_layout.addWidget(self.recommendations_page)
-        self.recommendations_page.refresh()
+        self.recommendations_page.refresh(library_rows=library)
         self.content_layout.addStretch(1)
         self._apply_theme_styles()
 
