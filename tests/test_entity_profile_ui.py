@@ -131,8 +131,22 @@ class EntityProfileUiTests(unittest.TestCase):
                     "name": {"full": "Example Character"},
                 }],
             }, "voice_actor")
+            selected_work = []
+            selected_character = []
+            card.work_selected.connect(selected_work.append)
+            card.character_selected.connect(selected_character.append)
             card.show()
             self.app.processEvents()
+
+            self.assertEqual(card.layoutDirection(), Qt.LeftToRight)
+            outer_layout = card.layout()
+            self.assertEqual(outer_layout.direction(), QBoxLayout.LeftToRight)
+            self.assertIsNotNone(card.character_artwork)
+            self.assertLess(
+                card.cover.geometry().center().x(),
+                card.character_artwork.geometry().center().x(),
+                "Work poster must render physically left of the character portrait",
+            )
 
             name_label = card.findChild(QLabel, "creditCharacterName")
             title_label = card.findChild(QLabel, "mediaCreditTitle")
@@ -147,6 +161,16 @@ class EntityProfileUiTests(unittest.TestCase):
             )
             self.assertEqual(card.toolTip(), "")
             self.assertEqual(title_label.toolTip(), "")
+
+            # The character portrait must keep its own navigation target while a
+            # click in the poster's left-hand area still opens the work.
+            QTest.mouseClick(card.character_artwork, Qt.LeftButton)
+            self.assertEqual(len(selected_character), 1)
+            self.assertEqual(selected_character[0]["id"], 456)
+            self.assertEqual(selected_work, [])
+            QTest.mouseClick(card, Qt.LeftButton, pos=card.cover.geometry().center())
+            self.assertEqual(len(selected_work), 1)
+            self.assertEqual(selected_work[0]["id"], 123)
         finally:
             if card is not None:
                 card.close()
