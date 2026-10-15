@@ -24,7 +24,7 @@ Track what you watch and read, manage your library, and keep your collection org
 
 ## Catalogs and fallbacks
 
-AniList remains NekoTrack's primary catalog, especially for anime and relationship data. Discover includes a catalog selector for MangaBaka search and browsing. MangaBaka can also enrich AniList manga/novel entries with alternate title variants and other provider metadata when a cautious ID/title match is available.
+AniList remains NekoTrack's primary catalog, especially for anime and relationship data. Search includes a catalog selector for MangaBaka search and browsing. MangaBaka can also enrich AniList manga/novel entries with alternate title variants and other provider metadata when a cautious ID/title match is available.
 
 MangaBaka-only results use separate local identifiers so they are not accidentally sent to AniList as if their IDs were AniList IDs. MangaBaka lookup failures are non-fatal: AniList results and locally saved reading progress should continue to work when MangaBaka is unavailable. Its API is not yet declared stable and its schema may change without notice, so NekoTrack preserves provider payloads and treats optional enrichment as best-effort.
 

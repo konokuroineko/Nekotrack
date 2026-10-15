@@ -552,15 +552,14 @@ class MainWindow(QMainWindow):
         self.work_detail_page = WorkDetailPage()
         self.entity_profile_page = EntityProfilePage()
         self.settings_page = SettingsPage(background_manager=self.background_manager)
-        self.home_page = HomePage()
-        self.recommendations_page = RecommendationsPage(self.add_to_library)
+        self.home_page = HomePage(self.add_to_library)
+        self.recommendations_page = self.home_page.recommendations_page
         self.calendar_page = CalendarPage()
         self.favorites_page = FavoritesPage()
         pages = {
             "home": self.home_page,
             "collections": self.library_page,
             "search": self.search_page,
-            "recommendations": self.recommendations_page,
             "calendar": self.calendar_page,
             "favorites": self.favorites_page,
             "work_detail": self.work_detail_page,
@@ -582,10 +581,9 @@ class MainWindow(QMainWindow):
         )
         self._section(
             side,
-            "DISCOVERY",
+            "CATALOG",
             [
-                ("search", "Discover", "search"),
-                ("recommendations", "Recommendations", "recommendations"),
+                ("search", "Search", "search"),
             ],
         )
         side.addStretch()
@@ -602,12 +600,6 @@ class MainWindow(QMainWindow):
         self.navigation.page_changed.connect(self.update_navigation_state)
         self.navigation.page_changed.connect(self._page_changed)
         self.home_page.work_selected.connect(self.show_work_details)
-        self.home_page.search_requested.connect(
-            lambda: self.navigation.show("search")
-        )
-        self.home_page.library_requested.connect(
-            lambda: self.navigation.show("collections")
-        )
         self.recommendations_page.work_selected.connect(self.show_work_details)
         self.recommendations_page.search_requested.connect(
             lambda: self.navigation.show("search")
@@ -683,15 +675,13 @@ class MainWindow(QMainWindow):
             # do not rebuild its artwork cards on every Home click.
             self.home_page.refresh()
         elif page_name == "search":
-            # Discover can keep its result widgets alive while a detail-page
+            # Search can keep its result widgets alive while a detail-page
             # override is edited. Reapply global identity overrides on return.
             for card in self.search_page.findChildren(QFrame):
                 refresh_identity = getattr(card, "refresh_display_identity", None)
                 if callable(refresh_identity):
                     refresh_identity()
-        if page_name == "recommendations":
-            self.recommendations_page.refresh()
-        elif page_name == "calendar":
+        if page_name == "calendar":
             self.calendar_page.refresh()
         elif page_name == "favorites":
             self.favorites_page.refresh()
@@ -980,7 +970,7 @@ class MainWindow(QMainWindow):
 
     def show_work_details(self, work):
         # Remember the originating destination so Back can return to Favorites,
-        # Discover, or Home rather than always throwing the user into Library.
+        # Search, or Home rather than always throwing the user into Library.
         current_widget = self.stack.currentWidget() if hasattr(self, "stack") else None
         if current_widget is not self.work_detail_page:
             self._work_detail_return_page = next(

@@ -126,31 +126,42 @@ class RecommendationsPage(QWidget):
     work_selected = Signal(object)
     search_requested = Signal()
 
-    def __init__(self, add_callback=None):
+    def __init__(self, add_callback=None, embedded=False):
         super().__init__()
         self.add_callback = add_callback
+        self.embedded = bool(embedded)
         self._thread = None
         self._worker = None
         self._stop_event = threading.Event()
         self._loaded = False
         self._results = []
+        self._library_signature = None
         self._build()
 
     def _build(self):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        self.scroll = QScrollArea(self)
-        self.scroll.setObjectName("recommendationsScroll")
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.content = QWidget()
         self.content.setObjectName("recommendationsContent")
         self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(34, 28, 34, 34)
-        self.content_layout.setSpacing(18)
-        self.scroll.setWidget(self.content)
-        outer.addWidget(self.scroll)
+
+        if self.embedded:
+            # Home already owns the page-level scroll area, so embedded
+            # recommendations must not create a second vertical scroll area.
+            self.content_layout.setContentsMargins(0, 0, 0, 0)
+            self.content_layout.setSpacing(18)
+            self.scroll = None
+            outer.addWidget(self.content)
+        else:
+            self.scroll = QScrollArea(self)
+            self.scroll.setObjectName("recommendationsScroll")
+            self.scroll.setWidgetResizable(True)
+            self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+            self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.content_layout.setContentsMargins(34, 28, 34, 34)
+            self.content_layout.setSpacing(18)
+            self.scroll.setWidget(self.content)
+            outer.addWidget(self.scroll)
         self._apply_theme()
 
     def _header(self):
@@ -176,12 +187,42 @@ class RecommendationsPage(QWidget):
         layout.addWidget(self.refresh_button, 0, Qt.AlignmentFlag.AlignVCenter)
         return header
 
-    def refresh(self, force=False):
+    @staticmethod
+    def _rows_signature(rows):
+        return tuple(
+            (
+                str(row.get("id") or ""),
+                str(row.get("type") or "").upper(),
+                RecommendationsPage._title(row),
+            )
+            for row in rows
+        )
+
+    def refresh(self, force=False, library_rows=None):
         if self._thread is not None and self._thread.isRunning():
             return
-        if self._loaded and not force:
+        try:
+            rows = (
+                [dict(row) for row in library_rows]
+                if library_rows is not None
+                else [dict(row) for row in (get_all_library() or [])]
+            )
+        except Exception as error:
+            log_exception("recommendations.library_read_failed", error)
+            if self.content_layout.count() == 0:
+                label = QLabel(
+                    "Your library could not be read. Reopen this page to try again."
+                )
+                label.setObjectName("recommendationsStatus")
+                label.setWordWrap(True)
+                self.content_layout.addWidget(label)
+            return
+
+        signature = self._rows_signature(rows)
+        if self._loaded and not force and signature == self._library_signature:
             self._render_results()
             return
+
         self._stop_event = threading.Event()
         self._clear_content()
         self.content_layout.addWidget(self._header())
@@ -189,12 +230,8 @@ class RecommendationsPage(QWidget):
         self.status.setObjectName("recommendationsStatus")
         self.status.setWordWrap(True)
         self.content_layout.addWidget(self.status)
-        try:
-            rows = [dict(row) for row in (get_all_library() or [])]
-        except Exception as error:
-            log_exception("recommendations.library_read_failed", error)
-            self.status.setText("Your library could not be read. Reopen this page to try again.")
-            return
+        self._library_signature = signature
+
         if not any(
             RecommendationWorker._work_id(row) is not None
             and str(row.get("type") or "").upper() in {"ANIME", "MANGA"}
@@ -288,7 +325,10 @@ class RecommendationsPage(QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(22)
-        available_width = max(100, self.scroll.viewport().width() or self.width() - 320)
+        available_width = max(
+            100,
+            self.width() if self.embedded else (self.scroll.viewport().width() or self.width() - 320),
+        )
         poster_width = int(get("card_size") or 210) + 8
         columns = max(2, min(5, (available_width - 50) // (poster_width + 16)))
         for index, work in enumerate(self._results):

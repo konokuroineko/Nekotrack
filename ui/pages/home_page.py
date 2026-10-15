@@ -5,7 +5,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -17,16 +16,15 @@ from diagnostics import log_exception
 from ui.preferences import get
 from ui.theme import COLORS
 from ui.widgets.work_card import WorkCard
+from ui.pages.recommendations_page import RecommendationsPage
 
 
 class HomePage(QWidget):
     """Home dashboard backed by saved library records and real read/watch progress."""
 
     work_selected = Signal(object)
-    search_requested = Signal()
-    library_requested = Signal()
 
-    def __init__(self):
+    def __init__(self, add_callback=None):
         super().__init__()
         self.setObjectName("homePage")
         outer = QVBoxLayout(self)
@@ -48,9 +46,7 @@ class HomePage(QWidget):
         self.scroll_area.setWidget(self.content)
         outer.addWidget(self.scroll_area)
 
-        self._home_counts = {"all": 0, "in_progress": 0, "completed": 0, "planned": 0}
-        self._continue_ids = set()
-        self._recent_ids = []
+        self.recommendations_page = RecommendationsPage(add_callback, embedded=True)
         self._apply_theme_styles()
         self.refresh()
 
@@ -113,12 +109,15 @@ class HomePage(QWidget):
             return []
 
     def refresh(self):
+        # Preserve the embedded recommendations widget while rebuilding the
+        # local library sections. It may own an active QThread.
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.setParent(None)
-                widget.deleteLater()
+                if widget is not self.recommendations_page:
+                    widget.deleteLater()
 
         library = self._read_library()
         statuses = [self._status(work) for work in library]
@@ -129,22 +128,18 @@ class HomePage(QWidget):
                 for status in statuses
             ),
             "completed": sum(status == "completed" for status in statuses),
-            "planned": sum(status in {"planning", "plan to watch", "plan to read"} for status in statuses),
+            "planned": sum(
+                status in {"planning", "plan to watch", "plan to read"}
+                for status in statuses
+            ),
         }
-
         continue_items = [
             work for work in library
             if self._status(work) in {"watching", "rewatching", "reading", "in progress"}
         ]
-        self._continue_ids = {
-            self._integer(work.get("id")) for work in continue_items
-        }
-        self._recent_ids = [
-            self._integer(work.get("id")) for work in library[:5]
-        ]
+        self._continue_ids = {self._integer(work.get("id")) for work in continue_items}
+        self._recent_ids = [self._integer(work.get("id")) for work in library[:5]]
 
-        self.content_layout.addWidget(self._hero(library))
-        self.content_layout.addWidget(self._stats_row())
         self.content_layout.addWidget(
             self._work_section(
                 "Continue watching or reading",
@@ -161,86 +156,12 @@ class HomePage(QWidget):
                 kind="recent",
             )
         )
+        # Reuse the already-loaded local rows instead of querying SQLite a
+        # second time just to seed recommendations.
+        self.content_layout.addWidget(self.recommendations_page)
+        self.recommendations_page.refresh(library_rows=library)
         self.content_layout.addStretch(1)
         self._apply_theme_styles()
-
-    def _hero(self, library):
-        hero = QFrame()
-        hero.setObjectName("homeHero")
-        layout = QVBoxLayout(hero)
-        layout.setContentsMargins(26, 24, 26, 24)
-        layout.setSpacing(10)
-
-        eyebrow = QLabel("YOUR PERSONAL MEDIA SPACE")
-        eyebrow.setObjectName("homeHeroEyebrow")
-        title = QLabel(
-            "Keep your stories moving." if library else "Your next story starts here."
-        )
-        title.setObjectName("homeHeroTitle")
-        title.setWordWrap(True)
-        description = QLabel(
-            (
-                f"You have {len(library)} saved title{'s' if len(library) != 1 else ''}. "
-                "Continue a series or explore something new."
-            )
-            if library else
-            "Build your own anime, manga, and light-novel collection. "
-            "Your progress stays in your local library."
-        )
-        description.setObjectName("homeHeroDescription")
-        description.setWordWrap(True)
-        layout.addWidget(eyebrow)
-        layout.addWidget(title)
-        layout.addWidget(description)
-
-        actions = QHBoxLayout()
-        actions.setSpacing(10)
-        discover = QPushButton("Explore the catalog")
-        discover.setObjectName("homePrimaryAction")
-        discover.setCursor(Qt.CursorShape.PointingHandCursor)
-        discover.clicked.connect(self.search_requested.emit)
-        library_button = QPushButton("Open library")
-        library_button.setObjectName("homeSecondaryAction")
-        library_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        library_button.clicked.connect(self.library_requested.emit)
-        actions.addWidget(discover, 0, Qt.AlignmentFlag.AlignLeft)
-        actions.addWidget(library_button, 0, Qt.AlignmentFlag.AlignLeft)
-        actions.addStretch(1)
-        layout.addLayout(actions)
-        return hero
-
-    def _stats_row(self):
-        row = QWidget()
-        row.setObjectName("homeStatsRow")
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
-        data = [
-            ("ALL TITLES", self._home_counts["all"], "Saved in your library", "accent"),
-            ("IN PROGRESS", self._home_counts["in_progress"], "Watching or reading", "success"),
-            ("COMPLETED", self._home_counts["completed"], "Marked finished", "primary"),
-            ("PLANNED", self._home_counts["planned"], "In your queue", "secondary"),
-        ]
-        for title, number, hint, tone in data:
-            card = QFrame()
-            card.setObjectName("homeStatCard")
-            card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(18, 17, 18, 16)
-            card_layout.setSpacing(6)
-            heading = QLabel(title)
-            heading.setObjectName("homeStatLabel")
-            value = QLabel(str(number))
-            value.setObjectName("homeStatValue")
-            value.setProperty("statTone", tone)
-            detail = QLabel(hint)
-            detail.setObjectName("homeStatHint")
-            detail.setWordWrap(True)
-            card_layout.addWidget(heading)
-            card_layout.addWidget(value)
-            card_layout.addStretch(1)
-            card_layout.addWidget(detail)
-            layout.addWidget(card, 1)
-        return row
 
     def _work_section(self, title, description, works, kind):
         section = QFrame()
@@ -275,7 +196,7 @@ class HomePage(QWidget):
             hint = QLabel(
                 "Add a title to your library, then your saved progress will appear here."
                 if kind == "continue" else
-                "Use Discover to find a title and add it to your collection."
+                "Use Search to find a title and add it to your collection."
             )
             hint.setObjectName("homeEmptyHint")
             hint.setWordWrap(True)
@@ -341,76 +262,6 @@ class HomePage(QWidget):
                 background: transparent;
                 border: none;
             }}
-            QFrame#homeHero {{
-                background: {COLORS['surface']};
-                border: 1px solid {COLORS['frame']};
-                border-left: 5px solid {COLORS['accent']};
-                border-radius: 18px;
-            }}
-            QLabel#homeHeroEyebrow {{
-                color: {COLORS['accent']};
-                background: transparent;
-                font-size: 10px;
-                font-weight: 900;
-                letter-spacing: 1.4px;
-            }}
-            QLabel#homeHeroTitle {{
-                color: {COLORS['primary']};
-                background: transparent;
-                font-size: 28px;
-                font-weight: 850;
-            }}
-            QLabel#homeHeroDescription {{
-                color: {COLORS['secondary']};
-                background: transparent;
-                font-size: 13px;
-            }}
-            QPushButton#homePrimaryAction {{
-                background: {COLORS['accent']};
-                color: {COLORS['accent_text']};
-                border: 1px solid {COLORS['accent']};
-                border-radius: 9px;
-                padding: 10px 15px;
-                font-weight: 800;
-            }}
-            QPushButton#homePrimaryAction:hover {{
-                background: {COLORS['accent_hover']};
-                border-color: {COLORS['accent_hover']};
-            }}
-            QPushButton#homeSecondaryAction {{
-                background: {COLORS['surface_alt']};
-                color: {COLORS['primary']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 9px;
-                padding: 10px 15px;
-                font-weight: 750;
-            }}
-            QPushButton#homeSecondaryAction:hover {{
-                background: {COLORS['surface_hover']};
-                border-color: {COLORS['border_hover']};
-            }}
-            QFrame#homeStatCard {{
-                background: {COLORS['surface']};
-                border: 1px solid {COLORS['frame']};
-                border-radius: 14px;
-            }}
-            QLabel#homeStatLabel {{
-                color: {COLORS['muted']};
-                background: transparent;
-                font-size: 10px;
-                font-weight: 850;
-                letter-spacing: 1.1px;
-            }}
-            QLabel#homeStatValue {{
-                background: transparent;
-                font-size: 32px;
-                font-weight: 850;
-            }}
-            QLabel#homeStatHint {{
-                color: {COLORS['secondary']};
-                background: transparent;
-                font-size: 11px;
-            }}
             QFrame#homeSection {{
                 background: {COLORS['surface']};
                 border: 1px solid {COLORS['frame']};
@@ -459,18 +310,6 @@ class HomePage(QWidget):
                 max-width: 218px;
             }}
         """)
-        tones = {
-            "accent": COLORS["accent"],
-            "success": COLORS["success"],
-            "primary": COLORS["primary"],
-            "secondary": COLORS["secondary"],
-        }
-        for value in self.findChildren(QLabel):
-            if value.objectName() == "homeStatValue":
-                value.setStyleSheet(
-                    f"color:{tones.get(value.property('statTone'), COLORS['primary'])};"
-                    "background:transparent;font-size:32px;font-weight:850;"
-                )
         for card in self.findChildren(WorkCard):
             card.refresh_theme()
 

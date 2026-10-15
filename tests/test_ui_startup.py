@@ -206,7 +206,8 @@ class UiStartupTests(unittest.TestCase):
             },
         ]
         with patch("ui.pages.home_page.get_all_library", return_value=rows):
-            page = HomePage()
+            with patch("ui.pages.home_page.RecommendationsPage.refresh", autospec=True):
+                page = HomePage()
             self.app.processEvents()
             self.assertEqual(
                 page._home_counts,
@@ -214,11 +215,6 @@ class UiStartupTests(unittest.TestCase):
             )
             self.assertEqual(page._continue_ids, {101, -103})
             self.assertEqual(page._recent_ids, [101, 102, -103])
-            values = [
-                label.text()
-                for label in page.findChildren(QLabel, "homeStatValue")
-            ]
-            self.assertEqual(values, ["3", "2", "1", "0"])
             captions = [
                 label.text()
                 for label in page.findChildren(QLabel, "homeTrackProgress")
@@ -227,15 +223,16 @@ class UiStartupTests(unittest.TestCase):
             self.assertTrue(any("6/30 chapters" in text for text in captions))
             self.assertTrue(any("1/4 volumes" in text for text in captions))
 
-            requested = []
-            page.search_requested.connect(lambda: requested.append("discover"))
-            page.findChild(QPushButton, "homePrimaryAction").click()
-            self.assertEqual(requested, ["discover"])
+            self.assertIsNone(page.findChild(QPushButton, "homePrimaryAction"))
+            self.assertIsNone(page.findChild(QPushButton, "homeSecondaryAction"))
             page.close()
             page.deleteLater()
             self.app.processEvents()
 
-        with patch("ui.pages.home_page.get_all_library", return_value=[]):
+        with (
+            patch("ui.pages.home_page.get_all_library", return_value=[]),
+            patch("ui.pages.home_page.RecommendationsPage.refresh", autospec=True),
+        ):
             empty_page = HomePage()
             self.app.processEvents()
             self.assertEqual(
@@ -614,20 +611,24 @@ class UiStartupTests(unittest.TestCase):
                     self.assertEqual(
                         set(window.navigation.pages),
                         {
-                            "home", "collections", "search", "recommendations",
+                            "home", "collections", "search",
                             "calendar", "favorites", "work_detail", "entity_profile", "settings",
                         },
                     )
                     self.assertFalse(window.windowIcon().isNull())
                     self.assertFalse(window.brand_word.pixmap().isNull())
                     self.assertEqual(window.brand_word.accessibleName(), "NekoTrack")
+                    self.assertIs(
+                        window.recommendations_page,
+                        window.home_page.recommendations_page,
+                    )
+                    self.assertTrue(window.recommendations_page.embedded)
                     self.assertEqual(
                         {name: button.text() for name, button in window.navigation_buttons.items()},
                         {
                             "home": "Home",
                             "collections": "Library",
-                            "search": "Discover",
-                            "recommendations": "Recommendations",
+                            "search": "Search",
                             "calendar": "Calendar",
                             "favorites": "Favorites",
                             "settings": "Settings",
