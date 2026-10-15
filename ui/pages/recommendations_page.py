@@ -135,6 +135,7 @@ class RecommendationsPage(QWidget):
         self._stop_event = threading.Event()
         self._loaded = False
         self._results = []
+        self._library_signature = None
         self._build()
 
     def _build(self):
@@ -186,12 +187,42 @@ class RecommendationsPage(QWidget):
         layout.addWidget(self.refresh_button, 0, Qt.AlignmentFlag.AlignVCenter)
         return header
 
-    def refresh(self, force=False):
+    @staticmethod
+    def _rows_signature(rows):
+        return tuple(
+            (
+                str(row.get("id") or ""),
+                str(row.get("type") or "").upper(),
+                RecommendationsPage._title(row),
+            )
+            for row in rows
+        )
+
+    def refresh(self, force=False, library_rows=None):
         if self._thread is not None and self._thread.isRunning():
             return
-        if self._loaded and not force:
+        try:
+            rows = (
+                [dict(row) for row in library_rows]
+                if library_rows is not None
+                else [dict(row) for row in (get_all_library() or [])]
+            )
+        except Exception as error:
+            log_exception("recommendations.library_read_failed", error)
+            if self.content_layout.count() == 0:
+                label = QLabel(
+                    "Your library could not be read. Reopen this page to try again."
+                )
+                label.setObjectName("recommendationsStatus")
+                label.setWordWrap(True)
+                self.content_layout.addWidget(label)
+            return
+
+        signature = self._rows_signature(rows)
+        if self._loaded and not force and signature == self._library_signature:
             self._render_results()
             return
+
         self._stop_event = threading.Event()
         self._clear_content()
         self.content_layout.addWidget(self._header())
@@ -199,12 +230,8 @@ class RecommendationsPage(QWidget):
         self.status.setObjectName("recommendationsStatus")
         self.status.setWordWrap(True)
         self.content_layout.addWidget(self.status)
-        try:
-            rows = [dict(row) for row in (get_all_library() or [])]
-        except Exception as error:
-            log_exception("recommendations.library_read_failed", error)
-            self.status.setText("Your library could not be read. Reopen this page to try again.")
-            return
+        self._library_signature = signature
+
         if not any(
             RecommendationWorker._work_id(row) is not None
             and str(row.get("type") or "").upper() in {"ANIME", "MANGA"}
