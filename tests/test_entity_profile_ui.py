@@ -7,7 +7,17 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QGridLayout, QBoxLayout, QTextBrowser, QVBoxLayout
+from PySide6.QtWidgets import (
+    QApplication,
+    QLabel,
+    QPushButton,
+    QGridLayout,
+    QBoxLayout,
+    QHBoxLayout,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ui.pages.entity_profile_page import (
     ClickableCharacterArtwork,
@@ -222,7 +232,7 @@ class EntityProfileUiTests(unittest.TestCase):
                 page.hide()
         page.close()
 
-    def test_profile_facts_and_biography_use_one_vertical_column(self):
+    def test_profile_facts_and_biography_share_one_header_in_two_columns(self):
         page = EntityProfilePage()
         try:
             with patch.object(EntityProfilePage, "_start_profile_load"):
@@ -277,27 +287,114 @@ class EntityProfileUiTests(unittest.TestCase):
                 "Source-work context must not appear as a visible profile fact",
             )
             self.assertEqual(page.profile_state()["source_work"]["id"], 123)
-            facts_index = next(
-                index
-                for index in range(profile_layout.count())
-                if (item := profile_layout.itemAt(index)).layout() is not None
-                and any(
-                    item.layout().itemAt(child_index).widget() in fact_labels
-                    for child_index in range(item.layout().count())
-                    if item.layout().itemAt(child_index).widget() is not None
-                )
+            details_row = next(
+                (
+                    item.layout()
+                    for index in range(profile_layout.count())
+                    if (item := profile_layout.itemAt(index)).layout() is not None
+                    and isinstance(item.layout(), QHBoxLayout)
+                    and item.layout().indexOf(bio) >= 0
+                ),
+                None,
             )
-            bio_index = next(
-                index
-                for index in range(profile_layout.count())
-                if profile_layout.itemAt(index).widget() is bio
-            )
+            self.assertIsInstance(details_row, QHBoxLayout)
+            facts_host = header.findChild(QWidget, "profileFactsColumn")
+            self.assertIsNotNone(facts_host)
+            self.assertGreaterEqual(details_row.indexOf(facts_host), 0)
+            self.assertGreaterEqual(details_row.indexOf(bio), 0)
             self.assertLess(
-                facts_index,
-                bio_index,
-                "Profile facts must be stacked above the biography in one vertical layout",
+                details_row.indexOf(facts_host),
+                details_row.indexOf(bio),
+                "Structured facts belong beside the biography, not above it.",
             )
+            self.assertEqual(bio.verticalScrollBarPolicy(), Qt.ScrollBarAlwaysOff)
+            self.assertGreater(bio.maximumHeight(), 210)
             self.assertIn("Biography text", bio.toPlainText())
+        finally:
+            page.close()
+            page.deleteLater()
+
+    def test_leading_bio_metadata_blends_into_facts_and_preserves_prose(self):
+        page = EntityProfilePage()
+        try:
+            with patch.object(EntityProfilePage, "_start_profile_load"):
+                page.set_profile(
+                    "character",
+                    {"id": 123, "character_name": "Sample Character"},
+                )
+            page._remote_data = {
+                "id": 123,
+                "name": {"full": "Sample Character"},
+                "description": (
+                    "Birthday:Apr 14\nAge:17-18\nGender:Male\n"
+                    "Height: 165 cm\nHobbies: Drawing fan art, reading manga\n"
+                    "A third year student with a lot of friends."
+                ),
+                "descriptionHtml": (
+                    "<p>Birthday:Apr 14<br/>Age:17-18<br/>Gender:Male<br/>"
+                    "Height: 165 cm<br/>Hobbies: Drawing fan art, reading manga<br/>"
+                    "A third year student with <strong>many friends</strong>.</p>"
+                ),
+                "gender": None,
+                "age": None,
+                "dateOfBirth": {},
+                "bloodType": None,
+                "image": {},
+                "media": {"edges": []},
+            }
+            page._render_profile()
+
+            facts = [
+                label.text()
+                for label in page.findChildren(QLabel, "profileFacts")
+            ]
+            self.assertIn("Birthday: Apr 14", facts)
+            self.assertIn("Age: 17-18", facts)
+            self.assertIn("Gender: Male", facts)
+            self.assertIn("Height: 165 cm", facts)
+            self.assertIn("Hobbies: Drawing fan art, reading manga", facts)
+
+            bio = page.findChild(QTextBrowser, "profileDescription")
+            self.assertIsNotNone(bio)
+            rendered_text = bio.toPlainText()
+            self.assertNotIn("Birthday:", rendered_text)
+            self.assertNotIn("Age:", rendered_text)
+            self.assertNotIn("Gender:", rendered_text)
+            self.assertNotIn("Height:", rendered_text)
+            self.assertNotIn("Hobbies:", rendered_text)
+            self.assertIn("A third year student with many friends.", rendered_text)
+            formatted = bio.document().find("many friends")
+            self.assertFalse(formatted.isNull())
+            self.assertGreaterEqual(formatted.charFormat().fontWeight(), 600)
+        finally:
+            page.close()
+            page.deleteLater()
+
+    def test_metadata_after_prose_remains_in_the_biography(self):
+        page = EntityProfilePage()
+        try:
+            with patch.object(EntityProfilePage, "_start_profile_load"):
+                page.set_profile(
+                    "character",
+                    {"id": 123, "character_name": "Sample Character"},
+                )
+            page._remote_data = {
+                "id": 123,
+                "name": {"full": "Sample Character"},
+                "description": "A biography. Height: 165 cm",
+                "descriptionHtml": "<p>A biography. Height: 165 cm</p>",
+                "image": {},
+                "media": {"edges": []},
+            }
+            page._render_profile()
+            facts = [
+                label.text()
+                for label in page.findChildren(QLabel, "profileFacts")
+            ]
+            self.assertFalse(any(fact.startswith("Height:") for fact in facts))
+            bio = page.findChild(QTextBrowser, "profileDescription")
+            self.assertIsNotNone(bio)
+            self.assertIn("Height: 165 cm", bio.toPlainText())
         finally:
             page.close()
             page.deleteLater()

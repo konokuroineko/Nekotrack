@@ -1,3 +1,7 @@
+import html as html_lib
+import re
+from math import ceil
+
 from PySide6.QtCore import Qt, Signal, QUrl, QObject, QRunnable, QThreadPool, QRectF, QPoint, QRect, QSize
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
@@ -21,6 +25,267 @@ from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
 from ui.widgets.character_card import CharacterArtwork
 from ui.widgets.person_card import PersonCard
 from ui.widgets.work_card import WorkCard
+
+
+_PROFILE_METADATA_LABEL_PATTERN = re.compile(
+    r"(?P<label>[A-Za-z][A-Za-z0-9 /&()'’-]{0,27}?)[ \t]*:[ \t]*"
+)
+_PROFILE_METADATA_INLINE_FIELD_PATTERN = re.compile(
+    r"(?:[ \t]*(?:\||[•·]|;)[ \t]*)(?P<label>[A-Za-z][A-Za-z0-9 /&()'’-]{0,27}?)[ \t]*:[ \t]*"
+)
+_PROFILE_METADATA_ALIASES = {
+    "blood type": ("blood_type", "Blood type"),
+    "date of birth": ("birthday", "Birthday"),
+    "dob": ("birthday", "Birthday"),
+    "birthday": ("birthday", "Birthday"),
+    "height": ("height", "Height"),
+    "weight": ("weight", "Weight"),
+    "age": ("age", "Age"),
+    "gender": ("gender", "Gender"),
+    "hometown": ("hometown", "Hometown"),
+    "home town": ("hometown", "Hometown"),
+    "language": ("language", "Language"),
+    "occupation": ("occupation", "Occupation"),
+    "occupations": ("occupation", "Occupation"),
+    "years active": ("years_active", "Years active"),
+    "active": ("years_active", "Years active"),
+    "favourite": ("favourites", "Favourites"),
+    "favourites": ("favourites", "Favourites"),
+    "favorite": ("favourites", "Favourites"),
+    "favorites": ("favourites", "Favourites"),
+}
+_PROFILE_METADATA_TYPED_VALUE_PATTERNS = {
+    "height": re.compile(
+        r"(?:\d{2,3}(?:\.\d+)?\s*(?:cm|centimeters?|mm|m|meters?|metres?)"
+        r"|\d{1,2}\s*(?:ft|feet|foot)(?:\s*\d{1,2}\s*(?:in|inches))?"
+        r"|\d{1,2}\s*(?:in|inches))",
+        re.IGNORECASE,
+    ),
+    "weight": re.compile(
+        r"\d{1,3}(?:\.\d+)?\s*(?:kg|kilograms?|lb|lbs|pounds?)",
+        re.IGNORECASE,
+    ),
+    "birthday": re.compile(
+        r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?"
+        r"|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?"
+        r"|Dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?"
+        r"|\d{1,2}(?:st|nd|rd|th)?\s+(?:January|February|March|April|May|June"
+        r"|July|August|September|October|November|December)(?:\s+\d{4})?"
+        r"|\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?|\d{4}|[A-Za-z]{3,9}\s+\d{1,2}",
+        re.IGNORECASE,
+    ),
+    "age": re.compile(
+        r"(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?(?:\s*(?:years? old|y/o))?"
+        r"|unknown|unspecified|\?)",
+        re.IGNORECASE,
+    ),
+    "gender": re.compile(
+        r"(?:male\s*/\s*female|female\s*/\s*male|non[- ]?binary|genderfluid"
+        r"|androgynous|genderless|agender|unknown|other|male|female)",
+        re.IGNORECASE,
+    ),
+    "blood_type": re.compile(r"(?:AB|A|B|O)[+-]?", re.IGNORECASE),
+}
+
+
+def _description_visible_text_and_map(description, html_mode):
+    """Return visible description text with offsets back into its original source."""
+    source = str(description or "")
+    if not html_mode:
+        return source, [(index, index + 1) for index in range(len(source))]
+
+    visible = []
+    source_map = []
+    tokens = re.compile(
+        r"(?is)<[^>]*>|&(?:#(?:x[0-9a-f]+|\d+)|[a-z][a-z0-9]+);|."
+    )
+    block_tags = {"p", "div", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6"}
+    for match in tokens.finditer(source):
+        token = match.group(0)
+        if token.startswith("<"):
+            tag_match = re.match(r"<\s*(/?)\s*([a-z0-9]+)", token, re.IGNORECASE)
+            if tag_match is None:
+                continue
+            closing, tag_name = tag_match.groups()
+            should_break = tag_name.casefold() == "br" or (
+                bool(closing) and tag_name.casefold() in block_tags
+            )
+            if should_break and (not visible or visible[-1] != "\n"):
+                visible.append("\n")
+                source_map.append((match.start(), match.end()))
+        elif token.startswith("&"):
+            decoded = html_lib.unescape(token)
+            for character in decoded:
+                visible.append(character)
+                source_map.append((match.start(), match.end()))
+        else:
+            visible.append(token)
+            source_map.append((match.start(), match.end()))
+
+    return "".join(visible), source_map
+
+
+def _profile_metadata_label(label):
+    """Return a normalized key and readable label for a simple X: Y field."""
+    cleaned = " ".join(str(label or "").split()).strip(" .:-")
+    normalized = cleaned.casefold()
+    if not cleaned:
+        return "", ""
+    alias = _PROFILE_METADATA_ALIASES.get(normalized)
+    if alias:
+        return alias
+    key = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
+    return key, cleaned[0].upper() + cleaned[1:]
+
+
+def _extract_leading_profile_metadata(description, html_mode=False):
+    """Extract consecutive leading X: Y fields, leaving the remaining biography intact.
+
+    Metadata labels are generic so fields such as Hobbies, Likes, or other
+    AniList-specific details work without adding a hardcoded label for each one.
+    Known labels with strongly recognizable value formats (for example Height)
+    can end before prose that starts on the same line. Otherwise, a field must
+    be separated by a line break or explicit field separator. Parsing stops at
+    the first ordinary prose segment.
+    """
+    source = str(description or "")
+    if not source.strip():
+        return [], source
+
+    visible, source_map = _description_visible_text_and_map(source, html_mode)
+    cursor = 0
+    facts = []
+    first_fact_start = None
+    last_fact_end = None
+
+    while cursor < len(visible):
+        while cursor < len(visible) and (
+            visible[cursor].isspace() or visible[cursor] in "|•·;"
+        ):
+            cursor += 1
+        if cursor >= len(visible):
+            break
+
+        label_match = _PROFILE_METADATA_LABEL_PATTERN.match(visible, cursor)
+        if label_match is None:
+            break
+
+        label_key, display_label = _profile_metadata_label(label_match.group("label"))
+        if not label_key:
+            break
+        value_start = label_match.end()
+
+        value_end = None
+        typed_pattern = _PROFILE_METADATA_TYPED_VALUE_PATTERNS.get(label_key)
+        if typed_pattern is not None:
+            value_match = typed_pattern.match(visible, value_start)
+            if value_match is not None:
+                candidate_end = value_match.end()
+                if (
+                    candidate_end == len(visible)
+                    or visible[candidate_end].isspace()
+                    or visible[candidate_end] in ",.;|•·);"
+                ):
+                    value_end = candidate_end
+                    # Include a sentence-ending period so removing a field from
+                    # "Height: 165 cm. This person..." does not leave ". This...".
+                    if (
+                        value_end < len(visible)
+                        and visible[value_end] == "."
+                        and (
+                            value_end + 1 == len(visible)
+                            or visible[value_end + 1].isspace()
+                        )
+                    ):
+                        value_end += 1
+
+        if value_end is None:
+            line_end = visible.find("\n", value_start)
+            if line_end < 0:
+                line_end = len(visible)
+            segment_end = line_end
+
+            inline_field = _PROFILE_METADATA_INLINE_FIELD_PATTERN.search(
+                visible, value_start, line_end
+            )
+            if inline_field is not None:
+                segment_end = inline_field.start()
+
+            # A generic value with one clear sentence followed by normal prose
+            # should not absorb the prose. Dotted/abbreviated titles remain rare
+            # here, but this conservative boundary is useful for common biographies.
+            sentence_boundary = re.search(
+                r"(?<=[.!?])[ \t]+(?=(?:I|He|She|They|This|That|The|A|An|My|His|Her|Their|Born|Known|Voiced|Worked|Was|Is)\b)",
+                visible[value_start:segment_end],
+            )
+            if sentence_boundary is not None:
+                segment_end = min(
+                    segment_end, value_start + sentence_boundary.start()
+                )
+
+            value_end = segment_end
+            while value_end > value_start and visible[value_end - 1].isspace():
+                value_end -= 1
+
+            value = visible[value_start:value_end].strip()
+            if not value or len(value) > 180:
+                break
+            # Don't turn a complete prose sentence into a fact just because it
+            # begins with a colon-bearing phrase like "Introduction: ...".
+            if re.search(r"\.\s+[A-Z]", value):
+                break
+        else:
+            value = visible[value_start:value_end].strip()
+
+        if not value:
+            break
+        if first_fact_start is None:
+            first_fact_start = cursor
+        facts.append((label_key, display_label, value))
+        last_fact_end = value_end
+        cursor = value_end
+
+        # A next field must begin after a line break or an explicit visual
+        # separator; ordinary comma-separated values (e.g. hobby lists) stay intact.
+        lookahead = cursor
+        while lookahead < len(visible) and visible[lookahead].isspace():
+            lookahead += 1
+        while lookahead < len(visible) and visible[lookahead] in "|•·;":
+            lookahead += 1
+            while lookahead < len(visible) and visible[lookahead].isspace():
+                lookahead += 1
+        if _PROFILE_METADATA_LABEL_PATTERN.match(visible, lookahead) is None:
+            break
+        cursor = lookahead
+
+    if not facts or first_fact_start is None or last_fact_end is None:
+        return [], source
+
+    start_offset = source_map[first_fact_start][0]
+    end_offset = source_map[last_fact_end - 1][1]
+    cleaned = source[:start_offset] + source[end_offset:]
+
+    if html_mode:
+        # The removed prefix may leave empty paragraphs or a leading line break.
+        for _ in range(8):
+            cleaned, count = re.subn(
+                r"(?is)^\s*<(p|div)\b[^>]*>\s*</\1\s*>\s*",
+                "",
+                cleaned,
+                count=1,
+            )
+            if not count:
+                break
+        cleaned = re.sub(
+            r"(?is)^(\s*<(?:p|div)\b[^>]*>)\s*(?:<br\b[^>]*>\s*)+",
+            r"\1",
+            cleaned,
+            count=1,
+        )
+        cleaned = re.sub(r"(?is)^\s*(?:<br\b[^>]*>\s*)+", "", cleaned)
+
+    return facts, cleaned.strip()
+
 
 
 def _crop_pixmap_to_size(pixmap, size):
@@ -498,6 +763,33 @@ class ProfileWorkCreditCard(WorkCard):
             self.height() + added_height + max(0, content_layout.spacing())
         )
 
+class ProfileDescriptionBrowser(QTextBrowser):
+    """Rich biography view that grows with its content instead of scrolling internally."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._updating_content_height = False
+        self.document().contentsChanged.connect(self.update_content_height)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_content_height()
+
+    def update_content_height(self):
+        if self._updating_content_height or self.width() <= 0:
+            return
+        viewport_width = max(1, self.viewport().width())
+        self._updating_content_height = True
+        try:
+            document = self.document()
+            document.setTextWidth(viewport_width)
+            content_height = ceil(document.documentLayout().documentSize().height()) + 8
+            if abs(self.minimumHeight() - content_height) > 1:
+                self.setMinimumHeight(content_height)
+        finally:
+            self._updating_content_height = False
+
+
 class EntityProfilePage(QWidget):
     """NekoTrack character and voice-actor profiles with internal work navigation."""
 
@@ -859,14 +1151,38 @@ class EntityProfilePage(QWidget):
         title.setWordWrap(True)
         profile_text.addWidget(title)
 
-        # Keep all profile information in one vertical flow: facts should not
-        # be separated from the biography into competing left/right columns.
+        # AniList biographies sometimes start with short X: Y facts (including
+        # hobbies or other nonstandard labels). Move a consecutive leading block
+        # into profile facts, and stop at the first ordinary prose segment.
+        html_description = remote.get("descriptionHtml")
+        has_original_html = isinstance(html_description, str) and bool(
+            html_description.strip()
+        )
+        raw_description = str(
+            html_description
+            or remote.get("description")
+            or self._value(record, "description", "")
+            or ""
+        ).strip()
+        description_has_html = has_original_html or (
+            "<" in raw_description and any(
+                token in raw_description.casefold()
+                for token in ("<p", "<br", "<a ", "<b>", "<i>", "<div", "<ul", "<ol")
+            )
+        )
+        metadata_facts, raw_description = _extract_leading_profile_metadata(
+            raw_description,
+            html_mode=description_has_html,
+        )
+
         facts_column = QVBoxLayout()
         facts_column.setContentsMargins(0, 0, 0, 0)
         facts_column.setSpacing(4)
 
         if is_character:
-            role = str(self._value(record, "character_role", "") or "").replace("_", " ").title()
+            role = str(
+                self._value(record, "character_role", "") or ""
+            ).replace("_", " ").title()
             if role:
                 facts_column.addWidget(self._fact("Role in this bundle", role))
         else:
@@ -874,11 +1190,17 @@ class EntityProfilePage(QWidget):
             occupations = remote.get("primaryOccupations")
             if isinstance(occupations, list) and occupations:
                 facts_column.addWidget(
-                    self._fact("Occupation", " · ".join(str(x) for x in occupations if x))
+                    self._fact(
+                        "Occupation",
+                        " · ".join(str(item) for item in occupations if item),
+                    )
                 )
             elif local_roles:
                 facts_column.addWidget(
-                    self._fact("Credits in this bundle", local_roles.replace("\n", " · "))
+                    self._fact(
+                        "Credits in this bundle",
+                        local_roles.replace("\n", " · "),
+                    )
                 )
             language = remote.get("languageV2")
             if language:
@@ -898,7 +1220,9 @@ class EntityProfilePage(QWidget):
             if value and value != "None":
                 facts.append(f"{label}: {value}")
         if isinstance(years_active, list) and years_active:
-            active_text = "–".join(str(item) for item in years_active if item is not None)
+            active_text = "–".join(
+                str(item) for item in years_active if item is not None
+            )
             if active_text:
                 facts.append(f"Active: {active_text}")
         favourites = remote.get("favourites")
@@ -907,44 +1231,67 @@ class EntityProfilePage(QWidget):
         for fact in facts:
             facts_column.addWidget(self._fact("", fact))
 
-        if facts_column.count():
-            profile_text.addLayout(facts_column)
+        # AniList already supplies some of these details in dedicated fields.
+        # Strip duplicate bio copies, but only add a fact when no API field
+        # currently displays the same category.
+        existing_metadata_keys = set()
+        if gender and gender != "None":
+            existing_metadata_keys.add("gender")
+        if age and age != "None":
+            existing_metadata_keys.add("age")
+        if birth:
+            existing_metadata_keys.add("birthday")
+        if blood_type and blood_type != "None":
+            existing_metadata_keys.add("blood_type")
+        if not is_character:
+            if hometown and hometown != "None":
+                existing_metadata_keys.add("hometown")
+            if remote.get("languageV2"):
+                existing_metadata_keys.add("language")
+            occupations = remote.get("primaryOccupations")
+            if isinstance(occupations, list) and any(occupations):
+                existing_metadata_keys.add("occupation")
+            if isinstance(years_active, list) and years_active:
+                existing_metadata_keys.add("years_active")
+            if isinstance(favourites, int) and favourites > 0:
+                existing_metadata_keys.add("favourites")
+        for metadata_key, display_label, value in metadata_facts:
+            if metadata_key not in existing_metadata_keys:
+                facts_column.addWidget(self._fact(display_label, value))
+                existing_metadata_keys.add(metadata_key)
 
-        # AniList provides both forms: use its original HTML to retain the
-        # provider's paragraph/list/spacing choices, and repair only malformed
-        # link fragments in that HTML. Raw Markdown remains available for older
-        # responses and locally saved descriptions.
-        html_description = remote.get("descriptionHtml")
-        has_original_html = isinstance(html_description, str) and bool(
-            html_description.strip()
-        )
-        raw_description = str(
-            html_description
-            or remote.get("description")
-            or self._value(record, "description", "")
-            or ""
-        ).strip()
-        description_has_html = has_original_html or (
-            "<" in raw_description and any(
-                token in raw_description.casefold()
-                for token in ("<p", "<br", "<a ", "<b>", "<i>", "<div", "<ul", "<ol")
-            )
-        )
+        details_row = QHBoxLayout()
+        details_row.setContentsMargins(0, 0, 0, 0)
+        details_row.setSpacing(16)
+
+        if facts_column.count():
+            facts_host = QWidget()
+            facts_host.setObjectName("profileFactsColumn")
+            facts_host.setLayout(facts_column)
+            facts_host.setMinimumWidth(170)
+            facts_host.setMaximumWidth(245)
+            facts_host.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+            details_row.addWidget(facts_host, 0, Qt.AlignTop)
+
+        # Render the remaining biography beside the facts in the same profile
+        # header. It grows to its content height, leaving only the page itself
+        # scrollable instead of nesting a second scroll area inside the header.
         description = self._normalize_profile_description(
-            raw_description, html_mode=description_has_html
+            raw_description,
+            html_mode=description_has_html,
         )
         if description:
-            description_browser = QTextBrowser()
+            description_browser = ProfileDescriptionBrowser()
             description_browser.setObjectName("profileDescription")
             description_browser.setReadOnly(True)
             description_browser.setOpenExternalLinks(True)
             description_browser.setFrameShape(QFrame.NoFrame)
             description_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            description_browser.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            description_browser.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             description_browser.document().setDocumentMargin(0)
-            description_browser.setMinimumHeight(120)
-            description_browser.setMaximumHeight(210)
-            description_browser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            description_browser.setSizePolicy(
+                QSizePolicy.Expanding, QSizePolicy.Preferred
+            )
             if description_has_html:
                 description_browser.setHtml(description)
             else:
@@ -956,17 +1303,22 @@ class EntityProfilePage(QWidget):
                 "background:transparent;border:none;font-size:12px; }"
                 f"QTextBrowser#profileDescription a {{ color:{COLORS['accent']}; }}"
             )
-            profile_text.addWidget(description_browser, 1)
+            description_browser.update_content_height()
+            details_row.addWidget(description_browser, 1)
         elif self._remote_error:
             note = QLabel(
                 "Biography unavailable. Showing the saved profile details."
             )
             note.setWordWrap(True)
             note.setStyleSheet(muted_label_stylesheet())
-            profile_text.addWidget(note, 1)
+            details_row.addWidget(note, 1)
+
+        if details_row.count():
+            profile_text.addLayout(details_row, 1)
 
         profile_text.addStretch(1)
         row.addLayout(profile_text, 1)
+
         self.content_layout.addWidget(header)
 
         if is_character:
