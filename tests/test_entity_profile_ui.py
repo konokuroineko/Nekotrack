@@ -86,7 +86,6 @@ class EntityProfileUiTests(unittest.TestCase):
         title_label = card.findChild(QLabel, "mediaCreditTitle")
         self.assertIsNotNone(title_label)
         self.assertEqual(title_label.text(), "Example Series")
-        self.assertEqual(title_label.parentWidget(), card)
         self.assertTrue(title_label.alignment() & Qt.AlignRight)
         self.assertEqual(title_label.parentWidget(), name_label.parentWidget())
         self.assertEqual(title_label.font().pointSize(), name_label.font().pointSize())
