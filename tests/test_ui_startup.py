@@ -626,7 +626,7 @@ class UiStartupTests(unittest.TestCase):
                         {
                             "home": "Home",
                             "collections": "Library",
-                            "search": "Search",
+                            "search": "Discover",
                             "settings": "Settings",
                         },
                     )
