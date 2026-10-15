@@ -18,11 +18,13 @@ from PySide6.QtWidgets import (
 )
 
 from ui.branding import application_icon, wordmark_pixmap
+from ui.theme import toggle_stylesheet
 from ui.bundle_options import BUNDLE_OPTION_GROUPS, BUNDLE_OPTION_KEYS
 from ui.preferences import (
     THEME_PRESETS,
     apply_theme_preset,
     get,
+    palette_for_mode,
     set_value,
 )
 
@@ -44,14 +46,13 @@ class ThemeCard(QFrame):
 
         swatches = QHBoxLayout()
         swatches.setSpacing(5)
+        self.swatches = {}
         for key in ("accent", "surface", "card", "background"):
             swatch = QFrame()
             swatch.setFixedHeight(24)
-            swatch.setStyleSheet(
-                f"background:{theme_data[key]};border-radius:6px;"
-                f"border:1px solid {theme_data['border']};"
-            )
+            self.swatches[key] = swatch
             swatches.addWidget(swatch, 1)
+        self.set_preview_mode(False)
         layout.addLayout(swatches)
 
         title = QLabel(name)
@@ -63,6 +64,14 @@ class ThemeCard(QFrame):
         description.setWordWrap(True)
         layout.addWidget(description)
         layout.addStretch(1)
+
+    def set_preview_mode(self, light_mode):
+        palette = palette_for_mode(self.theme_data, light_mode)
+        for key, swatch in self.swatches.items():
+            swatch.setStyleSheet(
+                f"background:{palette[key]};border-radius:6px;"
+                f"border:1px solid {palette['border']};"
+            )
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -98,6 +107,7 @@ class SetupWizard(QDialog):
         self.selected_theme = str(get("theme_preset") or "Neko")
         if self.selected_theme not in THEME_PRESETS:
             self.selected_theme = "Neko"
+        self.light_mode = bool(get("light_mode"))
         self.bundle_options = {key: bool(get(key)) for key in BUNDLE_OPTION_KEYS}
         self.bundle_checkboxes = {}
 
@@ -117,14 +127,21 @@ class SetupWizard(QDialog):
         side.setContentsMargins(25, 28, 22, 28)
         side.setSpacing(4)
 
+        brand_badge = QFrame()
+        brand_badge.setObjectName("setupBrandBadge")
+        brand_badge.setFixedSize(203, 63)
+        badge_layout = QHBoxLayout(brand_badge)
+        badge_layout.setContentsMargins(7, 6, 7, 6)
+        badge_layout.setSpacing(0)
         brand = QLabel()
         brand.setObjectName("setupBrand")
         brand.setAccessibleName("NekoTrack")
-        brand.setFixedSize(203, 53)
+        brand.setFixedSize(187, 49)
         brand.setScaledContents(True)
         brand.setStyleSheet("background:transparent;border:none;padding:0;")
         self.setup_brand = brand
-        side.addWidget(brand)
+        badge_layout.addWidget(brand)
+        side.addWidget(brand_badge)
         side.addSpacing(42)
 
         side_intro = QLabel("SETUP")
@@ -262,11 +279,29 @@ class SetupWizard(QDialog):
         names = list(THEME_PRESETS)
         for index, name in enumerate(names):
             card = ThemeCard(name, THEME_PRESETS[name])
+            card.set_preview_mode(self.light_mode)
             card.clicked.connect(self._select_theme)
             self.theme_cards[name] = card
             grid.addWidget(card, index // 2, index % 2)
 
         layout.addLayout(grid)
+
+        mode_row = QWidget()
+        mode_layout = QHBoxLayout(mode_row)
+        mode_layout.setContentsMargins(0, 2, 0, 0)
+        mode_layout.setSpacing(12)
+        self.light_mode_toggle = QCheckBox("White mode")
+        self.light_mode_toggle.setObjectName("lightModeToggle")
+        self.light_mode_toggle.setChecked(self.light_mode)
+        self.light_mode_toggle.toggled.connect(self._set_light_mode)
+        mode_description = QLabel(
+            "Use light surfaces without changing your selected theme or accent."
+        )
+        mode_description.setObjectName("themeDescription")
+        mode_description.setWordWrap(True)
+        mode_layout.addWidget(self.light_mode_toggle)
+        mode_layout.addWidget(mode_description, 1)
+        layout.addWidget(mode_row)
         layout.addStretch(1)
         return page
 
@@ -413,6 +448,12 @@ class SetupWizard(QDialog):
             card.style().polish(card)
         self._apply_wizard_style()
 
+    def _set_light_mode(self, enabled):
+        self.light_mode = bool(enabled)
+        for card in self.theme_cards.values():
+            card.set_preview_mode(self.light_mode)
+        self._apply_wizard_style()
+
     def _set_step(self, index):
         self.pages.setCurrentIndex(index)
         self.back_button.setVisible(index > 0)
@@ -435,6 +476,7 @@ class SetupWizard(QDialog):
 
     def _finish(self):
         apply_theme_preset(self.selected_theme)
+        set_value("light_mode", self.light_mode)
         for key, enabled in self.bundle_options.items():
             set_value(key, enabled)
         set_value(
@@ -478,10 +520,10 @@ class SetupWizard(QDialog):
         self._tmdb_worker = None
 
     def _apply_wizard_style(self):
-        theme = THEME_PRESETS[self.selected_theme]
+        theme = palette_for_mode(THEME_PRESETS[self.selected_theme], self.light_mode)
         if hasattr(self, "setup_brand"):
             self.setup_brand.setPixmap(
-                wordmark_pixmap(theme["primary"], 203, 53)
+                wordmark_pixmap(theme["accent"], 187, 49)
             )
         self.setStyleSheet(
             f"""
@@ -501,11 +543,15 @@ class SetupWizard(QDialog):
                 color:{theme['primary']};
                 font-family:"Segoe UI";
             }}
-            QLabel#setupMark {{ background:transparent; border:none; }}
+            QFrame#setupBrandBadge {{
+                background:#cec6d9;
+                border:1px solid #bcb2cf;
+                border-radius:10px;
+            }}
             QLabel#setupBrand {{
-                font-size:19px;
-                font-weight:800;
-                padding-left:3px;
+                background:transparent;
+                border:none;
+                padding:0;
             }}
             QLabel#setupOverline {{
                 color:{theme['muted']};
@@ -567,10 +613,6 @@ class SetupWizard(QDialog):
                 font-weight:800;
                 spacing:8px;
                 background:transparent;
-            }}
-            QCheckBox#bundleOptionCheck::indicator {{
-                width:16px;
-                height:16px;
             }}
             QScrollArea#bundleOptionsScroll, QScrollArea#bundleOptionsScroll QWidget {{
                 background:transparent;
@@ -645,5 +687,5 @@ class SetupWizard(QDialog):
             QLabel#setupStatus[success="false"] {{
                 color:{theme['danger']};
             }}
-            """
+            """ + toggle_stylesheet(theme)
         )

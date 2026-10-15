@@ -1,4 +1,5 @@
 from PySide6.QtCore import QSettings
+from PySide6.QtGui import QColor
 
 from ui.bundle_options import BUNDLE_OPTION_KEYS
 
@@ -36,37 +37,6 @@ THEME_PRESETS = {
         "card_hover": "#20182a",
     },
 
-    "Light": {
-        "description": "Paper-white surfaces, charcoal text, and violet accents.",
-        "nav_selected_text": "#5c3b83",
-        "nav_selected_frame": "#8a68b2",
-        "accent_text": "#ffffff",
-        "font_size": 13,
-        "card_size": 210,
-        "card_gap": 24,
-        "corner_radius": 14,
-        "accent": "#7350a5",
-        "accent_hover": "#8866b9",
-        "frame_color": "#b7a6cd",
-        "background": "#f6f4f8",
-        "background_alt": "#eeebf2",
-        "sidebar": "#ffffff",
-        "surface": "#ffffff",
-        "surface_alt": "#f3f0f7",
-        "surface_hover": "#ebe6f2",
-        "border": "#ded8e7",
-        "border_hover": "#c6bad7",
-        "primary": "#28232f",
-        "secondary": "#5e5768",
-        "muted": "#81778c",
-        "accent_soft": "#e9e0f5",
-        "success": "#267749",
-        "danger": "#bf3947",
-        "panel": "#ffffff",
-        "panel_soft": "#f8f6fb",
-        "card": "#ffffff",
-        "card_hover": "#f5f0fb",
-    },
     "Sakura": {
         "description": "Soft blossom pink over a deep plum-brown base.",
         "nav_selected_text": "#ffabc0",
@@ -226,6 +196,7 @@ THEME_PRESETS = {
 _DEFAULTS = {
     **{key: value for key, value in THEME_PRESETS["Neko"].items() if key != "description"},
     "theme_preset": "Neko",
+    "light_mode": False,
     "font_size": 13,
     "card_size": 210,
     "card_gap": 24,
@@ -247,7 +218,46 @@ _LEGACY_APPLICATION = "AniTrack"
 
 _MIGRATION_KEY = "_legacy_anitrack_preferences_migrated"
 
-_THEME_PALETTE_VERSION = 8
+_THEME_PALETTE_VERSION = 9
+
+
+def palette_for_mode(theme, light_mode=False):
+    """Return a theme palette for the selected mode without changing its accent."""
+    palette = dict(theme)
+    if not light_mode:
+        return palette
+
+    palette.update({
+        "background": "#f5f3f7",
+        "background_alt": "#eeebf2",
+        "sidebar": "#fbfafc",
+        "surface": "#ffffff",
+        "surface_alt": "#f6f3fa",
+        "surface_hover": "#ece7f3",
+        "border": "#ded8e7",
+        "border_hover": "#c9bdd8",
+        "primary": "#28232f",
+        "secondary": "#5f5868",
+        "muted": "#82798c",
+        "panel": "#ffffff",
+        "panel_soft": "#f8f6fb",
+        "card": "#ffffff",
+        "card_hover": "#f3eef9",
+        "success": "#267749",
+        "danger": "#b42332",
+    })
+
+    accent = QColor(palette.get("accent", "#7350a5"))
+    pale_accent = QColor("#ffffff")
+    # Tint the selected surfaces very lightly with the theme's own accent.
+    mix = 0.10
+    pale_accent.setRed(round(255 * (1 - mix) + accent.red() * mix))
+    pale_accent.setGreen(round(255 * (1 - mix) + accent.green() * mix))
+    pale_accent.setBlue(round(255 * (1 - mix) + accent.blue() * mix))
+    palette["accent_soft"] = pale_accent.name()
+    palette["nav_selected_text"] = accent.darker(165).name()
+    palette["nav_selected_frame"] = accent.name()
+    return palette
 
 
 def settings():
@@ -272,8 +282,15 @@ def settings():
         current.setValue(_MIGRATION_KEY, True)
         current.sync()
 
-    # Migrate legacy theme names into the new palette.
+    # Convert the short-lived Light preset into a mode toggle while preserving
+    # its intent. The underlying theme falls back to Neko because the old
+    # Light preset did not preserve which dark theme had been selected before it.
     stored_theme = str(current.value("theme_preset", "") or "")
+    if stored_theme == "Light":
+        if current.value("light_mode", None) is None:
+            current.setValue("light_mode", True)
+        stored_theme = "Neko"
+        current.setValue("theme_preset", stored_theme)
     if stored_theme in ("NekoTrack", "Amethyst") or stored_theme not in THEME_PRESETS:
         stored_theme = "Neko"
         current.setValue("theme_preset", stored_theme)

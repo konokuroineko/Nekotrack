@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QBuffer, QIODevice
 from PySide6.QtTest import QTest
 from PySide6.QtGui import QPixmap
 from PySide6.QtNetwork import QNetworkReply
-from PySide6.QtWidgets import QApplication, QLabel, QFrame, QTextBrowser
+from PySide6.QtWidgets import QApplication, QLabel, QFrame, QTextBrowser, QCheckBox
 
 import ui.preferences as preferences
 
@@ -60,8 +60,9 @@ class UiStartupTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_brand_assets_render_and_lockup_switches_ink_for_light_mode(self):
+    def test_brand_assets_keep_black_cat_lockup_with_theme_accent_progress(self):
         from ui.branding import application_icon, logo_pixmap, wordmark_pixmap
+        from ui.theme import toggle_stylesheet
 
         icon = application_icon()
         self.assertFalse(icon.isNull())
@@ -71,8 +72,8 @@ class UiStartupTests(unittest.TestCase):
         self.assertFalse(app_mark.isNull())
         self.assertEqual(app_mark.toImage().pixelColor(0, 0).alpha(), 0)
 
-        dark_lockup = wordmark_pixmap("#f5f0fb", 202, 52)
-        light_lockup = wordmark_pixmap("#28232f", 202, 52)
+        dark_lockup = wordmark_pixmap("#a678ff", 202, 52)
+        light_lockup = wordmark_pixmap("#59c2b6", 202, 52)
         self.assertFalse(dark_lockup.isNull())
         self.assertFalse(light_lockup.isNull())
         self.assertEqual(dark_lockup.size().width(), 202)
@@ -91,8 +92,36 @@ class UiStartupTests(unittest.TestCase):
         light_ink = first_opaque_ink(light_lockup)
         self.assertIsNotNone(dark_ink)
         self.assertIsNotNone(light_ink)
-        self.assertGreater(dark_ink.red(), 240)
-        self.assertLess(light_ink.red(), 30)
+
+        def count_black_pixels(pixmap):
+            image = pixmap.toImage()
+            return sum(
+                1
+                for y in range(image.height())
+                for x in range(image.width())
+                if (
+                    image.pixelColor(x, y).alpha() > 220
+                    and max(
+                        image.pixelColor(x, y).red(),
+                        image.pixelColor(x, y).green(),
+                        image.pixelColor(x, y).blue(),
+                    ) < 30
+                )
+            )
+
+        self.assertGreater(count_black_pixels(dark_lockup), 100)
+        self.assertGreater(count_black_pixels(light_lockup), 100)
+        switch_css = toggle_stylesheet({
+            "accent": "#59c2b6",
+            "border": "#283b38",
+            "surface_alt": "#17211f",
+            "background_alt": "#101716",
+            "muted": "#728983",
+        })
+        self.assertIn("width:38px", switch_css)
+        self.assertIn("background-color:#59c2b6", switch_css)
+        self.assertIn("toggle-thumb-left.svg", switch_css)
+        self.assertIn("toggle-thumb-right.svg", switch_css)
 
     def test_library_uses_the_bundle_saved_from_search_before_relation_sync_finishes(self):
         import os
@@ -397,6 +426,21 @@ class UiStartupTests(unittest.TestCase):
                     expected = set(preferences.BUNDLE_OPTION_KEYS)
                     self.assertEqual(set(wizard.bundle_checkboxes), expected)
                     self.assertEqual(set(settings_page.bundle_checkboxes), expected)
+                    self.assertIsNotNone(wizard.findChild(QCheckBox, "lightModeToggle"))
+                    settings_toggle = settings_page.findChild(QCheckBox, "lightModeToggle")
+                    self.assertIsNotNone(settings_toggle)
+                    self.assertIn("width:38px", settings_page.styleSheet())
+
+                    original_theme = preferences.get("theme_preset")
+                    original_accent = preferences.get("accent")
+                    settings_toggle.setChecked(True)
+                    self.assertTrue(preferences.get("light_mode"))
+                    self.assertEqual(preferences.get("theme_preset"), original_theme)
+                    self.assertEqual(preferences.get("accent"), original_accent)
+                    settings_toggle.setChecked(False)
+                    wizard.light_mode_toggle.setChecked(True)
+                    self.assertTrue(wizard.light_mode)
+                    self.assertIn("width:38px", wizard.styleSheet())
 
                     wizard.bundle_checkboxes["bundle_include_ovas"].setChecked(True)
                     self.assertTrue(wizard.bundle_options["bundle_include_ovas"])

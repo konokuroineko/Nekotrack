@@ -510,8 +510,11 @@ class MainWindow(QMainWindow):
         side.setContentsMargins(18, 22, 18, 20)
         side.setSpacing(5)
 
-        brand = QHBoxLayout()
-        brand.setContentsMargins(0, 0, 0, 0)
+        brand_badge = QFrame()
+        brand_badge.setObjectName("brandBadge")
+        brand_badge.setFixedSize(214, 66)
+        brand = QHBoxLayout(brand_badge)
+        brand.setContentsMargins(5, 5, 5, 5)
         brand.setSpacing(0)
         word = QLabel()
         word.setObjectName("brandWord")
@@ -522,7 +525,7 @@ class MainWindow(QMainWindow):
         self.brand_word = word
         self._update_brand_word()
         brand.addWidget(word)
-        side.addLayout(brand)
+        side.addWidget(brand_badge)
         side.addSpacing(28)
 
         self.stack = QStackedWidget()
@@ -590,7 +593,7 @@ class MainWindow(QMainWindow):
             application_stylesheet()
             + f"""
             QFrame#sidebar {{ background:{COLORS['sidebar']}; border-right:1px solid {COLORS['frame']}; }}
-            QLabel#brandMark {{ background:transparent; border:none; }}
+            QFrame#brandBadge {{ background:#cec6d9; border:1px solid #bcb2cf; border-radius:10px; }}
             QLabel#brandWord {{ background:transparent; border:none; padding:0; }}
             QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:10px; padding:11px 13px; text-align:left; font-size:13px; font-weight:600; }}
             QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
@@ -631,7 +634,7 @@ class MainWindow(QMainWindow):
             self.apply_settings("setup")
 
     def apply_settings(self, changed_key=""):
-        if changed_key == "theme_preset":
+        if changed_key in ("theme_preset", "light_mode"):
             self._apply_theme_live()
             return
         if self._settings_rebuild_pending:
@@ -646,8 +649,8 @@ class MainWindow(QMainWindow):
             application_stylesheet()
             + f"""
             QFrame#sidebar {{ background:{COLORS['sidebar']}; border-right:1px solid {COLORS['frame']}; }}
-            QLabel#brandMark {{ background:transparent; border:none; }}
-            QLabel#brandWord {{ color:{COLORS['primary']}; font-size:19px; font-weight:800; letter-spacing:-.4px; padding-left:7px; }}
+            QFrame#brandBadge {{ background:#cec6d9; border:1px solid #bcb2cf; border-radius:10px; }}
+            QLabel#brandWord {{ background:transparent; border:none; padding:0; }}
             QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:10px; padding:11px 13px; text-align:left; font-size:13px; font-weight:600; }}
             QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
             QPushButton[navButton="true"]:focus {{ background:{COLORS['surface']}; border-color:{COLORS['nav_selected_frame']}; outline:none; }}
@@ -767,7 +770,7 @@ class MainWindow(QMainWindow):
 
     def _update_brand_word(self):
         self.brand_word.setPixmap(
-            wordmark_pixmap(COLORS["primary"], 202, 52)
+            wordmark_pixmap(COLORS["accent"], 202, 52)
         )
         self.brand_word.setAccessibleName("NekoTrack")
         self.brand_word.setStyleSheet("background:transparent;border:none;padding:0;")
