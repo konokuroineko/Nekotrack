@@ -133,6 +133,28 @@ class BackgroundManagerTests(unittest.TestCase):
         manager.deleteLater()
         self.app.processEvents()
 
+    def test_slideshow_reuses_decoded_images_and_drops_missing_file_cache_entries(self):
+        first = self._image("first-cache.png", "#e95a73")
+        second = self._image("second-cache.png", "#459ad7")
+        manager = self._manager()
+        self.assertEqual(manager.add_images([str(first), str(second)]), 2)
+        manager.set_interval(30)
+        manager._advance()
+        manager._advance()
+        self.assertEqual(len(manager._pixmap_cache), 2)
+
+        remaining = manager.paths[0]
+        missing = manager.paths[1]
+        missing_file = Path(self._directory.name) / missing
+        missing_file.unlink()
+        manager._advance()
+        self.assertEqual(manager.paths, (remaining,))
+        self.assertEqual(len(manager._pixmap_cache), 1)
+        self.assertFalse(manager._pixmap.isNull())
+        manager._timer.stop()
+        manager.deleteLater()
+        self.app.processEvents()
+
     def test_invalid_images_and_missing_saved_files_are_ignored(self):
         bad_file = Path(self._directory.name) / "not-an-image.png"
         bad_file.write_text("not image bytes", encoding="utf-8")

@@ -68,6 +68,9 @@ class BackgroundManager(QObject):
         self._paths = []
         self._index = 0
         self._pixmap = QPixmap()
+        # Keep decoded images alive across slideshow turns. Recheck file stats
+        # first so deleted/replaced files are never served from stale cache.
+        self._pixmap_cache = {}
         self.last_errors = []
         self._interval = self._valid_interval(get("background_slideshow_interval"))
         self._overlay_opacity = self._valid_opacity(get("background_overlay_opacity"))
@@ -134,13 +137,27 @@ class BackgroundManager(QObject):
             return None
 
     def _read_pixmap(self, path):
+        cache_key = None
         try:
             path = Path(path)
-            if not path.is_file() or path.stat().st_size > MAX_BACKGROUND_BYTES:
+            if not path.is_file():
+                return QPixmap()
+            stat = path.stat()
+            cache_key = str(path.resolve())
+            signature = (stat.st_mtime_ns, stat.st_size)
+            cached = self._pixmap_cache.get(cache_key)
+            if cached is not None and cached[0] == signature:
+                return cached[1]
+            if stat.st_size > MAX_BACKGROUND_BYTES:
+                self._pixmap_cache.pop(cache_key, None)
                 return QPixmap()
             image, _fmt = _image_from_bytes(path.read_bytes())
-            return QPixmap.fromImage(image)
+            pixmap = QPixmap.fromImage(image)
+            self._pixmap_cache[cache_key] = (signature, pixmap)
+            return pixmap
         except (OSError, ValueError, RuntimeError) as error:
+            if cache_key is not None:
+                self._pixmap_cache.pop(cache_key, None)
             log_event("background.image_unavailable", level=30, error_type=type(error).__name__,
                       error=str(error))
             return QPixmap()
@@ -260,6 +277,7 @@ class BackgroundManager(QObject):
             self.images_changed.emit()
             path = self._resolve_managed_path(stored_path)
             if path is not None:
+                self._pixmap_cache.pop(str(path), None)
                 path.unlink(missing_ok=True)
             return True
         except (OSError, ValueError, RuntimeError) as error:
