@@ -259,7 +259,12 @@ class MediaCreditCard(QFrame):
                 f"background: transparent; border: none; color: {COLORS['primary']}; "
                 "font-weight: 600;"
             )
-            name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            # Keep both the widget direction and alignment absolute: Qt otherwise
+            # mirrors left/right alignment when the application uses an RTL locale.
+            name_label.setLayoutDirection(Qt.LeftToRight)
+            name_label.setAlignment(
+                Qt.AlignLeft | Qt.AlignVCenter | Qt.AlignAbsolute
+            )
 
             title_label = QLabel(str(title))
             title_label.setObjectName("mediaCreditTitle")
@@ -271,7 +276,10 @@ class MediaCreditCard(QFrame):
                 f"background: transparent; border: none; color: {COLORS['primary']}; "
                 "font-weight: 600;"
             )
-            title_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            title_label.setLayoutDirection(Qt.LeftToRight)
+            title_label.setAlignment(
+                Qt.AlignRight | Qt.AlignVCenter | Qt.AlignAbsolute
+            )
 
             names_row = QHBoxLayout()
             names_row.setDirection(QBoxLayout.LeftToRight)
