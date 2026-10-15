@@ -65,6 +65,61 @@ class AniListRecommendationsTests(unittest.TestCase):
         request.assert_not_called()
 
 
+
+class RecommendationWorkerTests(unittest.TestCase):
+    def test_worker_excludes_library_entries_and_ranks_repeat_suggestions_first(self):
+        from ui.pages.recommendations_page import RecommendationWorker
+
+        library = [
+            {"id": 1, "type": "ANIME", "title": {"english": "Seed One"}},
+            {"id": 2, "type": "ANIME", "title": {"romaji": "Seed Two"}},
+            {"id": -3, "type": "MANGA", "title": {"english": "Provider-only work"}},
+        ]
+        first = [
+            {
+                "id": 1, "type": "ANIME",
+                "title": {"english": "Already tracked"},
+                "_recommendation_rating": 99,
+            },
+            {
+                "id": 11, "type": "ANIME",
+                "title": {"english": "Repeated suggestion"},
+                "_recommendation_rating": 70, "averageScore": 81,
+            },
+            {
+                "id": 12, "type": "ANIME",
+                "title": {"english": "One-off suggestion"},
+                "_recommendation_rating": 95, "averageScore": 96,
+            },
+        ]
+        second = [
+            {
+                "id": 11, "type": "ANIME",
+                "title": {"english": "Repeated suggestion"},
+                "_recommendation_rating": 83, "averageScore": 81,
+            },
+            {
+                "id": 13, "type": "ANIME",
+                "title": {"english": "Second one-off"},
+                "_recommendation_rating": 78, "averageScore": 78,
+            },
+        ]
+        finished = []
+        worker = RecommendationWorker(library)
+        worker.finished.connect(finished.append)
+        with patch("ui.pages.recommendations_page.get_media_recommendations", side_effect=[first, second]):
+            worker.run()
+
+        self.assertEqual(len(finished), 1)
+        rows = finished[0]
+        self.assertEqual([row["id"] for row in rows], [11, 12, 13])
+        self.assertEqual(rows[0]["_recommendation_count"], 2)
+        self.assertEqual(
+            rows[0]["_recommendation_source_titles"],
+            ["Seed One", "Seed Two"],
+        )
+
+
 class ReleaseReminderDatabaseTests(unittest.TestCase):
     def setUp(self):
         self._directory = tempfile.TemporaryDirectory()
@@ -122,6 +177,37 @@ class ReleaseReminderDatabaseTests(unittest.TestCase):
             database.get_due_release_reminders("not-a-date")
         with self.assertRaisesRegex(ValueError, "ISO date"):
             database.mark_release_reminder_notified(101, 5, "not-a-date")
+
+
+    def test_calendar_page_shows_cached_upcoming_events_and_persists_toggle(self):
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from ui.pages.calendar_page import CalendarPage
+
+        database.add_to_library(101, "Watching")
+        app = QApplication.instance() or QApplication([])
+        page = CalendarPage()
+        app.processEvents()
+        self.assertEqual(len(page._events), 1)
+        self.assertEqual(page._events[0]["work_title"], "Reminder Test")
+        button = next(
+            candidate
+            for candidate in page.findChildren(QPushButton)
+            if candidate.accessibleName() == "Enable episode reminder"
+        )
+        button.click()
+        app.processEvents()
+        rows = database.get_release_reminders()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["episode_number"], 5)
+        self.assertTrue(
+            any(
+                candidate.accessibleName() == "Disable episode reminder"
+                for candidate in page.findChildren(QPushButton)
+            )
+        )
+        page.close()
+        page.deleteLater()
+        app.processEvents()
 
     def test_new_reminder_table_is_safe_to_initialize_repeatedly(self):
         database.initialize_database()
