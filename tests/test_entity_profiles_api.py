@@ -121,6 +121,26 @@ class EntityProfileApiTests(unittest.TestCase):
         self.assertNotIn("https://anilist.co/user/OfficialChannel", description)
         self.assertNotIn('<a href="https://www.youtube.com/">', description)
 
+    def test_html_link_normalizer_handles_attribute_variants_and_nested_markup(self):
+        variants = (
+            (
+                """<p>[YouTube]\(<a class='external' href='https://www.youtube.com/' target='_blank'><span>https://www.youtube.com/</span></a><a title="AniList user" href="https://anilist.co/user/Ueda"><span>@Ueda</span></a>-Kana)</p>""",
+                "https://www.youtube.com/@Ueda-Kana",
+            ),
+            (
+                """<p>[Youtube]\(<A href=https://youtube.com/ class='external'>https://youtube.com/</A><A title='AniList user' href='https://anilist.co/user/officialyoutubechannel3974/'><em>@officialyoutubechannel3974</em></A>?si=9AjlJ6Ujj2Vw1CiU)</p>""",
+                "https://youtube.com/@officialyoutubechannel3974?si=9AjlJ6Ujj2Vw1CiU",
+            ),
+        )
+        for malformed_html, expected_url in variants:
+            with self.subTest(expected_url=expected_url):
+                description = api._normalize_anilist_profile_description(
+                    malformed_html, html_mode=True
+                )
+                self.assertIn(f'href="{expected_url}"', description)
+                self.assertNotIn("https://anilist.co/user/", description)
+                self.assertNotIn("<a class='external' href='https://www.youtube.com/'", description)
+
     def test_anilist_request_normalizes_nested_descriptions_everywhere(self):
         malformed = (
             r"[YouTube]\([https://www.youtube.com/](https://www.youtube.com/)"
