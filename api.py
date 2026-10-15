@@ -506,9 +506,9 @@ def _normalize_anilist_profile_description(description, html_mode=False):
     # <a> elements but leave the outer label/parentheses as literal text.
     html_pattern = re.compile(
         r"\[(?P<label>[^\]]+)\]\s*\\?\(\s*"
-        rf"<a\b(?=[^>]*\bhref\s*=\s*['""](?P<base_href>{root_url})['""])[^>]*>"
+        rf'<a\b(?=[^>]*\bhref\s*=\s*"(?P<base_href>{root_url})")[^>]*>'
         rf"\s*(?P<base_text>{root_url})\s*</a>\s*"
-        r"<a\b(?=[^>]*\bhref\s*=\s*['""]https?://(?:www\.)?anilist\.co/user/(?P<profile_handle>[A-Za-z0-9_.-]+)['""])[^>]*>"
+        r'<a\b(?=[^>]*\bhref\s*=\s*"https?://(?:www\.)?anilist\.co/user/(?P<profile_handle>[A-Za-z0-9_.-]+)")[^>]*>'
         r"\s*@?(?P<handle>[A-Za-z0-9_.-]+)\s*</a>"
         r"(?P<suffix>(?:[-A-Za-z0-9_.]+)?(?:\?[^\s)<]*)?)\s*\\?\)",
         re.IGNORECASE,
