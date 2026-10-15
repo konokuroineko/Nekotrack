@@ -89,7 +89,7 @@ class EntityProfileApiTests(unittest.TestCase):
                 result = api.get_entity_profile(entity_type, entity_id)
                 query = request.call_args.args[0]
                 self.assertIn("description", query)
-                self.assertNotIn("description(asHtml: true)", query)
+                self.assertIn("descriptionHtml: description(asHtml: true)", query)
                 self.assertEqual(
                     result["description"],
                     "\n".join(
