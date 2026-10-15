@@ -511,27 +511,19 @@ class MainWindow(QMainWindow):
         side.setSpacing(5)
 
         brand = QHBoxLayout()
-        brand.setSpacing(6)
-        mark = QLabel()
-        mark.setObjectName("brandMark")
-        mark.setFixedSize(42, 42)
-        mark.setPixmap(logo_pixmap(96))
-        mark.setScaledContents(True)
-        mark.setStyleSheet("background:transparent;border:none;padding:0;")
-        self.brand_mark = mark
+        brand.setContentsMargins(0, 0, 0, 0)
+        brand.setSpacing(0)
         word = QLabel()
         word.setObjectName("brandWord")
         word.setAccessibleName("NekoTrack")
-        word.setFixedSize(156, 30)
+        word.setFixedSize(202, 52)
         word.setScaledContents(True)
         word.setStyleSheet("background:transparent;border:none;padding:0;")
         self.brand_word = word
         self._update_brand_word()
-        brand.addWidget(mark)
         brand.addWidget(word)
-        brand.addStretch()
         side.addLayout(brand)
-        side.addSpacing(32)
+        side.addSpacing(28)
 
         self.stack = QStackedWidget()
         self.navigation = NavigationController(self.stack)
@@ -775,7 +767,7 @@ class MainWindow(QMainWindow):
 
     def _update_brand_word(self):
         self.brand_word.setPixmap(
-            wordmark_pixmap(COLORS["accent"], COLORS["primary"], 312, 60)
+            wordmark_pixmap(COLORS["primary"], 202, 52)
         )
         self.brand_word.setAccessibleName("NekoTrack")
         self.brand_word.setStyleSheet("background:transparent;border:none;padding:0;")

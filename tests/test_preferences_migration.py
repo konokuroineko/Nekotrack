@@ -42,6 +42,20 @@ class PreferenceMigrationTests(unittest.TestCase):
             },
         }
 
+    def test_light_theme_is_registered_and_applies_all_palette_values(self):
+        theme = preferences.THEME_PRESETS["Light"]
+        self.assertGreater(int(theme["background"].lstrip("#")[:2], 16), 230)
+        self.assertLess(int(theme["primary"].lstrip("#")[:2], 16), 60)
+
+        with patch.object(preferences, "QSettings", MemorySettings):
+            preferences.apply_theme_preset("Light")
+            settings = preferences.settings()
+
+        self.assertEqual(settings.value("theme_preset"), "Light")
+        for key, value in theme.items():
+            if key != "description":
+                self.assertEqual(settings.value(key), value, key)
+
     def test_old_extras_mode_migrates_to_all_individual_options(self):
         MemorySettings.stores[("NekoTrack", "NekoTrack")]["bundle_mode"] = "extras"
 

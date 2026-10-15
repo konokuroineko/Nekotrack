@@ -36,6 +36,37 @@ THEME_PRESETS = {
         "card_hover": "#20182a",
     },
 
+    "Light": {
+        "description": "Paper-white surfaces, charcoal text, and violet accents.",
+        "nav_selected_text": "#5c3b83",
+        "nav_selected_frame": "#8a68b2",
+        "accent_text": "#ffffff",
+        "font_size": 13,
+        "card_size": 210,
+        "card_gap": 24,
+        "corner_radius": 14,
+        "accent": "#7350a5",
+        "accent_hover": "#8866b9",
+        "frame_color": "#b7a6cd",
+        "background": "#f6f4f8",
+        "background_alt": "#eeebf2",
+        "sidebar": "#ffffff",
+        "surface": "#ffffff",
+        "surface_alt": "#f3f0f7",
+        "surface_hover": "#ebe6f2",
+        "border": "#ded8e7",
+        "border_hover": "#c6bad7",
+        "primary": "#28232f",
+        "secondary": "#5e5768",
+        "muted": "#81778c",
+        "accent_soft": "#e9e0f5",
+        "success": "#267749",
+        "danger": "#bf3947",
+        "panel": "#ffffff",
+        "panel_soft": "#f8f6fb",
+        "card": "#ffffff",
+        "card_hover": "#f5f0fb",
+    },
     "Sakura": {
         "description": "Soft blossom pink over a deep plum-brown base.",
         "nav_selected_text": "#ffabc0",
@@ -216,7 +247,7 @@ _LEGACY_APPLICATION = "AniTrack"
 
 _MIGRATION_KEY = "_legacy_anitrack_preferences_migrated"
 
-_THEME_PALETTE_VERSION = 7
+_THEME_PALETTE_VERSION = 8
 
 
 def settings():
