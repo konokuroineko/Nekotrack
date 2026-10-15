@@ -568,7 +568,7 @@ def get_entity_profile(entity_type, entity_id):
                 id
                 name { full native alternative }
                 image { large }
-                description(asHtml: true)
+                description
                 gender
                 dateOfBirth { year month day }
                 age
@@ -600,7 +600,7 @@ def get_entity_profile(entity_type, entity_id):
                 name { full native alternative }
                 languageV2
                 image { large }
-                description(asHtml: true)
+                description
                 primaryOccupations
                 gender
                 age
@@ -654,10 +654,11 @@ def get_entity_profile(entity_type, entity_id):
         raise RuntimeError(f"AniList returned no {kind.lower()} profile for ID {numeric_id}.")
     entity = dict(entity)
     if isinstance(entity.get("description"), str):
-        # Normalize before profile data is cached or handed to the UI. AniList's
-        # HTML-mode description can still contain malformed Markdown link text.
+        # Keep AniList's original Markdown until the shared normalizer repairs
+        # malformed nested links. Pre-rendering with asHtml=True can change the
+        # nested link structure before we can reliably repair it.
         entity["description"] = _normalize_anilist_profile_description(
-            entity["description"], html_mode=True
+            entity["description"]
         )
     return entity
 
