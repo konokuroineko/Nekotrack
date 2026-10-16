@@ -201,7 +201,7 @@ class EpisodeArtwork(QLabel):
         super().__init__(parent)
         self.work_id = int(work_id) if work_id is not None else None
         self.episode_number = int(episode_number) if episode_number is not None else None
-        self.setFixedSize(180, 102)
+        self.setFixedSize(132, 74)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
             f"background:{surface_rgba('background_alt')};border-radius:10px;"
@@ -264,7 +264,7 @@ class EpisodeArtwork(QLabel):
 
         rect = result.rect().adjusted(1, 1, -1, -1)
         path = QPainterPath()
-        path.addRoundedRect(rect, 10, 10)
+        path.addRoundedRect(rect, 8, 8)
 
         painter.save()
         painter.setClipPath(path)
@@ -282,12 +282,12 @@ class EpisodeCard(QFrame):
         super().__init__(parent)
         self.episode = episode
         self.setObjectName("episodeCard")
-        self.setMinimumHeight(126)
+        self.setMinimumHeight(90)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 12, 14, 12)
-        layout.setSpacing(14)
+        layout.setContentsMargins(8, 8, 10, 8)
+        layout.setSpacing(10)
 
         artwork = EpisodeArtwork(
             episode["work_id"],
@@ -297,14 +297,15 @@ class EpisodeCard(QFrame):
         layout.addWidget(artwork, 0, Qt.AlignTop)
 
         body = QVBoxLayout()
-        body.setSpacing(4)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(2)
 
         top = QHBoxLayout()
-        number = QLabel(f"EPISODE {int(episode['episode_number']):02d}")
+        number = QLabel(f"EP {int(episode['episode_number']):02d}")
         number.setObjectName("detailEpisodeNumber")
         number.setStyleSheet(
-            f"color:{COLORS['accent']};font-size:11px;font-weight:900;"
-            "letter-spacing:0.6px;"
+            f"color:{COLORS['accent']};font-size:10px;font-weight:850;"
+            "letter-spacing:0.4px;"
         )
         top.addWidget(number)
 
@@ -318,24 +319,26 @@ class EpisodeCard(QFrame):
 
         title = QLabel(episode["title"] or f"Episode {episode['episode_number']}")
         title.setObjectName("detailEpisodeTitle")
-        title.setWordWrap(True)
+        title.setWordWrap(False)
+        title.setMinimumWidth(0)
+        title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         title.setStyleSheet(
-            f"color:{COLORS['primary']};font-size:15px;font-weight:800;"
+            f"color:{COLORS['primary']};font-size:14px;font-weight:750;"
         )
         body.addWidget(title)
 
         description_text = str(episode["description"] or "").strip()
-        description = QLabel(
-            description_text if description_text else "Synopsis unavailable."
-        )
+        description = QLabel(description_text)
         description.setObjectName("detailEpisodeDescription")
         description.setWordWrap(True)
         description.setTextFormat(Qt.PlainText)
-        description.setMaximumHeight(42)
+        description.setMaximumHeight(30)
         description.setStyleSheet(
-            f"color:{COLORS['secondary']};font-size:12px;"
+            f"color:{COLORS['secondary']};font-size:11px;"
         )
-        body.addWidget(description, 1)
+        description.setVisible(bool(description_text))
+        if description_text:
+            body.addWidget(description)
 
         layout.addLayout(body, 1)
 
@@ -350,10 +353,10 @@ class EpisodeCard(QFrame):
 
     def refresh_theme(self):
         styles = {
-            "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:11px;font-weight:900;letter-spacing:0.6px;",
-            "detailEpisodeDate": f"color:{COLORS['muted']};font-size:11px;",
-            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:15px;font-weight:800;",
-            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:12px;",
+            "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:10px;font-weight:850;letter-spacing:0.4px;",
+            "detailEpisodeDate": f"color:{COLORS['muted']};font-size:10px;",
+            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:14px;font-weight:750;",
+            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:11px;",
         }
         for label in self.findChildren(QLabel):
             stylesheet = styles.get(label.objectName())
@@ -1080,13 +1083,15 @@ class WorkDetailPage(QWidget):
             QFrame#hero {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 22px; }}
             QFrame#section {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 18px; }}
             QFrame#episodeCard {{
-                background: {surface_rgba('surface_alt')};
-                border: 1px solid {COLORS['border']};
-                border-radius: 14px;
+                background: transparent;
+                border: none;
+                border-bottom: 1px solid {COLORS['border']};
+                border-radius: 0px;
             }}
             QFrame#episodeCard:hover {{
-                background: {surface_rgba('surface_hover')};
-                border-color: {COLORS['border_hover']};
+                background: {surface_rgba('surface_alt')};
+                border-bottom-color: {COLORS['border_hover']};
+                border-radius: 8px;
             }}
             QFrame#detailSkeletonSection {{
                 background:{surface_rgba('surface')};
@@ -2699,8 +2704,8 @@ class WorkDetailPage(QWidget):
         frame = QFrame()
         frame.setObjectName("section")
         lay = QVBoxLayout(frame)
-        lay.setContentsMargins(20, 18, 20, 20)
-        lay.setSpacing(10)
+        lay.setContentsMargins(18, 16, 18, 16)
+        lay.setSpacing(8)
 
         header = QHBoxLayout()
 
@@ -2718,7 +2723,7 @@ class WorkDetailPage(QWidget):
             title = QLabel("Episodes")
 
         title.setStyleSheet(
-            f"font-size:17px;font-weight:800;color:{COLORS['primary']};"
+            f"font-size:16px;font-weight:800;color:{COLORS['primary']};"
         )
         header.addWidget(title)
 
@@ -2733,9 +2738,9 @@ class WorkDetailPage(QWidget):
                 color:{COLORS['secondary']};
                 background:{surface_rgba('surface_alt')};
                 border:1px solid {COLORS['border']};
-                border-radius:8px;
-                padding:4px 8px;
-                font-size:10px;
+                border-radius:6px;
+                padding:3px 7px;
+                font-size:9px;
                 font-weight:800;
             }}
             """
@@ -2765,8 +2770,8 @@ class WorkDetailPage(QWidget):
                     background:{surface_rgba('surface_alt')};
                     color:{COLORS['primary']};
                     border:1px solid {COLORS['border']};
-                    border-radius:9px;
-                    padding:7px 12px;
+                    border-radius:7px;
+                    padding:5px 9px;
                     font-weight:800;
                 }}
                 QToolButton:hover {{

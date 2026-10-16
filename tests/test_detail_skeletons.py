@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QVBoxLayout, QWidget
 
-from ui.pages.work_detail_page import WorkDetailPage
+from ui.pages.work_detail_page import EpisodeArtwork, EpisodeCard, WorkDetailPage
 
 
 class DetailSkeletonTests(unittest.TestCase):
@@ -156,6 +156,29 @@ class DetailSkeletonTests(unittest.TestCase):
         ))
 
         page.deleteLater()
+        self.app.processEvents()
+
+    def test_episode_rows_are_compact_and_hide_empty_synopsis(self):
+        episode = {
+            "work_id": 12345,
+            "episode_number": 1,
+            "thumbnail_url": None,
+            "air_date": None,
+            "title": "Episode title",
+            "description": "",
+            "watched": 0,
+        }
+        card = EpisodeCard(episode)
+        artwork = card.findChild(EpisodeArtwork)
+        description = card.findChild(QLabel, "detailEpisodeDescription")
+
+        self.assertLess(card.minimumHeight(), 100)
+        self.assertEqual(artwork.size().width(), 132)
+        self.assertEqual(artwork.size().height(), 74)
+        self.assertIsNotNone(description)
+        self.assertTrue(description.isHidden())
+
+        card.deleteLater()
         self.app.processEvents()
 
     def test_hero_cover_distinguishes_loading_from_unavailable(self):
