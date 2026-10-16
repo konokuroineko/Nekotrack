@@ -15,7 +15,6 @@ from database import (
     get_entity_favorites,
     get_recommendation_credit_profile,
     get_recommendation_history,
-    get_work_favorites,
     record_recommendation_impressions,
     set_recommendation_feedback,
 )
@@ -95,12 +94,9 @@ class RecommendationWorker(QObject):
         except Exception as error:
             self.history = {}
             log_exception("recommendations.history_read_failed", error)
-        try:
-            value = get_work_favorites()
-            self.favorite_works = [dict(row) for row in (value or []) if isinstance(row, dict)]
-        except Exception as error:
-            self.favorite_works = []
-            log_exception("recommendations.favorites_read_failed", error)
+        # Work/bundle favorites are not a user preference signal. The Favorites
+        # destination is reserved for character, voice-actor, and staff profiles.
+        self.favorite_works = []
         try:
             value = get_entity_favorites()
             self.favorite_entities = [dict(row) for row in (value or []) if isinstance(row, dict)]
@@ -125,19 +121,13 @@ class RecommendationWorker(QObject):
                 seeds_by_id.setdefault(work_id, dict(row))
 
         favorite_ids = set()
-        for work in self.favorite_works:
-            work_id = self._work_id(work)
-            if work_id is None:
-                continue
-            favorite_ids.add(work_id)
-            known_ids.add(work_id)
-            if self._media_type(work) in {"ANIME", "MANGA"}:
-                seeds_by_id.setdefault(work_id, dict(work))
-
-        # A positively rated recommendation can seed future discovery even before
-        # the user chooses to add that work to their Library.
+        # "More like this" choices can become recommendation sources even when
+        # the user does not add those titles to the Library.
         for work_id, state in self.history.items():
-            if not isinstance(state, dict) or state.get("feedback") != "like":
+            if (
+                not isinstance(state, dict)
+                or state.get("feedback") not in {"like", "more_like_this"}
+            ):
                 continue
             metadata = state.get("metadata")
             if not isinstance(metadata, dict) or self._media_type(metadata) not in {"ANIME", "MANGA"}:
@@ -182,20 +172,10 @@ class RecommendationWorker(QObject):
 
         for row in self.library_rows:
             merge_source_record(dict(row))
-        for row in self.favorite_works:
-            merge_source_record(dict(row))
-        favorite_source_ids = {
-            self._work_id(item) for item in self.favorite_works
-            if self._work_id(item) is not None
-        }
         for raw_id, state in self.history.items():
             if not isinstance(state, dict):
                 continue
-            try:
-                history_work_id = int(raw_id)
-            except (TypeError, ValueError, OverflowError):
-                history_work_id = 0
-            if state.get("feedback") != "like" and history_work_id not in favorite_source_ids:
+            if state.get("feedback") not in {"like", "more_like_this"}:
                 continue
             metadata = state.get("metadata")
             if not isinstance(metadata, dict):
@@ -848,8 +828,8 @@ class RecommendationsPage(QWidget):
         self._update_load_more_ui()
 
     def _record_recommendation_feedback(self, work, feedback):
-        """Persist feedback, immediately rerank the current feed, and refill it if needed."""
-        if feedback not in {"like", "dislike"}:
+        """Save title-specific or similarity feedback and rerank the visible feed."""
+        if feedback not in {"more_like_this", "less_like_this", "never_show"}:
             return
         work_id = RecommendationWorker._work_id(work)
         if work_id is None:
@@ -892,7 +872,7 @@ class RecommendationsPage(QWidget):
             if (candidate_id := RecommendationWorker._work_id(item)) is not None
         }
         self._render_results(preserve_scroll=True)
-        # Disliking the final visible suggestion should not strand the user
+        # Hiding the final visible suggestion should not strand the user
         # on an empty page while more AniList catalog pages remain.
         if not self._results and self._catalog_has_next and not self._loading_more:
             QTimer.singleShot(0, self.load_more)
@@ -910,7 +890,7 @@ class RecommendationsPage(QWidget):
             return
 
         summary = QLabel(
-            f"{len(self._results)} suggestions · titles already in your Library and explicit dislikes are excluded"
+            f"{len(self._results)} suggestions · titles already in your Library and permanently hidden titles are excluded"
         )
         summary.setObjectName("recommendationsSubtitle")
         self.content_layout.addWidget(summary)
@@ -939,30 +919,9 @@ class RecommendationsPage(QWidget):
                 recommendation_reason=reason,
                 show_recommendation_feedback=True,
             )
-            work_id = RecommendationWorker._work_id(work)
-            history_state = (
-                self._history.get(work_id, {})
-                if work_id is not None and isinstance(self._history, dict)
-                else {}
+            card.recommendation_feedback_requested.connect(
+                self._record_recommendation_feedback
             )
-            if not isinstance(history_state, dict):
-                history_state = {}
-            if card.recommendation_like_button is not None:
-                card.recommendation_like_button.setChecked(
-                    history_state.get("feedback") == "like"
-                )
-                card.recommendation_like_button.clicked.connect(
-                    lambda _checked=False, item=dict(work):
-                        self._record_recommendation_feedback(item, "like")
-                )
-            if card.recommendation_dislike_button is not None:
-                card.recommendation_dislike_button.setChecked(
-                    history_state.get("feedback") == "dislike"
-                )
-                card.recommendation_dislike_button.clicked.connect(
-                    lambda _checked=False, item=dict(work):
-                        self._record_recommendation_feedback(item, "dislike")
-                )
             card.clicked.connect(self.work_selected.emit)
             row = index // columns
             row_start = row * columns

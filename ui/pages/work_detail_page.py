@@ -28,9 +28,9 @@ from diagnostics import log_exception
 from database import (
     add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
-    get_reading_progress, get_staff, is_work_in_library, is_work_favorite,
+    get_reading_progress, get_staff, is_work_in_library,
     get_tmdb_mapping, get_work, get_provider_metadata,
-    save_work_display_override, set_work_favorite, save_anime, save_characters, save_cover_path,
+    save_work_display_override, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
     set_episode_watched, set_reading_progress_count, prune_episode_catalog,
 )
@@ -827,10 +827,16 @@ class WorkDetailPage(QWidget):
 
         for member in members:
             try:
-                work_id = int(member["id"])
-            except (KeyError, TypeError, ValueError):
+                if isinstance(member, dict):
+                    raw_id = member.get("id")
+                else:
+                    raw_id = member["id"]
+                if isinstance(raw_id, bool):
+                    continue
+                work_id = int(raw_id)
+            except (KeyError, TypeError, ValueError, OverflowError):
                 continue
-            if work_id not in ids:
+            if work_id > 0 and work_id not in ids:
                 ids.append(work_id)
 
         if ids:
@@ -838,8 +844,11 @@ class WorkDetailPage(QWidget):
 
         work_id = self._value("id")
         try:
-            return [int(work_id)] if work_id is not None else []
-        except (TypeError, ValueError):
+            if work_id is None or isinstance(work_id, bool):
+                return []
+            work_id = int(work_id)
+            return [work_id] if work_id > 0 else []
+        except (TypeError, ValueError, OverflowError):
             return []
 
     def _prepare_detail_state(self, work):
@@ -1203,17 +1212,6 @@ class WorkDetailPage(QWidget):
             QPushButton#detailBackButton:pressed {{ background:{surface_rgba('accent_soft')}; }}
             QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:2px solid transparent; border-radius:{get('corner_radius') + 2}px; font-size:30px; font-weight:900; padding:0; }}
             QToolButton#detailMenu:hover {{ background:{surface_rgba('surface_hover')}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
-            QPushButton#detailFavoriteButton {{
-                background:{surface_rgba('surface_alt')}; color:{COLORS['secondary']};
-                border:1px solid {COLORS['border']}; border-radius:12px;
-                padding:0; font-size:21px; font-weight:850;
-                min-width:42px; max-width:42px; min-height:42px; max-height:42px;
-            }}
-            QPushButton#detailFavoriteButton:hover,
-            QPushButton#detailFavoriteButton:checked {{
-                background:{surface_rgba('accent_soft')}; color:{COLORS['accent']};
-                border-color:{COLORS['accent']};
-            }}
             QFrame#deleteOverlay {{ background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:18px; }}
             QLabel#deleteTitle {{ color:{COLORS['primary']}; font-size:19px; font-weight:850; }}
             QLabel#deleteMessage {{ color:{COLORS['secondary']}; font-size:12px; }}
@@ -1274,6 +1272,52 @@ class WorkDetailPage(QWidget):
             content.update()
 
     def _populate_episode_section(self, token, content, host, attempt=0):
+        """Contain failures in deferred Qt callbacks so one season cannot crash the app."""
+        try:
+            return self._populate_episode_section_impl(
+                token, content, host, attempt=attempt
+            )
+        except Exception as error:
+            detail_ids = []
+            try:
+                detail_ids = self._detail_work_ids()
+            except Exception:
+                pass
+            log_exception(
+                "episodes.deferred_section_failed",
+                error,
+                work_id=getattr(self, "_selected_episode_work_id", None),
+                bundle_work_ids=detail_ids,
+            )
+            try:
+                if token != self._detail_build_token:
+                    return
+                if self.scroll_area.widget() is not content:
+                    return
+                root = content.layout()
+                if root is None or root.indexOf(host) < 0:
+                    return
+                error_frame = QFrame()
+                error_frame.setObjectName("episodesSection")
+                error_frame.setProperty("_episodes_section", True)
+                error_layout = QVBoxLayout(error_frame)
+                error_layout.setContentsMargins(12, 8, 12, 8)
+                message = QLabel(
+                    "Episode data could not be loaded. The rest of this title is still available."
+                )
+                message.setObjectName("detailEpisodeMessage")
+                message.setWordWrap(True)
+                message.setStyleSheet(muted_label_stylesheet())
+                error_layout.addWidget(message)
+                root.replaceWidget(host, error_frame)
+                host.deleteLater()
+            except Exception as recovery_error:
+                log_exception(
+                    "episodes.deferred_section_recovery_failed",
+                    recovery_error,
+                )
+
+    def _populate_episode_section_impl(self, token, content, host, attempt=0):
         if token != self._detail_build_token:
             return
         if self.scroll_area.widget() is not content:
@@ -1365,7 +1409,16 @@ class WorkDetailPage(QWidget):
         batch_size = 6
         end = min(offset + batch_size, len(episodes))
         for ep in episodes[offset:end]:
-            card = EpisodeCard(ep)
+            try:
+                card = EpisodeCard(ep)
+            except Exception as error:
+                log_exception(
+                    "episodes.deferred_card_render_failed",
+                    error,
+                    work_id=ep.get("work_id") if isinstance(ep, dict) else None,
+                    episode_number=ep.get("episode_number") if isinstance(ep, dict) else None,
+                )
+                continue
             card.watched_changed.connect(self._episode_toggled)
             layout.addWidget(card)
 
@@ -1781,52 +1834,30 @@ class WorkDetailPage(QWidget):
         title.setStyleSheet(f"font-size:34px;font-weight:850;color:{COLORS['primary']};letter-spacing:-1px;")
         title_row = QHBoxLayout()
         title_row.setObjectName("detailHeroTitleRow")
-        # Qt otherwise mirrors horizontal layout order when the application is
-        # running in RTL mode, which can move the three-dot artwork menu to
-        # the right side of the title. Keep the action pinned to the left.
+        # Keep the title in its natural reading order even in RTL mode, and pin
+        # its actions at the far right rather than the leading edge.
         title_row.setDirection(QBoxLayout.Direction.LeftToRight)
         title_row.setSpacing(10)
+        title_row.addWidget(title, 1)
 
         try:
-            favorite_work_id = int(self._value("id"))
-            if favorite_work_id <= 0:
-                favorite_work_id = None
+            action_work_id = int(self._value("id"))
+            if action_work_id <= 0:
+                action_work_id = None
         except (TypeError, ValueError, OverflowError):
-            favorite_work_id = None
+            action_work_id = None
 
-        # Keep actions grouped on the title's leading edge, even when the work
-        # has not been added to the Library yet.
-        if favorite_work_id is not None:
+        if action_work_id is not None:
             menu_button = QToolButton()
             menu_button.setObjectName("detailMenu")
             menu_button.setText("⋮")
+            menu_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
             menu_button.setFixedSize(42, 42)
             menu_button.setCursor(Qt.PointingHandCursor)
             menu_button.setAccessibleName("More artwork actions")
             menu_button.setToolTip("More actions, customization, and bundling")
             menu_button.clicked.connect(self._show_detail_menu)
             title_row.addWidget(menu_button, 0, Qt.AlignTop)
-
-        title_row.addWidget(title, 1)
-
-        if favorite_work_id is not None:
-            favorite_enabled = is_work_favorite(favorite_work_id)
-            favorite_button = QPushButton("♥" if favorite_enabled else "♡")
-            favorite_button.setObjectName("detailFavoriteButton")
-            favorite_button.setCheckable(True)
-            favorite_button.setChecked(favorite_enabled)
-            favorite_button.setAccessibleName(
-                "Remove from favorites" if favorite_enabled else "Add to favorites"
-            )
-            favorite_button.setToolTip(
-                "Remove from favorites" if favorite_enabled
-                else "Add to favorites (independent of Library membership)"
-            )
-            favorite_button.clicked.connect(
-                lambda checked, work_id=favorite_work_id, button=favorite_button:
-                    self._toggle_favorite(work_id, checked, button)
-            )
-            title_row.addWidget(favorite_button, 0, Qt.AlignTop)
         info.addLayout(title_row)
         alt = self._value("native") or self._value("title_native") or ""
         if alt:
@@ -2739,6 +2770,96 @@ class WorkDetailPage(QWidget):
             return
 
     def _episodes_section(self, defer_cards=False):
+        """Build an episode section without allowing bad catalog rows to crash a title page."""
+        try:
+            return self._build_episodes_section(defer_cards=defer_cards)
+        except Exception as error:
+            work_id = self._selected_episode_work_id or self._value("id")
+            try:
+                bundle_ids = self._detail_work_ids()
+            except Exception:
+                bundle_ids = []
+            log_exception(
+                "episodes.detail_section_failed",
+                error,
+                work_id=work_id,
+                bundle_work_ids=bundle_ids,
+            )
+            frame = QFrame()
+            frame.setObjectName("episodesSection")
+            frame.setProperty("_episodes_section", True)
+            layout = QVBoxLayout(frame)
+            layout.setContentsMargins(12, 8, 12, 8)
+            message = QLabel(
+                "Episode data could not be displayed. The rest of this title is still available."
+            )
+            message.setObjectName("detailEpisodeMessage")
+            message.setWordWrap(True)
+            message.setStyleSheet(muted_label_stylesheet())
+            layout.addWidget(message)
+            return frame
+
+    @staticmethod
+    def _normalize_episode_rows(work_id, rows):
+        """Filter malformed SQLite/provider episode rows into safe display records."""
+        try:
+            safe_work_id = int(work_id)
+            if safe_work_id <= 0:
+                safe_work_id = None
+        except (TypeError, ValueError, OverflowError):
+            safe_work_id = None
+
+        normalized = []
+        seen_numbers = set()
+        for raw in rows or []:
+            try:
+                row = dict(raw) if not isinstance(raw, dict) else dict(raw)
+            except (TypeError, ValueError, OverflowError):
+                continue
+
+            raw_number = row.get("episode_number", row.get("episodeNumber"))
+            if isinstance(raw_number, bool):
+                continue
+            try:
+                number = int(raw_number)
+                if isinstance(raw_number, float) and not raw_number.is_integer():
+                    continue
+                if number < 1 or number > 1_000_000 or number in seen_numbers:
+                    continue
+            except (TypeError, ValueError, OverflowError):
+                continue
+            seen_numbers.add(number)
+
+            raw_watched = row.get("watched", 0)
+            if isinstance(raw_watched, str):
+                watched = raw_watched.strip().casefold() in {"1", "true", "yes", "watched"}
+            else:
+                watched = bool(raw_watched)
+
+            title = row.get("title")
+            description = row.get("description")
+            air_date = row.get("air_date") or row.get("airdate")
+            thumbnail = row.get("thumbnail_url") or row.get("thumbnail")
+            row_work_id = row.get("work_id", safe_work_id)
+            try:
+                row_work_id = int(row_work_id)
+                if row_work_id <= 0:
+                    row_work_id = safe_work_id
+            except (TypeError, ValueError, OverflowError):
+                row_work_id = safe_work_id
+
+            normalized.append({
+                "work_id": row_work_id,
+                "episode_number": number,
+                "title": str(title or f"Episode {number}"),
+                "description": str(description or ""),
+                "air_date": str(air_date or ""),
+                "thumbnail_url": str(thumbnail) if thumbnail else None,
+                "watched": int(watched),
+            })
+        return normalized
+
+    def _build_episodes_section(self, defer_cards=False):
         if self._is_reading_media():
             return self._reading_section()
 
@@ -2752,7 +2873,8 @@ class WorkDetailPage(QWidget):
             )
 
         selected_id = self._selected_episode_work_id
-        episodes = get_episodes(selected_id) if selected_id is not None else []
+        raw_episodes = get_episodes(selected_id) if selected_id is not None else []
+        episodes = self._normalize_episode_rows(selected_id, raw_episodes)
         if selected_id is not None and episodes:
             self._start_episode_image_cache(
                 selected_id,
@@ -2892,29 +3014,37 @@ class WorkDetailPage(QWidget):
             and selected_id not in self._episode_sync_completed
             and selected_id not in self._episode_sync_errors
         ):
-            (
-                title_variants,
-                start_date,
-                end_date,
-                expected_episodes,
-                tmdb_id,
-                tmdb_season_number,
-                media_format,
-            ) = self._episode_tmdb_context(
-                selected_id,
-                members,
-                selected_work,
-            )
-            self._start_episode_sync(
-                selected_id,
-                title_variants,
-                start_date,
-                end_date,
-                expected_episodes,
-                tmdb_id,
-                tmdb_season_number,
-                media_format,
-            )
+            try:
+                (
+                    title_variants,
+                    start_date,
+                    end_date,
+                    expected_episodes,
+                    tmdb_id,
+                    tmdb_season_number,
+                    media_format,
+                ) = self._episode_tmdb_context(
+                    selected_id,
+                    members,
+                    selected_work,
+                )
+                self._start_episode_sync(
+                    selected_id,
+                    title_variants,
+                    start_date,
+                    end_date,
+                    expected_episodes,
+                    tmdb_id,
+                    tmdb_season_number,
+                    media_format,
+                )
+            except Exception as error:
+                self._episode_sync_errors[int(selected_id)] = str(error)
+                log_exception(
+                    "episodes.tmdb_context_failed",
+                    error,
+                    work_id=selected_id,
+                )
 
         if not episodes:
             sync_error = self._episode_sync_errors.get(int(selected_id)) if selected_id is not None else None
@@ -2947,38 +3077,92 @@ class WorkDetailPage(QWidget):
             frame._pending_episode_cards = [dict(ep) for ep in episodes]
         else:
             for ep in episodes:
-                card = EpisodeCard(ep)
+                try:
+                    card = EpisodeCard(ep)
+                except Exception as error:
+                    log_exception(
+                        "episodes.card_render_failed",
+                        error,
+                        work_id=ep.get("work_id"),
+                        episode_number=ep.get("episode_number"),
+                    )
+                    continue
                 card.watched_changed.connect(self._episode_toggled)
                 lay.addWidget(card)
 
         return frame
 
     def _episode_members(self):
-        members = list(self._value("_series_members") or [])
-        if not members:
+        """Return only valid bundle members, with defensive ordering for legacy rows."""
+        raw_members = self._value("_series_members") or []
+        try:
+            members = list(raw_members)
+        except (TypeError, ValueError):
+            members = []
+
+        def value(member, key, default=None):
+            if hasattr(member, "get"):
+                return member.get(key, default)
+            try:
+                return member[key]
+            except (KeyError, IndexError, TypeError):
+                return default
+
+        valid_members = []
+        seen_ids = set()
+        for member in members:
+            if not isinstance(member, dict) and not hasattr(member, "keys"):
+                continue
+            raw_id = value(member, "id")
+            if isinstance(raw_id, bool):
+                continue
+            try:
+                member_id = int(raw_id)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if member_id <= 0 or member_id in seen_ids:
+                continue
+            seen_ids.add(member_id)
+            valid_members.append(member)
+
+        if not valid_members:
             current = self.work
-            return [current] if current is not None else []
+            if current is not None:
+                try:
+                    current_id = int(value(current, "id"))
+                except (TypeError, ValueError, OverflowError):
+                    return []
+                return [current] if current_id > 0 else []
+            return []
 
         def sort_key(member):
-            if hasattr(member, "get"):
-                start_date = member.get("startDate") or {}
-                year = start_date.get("year") or member.get("start_year")
-                month = start_date.get("month") or member.get("start_month") or 0
-                day = start_date.get("day") or member.get("start_day") or 0
-            else:
-                year = member["start_year"]
-                month = member["start_month"] if "start_month" in member.keys() else 0
-                day = member["start_day"] if "start_day" in member.keys() else 0
-
+            start_date = value(member, "startDate") or {}
+            if not isinstance(start_date, dict):
+                start_date = {}
+            year = value(member, "start_year") or start_date.get("year")
+            month = value(member, "start_month") or start_date.get("month") or 0
+            day = value(member, "start_day") or start_date.get("day") or 0
+            try:
+                numeric_year = int(year) if year not in (None, "") else 9999
+            except (TypeError, ValueError, OverflowError):
+                numeric_year = 9999
+            try:
+                numeric_month = int(month or 0)
+            except (TypeError, ValueError, OverflowError):
+                numeric_month = 0
+            try:
+                numeric_day = int(day or 0)
+            except (TypeError, ValueError, OverflowError):
+                numeric_day = 0
             return (
-                year is None,
-                year or 9999,
-                month or 0,
-                day or 0,
-                int(member["id"]),
+                numeric_year == 9999,
+                numeric_year,
+                numeric_month,
+                numeric_day,
+                int(value(member, "id")),
             )
 
-        return sorted(members, key=sort_key)
+        return sorted(valid_members, key=sort_key)
 
     def _episode_season_changed(self, work_id):
         self._selected_episode_work_id = int(work_id)
@@ -3697,31 +3881,6 @@ class WorkDetailPage(QWidget):
         if hasattr(self.work, "get"): return self.work.get(key)
         try: return self.work[key]
         except (KeyError, IndexError, TypeError): return None
-
-    def _toggle_favorite(self, work_id, favorite, button):
-        try:
-            try:
-                snapshot = dict(self.work)
-            except (TypeError, ValueError):
-                snapshot = {}
-            set_work_favorite(work_id, bool(favorite), snapshot)
-        except Exception as error:
-            log_exception("favorites.toggle_failed", error, work_id=work_id)
-            QMessageBox.warning(
-                self,
-                "Favorite could not be saved",
-                "NekoTrack could not update this title's favorite state.",
-            )
-            button.setChecked(not bool(favorite))
-            return
-        button.setText("♥" if favorite else "♡")
-        button.setAccessibleName(
-            "Remove from favorites" if favorite else "Add to favorites"
-        )
-        button.setToolTip(
-            "Remove from favorites" if favorite
-            else "Add to favorites (independent of Library membership)"
-        )
 
     def _refresh_identity_after_edit(self, work_id):
         current_work = self.work

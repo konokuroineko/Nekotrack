@@ -330,12 +330,46 @@ def initialize_database():
         CREATE TABLE IF NOT EXISTS recommendation_history (
             work_id INTEGER PRIMARY KEY,
             impressions INTEGER NOT NULL DEFAULT 0 CHECK (impressions >= 0),
-            feedback TEXT CHECK (feedback IN ('like', 'dislike') OR feedback IS NULL),
+            feedback TEXT CHECK (feedback IN (
+                'like', 'dislike', 'more_like_this', 'less_like_this', 'never_show'
+            ) OR feedback IS NULL),
             metadata_json TEXT NOT NULL DEFAULT '{}',
             first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             last_seen_at DATETIME
         )
     """)
+    history_schema_row = cursor.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'recommendation_history'"
+    ).fetchone()
+    history_schema = str(history_schema_row["sql"] or "").casefold() if history_schema_row else ""
+    if any(action not in history_schema for action in (
+        "more_like_this", "less_like_this", "never_show",
+    )):
+        # SQLite cannot alter a CHECK constraint in place. Rebuild only this
+        # small history table while preserving every previous impression/choice.
+        cursor.execute(
+            "ALTER TABLE recommendation_history RENAME TO recommendation_history_legacy"
+        )
+        cursor.execute("""
+            CREATE TABLE recommendation_history (
+                work_id INTEGER PRIMARY KEY,
+                impressions INTEGER NOT NULL DEFAULT 0 CHECK (impressions >= 0),
+                feedback TEXT CHECK (feedback IN (
+                    'like', 'dislike', 'more_like_this', 'less_like_this', 'never_show'
+                ) OR feedback IS NULL),
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_seen_at DATETIME
+            )
+        """)
+        cursor.execute("""
+            INSERT INTO recommendation_history
+                (work_id, impressions, feedback, metadata_json, first_seen_at, last_seen_at)
+            SELECT work_id, impressions, feedback, metadata_json, first_seen_at, last_seen_at
+            FROM recommendation_history_legacy
+        """)
+        cursor.execute("DROP TABLE recommendation_history_legacy")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS entity_favorites (
             entity_type TEXT NOT NULL CHECK (entity_type IN ('character', 'staff', 'voice_actor')),
@@ -3718,9 +3752,22 @@ def _recommendation_metadata_json(metadata):
     allowed = (
         "id", "title", "type", "format", "genres", "tags", "averageScore",
         "popularity", "coverImage", "cover_url", "startDate", "start_year",
-        "_recommendation_source_titles", "_recommendation_reason",
+        "_recommendation_source_titles", "_recommendation_source_ids",
+        "_recommendation_reason",
     )
     snapshot = {key: metadata[key] for key in allowed if key in metadata}
+
+    raw_source_ids = metadata.get("_recommendation_source_ids")
+    if isinstance(raw_source_ids, (list, tuple, set)):
+        source_ids = []
+        for value in list(raw_source_ids)[:50]:
+            try:
+                source_id = _validated_work_id(value)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if source_id > 0 and source_id not in source_ids:
+                source_ids.append(source_id)
+        snapshot["_recommendation_source_ids"] = source_ids
 
     # Persist only the relationship fields needed for local learning. Keep
     # records deliberately small and numeric; provider biographies, images and
@@ -3835,12 +3882,14 @@ def record_recommendation_impressions(items):
 
 
 def set_recommendation_feedback(work_id, feedback, metadata=None):
-    """Persist an explicit like/dislike (or clear it with None) for a title."""
+    """Persist recommendation preference or a permanent exact-title exclusion."""
     try:
         safe_work_id = _validated_work_id(work_id)
     except (TypeError, ValueError, OverflowError):
         return False
-    if safe_work_id <= 0 or feedback not in (None, "like", "dislike"):
+    if safe_work_id <= 0 or feedback not in (
+        None, "like", "dislike", "more_like_this", "less_like_this", "never_show",
+    ):
         return False
     metadata_json = _recommendation_metadata_json(metadata)
     connection = get_connection()

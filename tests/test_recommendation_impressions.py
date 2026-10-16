@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from PySide6.QtWidgets import (
-    QApplication, QGridLayout, QLabel, QPushButton, QSizePolicy, QWidget,
+    QApplication, QGridLayout, QLabel, QPushButton, QToolButton, QSizePolicy, QWidget,
 )
 
 from ui.preferences import get
@@ -92,10 +92,20 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.assertNotIn("♥", buttons)
         self.assertNotIn("♡", buttons)
         self.assertNotIn("×", buttons)
-        self.assertIn("Like", buttons)
-        self.assertIn("Not for me", buttons)
-        self.assertIsNotNone(card.findChild(QPushButton, "recommendationLike"))
-        self.assertIsNotNone(card.findChild(QPushButton, "recommendationDislike"))
+        self.assertNotIn("Like", buttons)
+        self.assertNotIn("Not for me", buttons)
+        self.assertIsNone(card.findChild(QPushButton, "recommendationLike"))
+        self.assertIsNone(card.findChild(QPushButton, "recommendationDislike"))
+        menu_button = card.findChild(QToolButton, "recommendationMenuButton")
+        self.assertIsNotNone(menu_button)
+        self.assertEqual(
+            [action.text() for action in menu_button.menu().actions()],
+            [
+                "I want more like this",
+                "I don't want anything from this",
+                "I don't want anything like this",
+            ],
+        )
         self.assertNotIn("recommendationsTile", card.objectName())
 
         grid = self.page.findChild(QGridLayout)
@@ -113,11 +123,11 @@ class RecommendationImpressionTests(unittest.TestCase):
 
 
 
-    def test_dislike_feedback_is_saved_and_removes_the_title_from_the_feed(self):
-        disliked = {
+    def test_never_show_feedback_is_saved_and_permanently_removes_exact_title(self):
+        hidden = {
             "id": 9877,
             "type": "ANIME",
-            "title": {"english": "Not for me"},
+            "title": {"english": "Never show this title"},
             "format": "TV",
             "_recommendation_reason": "Popular anime discovery",
         }
@@ -128,7 +138,7 @@ class RecommendationImpressionTests(unittest.TestCase):
             "format": "TV",
             "_recommendation_reason": "Popular anime discovery",
         }
-        self.page._results = [disliked, other]
+        self.page._results = [hidden, other]
         self.page._history = {}
         self.page._catalog_has_next = False
         self.page._favorite_works = []
@@ -150,19 +160,29 @@ class RecommendationImpressionTests(unittest.TestCase):
                 return_value={
                     9877: {
                         "work_id": 9877,
-                        "feedback": "dislike",
-                        "metadata": disliked,
+                        "feedback": "never_show",
+                        "metadata": hidden,
                         "impressions": 0,
                     }
                 },
             ),
         ):
-            button = self.page.findChild(QPushButton, "recommendationDislike")
+            button = self.page.findChild(QToolButton, "recommendationMenuButton")
             self.assertIsNotNone(button)
-            button.click()
+            self.assertIsNone(self.page.findChild(QPushButton, "recommendationLike"))
+            self.assertIsNone(self.page.findChild(QPushButton, "recommendationDislike"))
+            menu = button.menu()
+            labels = [action.text() for action in menu.actions()]
+            self.assertEqual(labels, [
+                "I want more like this",
+                "I don't want anything from this",
+                "I don't want anything like this",
+            ])
+            next(action for action in menu.actions()
+                 if action.text() == "I don't want anything from this").trigger()
 
         save_feedback.assert_called_once()
-        self.assertEqual(save_feedback.call_args.args[0:2], (9877, "dislike"))
+        self.assertEqual(save_feedback.call_args.args[0:2], (9877, "never_show"))
         remaining_ids = [item["id"] for item in self.page._results]
         self.assertNotIn(9877, remaining_ids)
         self.assertIn(9878, remaining_ids)

@@ -86,7 +86,6 @@ class RecommendationWorkerTests(unittest.TestCase):
         with (
             patch("ui.pages.recommendations_page.get_media_recommendations", return_value=[]),
             patch("ui.pages.recommendations_page.get_anime_discovery_page", return_value=catalog),
-            patch("ui.pages.recommendations_page.get_work_favorites", return_value=[]),
             patch("ui.pages.recommendations_page.get_entity_favorites", return_value=[]),
             patch("ui.pages.recommendations_page.get_recommendation_credit_profile", return_value={}),
             patch("ui.pages.recommendations_page.get_recommendation_history", return_value={}),
@@ -124,7 +123,6 @@ class RecommendationWorkerTests(unittest.TestCase):
                     "media": [],
                 },
             ),
-            patch("ui.pages.recommendations_page.get_work_favorites", return_value=[]),
             patch("ui.pages.recommendations_page.get_entity_favorites", return_value=[]),
             patch("ui.pages.recommendations_page.get_recommendation_credit_profile", return_value={}),
             patch("ui.pages.recommendations_page.get_recommendation_history", return_value={}),
@@ -199,7 +197,6 @@ class RecommendationWorkerTests(unittest.TestCase):
                     "media": [],
                 },
             ),
-            patch("ui.pages.recommendations_page.get_work_favorites", return_value=[]),
             patch("ui.pages.recommendations_page.get_entity_favorites", return_value=[]),
             patch("ui.pages.recommendations_page.get_recommendation_credit_profile", return_value={}),
             patch("ui.pages.recommendations_page.get_recommendation_history", return_value={}),

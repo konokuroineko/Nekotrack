@@ -303,7 +303,7 @@ class DetailSkeletonTests(unittest.TestCase):
         card.deleteLater()
         self.app.processEvents()
 
-    def test_artwork_menu_stays_left_in_rtl_and_customize_is_inside_it(self):
+    def test_artwork_menu_is_on_far_right_in_rtl_and_customize_is_inside_it(self):
         page = WorkDetailPage()
         values = {
             "id": 12345,
@@ -333,7 +333,6 @@ class DetailSkeletonTests(unittest.TestCase):
         try:
             with (
                 patch("ui.pages.work_detail_page.get_display_override", return_value={}),
-                patch("ui.pages.work_detail_page.is_work_favorite", return_value=False),
                 patch.object(page, "_load_remote_cover"),
                 patch("ui.pages.work_detail_page.get_library_series", return_value=[]),
             ):
@@ -341,6 +340,8 @@ class DetailSkeletonTests(unittest.TestCase):
                 row = hero.findChild(QHBoxLayout, "detailHeroTitleRow")
                 self.assertIsNotNone(row)
                 self.assertEqual(row.direction(), QBoxLayout.Direction.LeftToRight)
+                self.assertEqual(row.itemAt(row.count() - 1).widget().objectName(), "detailMenu")
+                self.assertIsNone(hero.findChild(QPushButton, "detailFavoriteButton"))
 
                 menu_button = hero.findChild(QToolButton, "detailMenu")
                 self.assertIsNotNone(menu_button)
@@ -365,6 +366,102 @@ class DetailSkeletonTests(unittest.TestCase):
             page.close()
             page.deleteLater()
             self.app.processEvents()
+
+
+    def test_bundle_episode_section_skips_bad_members_and_malformed_episode_rows(self):
+        page = WorkDetailPage()
+        page.work = {
+            "id": 12345,
+            "type": "ANIME",
+            "format": "TV",
+            "episodes": 2,
+            "title": {"english": "Bundle Season"},
+            "_series_members": [
+                {"id": "not-a-work-id", "title": {"english": "Broken member"}},
+                {"id": 12345, "title": {"english": "Bundle Season"},
+                 "start_year": 2020, "start_month": 1, "start_day": 1},
+            ],
+        }
+        page._selected_episode_work_id = 12345
+        page._episode_sync_completed.add(12345)
+        rows = [
+            {"work_id": 12345, "episode_number": True, "title": "Boolean"},
+            {"work_id": 12345, "episode_number": 1.5, "title": "Fractional"},
+            {"work_id": 12345, "episode_number": "bad", "title": "Invalid"},
+            {"work_id": 12345, "episode_number": 1, "title": "Valid", "watched": 0},
+            {"work_id": 12345, "episode_number": 1, "title": "Duplicate", "watched": 1},
+        ]
+        with (
+            patch("ui.pages.work_detail_page.get_episodes", return_value=rows),
+            patch("ui.pages.work_detail_page.get_work", return_value={
+                "id": 12345, "title": {"english": "Bundle Season"}, "episodes": 2,
+                "format": "TV", "start_year": 2020, "start_month": 1, "start_day": 1,
+            }),
+            patch.object(page, "_start_episode_image_cache"),
+        ):
+            frame = page._episodes_section()
+
+        cards = frame.findChildren(EpisodeCard)
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(
+            cards[0].findChild(QLabel, "detailEpisodeTitle").text(),
+            "Valid",
+        )
+        frame.deleteLater()
+        page.deleteLater()
+        self.app.processEvents()
+
+    def test_episode_storage_error_does_not_break_bundle_detail_section(self):
+        page = WorkDetailPage()
+        page.work = {
+            "id": 12345,
+            "type": "ANIME",
+            "format": "TV",
+            "_series_members": [{"id": 12345}],
+        }
+        page._selected_episode_work_id = 12345
+
+        with patch(
+            "ui.pages.work_detail_page.get_episodes",
+            side_effect=RuntimeError("simulated corrupt episode catalog"),
+        ):
+            frame = page._episodes_section()
+
+        self.assertTrue(frame.property("_episodes_section"))
+        self.assertTrue(any(
+            "Episode data could not be displayed" in label.text()
+            for label in frame.findChildren(QLabel)
+        ))
+        frame.deleteLater()
+        page.deleteLater()
+        self.app.processEvents()
+
+    def test_deferred_episode_callback_contains_bundle_id_errors(self):
+        page = WorkDetailPage()
+        page.work = {
+            "id": 12345,
+            "type": "ANIME",
+            "format": "TV",
+            "_series_members": [{"id": 12345}],
+        }
+        page._selected_episode_work_id = 12345
+        content = QWidget()
+        root = QVBoxLayout(content)
+        host = QFrame(content)
+        root.addWidget(host)
+        page.scroll_area.setWidget(content)
+        token = page._detail_build_token
+
+        with patch.object(
+            page, "_detail_work_ids",
+            side_effect=RuntimeError("simulated invalid bundle details"),
+        ):
+            page._populate_episode_section(token, content, host)
+
+        self.assertIsNotNone(content.findChild(QLabel, "detailEpisodeMessage"))
+        self.assertEqual(root.indexOf(host), -1)
+        page.deleteLater()
+        self.app.processEvents()
 
     def test_hero_cover_distinguishes_loading_from_unavailable(self):
         page = WorkDetailPage()

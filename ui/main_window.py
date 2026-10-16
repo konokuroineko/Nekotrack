@@ -603,7 +603,11 @@ class MainWindow(QMainWindow):
         self.recommendations_page.search_requested.connect(
             lambda: self.navigation.show("search")
         )
-        self.favorites_page.work_selected.connect(self.show_work_details)
+        self.favorites_page.entity_selected.connect(
+            lambda kind, entity: self.show_entity_profile(
+                kind, entity, from_favorites=True
+            )
+        )
         self.favorites_page.search_requested.connect(
             lambda: self.navigation.show("search")
         )
@@ -1123,7 +1127,7 @@ class MainWindow(QMainWindow):
             return
         self.navigation.back(fallback="collections", skip=("work_detail",))
 
-    def show_entity_profile(self, entity_type, entity):
+    def show_entity_profile(self, entity_type, entity, from_favorites=False):
         """Open a detailed character, staff, or voice-actor profile."""
         if not entity:
             return
@@ -1143,7 +1147,7 @@ class MainWindow(QMainWindow):
         except (TypeError, ValueError):
             record = entity
         voice_actors = None
-        if kind == "character":
+        if kind == "character" and not from_favorites:
             try:
                 character_id = record.get("id") if hasattr(record, "get") else record["id"]
                 voice_actors = get_bundle_character_voice_actors(
@@ -1158,11 +1162,11 @@ class MainWindow(QMainWindow):
         self.entity_profile_page.set_profile(
             kind,
             record,
-            source_work=self.work_detail_page.work,
+            source_work=None if from_favorites else self.work_detail_page.work,
             voice_actors=voice_actors,
         )
         self.navigation.show("entity_profile")
-        if kind == "character" and not voice_actors:
+        if kind == "character" and not voice_actors and not from_favorites:
             self._queue_missing_character_voice_actor_refresh(
                 record,
                 self.work_detail_page._detail_work_ids(),

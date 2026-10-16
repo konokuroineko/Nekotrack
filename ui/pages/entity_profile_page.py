@@ -1146,7 +1146,7 @@ class EntityProfilePage(QWidget):
                 "NekoTrack could not update this profile's favorite state.",
             )
             return
-        button.setText("♥" if favorite else "♡")
+        button.setText("★" if favorite else "☆")
         button.setAccessibleName(
             "Remove from favorites" if favorite else "Add to favorites"
         )
@@ -1232,7 +1232,7 @@ class EntityProfilePage(QWidget):
                     entity_id=entity_id,
                 )
                 favorite_enabled = False
-            favorite_button = QPushButton("♥" if favorite_enabled else "♡")
+            favorite_button = QPushButton("★" if favorite_enabled else "☆")
             favorite_button.setObjectName("profileFavoriteButton")
             favorite_button.setCheckable(True)
             favorite_button.setChecked(favorite_enabled)

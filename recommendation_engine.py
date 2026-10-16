@@ -140,7 +140,7 @@ def seed_strength(work, favorite_ids=None, history=None):
     score = 0.0
     if work_id_value in favorite_ids or (isinstance(work, dict) and work.get("_is_favorite")):
         score += 24.0
-    if isinstance(state, dict) and state.get("feedback") == "like":
+    if isinstance(state, dict) and state.get("feedback") in {"like", "more_like_this"}:
         score += 30.0
     score += {
         "watching": 12.0, "rewatching": 11.0, "reading": 12.0,
@@ -170,8 +170,10 @@ def source_weight_for_work(work_id_value, work, favorite_ids=None, history=None)
     weight = 1.0
     if work_id_value in favorite_ids or (isinstance(work, dict) and work.get("_is_favorite")):
         weight += 1.2
-    if feedback == "like":
+    if feedback in {"like", "more_like_this"}:
         weight += 1.8
+    elif feedback == "less_like_this":
+        weight -= 0.65
     if status in {"watching", "rewatching", "reading", "in progress"}:
         weight += 0.75
     elif status == "completed":
@@ -222,10 +224,12 @@ def _preference_profiles(history, favorite_works):
             continue
         metadata = _history_metadata(entry)
         feedback = entry.get("feedback")
-        weight = 2.2 if feedback == "like" else 3.0 if feedback == "dislike" else 0.0
+        is_positive = feedback in {"like", "more_like_this"}
+        is_negative = feedback in {"dislike", "less_like_this"}
+        weight = 2.2 if is_positive else 3.0 if is_negative else 0.0
         if not weight:
             continue
-        target = negative if feedback == "dislike" else positive
+        target = negative if is_negative else positive
         for term in _terms(metadata):
             target[term] += weight
 
@@ -241,6 +245,31 @@ def _preference_profiles(history, favorite_works):
             pass
         for term in _terms(work):
             positive[term] += weight
+    return positive, negative
+
+
+def _source_preference_profiles(history):
+    """Learn whether suggestion source titles should receive more or less weight."""
+    positive = Counter()
+    negative = Counter()
+    for entry in (history or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        feedback = entry.get("feedback")
+        if feedback in {"like", "more_like_this"}:
+            target, weight = positive, 2.2
+        elif feedback in {"dislike", "less_like_this"}:
+            target, weight = negative, 3.0
+        else:
+            continue
+        metadata = _history_metadata(entry)
+        raw_ids = metadata.get("_recommendation_source_ids")
+        if not isinstance(raw_ids, (list, tuple, set)):
+            continue
+        for raw_id in list(raw_ids)[:50]:
+            source_id = _safe_int(raw_id, 0)
+            if source_id > 0:
+                target[source_id] += weight
     return positive, negative
 
 
@@ -306,7 +335,7 @@ def merge_recommendation_candidate(
         return False
     history = history or {}
     state = history.get(candidate_id, history.get(str(candidate_id), {}))
-    if isinstance(state, dict) and state.get("feedback") == "dislike":
+    if isinstance(state, dict) and state.get("feedback") in {"dislike", "never_show"}:
         return False
 
     entry = suggestions.get(candidate_id)
@@ -590,6 +619,7 @@ def rank_candidates(
     """Score candidates with local feedback, weighted credits and exposure."""
     history = history or {}
     positive, negative = _preference_profiles(history, favorite_works)
+    positive_sources, negative_sources = _source_preference_profiles(history)
     credit_profile = credit_profile or {}
     favorite_entities = favorite_entities or []
     voice_language = str(voice_language or "ALL").upper()
@@ -603,9 +633,10 @@ def rank_candidates(
         item_history = history.get(work_id, history.get(str(work_id), {}))
         if not isinstance(item_history, dict):
             item_history = {}
-        # An explicit dislike is a suppression rule, not an exploration hint.
+        # "Never show" is a permanent exact-ID exclusion, even in catalog-only
+        # discovery batches. The legacy "dislike" state keeps its old behavior.
         feedback = item_history.get("feedback")
-        if feedback == "dislike":
+        if feedback in {"dislike", "never_show"}:
             continue
         # Discovery refreshes should prefer titles the user has not actually
         # seen in the feed. An explicit like opts that title back in, while
@@ -618,6 +649,22 @@ def rank_candidates(
         terms = _terms(raw)
         positive_overlap = sum(min(2.5, positive[term]) for term in terms)
         negative_overlap = sum(min(3.0, negative[term]) for term in terms)
+        raw_source_ids = raw.get("_recommendation_source_ids")
+        candidate_source_ids = {
+            _safe_int(value, 0)
+            for value in raw_source_ids
+        } if isinstance(raw_source_ids, (list, tuple, set)) else set()
+        candidate_source_ids = {
+            source_id for source_id in candidate_source_ids if source_id > 0
+        }
+        positive_source_overlap = sum(
+            min(1.5, positive_sources[source_id])
+            for source_id in candidate_source_ids
+        )
+        negative_source_overlap = sum(
+            min(2.0, negative_sources[source_id])
+            for source_id in candidate_source_ids
+        )
         repeat_count = max(0, _safe_int(raw.get("_recommendation_count")))
         community_score = max(0, min(100, _safe_int(raw.get("averageScore"))))
         recommendation_score = max(0, min(100, _safe_int(raw.get("_recommendation_rating"))))
@@ -636,7 +683,18 @@ def rank_candidates(
             - min(48.0, negative_overlap * 10.0)
         )
         impressions = max(0, _safe_int(item_history.get("impressions")))
-        score = max(0.1, raw_score) * exposure_multiplier(impressions)
+        # Apply relation/source preferences after the base-score floor. Otherwise,
+        # a strong genre penalty can clamp every similar title to 0.1 and erase
+        # the distinction between the title that caused the suggestion and others.
+        source_multiplier = (
+            (1.0 + min(0.30, positive_source_overlap * 0.20))
+            / (1.0 + min(0.60, negative_source_overlap * 0.30))
+        )
+        score = (
+            max(0.1, raw_score)
+            * exposure_multiplier(impressions)
+            * source_multiplier
+        )
         item = dict(raw)
         item["_recommendation_score"] = round(score, 6)
         item["_recommendation_exposure_multiplier"] = exposure_multiplier(impressions)
