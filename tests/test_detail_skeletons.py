@@ -280,6 +280,57 @@ class DetailSkeletonTests(unittest.TestCase):
             for call in log_event.call_args_list
         ))
 
+    def test_episode_image_cache_thread_quits_without_gui_event_pump(self):
+        page = WorkDetailPage()
+        events = []
+
+        with (
+            patch(
+                "ui.pages.work_detail_page.cache_tmdb_episode_image",
+                side_effect=lambda *args: (time.sleep(0.05), "cached-episode.jpg")[1],
+            ),
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_path", return_value=True),
+            patch(
+                "ui.pages.work_detail_page.log_event",
+                side_effect=lambda event, **fields: events.append((event, fields)),
+            ),
+            patch("ui.pages.work_detail_page.log_exception"),
+        ):
+            page._start_episode_image_cache(
+                12345,
+                [{
+                    "episodeNumber": 1,
+                    "thumbnail": "https://image.tmdb.org/t/p/w500/test.jpg",
+                }],
+            )
+            thread = page._episode_image_cache_threads[12345]
+
+            # Deliberately wait without processing GUI events. The worker must
+            # be able to request thread shutdown without a queued GUI callback.
+            stopped_before_gui_pump = thread.wait(2000)
+
+            # If this regression returns, release queued callbacks and give the
+            # thread a chance to stop before ending the test.
+            if not stopped_before_gui_pump:
+                self.app.processEvents()
+
+            self.app.processEvents()
+
+        self.assertTrue(
+            stopped_before_gui_pump,
+            "Episode image cache QThread did not stop until GUI events were processed.",
+        )
+        event_names = [event for event, _fields in events]
+        self.assertIn("episodes.image_cache_worker_finished", event_names)
+        self.assertIn("episodes.image_cache_completion_signal_emitting", event_names)
+        self.assertIn("episodes.image_cache_completion_received", event_names)
+        self.assertIn("episodes.image_cache_batch_succeeded", event_names)
+        self.assertIn("episodes.image_cache_thread_stopped", event_names)
+        self.assertNotIn(12345, page._episode_image_cache_threads)
+
+        page.deleteLater()
+        self.app.processEvents()
+
     def test_episode_image_cache_failure_keeps_thread_reference_and_throttles_retry(self):
         page = WorkDetailPage()
         page.work = {"id": 12345, "type": "ANIME", "format": "TV"}
