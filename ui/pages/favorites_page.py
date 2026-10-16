@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 
 from database import get_favorite_works, set_work_favorite
 from diagnostics import log_exception
-from ui.theme import COLORS
+from ui.theme import COLORS, surface_rgba
 from ui.widgets.work_card import WorkCard
 
 
@@ -155,7 +155,7 @@ class FavoritesPage(QWidget):
             QWidget#favoritesContent {{ background:transparent; }}
             QScrollArea#favoritesScroll {{ background:transparent; border:none; }}
             QFrame#favoritesHeader, QFrame#favoritesEmpty {{
-                background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:14px;
+                background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:14px;
             }}
             QLabel#favoritesTitle {{
                 color:{COLORS['primary']}; background:transparent; font-size:22px; font-weight:850;
@@ -173,7 +173,7 @@ class FavoritesPage(QWidget):
                 background:transparent; border:1px solid transparent; border-radius:12px;
             }}
             QFrame#favoritesTile:hover {{
-                background:{COLORS['surface']}; border-color:{COLORS['border']};
+                background:{surface_rgba('surface')}; border-color:{COLORS['border']};
             }}
             QPushButton#favoritesAction {{
                 background:{COLORS['accent']}; color:{COLORS['accent_text']}; border:1px solid {COLORS['accent']};
@@ -184,7 +184,7 @@ class FavoritesPage(QWidget):
                 border-radius:8px; padding:7px 9px; font-size:10px;
             }}
             QPushButton#favoritesRemove:hover {{
-                background:{COLORS['accent_soft']}; color:{COLORS['primary']}; border-color:{COLORS['accent']};
+                background:{surface_rgba('accent_soft')}; color:{COLORS['primary']}; border-color:{COLORS['accent']};
             }}
         """)
 

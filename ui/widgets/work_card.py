@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout, QSizePol
 from database import save_cover_path
 from ui.display_identity import get_display_override
 from ui.preferences import get
-from ui.theme import COLORS
+from ui.theme import COLORS, surface_rgba
 
 
 IMAGE_DIRECTORY = Path("data") / "images" / "works"
@@ -270,7 +270,7 @@ class WorkCard(QFrame):
 
     def refresh_theme(self):
         hover_css = (
-            f"background: {COLORS['surface_hover']}; border-color: {COLORS['frame']};"
+            f"background: {surface_rgba('surface_hover')}; border-color: {COLORS['frame']};"
             if get("hover_highlight")
             else ""
         )

@@ -33,7 +33,7 @@ from ui.preferences import (
     reset,
     set_value,
 )
-from ui.theme import COLORS, SPACING, refresh_theme, retint_widget_styles
+from ui.theme import COLORS, SPACING, refresh_theme, retint_widget_styles, surface_rgba
 from ui.widgets.switch_control import SwitchControl
 
 
@@ -609,7 +609,7 @@ class SettingsPage(QWidget):
                 button.setStyleSheet(
                     f"""
                     QPushButton#settingsSecondaryAction {{
-                        background:{COLORS['surface_alt']};
+                        background:{surface_rgba('surface_alt')};
                         border:1px solid {COLORS['frame']};
                         border-radius:9px;
                         color:{COLORS['secondary']};
@@ -618,7 +618,7 @@ class SettingsPage(QWidget):
                         min-height:38px;
                     }}
                     QPushButton#settingsSecondaryAction:hover {{
-                        background:{COLORS['surface_hover']};
+                        background:{surface_rgba('surface_hover')};
                         color:{COLORS['primary']};
                     }}
                     """
@@ -647,7 +647,7 @@ class SettingsPage(QWidget):
                 background:transparent;
             }}
             QFrame#settingsSection {{
-                background:{COLORS['surface']};
+                background:{surface_rgba('surface')};
                 border:1px solid {COLORS['border']};
                 border-radius:14px;
             }}
@@ -670,16 +670,16 @@ class SettingsPage(QWidget):
                 background:transparent;
             }}
             QFrame#themePresetCard {{
-                background:{COLORS['card']};
+                background:{surface_rgba('card')};
                 border:1px solid {COLORS['frame']};
                 border-radius:12px;
             }}
             QFrame#themePresetCard:hover {{
-                background:{COLORS['card_hover']};
+                background:{surface_rgba('card_hover')};
                 border-color:{COLORS['accent']};
             }}
             QFrame#themePresetCard[selected="true"] {{
-                background:{COLORS['accent_soft']};
+                background:{surface_rgba('accent_soft')};
                 border:2px solid {COLORS['accent']};
             }}
             QLabel#themePresetTitle {{
@@ -694,16 +694,16 @@ class SettingsPage(QWidget):
                 background:transparent;
             }}
             QFrame#bundleSettingOption {{
-                background:{COLORS['card']};
+                background:{surface_rgba('card')};
                 border:1px solid {COLORS['border']};
                 border-radius:10px;
             }}
             QFrame#bundleSettingOption:hover {{
-                background:{COLORS['card_hover']};
+                background:{surface_rgba('card_hover')};
                 border-color:{COLORS['accent']};
             }}
             QFrame#bundleAlwaysOn {{
-                background:{COLORS['accent_soft']};
+                background:{surface_rgba('accent_soft')};
                 border:1px solid {COLORS['border_hover']};
                 border-radius:9px;
             }}
@@ -746,7 +746,7 @@ class SettingsPage(QWidget):
                 top:-1px;
             }}
             QTabBar::tab {{
-                background:{COLORS['surface_alt']};
+                background:{surface_rgba('surface_alt')};
                 color:{COLORS['secondary']};
                 border:1px solid {COLORS['border']};
                 border-bottom:none;
@@ -758,12 +758,12 @@ class SettingsPage(QWidget):
                 font-weight:750;
             }}
             QTabBar::tab:selected {{
-                background:{COLORS['accent_soft']};
+                background:{surface_rgba('accent_soft')};
                 color:{COLORS['nav_selected_text']};
                 border-color:{COLORS['accent']};
             }}
             QTabBar::tab:hover:!selected {{
-                background:{COLORS['surface_hover']};
+                background:{surface_rgba('surface_hover')};
                 color:{COLORS['primary']};
             }}
             QTabWidget#settingsTabs QScrollArea#settingsCategoryScroll {{
@@ -771,7 +771,7 @@ class SettingsPage(QWidget):
                 border:none;
             }}
             QListWidget#backgroundImageList {{
-                background:{COLORS['surface_alt']};
+                background:{surface_rgba('surface_alt')};
                 color:{COLORS['primary']};
                 border:1px solid {COLORS['border']};
                 border-radius:9px;
@@ -779,7 +779,7 @@ class SettingsPage(QWidget):
             }}
             QListWidget#backgroundImageList::item {{ padding:6px 8px; border-radius:6px; }}
             QListWidget#backgroundImageList::item:selected {{
-                background:{COLORS['accent_soft']}; color:{COLORS['nav_selected_text']};
+                background:{surface_rgba('accent_soft')}; color:{COLORS['nav_selected_text']};
             }}
             QLabel#backgroundIntro, QLabel#backgroundStatus {{
                 color:{COLORS['muted']}; background:transparent; font-size:11px;
@@ -819,7 +819,7 @@ class SettingsPage(QWidget):
                 border-color:{COLORS['accent_hover']};
             }}
             QPushButton#settingsSecondaryAction {{
-                background:{COLORS['surface_alt']};
+                background:{surface_rgba('surface_alt')};
                 border:1px solid {COLORS['border']};
                 border-radius:9px;
                 color:{COLORS['secondary']};
@@ -827,7 +827,7 @@ class SettingsPage(QWidget):
                 padding:9px 14px;
             }}
             QPushButton#settingsSecondaryAction:hover {{
-                background:{COLORS['surface_hover']};
+                background:{surface_rgba('surface_hover')};
                 color:{COLORS['primary']};
             }}
             QCheckBox {{

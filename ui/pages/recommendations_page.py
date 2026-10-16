@@ -20,7 +20,7 @@ from database import (
 )
 from diagnostics import log_exception
 from ui.preferences import get
-from ui.theme import COLORS
+from ui.theme import COLORS, surface_rgba
 from recommendation_engine import (
     credit_profile_from_media_record,
     inject_rare_exploration,
@@ -966,7 +966,7 @@ class RecommendationsPage(QWidget):
             QWidget#recommendationsContent {{ background:transparent; }}
             QScrollArea#recommendationsScroll {{ background:transparent; border:none; }}
             QFrame#recommendationsHeader, QFrame#recommendationsEmpty {{
-                background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:15px;
+                background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:15px;
             }}
             QLabel#recommendationsTitle, QLabel#recommendationsEmptyTitle {{
                 color:{COLORS['primary']}; background:transparent; font-size:22px; font-weight:850;

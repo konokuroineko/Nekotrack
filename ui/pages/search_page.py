@@ -7,7 +7,7 @@ from api import enrich_anilist_media, get_media_by_anilist_url, parse_anilist_ur
 from catalog_search import search_combined_media
 from series import group_media_results
 from ui.preferences import get
-from ui.theme import COLORS
+from ui.theme import COLORS, surface_rgba
 from ui.widgets.work_card import WorkCard
 
 
@@ -50,7 +50,7 @@ class SkeletonCard(QFrame):
                 border-radius: {get('corner_radius') + 2}px;
             }}
             QFrame#skeletonFill {{
-                background: {COLORS['surface_hover']};
+                background: {surface_rgba('surface_hover')};
                 border: 1px solid {COLORS['frame']};
                 border-radius: {get('corner_radius')}px;
             }}
@@ -356,14 +356,14 @@ class SearchPage(QWidget):
 
     def _search_panel_stylesheet(self):
         return (
-            f"QFrame#searchPanel {{ background:{COLORS['surface']}; "
+            f"QFrame#searchPanel {{ background:{surface_rgba('surface')}; "
             f"border:1px solid {COLORS['frame']}; border-radius:16px; }}"
         )
 
     def _search_input_frame_stylesheet(self):
         radius = get("corner_radius")
         return (
-            f"QFrame#searchInputFrame {{ background:{COLORS['surface']}; "
+            f"QFrame#searchInputFrame {{ background:{surface_rgba('surface')}; "
             f"border:1px solid {COLORS['frame']}; border-radius:{radius}px; }}"
             f"QFrame#searchInputFrame[focused=\"true\"] "
             f"{{ border-color:{COLORS['accent']}; }}"

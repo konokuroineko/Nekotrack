@@ -22,7 +22,7 @@ from database import (
 )
 from diagnostics import log_exception
 from ui.preferences import get
-from ui.theme import COLORS
+from ui.theme import COLORS, surface_rgba
 from ui.widgets.work_card import WorkCard
 from ui.pages.recommendations_page import RecommendationsPage
 
@@ -475,7 +475,7 @@ class HomePage(QWidget):
                 border: none;
             }}
             QFrame#homeSection {{
-                background: {COLORS['surface']};
+                background: {surface_rgba('surface')};
                 border: 1px solid {COLORS['frame']};
                 border-radius: 16px;
             }}
@@ -491,7 +491,7 @@ class HomePage(QWidget):
                 font-size: 11px;
             }}
             QFrame#homeSectionEmpty {{
-                background: {COLORS['surface_alt']};
+                background: {surface_rgba('surface_alt')};
                 border: 1px dashed {COLORS['border']};
                 border-radius: 11px;
             }}
@@ -522,12 +522,12 @@ class HomePage(QWidget):
                 max-width: 218px;
             }}
             QFrame#homeReleaseEvent {{
-                background: {COLORS['surface_alt']};
+                background: {surface_rgba('surface_alt')};
                 border: 1px solid {COLORS['border']};
                 border-radius: 11px;
             }}
             QFrame#homeReleaseDateBadge {{
-                background: {COLORS['accent_soft']};
+                background: {surface_rgba('accent_soft')};
                 border: 1px solid {COLORS['border_hover']};
                 border-radius: 9px;
                 min-width: 48px;
@@ -559,7 +559,7 @@ class HomePage(QWidget):
             }}
             QPushButton#homeCalendarAction, QPushButton#homeReminderToggle,
             QPushButton#homeReminderActive {{
-                background: {COLORS['surface_alt']};
+                background: {surface_rgba('surface_alt')};
                 color: {COLORS['primary']};
                 border: 1px solid {COLORS['border']};
                 border-radius: 8px;
@@ -569,7 +569,7 @@ class HomePage(QWidget):
             }}
             QPushButton#homeCalendarAction:hover, QPushButton#homeReminderToggle:hover,
             QPushButton#homeReminderActive:hover {{
-                background: {COLORS['accent_soft']};
+                background: {surface_rgba('accent_soft')};
                 border-color: {COLORS['accent']};
             }}
             QPushButton#homeReminderActive {{ color: {COLORS['accent']}; }}
