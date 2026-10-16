@@ -6,6 +6,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QVBoxLayout, QWidget
 
+from api import (
+    TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS,
+    TMDB_EPISODE_CATALOG_VERSION,
+)
 from ui.pages.work_detail_page import EpisodeArtwork, EpisodeCard, WorkDetailPage
 
 
@@ -179,6 +183,99 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertIsNone(description)
 
         card.deleteLater()
+        self.app.processEvents()
+
+    def test_episode_catalog_refresh_interval_uses_fetch_timestamp(self):
+        page = WorkDetailPage()
+        now = 2_000_000_000
+        recent = {
+            "version": TMDB_EPISODE_CATALOG_VERSION,
+            "fetched_at": now - 60,
+        }
+        stale = {
+            "version": TMDB_EPISODE_CATALOG_VERSION,
+            "fetched_at": now - TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS - 1,
+        }
+
+        with patch("ui.pages.work_detail_page.get_provider_metadata", return_value=recent), patch(
+            "ui.pages.work_detail_page.time.time", return_value=now
+        ):
+            self.assertFalse(page._episode_catalog_is_stale(12345))
+        with patch("ui.pages.work_detail_page.get_provider_metadata", return_value=stale), patch(
+            "ui.pages.work_detail_page.time.time", return_value=now
+        ):
+            self.assertTrue(page._episode_catalog_is_stale(12345))
+        with patch("ui.pages.work_detail_page.get_provider_metadata", return_value={"version": 3}), patch(
+            "ui.pages.work_detail_page.time.time", return_value=now
+        ):
+            self.assertTrue(page._episode_catalog_is_stale(12345))
+
+        page.deleteLater()
+        self.app.processEvents()
+
+    def test_empty_episode_sync_keeps_last_good_mapping_and_catalog(self):
+        page = WorkDetailPage()
+        with (
+            patch("ui.pages.work_detail_page.save_tmdb_mapping") as save_mapping,
+            patch("ui.pages.work_detail_page.save_episodes") as save_episodes,
+            patch("ui.pages.work_detail_page.save_provider_metadata") as save_metadata,
+            patch("ui.pages.work_detail_page.prune_episode_catalog") as prune,
+            patch.object(page, "_start_episode_image_cache"),
+            patch.object(page, "_replace_episode_section"),
+        ):
+            page._episode_sync_finished(
+                12345,
+                {"episodes": [], "tmdb_count": 0, "tmdb_id": 99, "tmdb_season_number": 2},
+            )
+
+        save_mapping.assert_not_called()
+        save_episodes.assert_not_called()
+        save_metadata.assert_not_called()
+        prune.assert_not_called()
+        page.deleteLater()
+        self.app.processEvents()
+
+    def test_successful_episode_sync_prunes_and_records_refresh_time(self):
+        page = WorkDetailPage()
+        now = 2_000_000_000
+        episodes = [{
+            "episodeNumber": 1,
+            "title": "Episode One",
+            "description": None,
+            "airdate": "2020-01-01",
+            "thumbnail": None,
+        }]
+        with (
+            patch("ui.pages.work_detail_page.save_episodes") as save_episodes,
+            patch("ui.pages.work_detail_page.save_tmdb_mapping") as save_mapping,
+            patch("ui.pages.work_detail_page.save_provider_metadata") as save_metadata,
+            patch("ui.pages.work_detail_page.prune_episode_catalog") as prune,
+            patch("ui.pages.work_detail_page.time.time", return_value=now),
+            patch.object(page, "_start_episode_image_cache"),
+            patch.object(page, "_replace_episode_section"),
+        ):
+            page._episode_sync_finished(
+                12345,
+                {
+                    "episodes": episodes,
+                    "tmdb_count": 1,
+                    "tmdb_id": 99,
+                    "tmdb_season_number": 1,
+                },
+            )
+
+        save_episodes.assert_called_once_with(12345, episodes)
+        save_mapping.assert_called_once_with(12345, 99, 1)
+        prune.assert_called_once_with(12345, episodes)
+        save_metadata.assert_called_once_with(
+            12345,
+            "tmdb_episode_match_version",
+            {
+                "version": TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": now,
+            },
+        )
+        page.deleteLater()
         self.app.processEvents()
 
     def test_episode_synopses_are_single_line_with_full_tooltip(self):
