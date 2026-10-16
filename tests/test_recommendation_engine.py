@@ -150,6 +150,43 @@ class RecommendationScoringTests(unittest.TestCase):
         self.assertGreater(staff_role_weight("Original story"), staff_role_weight("Background art"))
         self.assertLess(staff_role_weight("Assistant Director"), staff_role_weight("Director"))
 
+    def test_voice_actor_reason_names_the_person_and_title(self):
+        candidate = {
+            "id": 8801,
+            "type": "ANIME",
+            "title": {"english": "Candidate"},
+            "characters": {"edges": [{
+                "role": "MAIN",
+                "node": {"id": 700, "name": {"full": "Mina"}},
+                "voiceActors": [{
+                    "id": 901, "language": "Japanese",
+                    "name": {"full": "Miyuki Sawashiro"},
+                }],
+            }]},
+        }
+        profile = {
+            42: {
+                "_source_weight": 1.0,
+                "_source_title": "A Series You Enjoyed",
+                "characters": [],
+                "voice_actors": [{
+                    "id": 901, "language": "Japanese", "character_role": "MAIN",
+                }],
+                "staff": [],
+            }
+        }
+        ranked = rank_candidates([candidate], credit_profile=profile, voice_language="JA")
+        self.assertIn("Miyuki Sawashiro", ranked[0]["_recommendation_reason"])
+        self.assertIn("A Series You Enjoyed", ranked[0]["_recommendation_reason"])
+        self.assertIn("Japanese voice actor", ranked[0]["_recommendation_reason"])
+
+        favorited = rank_candidates(
+            [candidate], favorite_entities=[
+                {"entity_type": "voice_actor", "entity_id": 901},
+            ], voice_language="JA",
+        )
+        self.assertIn("Miyuki Sawashiro", favorited[0]["_recommendation_reason"])
+        self.assertIn("favorited", favorited[0]["_recommendation_reason"].casefold())
 
 class RecommendationHistoryPersistenceTests(unittest.TestCase):
     def setUp(self):

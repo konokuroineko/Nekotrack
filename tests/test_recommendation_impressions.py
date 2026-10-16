@@ -6,9 +6,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QGridLayout, QWidget
 
 from ui.pages.recommendations_page import RecommendationsPage
+from ui.widgets.work_card import WorkCard
 
 
 class RecommendationImpressionTests(unittest.TestCase):
@@ -55,6 +56,37 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.assertTrue(self.page.load_more_button.isEnabled())
         self.assertEqual(self.page.load_more_button.text(), "Load more")
 
+    def test_recommendation_cards_are_compact_without_heart_or_dislike_buttons(self):
+        self.page.resize(900, 700)
+        self.page._results = [{
+            "id": 9877,
+            "type": "ANIME",
+            "title": {"english": "Compact recommendation"},
+            "_recommendation_reason": "Shares Japanese voice actor Miyuki Sawashiro with A Series You Enjoyed",
+        }]
+        self.page._history = {}
+        self.page.show()
+        self.page._render_results(preserve_scroll=False)
+        self.app.processEvents()
+
+        tile = self.page._tiles[0][0]
+        card = tile.findChild(WorkCard)
+        reason = tile.findChild(QLabel, "recommendationsReason")
+        self.assertIsNotNone(card)
+        self.assertIsNotNone(reason)
+        self.assertEqual(tile.width(), card.width())
+        self.assertEqual(reason.width(), card.width())
+
+        buttons = [button.text() for button in tile.findChildren(QPushButton)]
+        self.assertNotIn("♥", buttons)
+        self.assertNotIn("♡", buttons)
+        self.assertNotIn("×", buttons)
+        self.assertNotIn("QFrame#recommendationsTile:hover", self.page.styleSheet())
+
+        grid = self.page.findChild(QGridLayout)
+        self.assertIsNotNone(grid)
+        self.assertEqual(grid.horizontalSpacing(), 12)
+        self.assertEqual(grid.verticalSpacing(), 14)
     def test_offscreen_tile_does_not_gain_an_impression(self):
         self.tile.move(300, 0)
         self.app.processEvents()

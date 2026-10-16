@@ -208,6 +208,16 @@ def _edge_id(value):
     return parsed if parsed > 0 else None
 
 
+def _display_credit_name(record):
+    """Get a readable AniList credit name without exposing raw provider objects."""
+    if not isinstance(record, dict):
+        return ""
+    value = record.get("name")
+    if isinstance(value, dict):
+        value = value.get("full") or value.get("userPreferred") or value.get("native")
+    return str(value or "").strip()
+
+
 def credit_profile_from_media_record(work):
     """Normalize provider credit edges into source-title signals for local learning."""
     if not isinstance(work, dict):
@@ -230,7 +240,9 @@ def credit_profile_from_media_record(work):
             role = str(edge.get("role") or "UNKNOWN")
             previous = characters_by_id.get(character_id)
             if previous is None or character_role_weight(role) > character_role_weight(previous["role"]):
-                characters_by_id[character_id] = {"id": character_id, "role": role}
+                characters_by_id[character_id] = {
+                    "id": character_id, "role": role, "name": _display_credit_name(node),
+                }
 
             voice_actors = edge.get("voiceActors")
             if not isinstance(voice_actors, list):
@@ -248,6 +260,7 @@ def credit_profile_from_media_record(work):
                     "language": language[:30],
                     "character_id": character_id,
                     "character_role": role,
+                    "name": _display_credit_name(voice),
                 }
                 previous = actors_by_key.get(key)
                 if previous is None or voice_actor_role_weight(role) > voice_actor_role_weight(previous["character_role"]):
@@ -266,7 +279,9 @@ def credit_profile_from_media_record(work):
             role = str(edge.get("role") or "")
             previous = staff_by_id.get(person_id)
             if previous is None or staff_role_weight(role) > staff_role_weight(previous["role"]):
-                staff_by_id[person_id] = {"id": person_id, "role": role[:250]}
+                staff_by_id[person_id] = {
+                    "id": person_id, "role": role[:250], "name": _display_credit_name(node),
+                }
 
     return {
         "characters": list(characters_by_id.values()),
@@ -277,6 +292,7 @@ def credit_profile_from_media_record(work):
 
 def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_language):
     source_weights = Counter()
+    source_context = {}
     for payload in (credit_profile or {}).values():
         if not isinstance(payload, dict):
             continue
@@ -285,9 +301,9 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
         except (TypeError, ValueError, OverflowError):
             source_weight = 1.0
         source_weight = min(3.5, max(0.0, source_weight))
+        source_title = str(payload.get("_source_title") or "").strip()
         # Deduplicate each contributor within one source work, keeping their
-        # strongest credited role. Multiple character/staff edges must not
-        # multiply the same identity's influence.
+        # strongest credited role. Multiple edges must not multiply one identity.
         per_source = {}
         for kind in ("characters", "voice_actors", "staff"):
             credits = payload.get(kind)
@@ -312,7 +328,11 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
                     weight = staff_role_weight(credit.get("role"))
                 per_source[key] = max(per_source.get(key, 0.0), weight)
         for key, weight in per_source.items():
-            source_weights[key] += source_weight * weight
+            contribution = source_weight * weight
+            source_weights[key] += contribution
+            previous = source_context.get(key, (0.0, ""))
+            if source_title and contribution > previous[0]:
+                source_context[key] = (contribution, source_title)
 
     favorites = set()
     for entry in favorite_entities or []:
@@ -320,8 +340,6 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
             continue
         kind = str(entry.get("entity_type") or "").strip().casefold()
         entity_id = _edge_id(entry.get("entity_id"))
-        # A favorite is the performer identity, not one particular role. The
-        # actual candidate edge below is filtered by voice language.
         if kind in {"character", "voice_actor", "staff"} and entity_id is not None:
             favorites.add((kind, entity_id))
 
@@ -337,15 +355,29 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
             character_id = _edge_id(character)
             if character_id is None:
                 continue
+            character_name = _display_credit_name(character)
             role_weight = character_role_weight(edge.get("role"))
             key = ("character", character_id)
             boost = 0.0
+            source_title = source_context.get(key, (0.0, ""))[1]
             if key in favorites:
                 boost = 22.0 * role_weight
-                reasons.append((boost, "Features a favorite character"))
+                reason = (
+                    f"Features your favorite character: {character_name}"
+                    if character_name else "Features a favorite character"
+                )
+                reasons.append((boost, reason))
             elif source_weights[key] > 0:
                 boost = min(14.0, source_weights[key] * role_weight * 5.0)
-                reasons.append((boost, "Shares a character with a title you enjoyed"))
+                if character_name and source_title:
+                    reason = f"Shares character {character_name} with {source_title}"
+                elif character_name:
+                    reason = f"Shares character {character_name} with a title you enjoyed"
+                elif source_title:
+                    reason = f"Shares a character with {source_title}"
+                else:
+                    reason = "Shares a character with a title you enjoyed"
+                reasons.append((boost, reason))
             strongest_by_entity[key] = max(strongest_by_entity.get(key, 0.0), boost)
 
             voices = edge.get("voiceActors")
@@ -358,15 +390,37 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
                 if voice_id is None:
                     continue
                 key = ("voice_actor", voice_id)
-                voice_boost = 20.0 * role_weight if key in favorites else min(
-                    16.0, source_weights[key] * role_weight * 5.5
-                )
+                voice_name = _display_credit_name(voice)
+                source_title = source_context.get(key, (0.0, ""))[1]
+                if key in favorites:
+                    voice_boost = 20.0 * role_weight
+                    reason = (
+                        f"Features a voice actor you favorited: {voice_name}"
+                        if voice_name else "Features a voice actor you favorited"
+                    )
+                else:
+                    voice_boost = min(16.0, source_weights[key] * role_weight * 5.5)
+                    if voice_boost:
+                        language = str(voice.get("language") or "").strip()
+                        normalized_language = language.casefold().replace("_", " ").replace("-", " ")
+                        if normalized_language in {"japanese", "ja", "jpn", "jp"}:
+                            credit_label = "Japanese voice actor"
+                        elif normalized_language in {"english", "en", "eng"}:
+                            credit_label = "English voice actor"
+                        elif language:
+                            credit_label = f"{language} voice actor"
+                        else:
+                            credit_label = "voice actor"
+                        if voice_name and source_title:
+                            reason = f"Shares {credit_label} {voice_name} with {source_title}"
+                        elif voice_name:
+                            reason = f"Shares {credit_label} {voice_name} with a title you enjoyed"
+                        elif source_title:
+                            reason = f"Shares a {credit_label} with {source_title}"
+                        else:
+                            reason = f"Shares a {credit_label} with a title you enjoyed"
                 if voice_boost:
-                    reasons.append((
-                        voice_boost,
-                        "Features a favorite voice actor" if key in favorites
-                        else "Shares a voice actor with a title you enjoyed",
-                    ))
+                    reasons.append((voice_boost, reason))
                 strongest_by_entity[key] = max(strongest_by_entity.get(key, 0.0), voice_boost)
 
     staff_connection = work.get("staff")
@@ -375,20 +429,32 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
         for edge in staff_edges:
             if not isinstance(edge, dict):
                 continue
-            person_id = _edge_id(edge.get("node"))
+            person = edge.get("node") if isinstance(edge.get("node"), dict) else {}
+            person_id = _edge_id(person)
             if person_id is None:
                 continue
+            person_name = _display_credit_name(person)
             role_weight = staff_role_weight(edge.get("role"))
             key = ("staff", person_id)
             boost = 15.0 * role_weight if key in favorites else min(
                 14.0, source_weights[key] * role_weight * 5.0
             )
+            source_title = source_context.get(key, (0.0, ""))[1]
             if boost:
-                reasons.append((
-                    boost,
-                    "Features a favorite production contributor" if key in favorites
-                    else "Shares important production staff with a title you enjoyed",
-                ))
+                if key in favorites:
+                    reason = (
+                        f"Features a production contributor you favorited: {person_name}"
+                        if person_name else "Features a production contributor you favorited"
+                    )
+                elif person_name and source_title:
+                    reason = f"Shares production staff {person_name} with {source_title}"
+                elif person_name:
+                    reason = f"Shares production staff {person_name} with a title you enjoyed"
+                elif source_title:
+                    reason = f"Shares production staff with {source_title}"
+                else:
+                    reason = "Shares important production staff with a title you enjoyed"
+                reasons.append((boost, reason))
             strongest_by_entity[key] = max(strongest_by_entity.get(key, 0.0), boost)
 
     favorite_boost = sum(value for key, value in strongest_by_entity.items() if key in favorites)

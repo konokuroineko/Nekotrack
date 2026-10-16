@@ -6,7 +6,7 @@ import time
 from PySide6.QtCore import QObject, QPoint, QRect, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-    QVBoxLayout, QWidget,
+    QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from api import get_anime_discovery_page, get_media_recommendations
@@ -17,7 +17,6 @@ from database import (
     get_recommendation_history,
     get_work_favorites,
     record_recommendation_impressions,
-    set_recommendation_feedback,
 )
 from diagnostics import log_exception
 from ui.preferences import get
@@ -324,8 +323,10 @@ class RecommendationWorker(QObject):
                 pass
             weight = min(3.5, max(0.35, weight))
             self.source_weights[work_id] = weight
-            if work_id in self.credit_profile and isinstance(self.credit_profile[work_id], dict):
-                self.credit_profile[work_id]["_source_weight"] = weight
+            profile = self.credit_profile.get(work_id)
+            if isinstance(profile, dict):
+                profile["_source_weight"] = weight
+                profile["_source_title"] = self._title(row)
 
         suggestions = {}
         errors = []
@@ -496,7 +497,7 @@ class RecommendationsPage(QWidget):
             # Home already owns the page-level scroll area, so embedded
             # recommendations must not create a second vertical scroll area.
             self.content_layout.setContentsMargins(0, 0, 0, 0)
-            self.content_layout.setSpacing(18)
+            self.content_layout.setSpacing(14)
             self.scroll = None
             outer.addWidget(self.content)
         else:
@@ -506,7 +507,7 @@ class RecommendationsPage(QWidget):
             self.scroll.setFrameShape(QFrame.Shape.NoFrame)
             self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             self.content_layout.setContentsMargins(34, 28, 34, 34)
-            self.content_layout.setSpacing(18)
+            self.content_layout.setSpacing(14)
             self.scroll.setWidget(self.content)
             outer.addWidget(self.scroll)
         if self.scroll is not None:
@@ -903,8 +904,9 @@ class RecommendationsPage(QWidget):
         grid_host.setObjectName("recommendationsGridHost")
         grid = QGridLayout(grid_host)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(16)
-        grid.setVerticalSpacing(22)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(14)
+        grid.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         available_width = max(
             100,
             self.width() if self.embedded else (
@@ -916,13 +918,16 @@ class RecommendationsPage(QWidget):
         for index, work in enumerate(self._results):
             tile = QFrame()
             tile.setObjectName("recommendationsTile")
+            tile.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Maximum)
             layout = QVBoxLayout(tile)
-            layout.setContentsMargins(5, 5, 5, 10)
-            layout.setSpacing(7)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(5)
             card = WorkCard(
                 work, mode="search", add_callback=self.add_callback,
                 show_add_button=True, parent=tile,
             )
+            card_width = max(1, card.sizeHint().width())
+            tile.setFixedWidth(card_width)
             card.clicked.connect(self.work_selected.emit)
             layout.addWidget(card, 0, Qt.AlignmentFlag.AlignHCenter)
 
@@ -930,47 +935,13 @@ class RecommendationsPage(QWidget):
             reason_label = QLabel(reason)
             reason_label.setObjectName("recommendationsReason")
             reason_label.setWordWrap(True)
+            reason_label.setFixedWidth(card_width)
             layout.addWidget(reason_label)
 
-            work_id = RecommendationWorker._work_id(work)
-            state = self._history.get(work_id, {}) if work_id is not None else {}
-            feedback = state.get("feedback") if isinstance(state, dict) else None
-            feedback_row = QHBoxLayout()
-            feedback_row.setSpacing(6)
-            like = QPushButton("♥" if feedback == "like" else "♡")
-            like.setObjectName("recommendationsFeedback")
-            like.setCheckable(True)
-            like.setChecked(feedback == "like")
-            like.setAccessibleName(
-                "Remove recommendation like" if feedback == "like" else "Like recommendation"
+            grid.addWidget(
+                tile, index // columns, index % columns,
+                Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter,
             )
-            like.setToolTip(
-                "Your feedback improves future recommendations. Click to "
-                + ("remove this like." if feedback == "like" else "like this title.")
-            )
-            like.setEnabled(work_id is not None)
-            like.clicked.connect(
-                lambda checked, item=dict(work): self._feedback_changed(
-                    item, "like" if checked else None
-                )
-            )
-            dislike = QPushButton("×")
-            dislike.setObjectName("recommendationsFeedback")
-            dislike.setCheckable(True)
-            dislike.setChecked(feedback == "dislike")
-            dislike.setAccessibleName("Not interested in this recommendation")
-            dislike.setToolTip("Show fewer titles like this and stop recommending this title.")
-            dislike.setEnabled(work_id is not None)
-            dislike.clicked.connect(
-                lambda checked, item=dict(work): self._feedback_changed(
-                    item, "dislike" if checked else None
-                )
-            )
-            feedback_row.addWidget(like)
-            feedback_row.addWidget(dislike)
-            feedback_row.addStretch(1)
-            layout.addLayout(feedback_row)
-            grid.addWidget(tile, index // columns, index % columns, Qt.AlignmentFlag.AlignTop)
             self._tiles.append((tile, dict(work)))
 
         self.content_layout.addWidget(grid_host)
@@ -987,44 +958,6 @@ class RecommendationsPage(QWidget):
         self._apply_theme()
         if preserve_scroll and old_bar is not None:
             QTimer.singleShot(0, lambda bar=old_bar, value=old_value: bar.setValue(min(value, bar.maximum())))
-
-    def _feedback_changed(self, work, feedback):
-        work_id = RecommendationWorker._work_id(work)
-        if work_id is None:
-            return
-        try:
-            if not set_recommendation_feedback(work_id, feedback, work):
-                raise RuntimeError("The recommendation feedback could not be saved.")
-            value = get_recommendation_history()
-            self._history = value if isinstance(value, dict) else {}
-        except Exception as error:
-            log_exception(
-                "recommendations.feedback_save_failed",
-                error,
-                work_id=work_id,
-                feedback=feedback,
-            )
-            if hasattr(self, "more_status"):
-                self.more_status.setText("Your feedback could not be saved. Please try again.")
-            return
-        self._results = inject_rare_exploration(
-            rank_candidates(
-                self._results,
-                history=self._history,
-                favorite_works=self._favorite_works,
-                rotation=self._refresh_cycle,
-                credit_profile=self._credit_profile,
-                favorite_entities=self._favorite_entities,
-                voice_language=self._voice_language,
-            ),
-            rotation=self._refresh_cycle,
-            fraction=0.04,
-        )
-        self._candidate_ids = {
-            value for item in self._results
-            if (value := RecommendationWorker._work_id(item)) is not None
-        }
-        self._render_results(preserve_scroll=True)
 
     def _update_load_more_ui(self):
         button = getattr(self, "load_more_button", None)
@@ -1085,21 +1018,9 @@ class RecommendationsPage(QWidget):
                 color:{COLORS['secondary']}; background:transparent; font-size:12px;
             }}
             QLabel#recommendationsReason {{
-                color:{COLORS['muted']}; background:transparent; font-size:10px; max-width:210px;
+                color:{COLORS['secondary']}; background:transparent; font-size:11px;
             }}
-            QPushButton#recommendationsFeedback {{
-                background:{COLORS['surface_alt']}; color:{COLORS['secondary']};
-                border:1px solid {COLORS['border']}; border-radius:8px;
-                min-width:30px; max-width:30px; min-height:26px; max-height:26px;
-                padding:0; font-size:13px; font-weight:850;
-            }}
-            QPushButton#recommendationsFeedback:hover,
-            QPushButton#recommendationsFeedback:checked {{
-                background:{COLORS['accent_soft']}; color:{COLORS['accent']};
-                border-color:{COLORS['accent']};
-            }}
-            QFrame#recommendationsTile {{ background:transparent; border:1px solid transparent; border-radius:12px; }}
-            QFrame#recommendationsTile:hover {{ background:{COLORS['surface']}; border-color:{COLORS['border']}; }}
+            QFrame#recommendationsTile {{ background:transparent; border:none; border-radius:0; }}
             QPushButton#recommendationsRefresh {{
                 background:{COLORS['accent']}; color:{COLORS['accent_text']}; border:1px solid {COLORS['accent']};
                 border-radius:8px; padding:9px 13px; font-weight:800;
