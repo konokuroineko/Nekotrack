@@ -251,7 +251,7 @@ class SettingsPage(QWidget):
                     "ui_scale",
                     [
                         (
-                            "100% (Windows default)" if scale == 100 else f"{scale}%",
+                            f"{scale}%",
                             scale,
                         )
                         for scale in UI_SCALE_OPTIONS
@@ -952,6 +952,8 @@ class SettingsPage(QWidget):
 
     def _combo_row(self, name, description, key, options):
         combo = QComboBox()
+        if key == "ui_scale":
+            combo.setObjectName("uiScaleCombo")
         for label, value in options:
             combo.addItem(label, value)
 
