@@ -136,7 +136,9 @@ class UiStartupTests(unittest.TestCase):
         os.environ["QT_SCALE_FACTOR"] = "1"
         MemorySettings.stores = {}
         try:
-            with patch.object(preferences, "QSettings", MemorySettings):
+            with patch.object(preferences, "QSettings", MemorySettings), patch(
+                "ui.pages.settings_page.get_all_library", return_value=[]
+            ):
                 settings_page = SettingsPage()
                 combo = settings_page.findChild(QComboBox, "uiScaleCombo")
                 restart_button = settings_page.findChild(QPushButton, "uiScaleRestartButton")
