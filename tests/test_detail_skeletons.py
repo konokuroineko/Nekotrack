@@ -178,6 +178,7 @@ class DetailSkeletonTests(unittest.TestCase):
         }
         page._selected_episode_work_id = 12345
         episode_frame = QFrame()
+        QVBoxLayout(episode_frame)
         episode_frame.setProperty("_episodes_section", True)
         episode_frame._pending_episode_cards = [
             {
