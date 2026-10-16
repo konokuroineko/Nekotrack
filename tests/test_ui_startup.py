@@ -132,6 +132,8 @@ class UiStartupTests(unittest.TestCase):
 
     def test_scale_change_offers_a_restart_action(self):
         previous_stores = MemorySettings.stores
+        previous_factor = os.environ.get("QT_SCALE_FACTOR")
+        os.environ["QT_SCALE_FACTOR"] = "1"
         MemorySettings.stores = {}
         try:
             with patch.object(preferences, "QSettings", MemorySettings):
@@ -148,14 +150,28 @@ class UiStartupTests(unittest.TestCase):
                 self.app.processEvents()
                 self.assertEqual(preferences.get("ui_scale"), 125)
                 self.assertFalse(restart_button.isHidden())
+
+                # Rebuilding Settings must not hide a scale change that has
+                # been saved but has not yet been applied at application start.
+                rebuilt_page = SettingsPage()
+                rebuilt_button = rebuilt_page.findChild(QPushButton, "uiScaleRestartButton")
+                self.assertIsNotNone(rebuilt_button)
+                self.assertFalse(rebuilt_button.isHidden())
+
                 restart_button.click()
                 self.assertEqual(requested, [True])
 
                 settings_page.close()
                 settings_page.deleteLater()
+                rebuilt_page.close()
+                rebuilt_page.deleteLater()
                 self.app.processEvents()
         finally:
             MemorySettings.stores = previous_stores
+            if previous_factor is None:
+                os.environ.pop("QT_SCALE_FACTOR", None)
+            else:
+                os.environ["QT_SCALE_FACTOR"] = previous_factor
 
     def test_brand_assets_and_switch_rendering_on_dark_and_white_surfaces(self):
         from PySide6.QtGui import QColor
