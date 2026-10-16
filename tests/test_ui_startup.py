@@ -82,6 +82,25 @@ class UiStartupTests(unittest.TestCase):
         self.assertIn('<circle cx="12" cy="12" r="2.8"/>', _NAV_DRAWINGS["settings"])
         self.assertNotIn("M4 6.2h5.3", _NAV_DRAWINGS["settings"])
 
+    def test_ui_scale_preference_is_configured_before_qt_startup(self):
+        from ui.preferences import UI_SCALE_OPTIONS
+        from ui.scale import configure_ui_scale
+
+        original_scale = os.environ.get("QT_SCALE_FACTOR")
+        try:
+            self.assertEqual(UI_SCALE_OPTIONS, (80, 90, 100, 110, 125, 150, 175, 200))
+            self.assertEqual(configure_ui_scale(125), 125)
+            self.assertEqual(os.environ["QT_SCALE_FACTOR"], "1.25")
+            self.assertEqual(configure_ui_scale(100), 100)
+            self.assertEqual(os.environ["QT_SCALE_FACTOR"], "1")
+            self.assertEqual(configure_ui_scale(120), 100)
+            self.assertEqual(os.environ["QT_SCALE_FACTOR"], "1")
+        finally:
+            if original_scale is None:
+                os.environ.pop("QT_SCALE_FACTOR", None)
+            else:
+                os.environ["QT_SCALE_FACTOR"] = original_scale
+
     def test_brand_assets_and_switch_rendering_on_dark_and_white_surfaces(self):
         from PySide6.QtGui import QColor
         from ui.branding import application_icon, logo_pixmap, wordmark_pixmap
@@ -96,11 +115,13 @@ class UiStartupTests(unittest.TestCase):
         self.assertFalse(app_mark.isNull())
         self.assertEqual(app_mark.toImage().pixelColor(0, 0).alpha(), 0)
 
-        dark_lockup = wordmark_pixmap("#a678ff", 202, 52, light_mode=False)
-        light_lockup = wordmark_pixmap("#59c2b6", 202, 52, light_mode=True)
+        dark_lockup = wordmark_pixmap("#a678ff", 222, 58, light_mode=False)
+        light_lockup = wordmark_pixmap("#59c2b6", 222, 58, light_mode=True)
         self.assertFalse(dark_lockup.isNull())
         self.assertFalse(light_lockup.isNull())
-        self.assertEqual(dark_lockup.size().width(), 202)
+        self.assertEqual(dark_lockup.width(), 666)
+        self.assertEqual(dark_lockup.height(), 174)
+        self.assertEqual(dark_lockup.devicePixelRatioF(), 3.0)
         self.assertEqual(light_lockup.toImage().pixelColor(0, 0).alpha(), 0)
 
         def count_pixels(pixmap, predicate):
@@ -613,6 +634,8 @@ class UiStartupTests(unittest.TestCase):
                 os.chdir(old_cwd)
 
     def test_main_window_builds_with_only_registered_pages(self):
+        from ui.branding import WordmarkLabel
+
         MemorySettings.stores = {
             ("NekoTrack", "NekoTrack"): {
                 preferences._MIGRATION_KEY: True,
@@ -637,7 +660,15 @@ class UiStartupTests(unittest.TestCase):
                         },
                     )
                     self.assertFalse(window.windowIcon().isNull())
-                    self.assertFalse(window.brand_word.pixmap().isNull())
+                    self.assertIsInstance(window.brand_word, WordmarkLabel)
+                    self.assertTrue(window.brand_word._renderer.isValid())
+                    self.assertEqual(window.brand_word.width(), 222)
+                    self.assertEqual(window.brand_word.height(), 58)
+                    self.assertFalse(window.brand_word.hasScaledContents())
+                    self.assertEqual(window.findChild(QFrame, "sidebar").width(), 270)
+                    self.assertEqual(window.navigation_buttons["home"].minimumHeight(), 52)
+                    self.assertEqual(window.navigation_buttons["home"].iconSize().width(), 20)
+                    self.assertEqual(window.navigation_buttons["settings"].minimumHeight(), 52)
                     self.assertEqual(window.brand_word.accessibleName(), "NekoTrack")
                     self.assertIs(
                         window.recommendations_page,

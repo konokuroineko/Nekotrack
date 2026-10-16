@@ -24,6 +24,7 @@ from database import get_all_library
 from ui.bundle_options import BUNDLE_OPTION_GROUPS, BUNDLE_OPTION_KEYS
 from ui.preferences import (
     THEME_PRESETS,
+    UI_SCALE_OPTIONS,
     apply_theme_preset,
     defaults,
     get,
@@ -238,6 +239,23 @@ class SettingsPage(QWidget):
                     "White mode",
                     "Use light surfaces while keeping your selected theme and accent color.",
                     "light_mode",
+                ),
+            ],
+        ))
+        appearance.addWidget(self._section(
+            "Interface scale",
+            [
+                self._combo_row(
+                    "UI scale",
+                    "Scale the whole NekoTrack interface relative to Windows display scaling. Restart NekoTrack to apply.",
+                    "ui_scale",
+                    [
+                        (
+                            "100% (Windows default)" if scale == 100 else f"{scale}%",
+                            scale,
+                        )
+                        for scale in UI_SCALE_OPTIONS
+                    ],
                 ),
             ],
         ))

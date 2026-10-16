@@ -65,6 +65,7 @@ install_qt_message_handler()
 from ui.branding import application_icon
 from ui.main_window import MainWindow
 from ui.preferences import get
+from ui.scale import configure_ui_scale
 from ui.setup_wizard import SetupWizard
 from updater import InstallerDownloader, UpdateChecker
 
@@ -118,6 +119,11 @@ def main():
         setup_forced="--setup" in sys.argv,
         argument_count=len(sys.argv),
     )
+    # Qt reads this multiplier during QApplication construction, so user scale
+    # preferences must be applied before the first GUI application is created.
+    ui_scale = get("ui_scale")
+    configure_ui_scale(ui_scale)
+    log_event("startup.ui_scale_configured", ui_scale_percent=ui_scale)
     with log_operation("startup.create_qapplication"):
         app = QApplication(sys.argv)
     app.setStyle(NekoProxyStyle("Fusion"))
