@@ -317,7 +317,11 @@ class EpisodeCard(QFrame):
             top.addWidget(date)
         body.addLayout(top)
 
-        title = QLabel(episode["title"] or f"Episode {episode['episode_number']}")
+        self._episode_full_title = str(
+            episode["title"] or f"Episode {episode['episode_number']}"
+        )
+        title = QLabel(self._episode_full_title)
+        self._episode_title_label = title
         title.setObjectName("detailEpisodeTitle")
         title.setWordWrap(False)
         title.setMinimumWidth(0)
@@ -366,7 +370,25 @@ class EpisodeCard(QFrame):
             artwork.refresh_theme()
         for button in self.findChildren(QPushButton, "detailBackButton"):
             button.setIcon(navigation_icon("back", COLORS["secondary"]))
+        self._update_episode_title()
         self.update()
+
+    def _update_episode_title(self):
+        """Ellide long episode titles to keep the compact row height stable."""
+        label = getattr(self, "_episode_title_label", None)
+        if label is None or label.width() <= 0:
+            return
+        label.setText(
+            label.fontMetrics().elidedText(
+                self._episode_full_title,
+                Qt.ElideRight,
+                label.contentsRect().width(),
+            )
+        )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_episode_title()
 
     @staticmethod
     def _format_date(value):
