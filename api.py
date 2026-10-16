@@ -36,6 +36,7 @@ __all__ = [
     "get_media_details",
     "get_entity_profile",
     "TMDB_EPISODE_CATALOG_VERSION",
+    "TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS",
     "get_tmdb_access_token",
     "get_tmdb_episode_data",
     "get_tmdb_episode_sample",
@@ -1813,7 +1814,9 @@ def get_media_details(media_id):
 # ---------------------------------------------------------------------------
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
-TMDB_EPISODE_CATALOG_VERSION = 2
+TMDB_EPISODE_CATALOG_VERSION = 3
+# Episode metadata is cached locally and refreshed only when it is at least a week old.
+TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS = 7 * 24 * 60 * 60
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w780"
 TMDB_EPISODE_CACHE_DIRECTORY = Path("data") / "images" / "episodes"
 MAX_TMDB_EPISODE_IMAGE_BYTES = 20 * 1024 * 1024
