@@ -243,8 +243,8 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
             continue
         kind = str(entry.get("entity_type") or "").strip().casefold()
         entity_id = _edge_id(entry.get("entity_id"))
-        if kind == "voice_actor" and not _language_matches(entry.get("language"), voice_language):
-            continue
+        # A favorite is the performer identity, not one particular role. The
+        # actual candidate edge below is filtered by voice language.
         if kind in {"character", "voice_actor", "staff"} and entity_id is not None:
             favorites.add((kind, entity_id))
 

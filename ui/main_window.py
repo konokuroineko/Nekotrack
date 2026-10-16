@@ -830,6 +830,27 @@ class MainWindow(QMainWindow):
         # until the final addWidget/setCurrentWidget swap.
         self.setup_ui(current_page)
         new_root = self._ui_root_stack.currentWidget()
+        if changed_key in {
+            "recommendation_voice_language",
+            "reset",
+            "bundle_include_movies",
+            "bundle_include_ovas",
+            "bundle_include_onas",
+            "bundle_include_specials",
+            "bundle_include_manga",
+            "bundle_include_novels",
+            "bundle_include_one_shots",
+        }:
+            # The rebuilt Home page reads the current preference and starts with
+            # a fresh candidate ordering rather than retaining stale rankings.
+            try:
+                self.home_page.recommendations_page.refresh(force=True)
+            except Exception as error:
+                log_exception(
+                    "recommendations.settings_refresh_failed",
+                    error,
+                    changed_key=changed_key,
+                )
 
         if old_root is not None and old_root is not new_root:
             self._retire_page_tree_when_idle(old_root)
