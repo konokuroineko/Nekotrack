@@ -80,8 +80,10 @@ def staff_role_weight(role):
     normalized = re.sub(r"[^a-z0-9]+", " ", str(role or "").casefold()).strip()
     if not normalized:
         return DEFAULT_STAFF_ROLE_WEIGHT
-    matches = [weight for phrase, weight in STAFF_ROLE_RULES if phrase in normalized]
-    return max(matches, default=DEFAULT_STAFF_ROLE_WEIGHT)
+    matches = [(len(phrase), weight) for phrase, weight in STAFF_ROLE_RULES if phrase in normalized]
+    # Prefer the most specific role: "assistant director" must not inherit
+    # the stronger score of the generic "director" substring.
+    return max(matches, default=(0, DEFAULT_STAFF_ROLE_WEIGHT))[1]
 
 
 def exposure_multiplier(impressions, floor=EXPOSURE_MULTIPLIER_FLOOR):

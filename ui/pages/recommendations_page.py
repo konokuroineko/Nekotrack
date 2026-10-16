@@ -253,8 +253,18 @@ class RecommendationWorker(QObject):
             merge_source_record(dict(row))
         for row in self.favorite_works:
             merge_source_record(dict(row))
+        favorite_source_ids = {
+            self._work_id(item) for item in self.favorite_works
+            if self._work_id(item) is not None
+        }
         for raw_id, state in self.history.items():
-            if not isinstance(state, dict) or state.get("feedback") != "like":
+            if not isinstance(state, dict):
+                continue
+            try:
+                history_work_id = int(raw_id)
+            except (TypeError, ValueError, OverflowError):
+                history_work_id = 0
+            if state.get("feedback") != "like" and history_work_id not in favorite_source_ids:
                 continue
             metadata = state.get("metadata")
             if not isinstance(metadata, dict):
@@ -541,6 +551,7 @@ class RecommendationsPage(QWidget):
         if viewport is None or not viewport.isVisible() or self._shutting_down:
             return
         now = time.monotonic()
+        pending_impressions = []
         for tile, work in list(self._tiles):
             work_id = RecommendationWorker._work_id(work)
             if work_id is None:
@@ -565,14 +576,22 @@ class RecommendationsPage(QWidget):
                 continue
             if now - self._exposure_visible_since[work_id] < 1.25:
                 continue
-            try:
-                record_recommendation_impressions([work])
+            pending_impressions.append((work_id, work))
+
+        if not pending_impressions:
+            return
+        try:
+            record_recommendation_impressions([work for _work_id, work in pending_impressions])
+            for work_id, _work in pending_impressions:
                 self._exposure_counted[work_id] = True
-                self._history = get_recommendation_history()
-            except Exception as error:
-                log_exception(
-                    "recommendations.impression_record_failed", error, work_id=work_id
-                )
+            history = get_recommendation_history()
+            self._history = history if isinstance(history, dict) else {}
+        except Exception as error:
+            log_exception(
+                "recommendations.impression_record_failed",
+                error,
+                work_ids=[work_id for work_id, _work in pending_impressions],
+            )
 
     def load_more(self):
         if (
