@@ -45,6 +45,16 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.page.deleteLater()
         self.app.processEvents()
 
+    def test_empty_feed_keeps_pagination_available_when_catalog_has_more(self):
+        self.page._results = []
+        self.page._catalog_has_next = True
+        self.page._loading_more = False
+        self.page._load_more_failed = False
+        self.page._render_results()
+        self.assertIsNotNone(self.page.load_more_button)
+        self.assertTrue(self.page.load_more_button.isEnabled())
+        self.assertEqual(self.page.load_more_button.text(), "Load more")
+
     def test_offscreen_tile_does_not_gain_an_impression(self):
         self.tile.move(300, 0)
         self.app.processEvents()

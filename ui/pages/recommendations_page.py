@@ -271,7 +271,7 @@ class RecommendationWorker(QObject):
                 continue
             if self._work_id(metadata) is None:
                 try:
-                    metadata = {"id": int(raw_id), **metadata}
+                    metadata = {**metadata, "id": int(raw_id)}
                 except (TypeError, ValueError, OverflowError):
                     continue
             merge_source_record(metadata)
@@ -871,7 +871,16 @@ class RecommendationsPage(QWidget):
         layout.addWidget(body)
         layout.addWidget(explore, 0, Qt.AlignmentFlag.AlignLeft)
         self.content_layout.addWidget(empty)
+        self.more_status = QLabel()
+        self.more_status.setObjectName("recommendationsStatus")
+        self.more_status.setWordWrap(True)
+        self.content_layout.addWidget(self.more_status)
+        self.load_more_button = QPushButton("Load more")
+        self.load_more_button.setObjectName("recommendationsRefresh")
+        self.load_more_button.clicked.connect(self.load_more)
+        self.content_layout.addWidget(self.load_more_button, 0, Qt.AlignmentFlag.AlignLeft)
         self.content_layout.addStretch(1)
+        self._update_load_more_ui()
 
     def _render_results(self, preserve_scroll=True):
         old_bar = self._active_scrollbar()
