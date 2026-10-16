@@ -193,7 +193,16 @@ class RecommendationsPage(QWidget):
 
     @staticmethod
     def _rows_signature(rows):
-     def refresh(self, force=False, library_rows=None):
+        return tuple(
+            (
+                str(row.get("id") or ""),
+                str(row.get("type") or "").upper(),
+                RecommendationWorker._title(row),
+            )
+            for row in rows
+        )
+
+    def refresh(self, force=False, library_rows=None):
         if self._shutting_down:
             return
 
@@ -276,12 +285,6 @@ class RecommendationsPage(QWidget):
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda t=thread: self._thread_finished(t))
         self._worker = worker
-        self._thread = thread
-        thread.start()
-        self.refresh_button = self.findChild(QPushButton, "recommendationsRefresh")
-        if self.refresh_button is not None:
-            self.refresh_button.setEnabled(False)
-
         self._thread = thread
         thread.start()
         self.refresh_button = self.findChild(QPushButton, "recommendationsRefresh")
