@@ -86,7 +86,7 @@ class TMDBEpisodeMatchingTests(unittest.TestCase):
         )
         self.assertEqual(selected["season_number"], 1)
 
-    def test_selected_season_keeps_undated_and_out_of_window_entries(self):
+    def test_selected_season_keeps_undated_entries_and_does_not_truncate(self):
         season_payload = {
             "episodes": [
                 {
@@ -104,6 +104,16 @@ class TMDBEpisodeMatchingTests(unittest.TestCase):
                     "overview": "", "air_date": "2021-04-01",
                     "still_path": None, "episode_type": "standard",
                 },
+                {
+                    "id": 4, "episode_number": 4, "name": "In Range Episode 4",
+                    "overview": "Valid episode", "air_date": "2020-11-01",
+                    "still_path": None, "episode_type": "standard",
+                },
+                {
+                    "id": 5, "episode_number": 5, "name": "In Range Episode 5",
+                    "overview": "Valid episode", "air_date": "2020-12-01",
+                    "still_path": None, "episode_type": "standard",
+                },
             ]
         }
         with patch("api._tmdb_get", return_value=season_payload) as request, patch(
@@ -119,8 +129,8 @@ class TMDBEpisodeMatchingTests(unittest.TestCase):
             )
 
         request.assert_called_once_with("/tv/99/season/1", {"language": "en-US"})
-        self.assertEqual([item["episodeNumber"] for item in data["episodes"]], [1, 2, 3])
-        self.assertIsNone(data["episodes"][1]["airdate"])
+        self.assertEqual([item["episodeNumber"] for item in data["episodes"]], [2, 4, 5])
+        self.assertIsNone(data["episodes"][0]["airdate"])
         self.assertEqual(data["tmdb_count"], 3)
 
     def test_catalog_pruning_removes_stale_rows_but_preserves_watched_state(self):

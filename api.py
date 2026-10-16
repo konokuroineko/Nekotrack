@@ -2787,10 +2787,17 @@ def get_tmdb_episode_data(
         if episode_number < 1:
             continue
 
-        # The season endpoint already scopes this record to the selected
-        # TMDB season. Don't discard valid entries because AniList's dates are
-        # approximate or TMDB omits an individual episode's air date.
-        air_date = _parse_date(episode.get("air_date"))
+        # AniList's date interval can separate multiple cours inside a TMDB
+        # season, so honor explicit dates outside the interval. A missing date
+        # alone is not enough to discard an otherwise valid episode.
+        raw_air_date = episode.get("air_date")
+        air_date = _parse_date(raw_air_date)
+        if raw_air_date not in (None, "") and air_date is None:
+            continue
+        if air_date is not None and air_date < target_start:
+            continue
+        if target_end is not None and air_date is not None and air_date >= target_end:
+            continue
 
         thumbnail, image_variants = _pick_best_episode_still(
             tmdb_id,
