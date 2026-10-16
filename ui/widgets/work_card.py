@@ -147,6 +147,7 @@ class WorkCard(QFrame):
             menu_button = QToolButton()
             menu_button.setObjectName("recommendationMenuButton")
             menu_button.setText("⋮")
+            menu_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
             menu_button.setFixedSize(28, 32)
             menu_button.setCursor(Qt.PointingHandCursor)
             menu_button.setAccessibleName("Recommendation preferences")
@@ -156,6 +157,7 @@ class WorkCard(QFrame):
                 f"border:1px solid transparent; border-radius:7px; font-size:21px; font-weight:800; }}"
                 f"QToolButton:hover {{ background:{surface_rgba('surface_hover')}; "
                 f"border-color:{COLORS['border']}; color:{COLORS['primary']}; }}"
+                "QToolButton::menu-indicator { image:none; width:0px; }"
             )
             menu = QMenu(menu_button)
             actions = (
