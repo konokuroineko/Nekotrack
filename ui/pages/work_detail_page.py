@@ -856,7 +856,12 @@ class WorkDetailPage(QWidget):
         for work_id in detail_ids:
             try:
                 work_row = get_work(work_id)
-                expected = int(work_row["episodes"] or 0) if work_row is not None else 0
+                # A not-yet-imported work is not the same as a work with zero
+                # episodes. The import worker may still be writing this row.
+                if work_row is None:
+                    episode_data_ready = False
+                    break
+                expected = int(work_row["episodes"] or 0)
                 saved = get_episodes(work_id)
                 if expected > 0 and not saved:
                     episode_data_ready = False
@@ -1215,11 +1220,57 @@ class WorkDetailPage(QWidget):
 
             content.update()
 
-    def _populate_episode_section(self, token, content, host):
+    def _populate_episode_section(self, token, content, host, attempt=0):
         if token != self._detail_build_token:
             return
         if self.scroll_area.widget() is not content:
             return
+
+        # Detail selection and catalog import run in parallel. Keep the
+        # skeleton alive until every bundled row exists, rather than treating a
+        # missing SQLite row as an empty season and crashing during TMDB setup.
+        if not self._is_reading_media():
+            missing_work_ids = [
+                work_id
+                for work_id in self._detail_work_ids()
+                if get_work(work_id) is None
+            ]
+            if missing_work_ids:
+                if attempt < 120:
+                    QTimer.singleShot(
+                        250,
+                        lambda token=token, page=content, section=host,
+                               next_attempt=attempt + 1:
+                            self._populate_episode_section(
+                                token, page, section, next_attempt
+                            ),
+                    )
+                    return
+
+                error_frame = QFrame()
+                error_frame.setObjectName("section")
+                error_frame.setProperty("_episodes_section", True)
+                error_layout = QVBoxLayout(error_frame)
+                error_layout.setContentsMargins(20, 18, 20, 20)
+                message = QLabel(
+                    "Title data is taking longer than expected. "
+                    "Go back and reopen this title to try again."
+                )
+                message.setWordWrap(True)
+                message.setStyleSheet(muted_label_stylesheet())
+                error_layout.addWidget(message)
+
+                root = content.layout()
+                if root is None:
+                    error_frame.deleteLater()
+                    return
+                index = root.indexOf(host)
+                if index < 0:
+                    error_frame.deleteLater()
+                    return
+                root.replaceWidget(host, error_frame)
+                host.deleteLater()
+                return
 
         new_frame = self._episodes_section(defer_cards=True)
         new_frame.setProperty("_episodes_section", True)
@@ -2748,6 +2799,16 @@ class WorkDetailPage(QWidget):
         lay.addLayout(header)
 
         selected_work = get_work(selected_id) if selected_id is not None else None
+        if selected_work is None:
+            # Stale season selections can outlive the row they referenced, and
+            # a freshly selected title may still be importing. Keep the page
+            # usable while the caller waits for catalog data instead of raising.
+            label = QLabel("Preparing title data…")
+            label.setObjectName("detailEpisodeLoadingLabel")
+            label.setStyleSheet(muted_label_stylesheet())
+            label.setWordWrap(True)
+            lay.addWidget(label)
+            return frame
 
         # Refresh each season once per detail-page session. This also clears
         # stale thumbnail URLs left by earlier episode imports.
