@@ -1,4 +1,6 @@
+import sys
 import threading
+from pathlib import Path
 
 from api import (
     get_media_details,
@@ -6,9 +8,9 @@ from api import (
     get_mangabaka_series_news,
     get_mangabaka_volume_records,
 )
-from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer, QSize
+from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer, QSize, QProcess
 
-from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QMainWindow, QMessageBox, QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout
 
 from database import (
     add_to_library,
@@ -502,8 +504,9 @@ class MainWindow(QMainWindow):
         self._pending_character_cast_refreshes = {}
         self._completed_character_cast_refreshes = set()
         self._profile_work_return_state = None
-        self._work_detail_return_page = None
         self._opening_profile_credit_work = False
+        self._restart_requested = False
+        self._restart_launch_scheduled = False
         self._library_episode_preload_thread = None
         self._library_episode_preload_worker = None
         self._ui_root_stack = None
@@ -629,6 +632,7 @@ class MainWindow(QMainWindow):
         self.work_detail_page.bundle_changed.connect(self._refresh_library_after_bundle_change)
         self.settings_page.settings_changed.connect(self.apply_settings)
         self.settings_page.setup_requested.connect(self.open_setup_wizard)
+        self.settings_page.restart_requested.connect(self._restart_application)
 
         root_layout.addWidget(sidebar)
         root_layout.addWidget(self.stack, 1)
@@ -644,7 +648,7 @@ class MainWindow(QMainWindow):
             QPushButton[navButton="true"]:checked {{ background:{COLORS['accent_soft']}; border-color:{COLORS['nav_selected_frame']}; color:{COLORS['nav_selected_text']}; }}
         """
         )
-        self.navigation.show(initial_page)
+        self.navigation.show(initial_page, record_history=False)
 
         # Keep the currently visible UI root on screen while this complete
         # replacement is being built. Only switch once the new tree exists.
@@ -704,6 +708,14 @@ class MainWindow(QMainWindow):
             return
         self._settings_rebuild_pending = True
         QTimer.singleShot(0, lambda key=changed_key: self._rebuild_for_settings(key))
+
+    def _restart_application(self):
+        """Close workers cleanly, then relaunch with the saved startup scale."""
+        self._restart_requested = True
+        app = QApplication.instance()
+        if app is not None:
+            app.setQuitOnLastWindowClosed(False)
+        self.close()
 
     def _apply_theme_live(self):
         refresh_theme()
@@ -958,17 +970,6 @@ class MainWindow(QMainWindow):
 
 
     def show_work_details(self, work):
-        # Remember the originating destination so Back can return to Favorites,
-        # Search, or Home rather than always throwing the user into Library.
-        current_widget = self.stack.currentWidget() if hasattr(self, "stack") else None
-        if current_widget is not self.work_detail_page:
-            self._work_detail_return_page = next(
-                (
-                    name for name, page in self.navigation.pages.items()
-                    if page is current_widget
-                ),
-                "collections",
-            )
         # A normal work selection starts a new navigation path. Preserve the
         # profile return target only while opening a work from a profile credit.
         if not self._opening_profile_credit_work:
@@ -1097,14 +1098,9 @@ class MainWindow(QMainWindow):
                 source_work=state["source_work"],
                 voice_actors=state["voice_actors"],
             )
-            self.navigation.show("entity_profile")
+            self.navigation.show("entity_profile", record_history=False)
             return
-        target = self._work_detail_return_page
-        self._work_detail_return_page = None
-        if target in self.navigation.pages and target not in {"work_detail", "entity_profile"}:
-            self.navigation.show(target)
-        else:
-            self.navigation.show("collections")
+        self.navigation.back(fallback="collections", skip=("work_detail",))
 
     def show_entity_profile(self, entity_type, entity):
         """Open a detailed character, staff, or voice-actor profile."""
@@ -1606,6 +1602,35 @@ class MainWindow(QMainWindow):
                 continue
         return False
 
+    def _launch_restarted_application(self):
+        app = QApplication.instance()
+        if app is None:
+            return
+
+        if getattr(sys, "frozen", False):
+            program = sys.executable
+            arguments = list(sys.argv[1:])
+        else:
+            program = sys.executable
+            script = Path(__file__).resolve().parents[1] / "main.py"
+            arguments = [str(script), *sys.argv[1:]]
+
+        try:
+            result = QProcess.startDetached(program, arguments, str(Path.cwd()))
+            started = result[0] if isinstance(result, tuple) else bool(result)
+        except Exception as error:
+            log_exception("app.restart.failed", error)
+            started = False
+
+        if not started:
+            QMessageBox.warning(
+                None,
+                "Restart failed",
+                "Your scale choice is saved, but NekoTrack could not reopen itself. "
+                "Close and launch NekoTrack again to apply the new scale.",
+            )
+        app.quit()
+
     def closeEvent(self, event):
         self._shutdown_requested = True
         self._shutdown_event.set()
@@ -1641,6 +1666,9 @@ class MainWindow(QMainWindow):
         if self._release_reminder_tray.isVisible():
             self._release_reminder_tray.hide()
         event.accept()
+        if self._restart_requested and not self._restart_launch_scheduled:
+            self._restart_launch_scheduled = True
+            QTimer.singleShot(250, self._launch_restarted_application)
 
     def _poll_shutdown_workers(self):
         if self._has_running_worker_threads():
