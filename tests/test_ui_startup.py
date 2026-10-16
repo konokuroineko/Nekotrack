@@ -750,7 +750,7 @@ class UiStartupTests(unittest.TestCase):
                     self.assertFalse(window.windowIcon().isNull())
                     self.assertIsInstance(window.brand_word, WordmarkLabel)
                     self.assertFalse(window.brand_word._pixmap.isNull())
-        self.assertGreaterEqual(window.brand_word._pixmap.devicePixelRatioF(), 4.0)
+                    self.assertGreaterEqual(window.brand_word._pixmap.devicePixelRatioF(), 4.0)
                     self.assertEqual(window.brand_word.width(), 222)
                     self.assertEqual(window.brand_word.height(), 58)
                     self.assertFalse(window.brand_word.hasScaledContents())
