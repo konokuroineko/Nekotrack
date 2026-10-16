@@ -172,9 +172,9 @@ class DetailSkeletonTests(unittest.TestCase):
         artwork = card.findChild(EpisodeArtwork)
         description = card.findChild(QLabel, "detailEpisodeDescription")
 
-        self.assertLess(card.minimumHeight(), 80)
-        self.assertEqual(artwork.size().width(), 116)
-        self.assertEqual(artwork.size().height(), 65)
+        self.assertLessEqual(card.minimumHeight(), 64)
+        self.assertEqual(artwork.size().width(), 96)
+        self.assertEqual(artwork.size().height(), 54)
         # Empty synopses are omitted entirely rather than taking up row space.
         self.assertIsNone(description)
 
