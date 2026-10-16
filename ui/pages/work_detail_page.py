@@ -46,6 +46,7 @@ from ui.widgets.relation_card import RelationCard
 
 
 IMAGE_DIRECTORY = Path("data") / "images" / "works"
+EPISODE_IMAGE_CACHE_RETRY_COOLDOWN_SECONDS = 300
 
 
 
@@ -165,32 +166,90 @@ class EpisodeImageCacheWorker(QObject):
         self.work_id = int(work_id)
         self.episodes = [dict(episode) for episode in (episodes or [])]
         self.stop_event = stop_event
+        self.failed_episode_numbers = []
+        self.attempted_count = 0
+        self.cached_count = 0
+        self.cancelled = False
 
     def run(self):
         errors = []
+        log_event(
+            "episodes.image_cache_worker_started",
+            work_id=self.work_id,
+            image_count=len(self.episodes),
+        )
         for episode in self.episodes:
             if self.stop_event is not None and self.stop_event.is_set():
+                self.cancelled = True
                 break
+
             number = episode.get("episodeNumber")
             url = episode.get("thumbnail")
-            if number is None or not url:
+            if number is None or not str(url or "").strip():
+                continue
+            try:
+                episode_number = int(number)
+                if episode_number < 1:
+                    raise ValueError("Episode number must be positive.")
+            except (TypeError, ValueError, OverflowError) as error:
+                self.failed_episode_numbers.append(None)
+                errors.append("Invalid episode number")
+                log_exception(
+                    "episodes.image_cache_item_failed",
+                    error,
+                    work_id=self.work_id,
+                    episode_number=None,
+                )
                 continue
 
+            self.attempted_count += 1
+            log_event(
+                "episodes.image_cache_item_started",
+                work_id=self.work_id,
+                episode_number=episode_number,
+            )
             try:
                 local_path = cache_tmdb_episode_image(
                     url,
                     self.work_id,
-                    number,
+                    episode_number,
                 )
-                if local_path:
-                    save_episode_thumbnail_path(
-                        self.work_id,
-                        number,
-                        local_path,
-                    )
-            except Exception as error:
-                errors.append(f"Episode {int(number)}: {error}")
+                if not local_path:
+                    raise ValueError("TMDB returned no usable image data.")
 
+                saved = save_episode_thumbnail_path(
+                    self.work_id,
+                    episode_number,
+                    local_path,
+                )
+                if not saved:
+                    raise RuntimeError("The cached image path could not be saved.")
+
+                self.cached_count += 1
+                log_event(
+                    "episodes.image_cache_item_completed",
+                    work_id=self.work_id,
+                    episode_number=episode_number,
+                    path_saved=True,
+                )
+            except Exception as error:
+                self.failed_episode_numbers.append(episode_number)
+                errors.append(f"Episode {episode_number}: {type(error).__name__}")
+                log_exception(
+                    "episodes.image_cache_item_failed",
+                    error,
+                    work_id=self.work_id,
+                    episode_number=episode_number,
+                )
+
+        log_event(
+            "episodes.image_cache_worker_finished",
+            work_id=self.work_id,
+            attempted_count=self.attempted_count,
+            cached_count=self.cached_count,
+            failed_count=len(self.failed_episode_numbers),
+            cancelled=self.cancelled,
+        )
         if errors:
             self.error.emit(self.work_id, "; ".join(errors[:3]))
         else:
@@ -298,6 +357,8 @@ class EpisodeCard(QFrame):
             episode["episode_number"],
         )
         artwork.load(episode["thumbnail_url"])
+        if episode.get("thumbnail_cache_failed"):
+            artwork._show_fallback("UNAVAILABLE")
         layout.addWidget(artwork, 0, Qt.AlignVCenter)
 
         body = QVBoxLayout()
@@ -689,6 +750,7 @@ class WorkDetailPage(QWidget):
         self._episode_sync_work_id = None
         self._episode_image_cache_threads = {}
         self._episode_image_cache_workers = {}
+        self._episode_image_cache_retry_after = {}
         self._staff_next_pages = {}
         self._staff_exhausted_ids = set()
         self._staff_page_errors = {}
@@ -2960,6 +3022,16 @@ class WorkDetailPage(QWidget):
         selected_id = self._selected_episode_work_id
         raw_episodes = get_episodes(selected_id) if selected_id is not None else []
         episodes = self._normalize_episode_rows(selected_id, raw_episodes)
+        retry_after = (
+            self._episode_image_cache_retry_after.get(int(selected_id), 0.0)
+            if selected_id is not None else 0.0
+        )
+        retry_suppressed = retry_after > time.monotonic()
+        if retry_suppressed:
+            for episode in episodes:
+                thumbnail = str(episode.get("thumbnail_url") or "").strip()
+                if thumbnail and not Path(thumbnail).is_file():
+                    episode["thumbnail_cache_failed"] = True
         if selected_id is not None and episodes:
             self._start_episode_image_cache(
                 selected_id,
@@ -3418,6 +3490,18 @@ class WorkDetailPage(QWidget):
         if work_id in self._episode_image_cache_threads:
             return
 
+        retry_after = self._episode_image_cache_retry_after.get(work_id, 0.0)
+        now = time.monotonic()
+        if retry_after > now:
+            log_event(
+                "episodes.image_cache_retry_suppressed",
+                work_id=work_id,
+                seconds_remaining=round(retry_after - now, 1),
+            )
+            return
+        if retry_after:
+            self._episode_image_cache_retry_after.pop(work_id, None)
+
         cacheable = [
             dict(episode)
             for episode in (episodes or [])
@@ -3429,6 +3513,7 @@ class WorkDetailPage(QWidget):
             return
 
         thread = QThread(self)
+        thread.setProperty("episode_image_cache_work_id", work_id)
         worker = EpisodeImageCacheWorker(work_id, cacheable, self._shutdown_event)
         worker.moveToThread(thread)
 
@@ -3438,32 +3523,72 @@ class WorkDetailPage(QWidget):
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
+        # Keep strong references to the QThread and worker until Qt confirms
+        # that the background thread has actually stopped.
+        thread.finished.connect(self._episode_image_cache_thread_finished)
         thread.finished.connect(thread.deleteLater)
 
         self._episode_image_cache_threads[work_id] = thread
         self._episode_image_cache_workers[work_id] = worker
+        log_event(
+            "episodes.image_cache_thread_started",
+            work_id=work_id,
+            image_count=len(cacheable),
+        )
         thread.start()
 
     def _episode_image_cache_finished(self, work_id):
         work_id = int(work_id)
-        self._episode_image_cache_cleanup(work_id)
+        self._episode_image_cache_retry_after.pop(work_id, None)
         if self._shutdown_event.is_set():
             return
 
+        log_event("episodes.image_cache_batch_succeeded", work_id=work_id)
         if self._selected_episode_work_id == work_id:
             self._replace_episode_section()
 
     def _episode_image_cache_error(self, work_id, error):
         work_id = int(work_id)
-        self._episode_image_cache_cleanup(work_id)
         if self._shutdown_event.is_set():
             return
-        print(f"TMDB episode image cache failed for work {work_id}: {error}")
 
-        # Some images may have succeeded before one failed. Rebuild the
-        # selected season so any newly cached local files appear immediately.
+        # Do not immediately retry failed image downloads while rebuilding the
+        # episode list. A missing or rejected image used to start another worker
+        # on each rebuild, which could create a runaway worker/render loop.
+        self._episode_image_cache_retry_after[work_id] = (
+            time.monotonic() + EPISODE_IMAGE_CACHE_RETRY_COOLDOWN_SECONDS
+        )
+        worker = self._episode_image_cache_workers.get(work_id)
+        log_event(
+            "episodes.image_cache_batch_failed",
+            work_id=work_id,
+            retry_cooldown_seconds=EPISODE_IMAGE_CACHE_RETRY_COOLDOWN_SECONDS,
+            failed_episode_numbers=list(
+                getattr(worker, "failed_episode_numbers", [])
+            ),
+            error_summary=str(error)[:400],
+        )
+
+        # Rebuild once to show successful local images and unavailable ones.
+        # Keep the active thread registered until thread.finished; this avoids
+        # starting a duplicate worker before Qt has stopped the previous one.
         if self._selected_episode_work_id == work_id:
             self._replace_episode_section()
+
+    def _episode_image_cache_thread_finished(self):
+        thread = self.sender()
+        if thread is None:
+            return
+        raw_work_id = thread.property("episode_image_cache_work_id")
+        try:
+            work_id = int(raw_work_id)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if self._episode_image_cache_threads.get(work_id) is not thread:
+            return
+
+        self._episode_image_cache_cleanup(work_id)
+        log_event("episodes.image_cache_thread_stopped", work_id=work_id)
 
     def _episode_image_cache_cleanup(self, work_id):
         self._episode_image_cache_threads.pop(int(work_id), None)
