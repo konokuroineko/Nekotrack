@@ -35,7 +35,7 @@ from ui.display_identity import copy_custom_cover, get_display_override, invalid
 from ui.branding import navigation_icon
 from ui.preferences import get
 from ui.pages.search_page import SearchPage
-from ui.theme import COLORS, muted_label_stylesheet
+from ui.theme import COLORS, muted_label_stylesheet, surface_rgba
 from ui.widgets.character_card import CharacterCard
 from ui.widgets.person_card import PersonCard
 from ui.widgets.relation_card import RelationCard
@@ -203,13 +203,13 @@ class EpisodeArtwork(QLabel):
         self.setFixedSize(180, 102)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
-            f"background:{COLORS['background_alt']};border-radius:10px;"
+            f"background:{surface_rgba('background_alt')};border-radius:10px;"
             f"color:{COLORS['muted']};font-size:11px;font-weight:800;"
         )
 
     def refresh_theme(self):
         self.setStyleSheet(
-            f"background:{COLORS['background_alt']};border-radius:10px;"
+            f"background:{surface_rgba('background_alt')};border-radius:10px;"
             f"color:{COLORS['muted']};font-size:11px;font-weight:800;"
         )
         self.update()
@@ -576,7 +576,7 @@ class BundleRemoveDialog(QDialog):
             f"""
             QDialog {{ background:{COLORS['background']}; }}
             QListWidget {{
-                background:{COLORS['surface']};
+                background:{surface_rgba('surface')};
                 color:{COLORS['primary']};
                 border:1px solid {COLORS['border']};
                 border-radius:12px;
@@ -589,7 +589,7 @@ class BundleRemoveDialog(QDialog):
                 padding:10px 12px;
             }}
             QListWidget::item:hover, QListWidget::item:selected {{
-                background:{COLORS['surface_hover']};
+                background:{surface_rgba('surface_hover')};
                 border-color:{COLORS['accent']};
             }}
         """
@@ -1071,29 +1071,29 @@ class WorkDetailPage(QWidget):
         self.setStyleSheet(f"""
             QPushButton#back {{ background: transparent; border: 0; color: {COLORS['secondary']}; padding: 5px 0; font-weight: 750; }}
             QPushButton#back:hover {{ color: {COLORS['primary']}; }}
-            QFrame#hero {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: 22px; }}
-            QFrame#section {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: 18px; }}
+            QFrame#hero {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 22px; }}
+            QFrame#section {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 18px; }}
             QFrame#episodeCard {{
-                background: {COLORS['surface_alt']};
+                background: {surface_rgba('surface_alt')};
                 border: 1px solid {COLORS['border']};
                 border-radius: 14px;
             }}
             QFrame#episodeCard:hover {{
-                background: {COLORS['surface_hover']};
+                background: {surface_rgba('surface_hover')};
                 border-color: {COLORS['border_hover']};
             }}
             QFrame#detailSkeletonSection {{
-                background:{COLORS['surface']};
+                background:{surface_rgba('surface')};
                 border:1px solid {COLORS['frame']};
                 border-radius:16px;
             }}
             QFrame#detailSkeletonCard, QFrame#detailSkeletonEpisodeCard {{
-                background:{COLORS['surface_alt']};
+                background:{surface_rgba('surface_alt')};
                 border:1px solid {COLORS['border']};
                 border-radius:10px;
             }}
             QFrame#detailSkeletonBlock, QFrame#detailSkeletonCover {{
-                background:{COLORS['surface_hover']};
+                background:{surface_rgba('surface_hover')};
                 border:1px solid {COLORS['border']};
                 border-radius:6px;
             }}
@@ -1112,59 +1112,59 @@ class WorkDetailPage(QWidget):
             }}
             QLabel#detailHeroCover {{
                 color:{COLORS['muted']};
-                background:{COLORS['background_alt']};
+                background:{surface_rgba('background_alt')};
                 border-radius:14px;
             }}
             QLabel#detailHeroCover[coverLoading="true"] {{
                 color:{COLORS['muted']};
-                background:{COLORS['surface_alt']};
+                background:{surface_rgba('surface_alt')};
                 border:1px solid {COLORS['border']};
                 border-radius:14px;
                 font-size:11px;
                 font-weight:750;
             }}
             QFrame#readingKindSection {{
-                background:{COLORS['surface_alt']};
+                background:{surface_rgba('surface_alt')};
                 border:1px solid {COLORS['border']};
                 border-radius:12px;
             }}
             QSpinBox#readingProgressCount {{
                 min-width:110px;
                 color:{COLORS['primary']};
-                background:{COLORS['surface']};
+                background:{surface_rgba('surface')};
                 border:1px solid {COLORS['border']};
                 border-radius:8px;
                 padding:6px 8px;
             }}
             QSpinBox#readingProgressCount:disabled {{
                 color:{COLORS['muted']};
-                background:{COLORS['surface_alt']};
+                background:{surface_rgba('surface_alt')};
             }}
             QPushButton#detailBackButton {{ background:transparent; border:1px solid transparent; border-radius:21px; padding:0; }}
-            QPushButton#detailBackButton:hover {{ background:{COLORS['surface_hover']}; border-color:{COLORS['border']}; }}
-            QPushButton#detailBackButton:pressed {{ background:{COLORS['accent_soft']}; }}
+            QPushButton#detailBackButton:hover {{ background:{surface_rgba('surface_hover')}; border-color:{COLORS['border']}; }}
+            QPushButton#detailBackButton:pressed {{ background:{surface_rgba('accent_soft')}; }}
             QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:2px solid transparent; border-radius:{get('corner_radius') + 2}px; font-size:30px; font-weight:900; padding:0; }}
-            QToolButton#detailMenu:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
+            QToolButton#detailMenu:hover {{ background:{surface_rgba('surface_hover')}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
             QPushButton#detailFavoriteButton {{
-                background:{COLORS['surface_alt']}; color:{COLORS['secondary']};
+                background:{surface_rgba('surface_alt')}; color:{COLORS['secondary']};
                 border:1px solid {COLORS['border']}; border-radius:12px;
                 padding:0; font-size:21px; font-weight:850;
                 min-width:42px; max-width:42px; min-height:42px; max-height:42px;
             }}
             QPushButton#detailFavoriteButton:hover,
             QPushButton#detailFavoriteButton:checked {{
-                background:{COLORS['accent_soft']}; color:{COLORS['accent']};
+                background:{surface_rgba('accent_soft')}; color:{COLORS['accent']};
                 border-color:{COLORS['accent']};
             }}
-            QFrame#deleteOverlay {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}
+            QFrame#deleteOverlay {{ background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:18px; }}
             QLabel#deleteTitle {{ color:{COLORS['primary']}; font-size:19px; font-weight:850; }}
             QLabel#deleteMessage {{ color:{COLORS['secondary']}; font-size:12px; }}
-            QPushButton#deleteCancel {{ background:{COLORS['surface_alt']}; color:{COLORS['secondary']}; border:1px solid {COLORS['border']}; border-radius:9px; padding:9px 16px; font-weight:750; }}
-            QPushButton#deleteCancel:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['primary']}; }}
+            QPushButton#deleteCancel {{ background:{surface_rgba('surface_alt')}; color:{COLORS['secondary']}; border:1px solid {COLORS['border']}; border-radius:9px; padding:9px 16px; font-weight:750; }}
+            QPushButton#deleteCancel:hover {{ background:{surface_rgba('surface_hover')}; color:{COLORS['primary']}; }}
             QPushButton#deleteConfirm {{ background:{COLORS['danger']}; color:{COLORS['primary']}; border:0; border-radius:9px; padding:9px 18px; font-weight:850; }}
             QPushButton#deleteBundle {{ background:{COLORS['danger']}; color:{COLORS['primary']}; border:0; border-radius:9px; padding:9px 14px; font-weight:850; }}
             QPushButton#deleteBundle:hover {{ background:{COLORS['danger']}; }}
-            QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {COLORS['border_hover']}; background: {COLORS['background_alt']}; }}
+            QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {COLORS['border_hover']}; background: {surface_rgba('background_alt')}; }}
             QCheckBox::indicator:checked {{ background: {COLORS['accent']}; border-color: {COLORS['accent']}; }}
         """)
 
@@ -1862,7 +1862,7 @@ class WorkDetailPage(QWidget):
         menu.setStyleSheet(
             f"""
             QMenu {{
-                background: {COLORS['surface']};
+                background: {surface_rgba('surface')};
                 border: 1px solid {COLORS['border']};
                 border-radius: 12px;
                 padding: 6px;
@@ -1877,7 +1877,7 @@ class WorkDetailPage(QWidget):
                 font-weight: 700;
             }}
             QPushButton#detailMenuItem:hover {{
-                background: {COLORS['surface_hover']};
+                background: {surface_rgba('surface_hover')};
                 border-color: {COLORS['accent']};
                 color: {COLORS['primary']};
             }}
@@ -1891,7 +1891,7 @@ class WorkDetailPage(QWidget):
                 font-weight: 800;
             }}
             QPushButton#detailDeleteItem:hover {{
-                background: {COLORS['surface_hover']};
+                background: {surface_rgba('surface_hover')};
                 border-color: {COLORS['accent']};
                 color: {COLORS['danger']};
             }}
@@ -2197,7 +2197,7 @@ class WorkDetailPage(QWidget):
             member_list.setStyleSheet(
                 f"""
                 QListWidget#deleteMemberList {{
-                    background: {COLORS['background_alt']};
+                    background: {surface_rgba('background_alt')};
                     border: 1px solid {COLORS['frame']};
                     border-radius: 9px;
                     padding: 4px;
@@ -2210,12 +2210,12 @@ class WorkDetailPage(QWidget):
                     color: {COLORS['secondary']};
                 }}
                 QListWidget#deleteMemberList::item:hover {{
-                    background: {COLORS['surface_hover']};
+                    background: {surface_rgba('surface_hover')};
                     border-color: {COLORS['accent']};
                     color: {COLORS['primary']};
                 }}
                 QListWidget#deleteMemberList::item:selected {{
-                    background: {COLORS['accent_soft']};
+                    background: {surface_rgba('accent_soft')};
                     border-color: {COLORS['accent']};
                     color: {COLORS['primary']};
                 }}
@@ -2535,7 +2535,7 @@ class WorkDetailPage(QWidget):
             progress_bar.setTextVisible(False)
             progress_bar.setFixedHeight(7)
             progress_bar.setStyleSheet(
-                f"QProgressBar {{ background:{COLORS['background_alt']};"
+                f"QProgressBar {{ background:{surface_rgba('background_alt')};"
                 f"border:0;border-radius:3px; }}"
                 f"QProgressBar::chunk {{ background:{COLORS['accent']};"
                 "border-radius:3px; }}"
@@ -2679,7 +2679,7 @@ class WorkDetailPage(QWidget):
             f"""
             QLabel {{
                 color:{COLORS['secondary']};
-                background:{COLORS['surface_alt']};
+                background:{surface_rgba('surface_alt')};
                 border:1px solid {COLORS['border']};
                 border-radius:8px;
                 padding:4px 8px;
@@ -2710,7 +2710,7 @@ class WorkDetailPage(QWidget):
             season_button.setStyleSheet(
                 f"""
                 QToolButton {{
-                    background:{COLORS['surface_alt']};
+                    background:{surface_rgba('surface_alt')};
                     color:{COLORS['primary']};
                     border:1px solid {COLORS['border']};
                     border-radius:9px;
@@ -2718,7 +2718,7 @@ class WorkDetailPage(QWidget):
                     font-weight:800;
                 }}
                 QToolButton:hover {{
-                    background:{COLORS['surface_hover']};
+                    background:{surface_rgba('surface_hover')};
                     border-color:{COLORS['accent']};
                 }}
                 QToolButton::menu-indicator {{
@@ -3153,8 +3153,8 @@ class WorkDetailPage(QWidget):
 
     def _detail_section_frame_stylesheet(self):
         return (
-            f"QFrame#charactersSection {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
-            f" QFrame#section {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
+            f"QFrame#charactersSection {{ background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
+            f" QFrame#section {{ background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
         )
 
     @staticmethod
@@ -3660,11 +3660,11 @@ class WorkDetailPage(QWidget):
                 color:{COLORS['primary']}; background:transparent; font-size:12px; font-weight:800;
             }}
             QLabel#identityCoverName {{
-                color:{COLORS['secondary']}; background:{COLORS['surface_alt']};
+                color:{COLORS['secondary']}; background:{surface_rgba('surface_alt')};
                 border:1px solid {COLORS['border']}; border-radius:8px; padding:10px;
             }}
             QPushButton#identityBrowseCover, QPushButton#identityReset {{
-                background:{COLORS['surface_alt']}; color:{COLORS['primary']};
+                background:{surface_rgba('surface_alt')}; color:{COLORS['primary']};
                 border:1px solid {COLORS['border']}; border-radius:8px; padding:8px 10px;
             }}
         """)

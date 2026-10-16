@@ -4,7 +4,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QSizePolicy
 
 from ui.preferences import get
-from ui.theme import COLORS
+from ui.theme import COLORS, surface_rgba
 from ui.widgets.work_card import CoverFrame
 
 
@@ -112,7 +112,7 @@ class RelationCard(QFrame):
                 border-radius: {get('corner_radius') + 2}px;
             }}
             QFrame#relationCard:hover {{
-                background: {COLORS['surface_hover']};
+                background: {surface_rgba('surface_hover')};
             }}
             QLabel {{
                 background: transparent;

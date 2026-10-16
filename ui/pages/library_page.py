@@ -19,7 +19,7 @@ from database import (
 )
 from series import get_library_series, group_media_results
 from ui.preferences import get
-from ui.theme import COLORS
+from ui.theme import COLORS, surface_rgba
 from ui.widgets.work_card import WorkCard
 
 
@@ -269,7 +269,7 @@ class LibraryPage(QWidget):
         controls.setObjectName("libraryFilters")
         self.filter_controls = controls
         controls.setStyleSheet(
-            f"QFrame#libraryFilters{{background:{COLORS['surface']};border:none;border-radius:14px;}}"
+            f"QFrame#libraryFilters{{background:{surface_rgba('surface')};border:none;border-radius:14px;}}"
         )
         row = QHBoxLayout(controls); row.setContentsMargins(9, 8, 9, 8); row.setSpacing(6); self.filter_buttons = {}
         for name in ["All", "Watching", "Completed", "Planned"]:
@@ -703,7 +703,7 @@ class LibraryPage(QWidget):
     def refresh_theme(self):
         if hasattr(self, "filter_controls"):
             self.filter_controls.setStyleSheet(
-                f"QFrame#libraryFilters{{background:{COLORS['surface']};border:none;border-radius:14px;}}"
+                f"QFrame#libraryFilters{{background:{surface_rgba('surface')};border:none;border-radius:14px;}}"
             )
         if hasattr(self, "title_label"):
             self.title_label.setStyleSheet(
@@ -727,23 +727,23 @@ class LibraryPage(QWidget):
     def _filter_style(self,active):
         focus = (
             f"QPushButton#libraryFilterButton:focus{{"
-            f"background:{COLORS['surface_hover']};"
+            f"background:{surface_rgba('surface_hover')};"
             f"border:1px solid {COLORS['nav_selected_frame']};"
             "outline:none;}"
         )
         if active:
             return (
-                f"QPushButton#libraryFilterButton{{background:{COLORS['accent_soft']};"
+                f"QPushButton#libraryFilterButton{{background:{surface_rgba('accent_soft')};"
                 f"color:{COLORS['nav_selected_text']};"
                 f"border:1px solid {COLORS['nav_selected_frame']};"
                 f"border-radius:9px;padding:8px 15px;font-weight:800;}}"
-                f"QPushButton#libraryFilterButton:hover{{background:{COLORS['surface']};}}"
+                f"QPushButton#libraryFilterButton:hover{{background:{surface_rgba('surface')};}}"
                 f"{focus}"
             )
         return (
             f"QPushButton#libraryFilterButton{{background:transparent;color:{COLORS['secondary']};"
             f"border:1px solid transparent;border-radius:9px;padding:8px 15px;font-weight:650;}}"
-            f"QPushButton#libraryFilterButton:hover{{background:{COLORS['surface_hover']};"
+            f"QPushButton#libraryFilterButton:hover{{background:{surface_rgba('surface_hover')};"
             f"color:{COLORS['nav_selected_text']};"
             f"border-color:{COLORS['nav_selected_frame']};}}"
             f"{focus}"

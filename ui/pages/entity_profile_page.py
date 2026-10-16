@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from api import get_entity_profile, _normalize_anilist_profile_description
 from database import is_entity_favorite, set_entity_favorite
 from diagnostics import log_exception
-from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
+from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet, surface_rgba
 from ui.widgets.character_card import CharacterArtwork
 from ui.widgets.person_card import PersonCard
 from ui.widgets.work_card import WorkCard
@@ -849,27 +849,27 @@ class EntityProfilePage(QWidget):
             f"""
             QPushButton {{
                 color:{COLORS['primary']};
-                background:{COLORS['surface']};
+                background:{surface_rgba('surface')};
                 border:1px solid {COLORS['border']};
                 border-radius:10px;
                 padding:9px 14px;
                 font-weight:750;
             }}
             QPushButton:hover {{
-                background:{COLORS['surface_hover']};
+                background:{surface_rgba('surface_hover')};
                 border-color:{COLORS['accent']};
             }}
             QPushButton:disabled {{
                 color:{COLORS['muted']};
-                background:{COLORS['background_alt']};
+                background:{surface_rgba('background_alt')};
             }}
             QFrame#profileHeader {{
-                background:{COLORS['surface']};
+                background:{surface_rgba('surface')};
                 border:1px solid {COLORS['frame']};
                 border-radius:18px;
             }}
             QFrame#profileSection {{
-                background:{COLORS['surface']};
+                background:{surface_rgba('surface')};
                 border:1px solid {COLORS['frame']};
                 border-radius:16px;
             }}
@@ -881,12 +881,12 @@ class EntityProfilePage(QWidget):
             QPushButton#profileFavoriteButton {{
                 min-width:42px; max-width:42px; min-height:42px; max-height:42px;
                 padding:0; border-radius:12px; font-size:21px; font-weight:850;
-                color:{COLORS['secondary']}; background:{COLORS['surface_alt']};
+                color:{COLORS['secondary']}; background:{surface_rgba('surface_alt')};
                 border:1px solid {COLORS['border']};
             }}
             QPushButton#profileFavoriteButton:hover,
             QPushButton#profileFavoriteButton:checked {{
-                color:{COLORS['accent']}; background:{COLORS['accent_soft']};
+                color:{COLORS['accent']}; background:{surface_rgba('accent_soft')};
                 border-color:{COLORS['accent']};
             }}
             QLabel#profileKind {{
@@ -905,7 +905,7 @@ class EntityProfilePage(QWidget):
                 font-weight:850;
             }}
             QLabel#profileImage {{
-                background:{COLORS['background_alt']};
+                background:{surface_rgba('background_alt')};
                 border:1px solid {COLORS['frame']};
                 border-radius:14px;
             }}

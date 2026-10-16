@@ -43,7 +43,7 @@ from ui.branding import application_icon, navigation_icon, WordmarkLabel
 from ui.navigation import NavigationController
 from ui.preferences import get
 from ui.setup_wizard import SetupWizard
-from ui.theme import COLORS, application_stylesheet, refresh_theme
+from ui.theme import COLORS, application_stylesheet, refresh_theme, surface_rgba
 from ui.pages.calendar_page import CalendarPage
 from ui.pages.favorites_page import FavoritesPage
 from ui.pages.home_page import HomePage
@@ -639,13 +639,13 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             application_stylesheet()
             + f"""
-            QFrame#sidebar {{ background:{COLORS['sidebar']}; border-right:1px solid {COLORS['frame']}; }}
+            QFrame#sidebar {{ background:{surface_rgba('sidebar')}; border-right:1px solid {COLORS['frame']}; }}
             QFrame#brandBadge {{ background:transparent; border:none; }}
             QLabel#brandWord {{ background:transparent; border:none; padding:0; }}
             QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:11px; padding:13px 15px; text-align:left; font-size:14px; font-weight:600; }}
-            QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
-            QPushButton[navButton="true"]:focus {{ background:{COLORS['surface']}; border-color:{COLORS['nav_selected_frame']}; outline:none; }}
-            QPushButton[navButton="true"]:checked {{ background:{COLORS['accent_soft']}; border-color:{COLORS['nav_selected_frame']}; color:{COLORS['nav_selected_text']}; }}
+            QPushButton[navButton="true"]:hover {{ background:{surface_rgba('surface')}; color:{COLORS['primary']}; }}
+            QPushButton[navButton="true"]:focus {{ background:{surface_rgba('surface')}; border-color:{COLORS['nav_selected_frame']}; outline:none; }}
+            QPushButton[navButton="true"]:checked {{ background:{surface_rgba('accent_soft')}; border-color:{COLORS['nav_selected_frame']}; color:{COLORS['nav_selected_text']}; }}
         """
         )
         self.navigation.show(initial_page, record_history=False)
@@ -725,13 +725,13 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             application_stylesheet()
             + f"""
-            QFrame#sidebar {{ background:{COLORS['sidebar']}; border-right:1px solid {COLORS['frame']}; }}
+            QFrame#sidebar {{ background:{surface_rgba('sidebar')}; border-right:1px solid {COLORS['frame']}; }}
             QFrame#brandBadge {{ background:transparent; border:none; }}
             QLabel#brandWord {{ background:transparent; border:none; padding:0; }}
             QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:11px; padding:13px 15px; text-align:left; font-size:14px; font-weight:600; }}
-            QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
-            QPushButton[navButton="true"]:focus {{ background:{COLORS['surface']}; border-color:{COLORS['nav_selected_frame']}; outline:none; }}
-            QPushButton[navButton="true"]:checked {{ background:{COLORS['accent_soft']}; border-color:{COLORS['nav_selected_frame']}; color:{COLORS['nav_selected_text']}; }}
+            QPushButton[navButton="true"]:hover {{ background:{surface_rgba('surface')}; color:{COLORS['primary']}; }}
+            QPushButton[navButton="true"]:focus {{ background:{surface_rgba('surface')}; border-color:{COLORS['nav_selected_frame']}; outline:none; }}
+            QPushButton[navButton="true"]:checked {{ background:{surface_rgba('accent_soft')}; border-color:{COLORS['nav_selected_frame']}; color:{COLORS['nav_selected_text']}; }}
             """
         )
 

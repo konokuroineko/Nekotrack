@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 
 from database import get_all_library, get_episodes, get_release_reminders, set_release_reminder
 from diagnostics import log_exception
-from ui.theme import COLORS
+from ui.theme import COLORS, surface_rgba
 
 
 class CalendarPage(QWidget):
@@ -217,11 +217,11 @@ class CalendarPage(QWidget):
             QWidget#calendarContent {{ background:transparent; }}
             QScrollArea#calendarScroll {{ background:transparent; border:none; }}
             QFrame#calendarHeader, QFrame#calendarEmpty, QFrame#calendarEvent {{
-                background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:14px;
+                background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:14px;
             }}
             QFrame#calendarEvent:hover {{ border-color:{COLORS['border_hover']}; }}
             QFrame#calendarDateBadge {{
-                background:{COLORS['accent_soft']}; border:1px solid {COLORS['border_hover']}; border-radius:10px;
+                background:{surface_rgba('accent_soft')}; border:1px solid {COLORS['border_hover']}; border-radius:10px;
                 min-width:54px; max-width:54px;
             }}
             QLabel#calendarTitle, QLabel#calendarEmptyTitle {{
@@ -235,11 +235,11 @@ class CalendarPage(QWidget):
             QLabel#calendarWorkTitle {{ color:{COLORS['primary']}; background:transparent; font-size:13px; font-weight:800; }}
             QLabel#calendarEpisodeTitle {{ color:{COLORS['secondary']}; background:transparent; font-size:11px; font-weight:750; }}
             QPushButton#calendarAction, QPushButton#calendarReminderOn {{
-                background:{COLORS['surface_alt']}; color:{COLORS['primary']}; border:1px solid {COLORS['border']};
+                background:{surface_rgba('surface_alt')}; color:{COLORS['primary']}; border:1px solid {COLORS['border']};
                 border-radius:8px; padding:9px 12px; font-size:11px; font-weight:800;
             }}
             QPushButton#calendarAction:hover, QPushButton#calendarReminderOn:hover {{
-                background:{COLORS['accent_soft']}; border-color:{COLORS['accent']};
+                background:{surface_rgba('accent_soft')}; border-color:{COLORS['accent']};
             }}
             QPushButton#calendarReminderOn {{ color:{COLORS['accent']}; }}
         """)

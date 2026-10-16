@@ -50,6 +50,35 @@ FONT_SIZES = {
 }
 SPACING = {"xs": 4, "sm": 8, "md": 14, "lg": 20, "xl": 28, "xxl": 40}
 
+# Theme surfaces use a shared alpha scale so every theme lets the selected
+# wallpaper show through while keeping stronger layers readable.
+SURFACE_OPACITY = {
+    "sidebar": 82,
+    "background_alt": 76,
+    "surface": 78,
+    "surface_alt": 85,
+    "surface_hover": 92,
+    "panel": 77,
+    "panel_soft": 84,
+    "card": 81,
+    "card_hover": 92,
+    "accent_soft": 88,
+}
+
+
+def surface_rgba(key):
+    """Return a theme color as an RGBA stylesheet color at its layer opacity."""
+    key = str(key)
+    value = COLORS.get(key)
+    if value is None:
+        return "transparent"
+    color = QColor(str(value))
+    if not color.isValid():
+        return str(value)
+    opacity = max(0, min(100, int(SURFACE_OPACITY.get(key, 100))))
+    alpha = round(255 * opacity / 100)
+    return f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha})"
+
 
 def refresh_theme():
     theme_name = str(get("theme_preset") or "Neko")
@@ -167,6 +196,33 @@ def retint_widget_styles(
         "|".join(re.escape(color) for color in sorted(replacements, key=len, reverse=True)),
         re.IGNORECASE,
     )
+    rgba_pattern = re.compile(
+        r"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)",
+        re.IGNORECASE,
+    )
+    rgb_candidates = {}
+    for old_color, new_color in replacements.items():
+        old_rgb = QColor(old_color)
+        new_rgb = QColor(new_color)
+        old_key = (old_rgb.red(), old_rgb.green(), old_rgb.blue())
+        new_value = (new_rgb.red(), new_rgb.green(), new_rgb.blue())
+        rgb_candidates.setdefault(old_key, set()).add(new_value)
+    rgba_replacements = {
+        old_rgb: next(iter(new_values))
+        for old_rgb, new_values in rgb_candidates.items()
+        if len(new_values) == 1
+    }
+
+    def retint_rgba(match):
+        old_rgb = tuple(int(match.group(index)) for index in (1, 2, 3))
+        new_rgb = rgba_replacements.get(old_rgb)
+        if new_rgb is None:
+            return match.group(0)
+        return (
+            f"rgba({new_rgb[0]}, {new_rgb[1]}, {new_rgb[2]}, "
+            f"{match.group(4)})"
+        )
+
     app = QApplication.instance()
     if app is None:
         return
@@ -203,6 +259,7 @@ def retint_widget_styles(
             lambda match: replacements[match.group(0).lower()],
             stylesheet,
         )
+        updated = rgba_pattern.sub(retint_rgba, updated)
         if updated == stylesheet:
             continue
 
@@ -220,25 +277,25 @@ def application_stylesheet():
         QMainWindow {{ background: {COLORS['background']}; color: {COLORS['primary']}; }}
         QWidget {{ background: transparent; color: {COLORS['primary']}; font-family: "Segoe UI"; font-size: {FONT_SIZES['body']}px; }}
         QLabel, QCheckBox, QRadioButton {{ background: transparent; }}
-        QToolTip {{ background: {COLORS['surface_alt']}; color: {COLORS['primary']}; border: 1px solid {COLORS['border']}; padding: 7px 9px; }}
-        QLineEdit, QComboBox, QSpinBox {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: {radius}px; color: {COLORS['primary']}; padding: 10px 12px; selection-background-color: {COLORS['accent']}; }}
+        QToolTip {{ background: {surface_rgba('surface_alt')}; color: {COLORS['primary']}; border: 1px solid {COLORS['border']}; padding: 7px 9px; }}
+        QLineEdit, QComboBox, QSpinBox {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['border']}; border-radius: {radius}px; color: {COLORS['primary']}; padding: 10px 12px; selection-background-color: {COLORS['accent']}; }}
         QComboBox {{ padding-right: 34px; }}
         QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: 32px; border: none; background: transparent; }}
-        QComboBox QAbstractItemView {{ background: {COLORS['surface']}; color: {COLORS['primary']}; border: 1px solid {COLORS['border']}; border-radius: 10px; padding: 4px; outline: none; selection-background-color: {COLORS['accent_soft']}; }}
+        QComboBox QAbstractItemView {{ background: {surface_rgba('surface')}; color: {COLORS['primary']}; border: 1px solid {COLORS['border']}; border-radius: 10px; padding: 4px; outline: none; selection-background-color: {surface_rgba('accent_soft')}; }}
         QComboBox QAbstractItemView::item {{ min-height: 28px; padding: 6px 10px; border-radius: 6px; }}
-        QComboBox QAbstractItemView::item:hover {{ background: {COLORS['surface_hover']}; color: {COLORS['primary']}; }}
-        QComboBox QAbstractItemView::item:selected {{ background: {COLORS['accent_soft']}; color: {COLORS['nav_selected_text']}; }}
+        QComboBox QAbstractItemView::item:hover {{ background: {surface_rgba('surface_hover')}; color: {COLORS['primary']}; }}
+        QComboBox QAbstractItemView::item:selected {{ background: {surface_rgba('accent_soft')}; color: {COLORS['nav_selected_text']}; }}
         QSlider::groove:horizontal {{ height: 6px; background: {COLORS['border']}; border: none; border-radius: 3px; }}
         QSlider::sub-page:horizontal {{ background: {COLORS['accent']}; border: none; border-radius: 3px; }}
-        QSlider::add-page:horizontal {{ background: {COLORS['surface_alt']}; border: none; border-radius: 3px; }}
+        QSlider::add-page:horizontal {{ background: {surface_rgba('surface_alt')}; border: none; border-radius: 3px; }}
         QSlider::handle:horizontal {{ width: 16px; margin: -6px 0; background: {COLORS['primary']}; border: 2px solid {COLORS['accent']}; border-radius: 8px; }}
         QSlider::handle:horizontal:hover {{ background: {COLORS['accent_hover']}; border-color: {COLORS['accent_hover']}; }}
         QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {COLORS['accent']}; }}
-        QPushButton {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: {max(6, radius - 3)}px; color: {COLORS['secondary']}; padding: 9px 13px; font-weight: 600; }}
-        QPushButton:hover {{ background: {COLORS['surface_hover']}; border-color: {COLORS['border_hover']}; color: {COLORS['primary']}; }}
-        QPushButton:pressed {{ background: {COLORS['surface_alt']}; }}
+        QPushButton {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['border']}; border-radius: {max(6, radius - 3)}px; color: {COLORS['secondary']}; padding: 9px 13px; font-weight: 600; }}
+        QPushButton:hover {{ background: {surface_rgba('surface_hover')}; border-color: {COLORS['border_hover']}; color: {COLORS['primary']}; }}
+        QPushButton:pressed {{ background: {surface_rgba('surface_alt')}; }}
         QPushButton:focus {{ border-color: {COLORS['accent']}; outline: none; }}
-        QPushButton:disabled {{ color: {COLORS['muted']}; background: {COLORS['background_alt']}; }}
+        QPushButton:disabled {{ color: {COLORS['muted']}; background: {surface_rgba('background_alt')}; }}
         QScrollArea {{ border: none; background: transparent; }}
         QScrollArea > QWidget > QWidget {{ background: transparent; }}
         QScrollBar:vertical {{ background: transparent; width: 10px; margin: 3px 1px; border: none; }}
@@ -255,12 +312,12 @@ def application_stylesheet():
 
 def panel_stylesheet(radius=None):
     radius = get("corner_radius") if radius is None else radius
-    return f"QFrame {{ background: {COLORS['surface']}; border: 1px solid {COLORS['frame']}; border-radius: {radius}px; }}"
+    return f"QFrame {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: {radius}px; }}"
 
 
 def card_stylesheet(radius=None):
     radius = get("corner_radius") if radius is None else radius
-    return f"QFrame {{ background: {COLORS['card']}; border: 2px solid {COLORS['frame']}; border-radius: {radius}px; }} QFrame:hover {{ background: {COLORS['card_hover']}; border-color: {COLORS['frame']}; }}"
+    return f"QFrame {{ background: {surface_rgba('card')}; border: 2px solid {COLORS['frame']}; border-radius: {radius}px; }} QFrame:hover {{ background: {surface_rgba('card_hover')}; border-color: {COLORS['frame']}; }}"
 
 
 def muted_label_stylesheet():
