@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -152,7 +153,7 @@ class SettingsPage(QWidget):
     def __init__(self, background_manager=None):
         super().__init__()
         self.background_manager = background_manager
-        self._active_ui_scale = get("ui_scale")
+        self._active_ui_scale = self._read_active_ui_scale()
         self._ui_scale_combo = None
         self._ui_scale_restart_action = None
         self._background_list = None
@@ -987,6 +988,19 @@ class SettingsPage(QWidget):
             self._ui_scale_combo = combo
             combo.currentIndexChanged.connect(self._update_ui_scale_restart_visibility)
         return self._row(name, description, combo)
+
+    @staticmethod
+    def _read_active_ui_scale():
+        """Read the scale factor applied before QApplication was created."""
+        configured = get("ui_scale")
+        factor_text = os.environ.get("QT_SCALE_FACTOR")
+        if factor_text is None:
+            return configured
+        try:
+            active = int(round(float(factor_text) * 100))
+        except (TypeError, ValueError, OverflowError):
+            return configured
+        return active if active in UI_SCALE_OPTIONS else configured
 
     def _scale_restart_action(self):
         wrapper = QWidget()
