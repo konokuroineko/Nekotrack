@@ -78,7 +78,8 @@ class UiStartupTests(unittest.TestCase):
         )
         self.assertEqual(len({page for _icon, _label, page in SIDEBAR_NAVIGATION}), 6)
         self.assertIn('stroke-width="3.5"', _wordmark_svg())
-        self.assertIn('<circle cx="12" cy="12" r="3"/>', _NAV_DRAWINGS["settings"])
+        self.assertEqual(_NAV_DRAWINGS["settings"].count("L"), 23)
+        self.assertIn('<circle cx="12" cy="12" r="2.8"/>', _NAV_DRAWINGS["settings"])
         self.assertNotIn("M4 6.2h5.3", _NAV_DRAWINGS["settings"])
 
     def test_brand_assets_and_switch_rendering_on_dark_and_white_surfaces(self):
@@ -656,6 +657,17 @@ class UiStartupTests(unittest.TestCase):
                     )
                     self.assertTrue(
                         all(not button.icon().isNull() for button in window.navigation_buttons.values())
+                    )
+                    sidebar = window.findChild(QFrame, "sidebar")
+                    self.assertIsNotNone(sidebar)
+                    sidebar_layout = sidebar.layout()
+                    # Flexible spacers bracket the five main destinations so
+                    # the group sits vertically centered while Settings stays last.
+                    self.assertIsNotNone(sidebar_layout.itemAt(2).spacerItem())
+                    self.assertIsNotNone(sidebar_layout.itemAt(8).spacerItem())
+                    self.assertIs(
+                        sidebar_layout.itemAt(9).widget(),
+                        window.navigation_buttons["settings"],
                     )
                     window.close()
                     window.deleteLater()
