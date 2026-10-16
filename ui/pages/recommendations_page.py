@@ -356,6 +356,7 @@ class RecommendationWorker(QObject):
             credit_profile=self.credit_profile,
             favorite_entities=self.favorite_entities,
             voice_language=self.voice_language,
+            exclude_seen=True,
         )
         ranked = inject_rare_exploration(ranked, rotation=self.refresh_cycle, fraction=0.04)
         self.finished.emit(ranked)
