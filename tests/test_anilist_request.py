@@ -12,7 +12,7 @@ class AniListRequestRetryTests(unittest.TestCase):
         api._anilist_cooldown_until = 0.0
 
     @patch("api._wait_for_anilist_slot")
-    @patch("api.time.sleep")
+    @patch("api._retry_sleep")
     @patch("api.requests.post")
     def test_ssl_eof_retries_with_bounded_timeout_then_succeeds(
         self, post, sleep, _wait_for_slot
@@ -41,7 +41,7 @@ class AniListRequestRetryTests(unittest.TestCase):
         sleep.assert_called_once_with(1)
 
     @patch("api._wait_for_anilist_slot")
-    @patch("api.time.sleep")
+    @patch("api._retry_sleep")
     @patch("api.requests.post")
     def test_persistent_network_errors_stop_after_three_short_retries(
         self, post, sleep, _wait_for_slot
