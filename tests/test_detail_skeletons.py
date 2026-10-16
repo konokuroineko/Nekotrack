@@ -4,7 +4,10 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QFrame, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QBoxLayout, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton,
+    QToolButton, QVBoxLayout, QWidget, QWidgetAction,
+)
 
 from api import (
     TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS,
@@ -297,6 +300,74 @@ class DetailSkeletonTests(unittest.TestCase):
 
         card.deleteLater()
         self.app.processEvents()
+
+    def test_artwork_menu_stays_left_in_rtl_and_customize_is_inside_it(self):
+        page = WorkDetailPage()
+        values = {
+            "id": 12345,
+            "type": "ANIME",
+            "format": "TV",
+            "episodes": 12,
+            "chapters": None,
+            "volumes": None,
+            "title": {"english": "Example Title"},
+            "title_native": None,
+            "native": None,
+            "description": "Example synopsis",
+            "_series_members": [],
+            "_series_count": 1,
+            "cover_path": None,
+            "cover_url": None,
+            "coverImage": None,
+            "start_year": 2025,
+            "score": None,
+            "averageScore": None,
+        }
+        page._value = lambda key: values.get(key)
+        page._title = lambda: "Example Title"
+        page._is_reading_media = lambda: False
+        page.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        menus = []
+
+        def capture_menu(menu, *_args, **_kwargs):
+            menus.append(menu)
+
+        try:
+            with (
+                patch("ui.pages.work_detail_page.get_display_override", return_value={}),
+                patch("ui.pages.work_detail_page.is_work_favorite", return_value=False),
+                patch.object(page, "_load_remote_cover"),
+                patch("ui.pages.work_detail_page.get_library_series", return_value=[]),
+                patch.object(QMenu, "exec", autospec=True, side_effect=capture_menu),
+            ):
+                hero = page._hero()
+                row = hero.findChild(QHBoxLayout, "detailHeroTitleRow")
+                self.assertIsNotNone(row)
+                self.assertEqual(row.direction(), QBoxLayout.Direction.LeftToRight)
+
+                menu_button = hero.findChild(QToolButton, "detailMenu")
+                self.assertIsNotNone(menu_button)
+                self.assertEqual(menu_button.accessibleName(), "More artwork actions")
+
+                page._show_detail_menu()
+                self.assertEqual(len(menus), 1)
+                menu_labels = []
+                for action in menus[0].actions():
+                    if isinstance(action, QWidgetAction):
+                        button = action.defaultWidget()
+                        if isinstance(button, QPushButton):
+                            menu_labels.append(button.text())
+                self.assertIn("Customize title and cover…", menu_labels)
+                self.assertFalse(any(
+                    button.text() == "Customize title and cover…"
+                    for button in hero.findChildren(QPushButton)
+                ))
+                hero.deleteLater()
+        finally:
+            page.close()
+            page.deleteLater()
+            self.app.processEvents()
 
     def test_hero_cover_distinguishes_loading_from_unavailable(self):
         page = WorkDetailPage()
