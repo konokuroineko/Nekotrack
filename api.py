@@ -66,8 +66,13 @@ __all__ = [
 
 ANILIST_URL = "https://graphql.anilist.co"
 
-MAX_RETRIES = 5
+MAX_RETRIES = 3
 RETRY_DELAY = 1
+ANILIST_REQUEST_TIMEOUT = (5, 15)
+MAX_RETRY_BACKOFF_SECONDS = 4
+# Keep retry sleeps independently patchable in tests; patching time.sleep
+# itself would affect every module because the time module is shared globally.
+_retry_sleep = time.sleep
 MAX_ANILIST_MEDIA_ID = (1 << 31) - 1
 MIN_LOCAL_MEDIA_ID = -((1 << 63) - 1)
 
@@ -203,7 +208,7 @@ def anilist_request(query, variables=None):
                 response = requests.post(
                     ANILIST_URL,
                     json={"query": query, "variables": variables or {}},
-                    timeout=30,
+                    timeout=ANILIST_REQUEST_TIMEOUT,
                 )
             log_event(
                 "api.response",
@@ -234,7 +239,7 @@ def anilist_request(query, variables=None):
                         f"AniList rate limited the request (attempt {attempt + 1}/{MAX_RETRIES}). "
                         f"Retrying in {wait_time:g}s..."
                     )
-                    time.sleep(wait_time)
+                    _retry_sleep(wait_time)
                     continue
 
                 message = error_message(data, getattr(response, "reason", None))
@@ -246,12 +251,24 @@ def anilist_request(query, variables=None):
                     f"{getattr(response, 'reason', '')}"
                 )
                 if attempt < MAX_RETRIES - 1:
-                    wait_time = RETRY_DELAY * (2 ** attempt)
+                    wait_time = min(
+                        MAX_RETRY_BACKOFF_SECONDS,
+                        RETRY_DELAY * (2 ** attempt),
+                    )
+                    log_event(
+                        "api.retry_scheduled",
+                        provider="AniList",
+                        reason="server_error",
+                        attempt=attempt + 1,
+                        max_attempts=MAX_RETRIES,
+                        retry_seconds=wait_time,
+                        status_code=response.status_code,
+                    )
                     print(
                         f"AniList server error (attempt {attempt + 1}/{MAX_RETRIES}). "
                         f"Retrying in {wait_time:g}s..."
                     )
-                    time.sleep(wait_time)
+                    _retry_sleep(wait_time)
                     continue
                 raise last_error
 
@@ -278,18 +295,36 @@ def anilist_request(query, variables=None):
             return _normalize_anilist_description_fields(result)
 
         except (
+            requests.exceptions.SSLError,
             requests.exceptions.ConnectionError,
             requests.exceptions.Timeout,
             requests.exceptions.ChunkedEncodingError,
         ) as error:
             last_error = error
             if attempt < MAX_RETRIES - 1:
-                wait_time = RETRY_DELAY * (2 ** attempt)
-                print(
-                    f"Network error (attempt {attempt + 1}/{MAX_RETRIES}): "
-                    f"{error}. Retrying in {wait_time:g}s..."
+                wait_time = min(
+                    MAX_RETRY_BACKOFF_SECONDS,
+                    RETRY_DELAY * (2 ** attempt),
                 )
-                time.sleep(wait_time)
+                log_event(
+                    "api.retry_scheduled",
+                    provider="AniList",
+                    reason=(
+                        "ssl_error"
+                        if isinstance(error, requests.exceptions.SSLError)
+                        else "network_error"
+                    ),
+                    attempt=attempt + 1,
+                    max_attempts=MAX_RETRIES,
+                    retry_seconds=wait_time,
+                    error_type=type(error).__name__,
+                    error=str(error)[:600],
+                )
+                print(
+                    f"AniList connection failed (attempt {attempt + 1}/{MAX_RETRIES}: "
+                    f"{type(error).__name__}). Retrying in {wait_time:g}s..."
+                )
+                _retry_sleep(wait_time)
             else:
                 print(f"Failed after {MAX_RETRIES} attempts: {error}")
         except requests.exceptions.RequestException:

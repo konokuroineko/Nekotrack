@@ -78,7 +78,9 @@ class AniListRateLimitTests(unittest.TestCase):
 
         with patch.object(api.time, "monotonic", self.clock.monotonic), patch.object(
             api.time, "sleep", self.clock.sleep
-        ), patch.object(api.requests, "post", side_effect=fake_post):
+        ), patch.object(api, "_retry_sleep", self.clock.sleep), patch.object(
+            api.requests, "post", side_effect=fake_post
+        ):
             result = api.anilist_request("query { Media(id: 42) { id } }")
 
         self.assertEqual(result, {"Media": {"id": 42}})

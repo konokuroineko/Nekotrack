@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 )
 
-from diagnostics import log_exception
+from diagnostics import log_event, log_exception
 
 from database import (
     add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
@@ -662,6 +662,8 @@ class BundleRemoveDialog(QDialog):
 
 
 class WorkDetailPage(QWidget):
+    DETAIL_CONTENT_CACHE_LIMIT = 3
+
     back_requested = Signal()
     person_selected = Signal(object)
     character_selected = Signal(object)
@@ -968,7 +970,10 @@ class WorkDetailPage(QWidget):
             episode_host.deleteLater()
             episode_host = reading_frame
         elif episode_data_ready:
-            ready_episode_frame = self._episodes_section()
+            # Reading all episode rows is cheap local I/O; building dozens of
+            # QWidget cards at once is not. Queue cards in bounded batches after
+            # the content becomes the active scroll-area widget.
+            ready_episode_frame = self._episodes_section(defer_cards=True)
             ready_episode_frame.setProperty("_episodes_section", True)
             episode_host.deleteLater()
             episode_host = ready_episode_frame
@@ -1062,7 +1067,7 @@ class WorkDetailPage(QWidget):
                 content.deleteLater()
                 return False
 
-            self._detail_content_cache[key] = content
+            self._cache_detail_content(key, content)
             return True
         except Exception as error:
             print(f"Detail preload failed: {error}")
@@ -1086,6 +1091,48 @@ class WorkDetailPage(QWidget):
 
         QTimer.singleShot(0, preload_next)
 
+    def _cache_detail_content(self, key, content):
+        """Keep only a few inactive detail widget trees to avoid runaway memory use."""
+        normalized_key = tuple(int(work_id) for work_id in key)
+        previous = self._detail_content_cache.pop(normalized_key, None)
+        if previous is not None and previous is not content:
+            previous.deleteLater()
+        self._detail_content_cache[normalized_key] = content
+
+        while len(self._detail_content_cache) > self.DETAIL_CONTENT_CACHE_LIMIT:
+            oldest_key = next(iter(self._detail_content_cache))
+            evicted = self._detail_content_cache.pop(oldest_key)
+            evicted.deleteLater()
+            log_event(
+                "work_detail.cache_evicted",
+                cached_work_ids=list(oldest_key),
+                cache_limit=self.DETAIL_CONTENT_CACHE_LIMIT,
+            )
+
+    def _queue_pending_episode_cards(self, content):
+        """Render cached episode data in small batches only after the page is attached."""
+        frames = [content, *content.findChildren(QFrame)]
+        for frame in frames:
+            episodes = getattr(frame, "_pending_episode_cards", None)
+            if not episodes or getattr(frame, "_episode_cards_rendering", False):
+                continue
+            token = self._detail_build_token
+            offset = max(0, int(getattr(frame, "_episode_cards_rendered_count", 0) or 0))
+            frame._episode_cards_rendering = True
+            log_event(
+                "episodes.card_render_queued",
+                work_id=self._selected_episode_work_id,
+                episode_count=len(episodes),
+                rendered_count=offset,
+                batch_size=6,
+            )
+            QTimer.singleShot(
+                0,
+                lambda token=token, page=content, section=frame, data=episodes, start=offset:
+                    self._populate_episode_cards(token, page, section, data, start),
+            )
+            return
+
     def invalidate_detail_cache(self, work_ids=None):
         ids = {
             int(work_id)
@@ -1104,6 +1151,11 @@ class WorkDetailPage(QWidget):
         self._detail_build_token += 1
 
         detail_ids = self._prepare_detail_state(work)
+        log_event(
+            "work_detail.open_started",
+            work_ids=detail_ids,
+            member_count=len(detail_ids),
+        )
         if previous_selected_episode_id in detail_ids:
             self._selected_episode_work_id = previous_selected_episode_id
 
@@ -1112,7 +1164,7 @@ class WorkDetailPage(QWidget):
             old_key = old_content.property("_detail_cache_key")
             old_cacheable = bool(old_content.property("_detail_cacheable"))
             if old_cacheable and old_key:
-                self._detail_content_cache[tuple(old_key)] = old_content
+                self._cache_detail_content(tuple(old_key), old_content)
             else:
                 old_content.deleteLater()
 
@@ -1122,6 +1174,12 @@ class WorkDetailPage(QWidget):
         if cached is not None:
             self.scroll_area.setWidget(cached)
             self._apply_detail_styles()
+            self._queue_pending_episode_cards(cached)
+            log_event(
+                "work_detail.open_completed",
+                work_ids=detail_ids,
+                cache_hit=True,
+            )
             return
 
         content, _ready = self._build_detail_content(
@@ -1130,6 +1188,13 @@ class WorkDetailPage(QWidget):
         )
         self.scroll_area.setWidget(content)
         self._apply_detail_styles()
+        self._queue_pending_episode_cards(content)
+        log_event(
+            "work_detail.open_completed",
+            work_ids=detail_ids,
+            cache_hit=False,
+            cached_view_count=len(self._detail_content_cache),
+        )
 
     def _apply_detail_styles(self):
         self.setStyleSheet(f"""
@@ -1393,19 +1458,28 @@ class WorkDetailPage(QWidget):
 
 
     def _populate_episode_cards(self, token, content, frame, episodes, offset):
-        if token != self._detail_build_token:
-            return
-        if self.scroll_area.widget() is not content:
+        if token != self._detail_build_token or self.scroll_area.widget() is not content:
+            frame._episode_cards_rendering = False
+            # If this cached page has already become active again, retry with
+            # its current token rather than abandoning its remaining cards.
+            if self.scroll_area.widget() is content:
+                QTimer.singleShot(
+                    0,
+                    lambda page=content: self._queue_pending_episode_cards(page),
+                )
             return
 
         root = content.layout()
         if root is None or root.indexOf(frame) < 0:
+            frame._episode_cards_rendering = False
             return
 
         layout = frame.layout()
         if layout is None:
+            frame._episode_cards_rendering = False
             return
 
+        frame._episode_cards_rendering = True
         batch_size = 6
         end = min(offset + batch_size, len(episodes))
         for ep in episodes[offset:end]:
@@ -1422,6 +1496,7 @@ class WorkDetailPage(QWidget):
             card.watched_changed.connect(self._episode_toggled)
             layout.addWidget(card)
 
+        frame._episode_cards_rendered_count = end
         if end < len(episodes):
             QTimer.singleShot(
                 0,
@@ -1434,6 +1509,16 @@ class WorkDetailPage(QWidget):
                         next_offset,
                     ),
             )
+        else:
+            frame._episode_cards_rendering = False
+            try:
+                delattr(frame, "_pending_episode_cards")
+            except AttributeError:
+                pass
+            try:
+                delattr(frame, "_episode_cards_rendered_count")
+            except AttributeError:
+                pass
 
 
     def _build_detail_sections_local(self, layout, detail_ids):
