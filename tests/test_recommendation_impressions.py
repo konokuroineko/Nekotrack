@@ -92,6 +92,10 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.assertNotIn("♥", buttons)
         self.assertNotIn("♡", buttons)
         self.assertNotIn("×", buttons)
+        self.assertIn("Like", buttons)
+        self.assertIn("Not for me", buttons)
+        self.assertIsNotNone(card.findChild(QPushButton, "recommendationLike"))
+        self.assertIsNotNone(card.findChild(QPushButton, "recommendationDislike"))
         self.assertNotIn("recommendationsTile", card.objectName())
 
         grid = self.page.findChild(QGridLayout)
@@ -108,6 +112,81 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.assertGreater(grid.columnStretch(0), 0)
 
 
+
+    def test_dislike_feedback_is_saved_and_removes_the_title_from_the_feed(self):
+        disliked = {
+            "id": 9877,
+            "type": "ANIME",
+            "title": {"english": "Not for me"},
+            "format": "TV",
+            "_recommendation_reason": "Popular anime discovery",
+        }
+        other = {
+            "id": 9878,
+            "type": "ANIME",
+            "title": {"english": "Another recommendation"},
+            "format": "TV",
+            "_recommendation_reason": "Popular anime discovery",
+        }
+        self.page._results = [disliked, other]
+        self.page._history = {}
+        self.page._catalog_has_next = False
+        self.page._favorite_works = []
+        self.page._favorite_entities = []
+        self.page._credit_profile = {}
+        self.page._voice_language = "ALL"
+        self.page._refresh_cycle = 1
+        self.page.show()
+        self.page._render_results(preserve_scroll=False)
+        self.app.processEvents()
+
+        with (
+            patch(
+                "ui.pages.recommendations_page.set_recommendation_feedback",
+                return_value=True,
+            ) as save_feedback,
+            patch(
+                "ui.pages.recommendations_page.get_recommendation_history",
+                return_value={
+                    9877: {
+                        "work_id": 9877,
+                        "feedback": "dislike",
+                        "metadata": disliked,
+                        "impressions": 0,
+                    }
+                },
+            ),
+        ):
+            button = self.page.findChild(QPushButton, "recommendationDislike")
+            self.assertIsNotNone(button)
+            button.click()
+
+        save_feedback.assert_called_once()
+        self.assertEqual(save_feedback.call_args.args[0:2], (9877, "dislike"))
+        remaining_ids = [item["id"] for item in self.page._results]
+        self.assertNotIn(9877, remaining_ids)
+        self.assertIn(9878, remaining_ids)
+
+    def test_empty_catalog_feed_automatically_loads_another_page(self):
+        self.page._results = []
+        self.page._catalog_has_next = True
+        self.page._loading_more = False
+        self.page._worker = None
+        with (
+            patch.object(self.page, "_render_results") as render,
+            patch.object(self.page, "load_more") as load_more,
+            patch("ui.pages.recommendations_page.QTimer.singleShot") as single_shot,
+        ):
+            self.page._recommendations_ready([])
+
+        render.assert_called_once()
+        self.assertTrue(any(
+            len(call.args) == 2
+            and call.args[0] == 0
+            and getattr(call.args[1], "__self__", None) is self.page
+            and getattr(call.args[1], "__name__", "") == "load_more"
+            for call in single_shot.call_args_list
+        ))
 
     def test_offscreen_tile_does_not_gain_an_impression(self):
         self.tile.move(300, 0)
