@@ -1200,8 +1200,6 @@ def sync_library_relations(force_ids=None):
     return changed
 
 
-
-
 def auto_bundle_library_work(work_id):
     """Refresh provider relations and persist the existing Library grouping for one work.
 
@@ -1220,15 +1218,18 @@ def auto_bundle_library_work(work_id):
         raise ValueError("Add this title to the Library before automatic bundling.")
 
     changed = sync_library_relations(force_ids={numeric_id})
+    def contains_work(item, target_id):
+        for member in item.get("_series_members") or []:
+            try:
+                if int(member["id"]) == target_id:
+                    return True
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+        return False
+
     groups = get_library_series()
     group = next(
-        (
-            item for item in groups
-            if any(
-                int(member.get("id") or 0) == numeric_id
-                for member in (item.get("_series_members") or [])
-            )
-        ),
+        (item for item in groups if contains_work(item, numeric_id)),
         None,
     )
     if group is None:
@@ -1246,19 +1247,17 @@ def auto_bundle_library_work(work_id):
     if len(members) > 1:
         # Existing exclusions are enforced by get_library_series() before this
         # snapshot is persisted. Never create a separate grouping algorithm.
-        if not save_automatic_bundle_membership(min(members), members):
+        try:
+            bundle_id = int(group["id"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            bundle_id = min(members)
+        if not save_automatic_bundle_membership(bundle_id, members):
             raise RuntimeError("NekoTrack could not save the automatic bundle.")
         # Re-read so the returned group reflects the persisted bundle snapshot
         # and any existing user appearance overrides.
         refreshed = get_library_series()
         group = next(
-            (
-                item for item in refreshed
-                if any(
-                    int(member.get("id") or 0) == numeric_id
-                    for member in (item.get("_series_members") or [])
-                )
-            ),
+            (item for item in refreshed if contains_work(item, numeric_id)),
             group,
         )
 
@@ -1268,6 +1267,7 @@ def auto_bundle_library_work(work_id):
         "count": len(members),
         "relations_refreshed": bool(changed),
     }
+
 
 def get_library_series():
     rows = list(get_all_library())

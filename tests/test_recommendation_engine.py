@@ -81,6 +81,10 @@ class RecommendationScoringTests(unittest.TestCase):
             ja_ranked[0]["_recommendation_credit_boost"],
             next(row["_recommendation_credit_boost"] for row in en_ranked if row["id"] == 801),
         )
+        # The person remains favorited across languages; only the matching voice
+        # credit on each candidate is filtered by the selected audio preference.
+        english_candidate = next(row for row in en_ranked if row["id"] == 802)
+        self.assertGreater(english_candidate["_recommendation_credit_boost"], 0)
 
     def test_saved_creator_credit_boosts_important_roles_and_deduplicates(self):
         candidate = {
