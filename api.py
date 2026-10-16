@@ -1258,6 +1258,14 @@ def get_media_recommendations(media_id, per_page=12):
                         startDate { year }
                         title { romaji english native }
                         coverImage { large }
+                         characters(page: 1, perPage: 15, sort: ROLE) {
+                             edges { role node { id } voiceActors { id language } }
+                             pageInfo { hasNextPage }
+                         }
+                         staff(page: 1, perPage: 12) {
+                             edges { role node { id } }
+                             pageInfo { hasNextPage }
+                         }
                     }
                 }
             }
