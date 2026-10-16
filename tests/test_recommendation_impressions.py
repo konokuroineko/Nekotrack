@@ -92,10 +92,20 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.assertNotIn("♥", buttons)
         self.assertNotIn("♡", buttons)
         self.assertNotIn("×", buttons)
-        self.assertIn("Like", buttons)
-        self.assertIn("Not for me", buttons)
-        self.assertIsNotNone(card.findChild(QPushButton, "recommendationLike"))
-        self.assertIsNotNone(card.findChild(QPushButton, "recommendationDislike"))
+        self.assertNotIn("Like", buttons)
+        self.assertNotIn("Not for me", buttons)
+        self.assertIsNone(card.findChild(QPushButton, "recommendationLike"))
+        self.assertIsNone(card.findChild(QPushButton, "recommendationDislike"))
+        menu_button = card.findChild(QToolButton, "recommendationMenuButton")
+        self.assertIsNotNone(menu_button)
+        self.assertEqual(
+            [action.text() for action in menu_button.menu().actions()],
+            [
+                "I want more like this",
+                "I don't want anything from this",
+                "I don't want anything like this",
+            ],
+        )
         self.assertNotIn("recommendationsTile", card.objectName())
 
         grid = self.page.findChild(QGridLayout)
