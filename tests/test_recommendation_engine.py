@@ -26,6 +26,28 @@ class RecommendationScoringTests(unittest.TestCase):
         self.assertEqual(values, sorted(values, reverse=True))
         self.assertGreaterEqual(values[-1], 0.18)
 
+    def test_discovery_skips_seen_titles_but_keeps_explicit_likes(self):
+        candidates = [
+            {"id": 10, "type": "ANIME", "title": {"english": "Already seen"}, "averageScore": 98},
+            {"id": 11, "type": "ANIME", "title": {"english": "Explicit like"}, "averageScore": 70},
+            {"id": 12, "type": "ANIME", "title": {"english": "Fresh title"}, "averageScore": 65},
+        ]
+        history = {
+            10: {"work_id": 10, "feedback": None, "impressions": 4, "metadata": candidates[0]},
+            11: {"work_id": 11, "feedback": "like", "impressions": 12, "metadata": candidates[1]},
+        }
+
+        default_ranked = rank_candidates(candidates, history=history)
+        discovery_ranked = rank_candidates(
+            candidates, history=history, exclude_seen=True
+        )
+
+        self.assertIn(10, [item["id"] for item in default_ranked])
+        discovery_ids = [item["id"] for item in discovery_ranked]
+        self.assertNotIn(10, discovery_ids)
+        self.assertIn(11, discovery_ids)
+        self.assertIn(12, discovery_ids)
+
     def test_like_boosts_matching_metadata_and_dislike_suppresses_exact_title(self):
         candidates = [
             {"id": 1, "type": "ANIME", "title": {"english": "Liked"},
