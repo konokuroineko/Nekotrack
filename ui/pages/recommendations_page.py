@@ -446,16 +446,22 @@ class RecommendationsPage(QWidget):
         except (TypeError, ValueError, OverflowError):
             return 24
 
-    def _columns_for_width(self, width):
+    def _columns_for_width(self, width, item_count=None):
+        """Fit the current row count to the viewport without reserving empty columns."""
         card_width = max(1, int(get("card_size") or 210) + 8)
         gap = self._grid_gap()
-        return max(1, min(8, (max(100, int(width)) + gap) // (card_width + gap)))
+        capacity = max(1, min(8, (max(100, int(width)) + gap) // (card_width + gap)))
+        try:
+            count = max(0, int(item_count)) if item_count is not None else 0
+        except (TypeError, ValueError, OverflowError):
+            count = 0
+        return min(capacity, count) if count else capacity
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self._shutting_down or not self._results or self._layout_refresh_pending:
             return
-        if self._columns_for_width(self._available_feed_width()) != self._rendered_columns:
+        if self._columns_for_width(self._available_feed_width(), len(self._results)) != self._rendered_columns:
             self._layout_refresh_pending = True
             QTimer.singleShot(0, self._refresh_grid_for_resize)
 
@@ -463,7 +469,7 @@ class RecommendationsPage(QWidget):
         self._layout_refresh_pending = False
         if self._shutting_down or not self._results:
             return
-        if self._columns_for_width(self._available_feed_width()) != self._rendered_columns:
+        if self._columns_for_width(self._available_feed_width(), len(self._results)) != self._rendered_columns:
             self._render_results(preserve_scroll=True)
 
     def set_visibility_viewport(self, viewport, scroll_bar=None):
@@ -861,7 +867,7 @@ class RecommendationsPage(QWidget):
         grid.setHorizontalSpacing(gap)
         grid.setVerticalSpacing(gap)
         available_width = self._available_feed_width()
-        columns = self._columns_for_width(available_width)
+        columns = self._columns_for_width(available_width, len(self._results))
         self._rendered_columns = columns
         for column in range(columns):
             grid.setColumnStretch(column, 1)
@@ -877,12 +883,22 @@ class RecommendationsPage(QWidget):
                 recommendation_reason=reason,
             )
             card.clicked.connect(self.work_selected.emit)
-            grid.addWidget(
-                card,
-                index // columns,
-                index % columns,
-                Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter,
-            )
+            row = index // columns
+            row_start = row * columns
+            row_count = min(columns, len(self._results) - row_start)
+            if row_count == 1 and columns > 1:
+                # Center a lone card on the final row across the whole feed.
+                grid.addWidget(
+                    card, row, 0, 1, columns,
+                    Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter,
+                )
+            else:
+                offset = max(0, (columns - row_count) // 2)
+                column = (index % columns) + offset
+                grid.addWidget(
+                    card, row, column,
+                    Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter,
+                )
             self._tiles.append((card, dict(work)))
 
         self.content_layout.addWidget(grid_host)
