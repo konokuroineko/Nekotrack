@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QBuffer, QIODevice
 from PySide6.QtTest import QTest
 from PySide6.QtGui import QPixmap
 from PySide6.QtNetwork import QNetworkReply
-from PySide6.QtWidgets import QApplication, QLabel, QFrame, QTextBrowser, QCheckBox, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QFrame, QTextBrowser, QCheckBox, QComboBox, QPushButton
 
 import ui.preferences as preferences
 
@@ -101,6 +101,55 @@ class UiStartupTests(unittest.TestCase):
             else:
                 os.environ["QT_SCALE_FACTOR"] = original_scale
 
+    def test_navigation_back_uses_the_actual_previous_page(self):
+        from PySide6.QtWidgets import QStackedWidget, QWidget
+        from ui.navigation import NavigationController
+        from ui.branding import _NAV_DRAWINGS, navigation_icon
+
+        self.assertIn("back", _NAV_DRAWINGS)
+        self.assertFalse(navigation_icon("back", "#a678ff").isNull())
+
+        for origin in ("home", "search"):
+            stack = QStackedWidget()
+            navigation = NavigationController(stack)
+            for page_name in ("home", "collections", "search", "work_detail"):
+                navigation.add_page(page_name, QWidget())
+            navigation.show(origin, record_history=False)
+            navigation.show("work_detail")
+            self.assertEqual(
+                navigation.back(fallback="collections", skip=("work_detail",)),
+                origin,
+            )
+            stack.deleteLater()
+        self.app.processEvents()
+
+    def test_scale_change_offers_a_restart_action(self):
+        previous_stores = MemorySettings.stores
+        MemorySettings.stores = {}
+        try:
+            with patch.object(preferences, "QSettings", MemorySettings):
+                settings_page = SettingsPage()
+                combo = settings_page.findChild(QComboBox, "uiScaleCombo")
+                restart_button = settings_page.findChild(QPushButton, "uiScaleRestartButton")
+                self.assertIsNotNone(combo)
+                self.assertIsNotNone(restart_button)
+                self.assertTrue(restart_button.isHidden())
+
+                requested = []
+                settings_page.restart_requested.connect(lambda: requested.append(True))
+                combo.setCurrentIndex(combo.findData(125))
+                self.app.processEvents()
+                self.assertEqual(preferences.get("ui_scale"), 125)
+                self.assertFalse(restart_button.isHidden())
+                restart_button.click()
+                self.assertEqual(requested, [True])
+
+                settings_page.close()
+                settings_page.deleteLater()
+                self.app.processEvents()
+        finally:
+            MemorySettings.stores = previous_stores
+
     def test_brand_assets_and_switch_rendering_on_dark_and_white_surfaces(self):
         from PySide6.QtGui import QColor
         from ui.branding import application_icon, logo_pixmap, wordmark_pixmap
@@ -181,6 +230,7 @@ class UiStartupTests(unittest.TestCase):
             self.assertGreater(unchecked_thumb.blue(), 230)
 
             switch.setChecked(True)
+            QTest.qWait(220)
             self.app.processEvents()
             checked = render(switch)
             self.assertEqual(
