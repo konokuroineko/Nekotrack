@@ -113,11 +113,11 @@ class RecommendationImpressionTests(unittest.TestCase):
 
 
 
-    def test_dislike_feedback_is_saved_and_removes_the_title_from_the_feed(self):
-        disliked = {
+    def test_never_show_feedback_is_saved_and_permanently_removes_exact_title(self):
+        hidden = {
             "id": 9877,
             "type": "ANIME",
-            "title": {"english": "Not for me"},
+            "title": {"english": "Never show this title"},
             "format": "TV",
             "_recommendation_reason": "Popular anime discovery",
         }
@@ -128,7 +128,7 @@ class RecommendationImpressionTests(unittest.TestCase):
             "format": "TV",
             "_recommendation_reason": "Popular anime discovery",
         }
-        self.page._results = [disliked, other]
+        self.page._results = [hidden, other]
         self.page._history = {}
         self.page._catalog_has_next = False
         self.page._favorite_works = []
@@ -150,19 +150,29 @@ class RecommendationImpressionTests(unittest.TestCase):
                 return_value={
                     9877: {
                         "work_id": 9877,
-                        "feedback": "dislike",
-                        "metadata": disliked,
+                        "feedback": "never_show",
+                        "metadata": hidden,
                         "impressions": 0,
                     }
                 },
             ),
         ):
-            button = self.page.findChild(QPushButton, "recommendationDislike")
+            button = self.page.findChild(QPushButton, "recommendationMenuButton")
             self.assertIsNotNone(button)
-            button.click()
+            self.assertIsNone(self.page.findChild(QPushButton, "recommendationLike"))
+            self.assertIsNone(self.page.findChild(QPushButton, "recommendationDislike"))
+            menu = button.menu()
+            labels = [action.text() for action in menu.actions()]
+            self.assertEqual(labels, [
+                "I want more like this",
+                "I don't want anything from this",
+                "I don't want anything like this",
+            ])
+            next(action for action in menu.actions()
+                 if action.text() == "I don't want anything from this").trigger()
 
         save_feedback.assert_called_once()
-        self.assertEqual(save_feedback.call_args.args[0:2], (9877, "dislike"))
+        self.assertEqual(save_feedback.call_args.args[0:2], (9877, "never_show"))
         remaining_ids = [item["id"] for item in self.page._results]
         self.assertNotIn(9877, remaining_ids)
         self.assertIn(9878, remaining_ids)
