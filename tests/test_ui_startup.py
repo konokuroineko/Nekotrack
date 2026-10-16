@@ -177,7 +177,7 @@ class UiStartupTests(unittest.TestCase):
 
     def test_brand_assets_and_switch_rendering_on_dark_and_white_surfaces(self):
         from PySide6.QtGui import QColor
-        from ui.branding import application_icon, logo_pixmap, wordmark_pixmap
+        from ui.branding import WordmarkLabel, application_icon, logo_pixmap, wordmark_pixmap
         from ui.preferences import THEME_PRESETS, palette_for_mode
         from ui.widgets.switch_control import SwitchControl
 
@@ -197,6 +197,19 @@ class UiStartupTests(unittest.TestCase):
         self.assertEqual(dark_lockup.height(), 174)
         self.assertEqual(dark_lockup.devicePixelRatioF(), 3.0)
         self.assertEqual(light_lockup.toImage().pixelColor(0, 0).alpha(), 0)
+
+        # The small sidebar rendering gets a supersampled backing pixmap so
+        # the traced contours do not rely on one-pixel-wide edge coverage.
+        sidebar_wordmark = WordmarkLabel()
+        sidebar_wordmark.setFixedSize(222, 58)
+        sidebar_wordmark.set_wordmark("#a678ff", light_mode=False)
+        expected_ratio = max(4.0, float(sidebar_wordmark.devicePixelRatioF()))
+        self.assertFalse(sidebar_wordmark._pixmap.isNull())
+        self.assertEqual(sidebar_wordmark._pixmap.width(), round(222 * expected_ratio))
+        self.assertEqual(sidebar_wordmark._pixmap.height(), round(58 * expected_ratio))
+        self.assertEqual(sidebar_wordmark._pixmap.devicePixelRatioF(), expected_ratio)
+        sidebar_wordmark.close()
+        sidebar_wordmark.deleteLater()
 
         def count_pixels(pixmap, predicate):
             image = pixmap.toImage()
@@ -736,7 +749,8 @@ class UiStartupTests(unittest.TestCase):
                     )
                     self.assertFalse(window.windowIcon().isNull())
                     self.assertIsInstance(window.brand_word, WordmarkLabel)
-                    self.assertTrue(window.brand_word._renderer.isValid())
+                    self.assertFalse(window.brand_word._pixmap.isNull())
+                    self.assertGreaterEqual(window.brand_word._pixmap.devicePixelRatioF(), 4.0)
                     self.assertEqual(window.brand_word.width(), 222)
                     self.assertEqual(window.brand_word.height(), 58)
                     self.assertFalse(window.brand_word.hasScaledContents())
