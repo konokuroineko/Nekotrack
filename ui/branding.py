@@ -5,6 +5,7 @@ import sys
 from PySide6.QtCore import QByteArray, QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtWidgets import QLabel
 
 
 def resource_path(relative_path):
@@ -48,34 +49,61 @@ def logo_pixmap(size=128):
     return _render_svg(_logo_svg(), max(16, int(size)))
 
 
-@lru_cache(maxsize=128)
-def wordmark_pixmap(
-    accent, width=312, height=60, light_mode=False, device_pixel_ratio=3.0
-):
-    """Render a crisp high-density wordmark at the requested logical size."""
+def _styled_wordmark_svg(accent, light_mode=False):
+    """Return the brand SVG with its accent and contrast colors applied."""
     accent_color = QColor(accent).name(QColor.NameFormat.HexRgb)
     # Keep the cat and lettering black. On dark surfaces, a restrained pale
     # contour makes the original silhouette legible without inverting it.
     outline = "none" if light_mode else "#d8cfe6"
-    svg = (
+    return (
         _wordmark_svg()
         .replace("__ACCENT__", accent_color)
         .replace("__OUTLINE__", outline)
     )
+
+
+@lru_cache(maxsize=128)
+def wordmark_pixmap(
+    accent, width=312, height=60, light_mode=False, device_pixel_ratio=3.0
+):
+    """Render a crisp high-density raster wordmark for image-based uses."""
     logical_width = max(16, int(width))
     logical_height = max(16, int(height))
     pixel_ratio = max(1.0, float(device_pixel_ratio))
     pixmap = _render_svg(
-        svg,
+        _styled_wordmark_svg(accent, light_mode),
         (
             round(logical_width * pixel_ratio),
             round(logical_height * pixel_ratio),
         ),
     )
-    # The pixmap now carries enough real pixels for high-DPI Windows displays.
-    # QLabel can draw it at its native logical size without resampling.
     pixmap.setDevicePixelRatio(pixel_ratio)
     return pixmap
+
+
+class WordmarkLabel(QLabel):
+    """Paint the brand SVG directly so Qt never enlarges a low-res logo bitmap."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._renderer = None
+
+    def set_wordmark(self, accent, light_mode=False):
+        svg = _styled_wordmark_svg(accent, light_mode)
+        self._renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+        self.update()
+
+    def paintEvent(self, event):
+        if self._renderer is None or not self._renderer.isValid():
+            return super().paintEvent(event)
+
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            self._renderer.render(painter, QRectF(self.contentsRect()))
+        finally:
+            painter.end()
 
 
 @lru_cache(maxsize=1)
