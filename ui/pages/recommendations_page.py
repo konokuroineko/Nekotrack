@@ -760,13 +760,6 @@ class RecommendationsPage(QWidget):
         self._loaded = True
         self._load_more_failed = False
         self._render_results(preserve_scroll=bool(worker is not None and worker.catalog_only))
-        # A first page can contain only titles already in the library or titles
-        # the user explicitly disliked. Keep walking the catalog in the
-        # background while it has pages left; an empty page has no scrollbar
-        # range to trigger ordinary infinite-scroll pagination.
-        if not self._results and self._catalog_has_next:
-            QTimer.singleShot(0, self.load_more)
-
     def _recommendations_failed(self, message):
         if self._stop_event.is_set():
             return
@@ -818,7 +811,12 @@ class RecommendationsPage(QWidget):
         if button is not None:
             button.setEnabled(True)
         self._update_load_more_ui()
-        QTimer.singleShot(0, self._maybe_load_more)
+        if self._loaded and not self._results and self._catalog_has_next:
+            # The previous QThread is released here. Scheduling pagination
+            # earlier can race load_more() while self._thread still exists.
+            QTimer.singleShot(0, self.load_more)
+        else:
+            QTimer.singleShot(0, self._maybe_load_more)
 
     def _render_empty(self, message):
         empty = QFrame()
