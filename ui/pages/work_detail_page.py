@@ -1272,6 +1272,52 @@ class WorkDetailPage(QWidget):
             content.update()
 
     def _populate_episode_section(self, token, content, host, attempt=0):
+        """Contain failures in deferred Qt callbacks so one season cannot crash the app."""
+        try:
+            return self._populate_episode_section_impl(
+                token, content, host, attempt=attempt
+            )
+        except Exception as error:
+            detail_ids = []
+            try:
+                detail_ids = self._detail_work_ids()
+            except Exception:
+                pass
+            log_exception(
+                "episodes.deferred_section_failed",
+                error,
+                work_id=getattr(self, "_selected_episode_work_id", None),
+                bundle_work_ids=detail_ids,
+            )
+            try:
+                if token != self._detail_build_token:
+                    return
+                if self.scroll_area.widget() is not content:
+                    return
+                root = content.layout()
+                if root is None or root.indexOf(host) < 0:
+                    return
+                error_frame = QFrame()
+                error_frame.setObjectName("episodesSection")
+                error_frame.setProperty("_episodes_section", True)
+                error_layout = QVBoxLayout(error_frame)
+                error_layout.setContentsMargins(12, 8, 12, 8)
+                message = QLabel(
+                    "Episode data could not be loaded. The rest of this title is still available."
+                )
+                message.setObjectName("detailEpisodeMessage")
+                message.setWordWrap(True)
+                message.setStyleSheet(muted_label_stylesheet())
+                error_layout.addWidget(message)
+                root.replaceWidget(host, error_frame)
+                host.deleteLater()
+            except Exception as recovery_error:
+                log_exception(
+                    "episodes.deferred_section_recovery_failed",
+                    recovery_error,
+                )
+
+    def _populate_episode_section_impl(self, token, content, host, attempt=0):
         if token != self._detail_build_token:
             return
         if self.scroll_area.widget() is not content:
