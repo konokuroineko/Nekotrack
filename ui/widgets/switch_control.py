@@ -6,7 +6,7 @@ It subclasses QCheckBox to preserve native checked state, keyboard activation,
 and accessibility semantics.
 """
 
-from PySide6.QtCore import QRectF, QSize, Qt
+from PySide6.QtCore import QEasingCurve, QRectF, QSize, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QCheckBox
 
@@ -14,10 +14,10 @@ from ui.theme import COLORS
 
 
 class SwitchControl(QCheckBox):
-    TRACK_WIDTH = 38
-    TRACK_HEIGHT = 22
-    THUMB_DIAMETER = 14
-    LABEL_LEFT = 48
+    TRACK_WIDTH = 42
+    TRACK_HEIGHT = 24
+    THUMB_DIAMETER = 16
+    LABEL_LEFT = 52
 
     def __init__(self, text="", parent=None, palette=None):
         super().__init__(text, parent)
@@ -25,6 +25,24 @@ class SwitchControl(QCheckBox):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self._thumb_position = 1.0 if self.isChecked() else 0.0
+        self._thumb_animation = QVariantAnimation(self)
+        self._thumb_animation.setDuration(180)
+        self._thumb_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._thumb_animation.setStartValue(self._thumb_position)
+        self._thumb_animation.setEndValue(self._thumb_position)
+        self._thumb_animation.valueChanged.connect(self._set_thumb_position)
+        self.toggled.connect(self._animate_thumb)
+
+    def _set_thumb_position(self, value):
+        self._thumb_position = float(value)
+        self.update()
+
+    def _animate_thumb(self, checked):
+        self._thumb_animation.stop()
+        self._thumb_animation.setStartValue(self._thumb_position)
+        self._thumb_animation.setEndValue(1.0 if checked else 0.0)
+        self._thumb_animation.start()
 
     def set_color_palette(self, palette=None):
         """Set optional preview colors; normal controls follow the live theme."""
@@ -96,11 +114,9 @@ class SwitchControl(QCheckBox):
         painter.setBrush(QColor(track_fill))
         painter.drawRoundedRect(track, self.TRACK_HEIGHT / 2.0, self.TRACK_HEIGHT / 2.0)
 
-        thumb_x = (
-            track.right() - 3.0 - self.THUMB_DIAMETER
-            if checked
-            else track.left() + 3.0
-        )
+        thumb_left = track.left() + 3.0
+        thumb_right = track.right() - 3.0 - self.THUMB_DIAMETER
+        thumb_x = thumb_left + (thumb_right - thumb_left) * self._thumb_position
         thumb_y = track.top() + (self.TRACK_HEIGHT - self.THUMB_DIAMETER) / 2.0
         thumb = QRectF(
             thumb_x, thumb_y, float(self.THUMB_DIAMETER), float(self.THUMB_DIAMETER)
