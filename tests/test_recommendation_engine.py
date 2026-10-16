@@ -12,6 +12,7 @@ from recommendation_engine import (
     inject_rare_exploration,
     merge_recommendation_candidate,
     rank_candidates,
+    _source_preference_profiles,
     seed_strength,
     source_weight_for_work,
     staff_role_weight,
@@ -114,11 +115,16 @@ class RecommendationScoringTests(unittest.TestCase):
              "genres": ["Drama"], "_recommendation_source_ids": [77], "averageScore": 100, "popularity": 10000},
         ]
 
+        positive_sources, negative_sources = _source_preference_profiles(history)
+        self.assertEqual(positive_sources[41], 2.2)
+        self.assertEqual(negative_sources[42], 3.0)
+
         ranked = rank_candidates(candidates, history=history, rotation=0)
         ids = [item["id"] for item in ranked]
+        scores = {item["id"]: item["_recommendation_score"] for item in ranked}
         self.assertNotIn(999, ids)
         self.assertLess(ids.index(11), ids.index(12))
-        self.assertLess(ids.index(14), ids.index(13))
+        self.assertGreater(scores[14], scores[13], msg=f"source-feedback scores: {scores}")
 
         suggestions = {}
         self.assertFalse(merge_recommendation_candidate(
