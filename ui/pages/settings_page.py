@@ -251,7 +251,7 @@ class SettingsPage(QWidget):
                     "ui_scale",
                     [
                         (
-                            "100% (Windows default)" if scale == 100 else f"{scale}%",
+                            f"{scale}%",
                             scale,
                         )
                         for scale in UI_SCALE_OPTIONS
