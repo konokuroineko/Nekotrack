@@ -188,10 +188,147 @@ def recommendation_reason(work, positive_profile=None):
     return "Discovered from AniList"
 
 
-def rank_candidates(candidates, history=None, favorite_works=None, rotation=0):
-    """Score candidates with local feedback, metadata interests and exposure."""
+def _language_matches(actual, preference):
+    normalized = str(actual or "").strip().casefold().replace("_", " ").replace("-", " ")
+    if preference == "ALL":
+        return True
+    if preference == "JA":
+        return normalized in {"japanese", "ja", "jpn", "jp"}
+    if preference == "EN":
+        return normalized in {"english", "en", "eng"}
+    return True
+
+
+def _edge_id(value):
+    if isinstance(value, dict):
+        value = value.get("id")
+    parsed = _safe_int(value, 0)
+    return parsed if parsed > 0 else None
+
+
+def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_language):
+    source_weights = Counter()
+    for payload in (credit_profile or {}).values():
+        if not isinstance(payload, dict):
+            continue
+        try:
+            source_weight = float(payload.get("_source_weight", 1.0) or 1.0)
+        except (TypeError, ValueError, OverflowError):
+            source_weight = 1.0
+        source_weight = min(3.5, max(0.0, source_weight))
+        for kind in ("characters", "voice_actors", "staff"):
+            credits = payload.get(kind)
+            if not isinstance(credits, list):
+                continue
+            for credit in credits:
+                if not isinstance(credit, dict):
+                    continue
+                entity_id = _edge_id(credit.get("id"))
+                if entity_id is None:
+                    continue
+                if kind == "characters":
+                    weight = character_role_weight(credit.get("role"))
+                    source_weights[("character", entity_id)] += source_weight * weight
+                elif kind == "voice_actors":
+                    if not _language_matches(credit.get("language"), voice_language):
+                        continue
+                    weight = voice_actor_role_weight(credit.get("character_role"))
+                    source_weights[("voice_actor", entity_id)] += source_weight * weight
+                else:
+                    source_weights[("staff", entity_id)] += source_weight * staff_role_weight(credit.get("role"))
+
+    favorites = set()
+    for entry in favorite_entities or []:
+        if not isinstance(entry, dict):
+            continue
+        kind = str(entry.get("entity_type") or "").strip().casefold()
+        entity_id = _edge_id(entry.get("entity_id"))
+        if kind == "voice_actor" and not _language_matches(entry.get("language"), voice_language):
+            continue
+        if kind in {"character", "voice_actor", "staff"} and entity_id is not None:
+            favorites.add((kind, entity_id))
+
+    strongest_by_entity = {}
+    reasons = []
+    characters = work.get("characters")
+    edges = characters.get("edges") if isinstance(characters, dict) else []
+    if isinstance(edges, list):
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            character = edge.get("node") if isinstance(edge.get("node"), dict) else {}
+            character_id = _edge_id(character)
+            if character_id is None:
+                continue
+            role_weight = character_role_weight(edge.get("role"))
+            key = ("character", character_id)
+            boost = 0.0
+            if key in favorites:
+                boost = 22.0 * role_weight
+                reasons.append((boost, "Features a favorite character"))
+            elif source_weights[key] > 0:
+                boost = min(14.0, source_weights[key] * role_weight * 5.0)
+                reasons.append((boost, "Shares a character with a title you enjoyed"))
+            strongest_by_entity[key] = max(strongest_by_entity.get(key, 0.0), boost)
+
+            voices = edge.get("voiceActors")
+            if not isinstance(voices, list):
+                continue
+            for voice in voices:
+                if not isinstance(voice, dict) or not _language_matches(voice.get("language"), voice_language):
+                    continue
+                voice_id = _edge_id(voice)
+                if voice_id is None:
+                    continue
+                key = ("voice_actor", voice_id)
+                voice_boost = 20.0 * role_weight if key in favorites else min(
+                    16.0, source_weights[key] * role_weight * 5.5
+                )
+                if voice_boost:
+                    reasons.append((
+                        voice_boost,
+                        "Features a favorite voice actor" if key in favorites
+                        else "Shares a voice actor with a title you enjoyed",
+                    ))
+                strongest_by_entity[key] = max(strongest_by_entity.get(key, 0.0), voice_boost)
+
+    staff_connection = work.get("staff")
+    staff_edges = staff_connection.get("edges") if isinstance(staff_connection, dict) else []
+    if isinstance(staff_edges, list):
+        for edge in staff_edges:
+            if not isinstance(edge, dict):
+                continue
+            person_id = _edge_id(edge.get("node"))
+            if person_id is None:
+                continue
+            role_weight = staff_role_weight(edge.get("role"))
+            key = ("staff", person_id)
+            boost = 15.0 * role_weight if key in favorites else min(
+                14.0, source_weights[key] * role_weight * 5.0
+            )
+            if boost:
+                reasons.append((
+                    boost,
+                    "Features a favorite production contributor" if key in favorites
+                    else "Shares important production staff with a title you enjoyed",
+                ))
+            strongest_by_entity[key] = max(strongest_by_entity.get(key, 0.0), boost)
+
+    favorite_boost = sum(value for key, value in strongest_by_entity.items() if key in favorites)
+    other_boost = sum(value for key, value in strongest_by_entity.items() if key not in favorites)
+    return min(48.0, favorite_boost) + min(26.0, other_boost), max(reasons, default=(0.0, ""))[1]
+
+
+def rank_candidates(
+    candidates, history=None, favorite_works=None, rotation=0,
+    credit_profile=None, favorite_entities=None, voice_language="ALL",
+):
+    """Score candidates with local feedback, weighted credits and exposure."""
     history = history or {}
     positive, negative = _preference_profiles(history, favorite_works)
+    credit_profile = credit_profile or {}
+    favorite_entities = favorite_entities or []
+    voice_language = str(voice_language or "ALL").upper()
     scored = []
     for raw in candidates or []:
         if not isinstance(raw, dict):
@@ -213,6 +350,9 @@ def rank_candidates(candidates, history=None, favorite_works=None, rotation=0):
         community_score = max(0, min(100, _safe_int(raw.get("averageScore"))))
         recommendation_score = max(0, min(100, _safe_int(raw.get("_recommendation_rating"))))
         popularity = max(0, _safe_int(raw.get("popularity")))
+        credit_boost, credit_reason = _candidate_credit_signal(
+            raw, credit_profile, favorite_entities, voice_language
+        )
         raw_score = (
             6.0
             + min(repeat_count, 5) * 11.0
@@ -220,6 +360,7 @@ def rank_candidates(candidates, history=None, favorite_works=None, rotation=0):
             + community_score * 0.05
             + min(12.0, math.log1p(popularity)) * 0.25
             + min(35.0, positive_overlap * 8.5)
+            + credit_boost
             - min(48.0, negative_overlap * 10.0)
         )
         impressions = max(0, _safe_int(item_history.get("impressions")))
@@ -227,8 +368,9 @@ def rank_candidates(candidates, history=None, favorite_works=None, rotation=0):
         item = dict(raw)
         item["_recommendation_score"] = round(score, 6)
         item["_recommendation_exposure_multiplier"] = exposure_multiplier(impressions)
-        item["_recommendation_reason"] = recommendation_reason(item, positive)
+        item["_recommendation_reason"] = credit_reason or recommendation_reason(item, positive)
         item["_recommendation_matching_terms"] = sorted(terms.intersection(positive))
+        item["_recommendation_credit_boost"] = round(credit_boost, 6)
         # Rotation only changes deterministic tie-breaks; the main relevance score
         # remains intact and refreshes can expose a different slice of close ties.
         item["_recommendation_rotation_key"] = (_work_id(item) + _safe_int(rotation)) % 1000003

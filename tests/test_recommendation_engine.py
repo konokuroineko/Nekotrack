@@ -47,6 +47,61 @@ class RecommendationScoringTests(unittest.TestCase):
         self.assertLess(ids.index(2), ids.index(3))
         self.assertIn("Mystery", ranked[ids.index(2)]["_recommendation_reason"])
 
+    def test_favorite_character_and_language_matched_voice_actors_boost_candidates(self):
+        candidates = [
+            {
+                "id": 801, "type": "ANIME", "title": {"english": "Favorite role"},
+                "characters": {"edges": [{
+                    "role": "MAIN", "node": {"id": 71},
+                    "voiceActors": [{"id": 91, "language": "Japanese"}],
+                }]},
+                "staff": {"edges": []},
+            },
+            {
+                "id": 802, "type": "ANIME", "title": {"english": "Background role"},
+                "characters": {"edges": [{
+                    "role": "BACKGROUND", "node": {"id": 71},
+                    "voiceActors": [{"id": 91, "language": "English"}],
+                }]},
+                "staff": {"edges": []},
+            },
+        ]
+        favorites = [
+            {"entity_type": "character", "entity_id": 71},
+            {"entity_type": "voice_actor", "entity_id": 91, "language": "Japanese"},
+        ]
+        ja_ranked = rank_candidates(candidates, favorite_entities=favorites, voice_language="JA")
+        self.assertEqual(ja_ranked[0]["id"], 801)
+        self.assertGreater(
+            ja_ranked[0]["_recommendation_credit_boost"],
+            ja_ranked[1]["_recommendation_credit_boost"],
+        )
+        en_ranked = rank_candidates(candidates, favorite_entities=favorites, voice_language="EN")
+        self.assertGreater(
+            ja_ranked[0]["_recommendation_credit_boost"],
+            next(row["_recommendation_credit_boost"] for row in en_ranked if row["id"] == 801),
+        )
+
+    def test_saved_creator_credit_boosts_important_roles_and_deduplicates(self):
+        candidate = {
+            "id": 803, "type": "ANIME", "title": {"english": "Candidate"},
+            "staff": {"edges": [
+                {"role": "Series Composition", "node": {"id": 99}},
+                {"role": "Background Art", "node": {"id": 99}},
+            ]},
+        }
+        profile = {
+            1: {
+                "_source_weight": 2.0,
+                "characters": [],
+                "voice_actors": [],
+                "staff": [{"id": 99, "role": "Series Composition"}],
+            }
+        }
+        scored = rank_candidates([candidate], credit_profile=profile)
+        self.assertGreater(scored[0]["_recommendation_credit_boost"], 0)
+        self.assertIn("production staff", scored[0]["_recommendation_reason"].casefold())
+
     def test_exploration_is_small_and_does_not_change_candidate_eligibility(self):
         candidates = [
             {"id": index + 1, "type": "ANIME", "title": {"english": str(index)},
