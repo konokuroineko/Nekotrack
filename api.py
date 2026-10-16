@@ -31,6 +31,7 @@ __all__ = [
     "get_media_relations_batch",
     "get_media_episodes",
     "get_media_recommendations",
+    "get_anime_discovery_page",
     "get_media_details",
     "get_entity_profile",
     "get_tmdb_episode_data",
@@ -304,6 +305,7 @@ def _media_fields(include_details=False, include_relations=True):
         title { romaji english native }
         episodes
         averageScore
+        popularity
         status
         season
         seasonYear
@@ -1121,6 +1123,90 @@ def get_media_relations_batch(media_ids):
     return result
 
 
+def get_anime_discovery_page(page=1, per_page=25, sort="POPULARITY_DESC"):
+    """Return one validated, genuinely paginated AniList anime-catalog page.
+
+    This deliberately delegates GraphQL construction and pacing to search_anime,
+    keeping all AniList integration in api.py.
+    """
+    def bounded_integer(value, fallback, minimum, maximum):
+        if isinstance(value, bool):
+            return fallback
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+        return min(maximum, max(minimum, parsed))
+
+    page_number = bounded_integer(page, 1, 1, 10000)
+    page_size = bounded_integer(per_page, 25, 1, 50)
+    allowed_sorts = {
+        "POPULARITY_DESC", "SCORE_DESC", "START_DATE_DESC", "ID_DESC",
+        "START_DATE", "ID",
+    }
+    effective_sort = sort if sort in allowed_sorts else "POPULARITY_DESC"
+    response = search_anime(
+        "",
+        page=page_number,
+        per_page=page_size,
+        media_type="ANIME",
+        sort=effective_sort,
+        include_relations=False,
+    )
+    if not isinstance(response, dict):
+        raise RuntimeError("AniList returned an invalid anime catalog page.")
+
+    raw_info = response.get("pageInfo")
+    raw_info = raw_info if isinstance(raw_info, dict) else {}
+    current_page = bounded_integer(raw_info.get("currentPage"), page_number, 1, 10000)
+    last_page = bounded_integer(raw_info.get("lastPage"), current_page, current_page, 10000)
+    has_next = raw_info.get("hasNextPage")
+    if not isinstance(has_next, bool):
+        has_next = current_page < last_page
+    has_next = bool(has_next and current_page < last_page + 1)
+
+    raw_media = response.get("media")
+    if not isinstance(raw_media, list):
+        raise RuntimeError("AniList returned an invalid anime catalog result list.")
+
+    media = []
+    seen = set()
+    for row in raw_media:
+        if not isinstance(row, dict) or str(row.get("type") or "").upper() != "ANIME":
+            continue
+        try:
+            media_id = _validated_media_id(row.get("id"))
+        except ValueError:
+            continue
+        if media_id < 1 or media_id in seen:
+            continue
+        title = row.get("title")
+        if not isinstance(title, dict) or not any(
+            isinstance(title.get(key), str) and title.get(key).strip()
+            for key in ("english", "romaji", "native")
+        ):
+            continue
+        seen.add(media_id)
+        normalized = dict(row)
+        cover = row.get("coverImage")
+        if isinstance(cover, dict) and isinstance(cover.get("large"), str):
+            normalized["cover_url"] = cover["large"]
+        start_date = row.get("startDate")
+        if isinstance(start_date, dict) and start_date.get("year") is not None:
+            normalized["start_year"] = start_date["year"]
+        media.append(normalized)
+
+    return {
+        "pageInfo": {
+            "currentPage": current_page,
+            "lastPage": last_page,
+            "hasNextPage": has_next,
+        },
+        "media": media,
+        "sort": effective_sort,
+    }
+
+
 def get_media_recommendations(media_id, per_page=12):
     """Return validated AniList recommendations for one positive media ID."""
     try:
@@ -1150,6 +1236,9 @@ def get_media_recommendations(media_id, per_page=12):
                         status
                         episodes
                         averageScore
+                        popularity
+                        genres
+                        tags { name }
                         seasonYear
                         startDate { year }
                         title { romaji english native }
