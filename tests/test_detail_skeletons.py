@@ -2,6 +2,8 @@ import os
 import unittest
 from unittest.mock import patch
 
+from PySide6.QtCore import Qt
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import (
