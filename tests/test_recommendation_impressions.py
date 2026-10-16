@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QGridLayout, QWidget
+from PySide6.QtWidgets import QApplication, QGridLayout, QLabel, QPushButton, QWidget
 
 from ui.pages.recommendations_page import RecommendationsPage
 from ui.widgets.work_card import WorkCard
@@ -87,6 +87,7 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.assertIsNotNone(grid)
         self.assertEqual(grid.horizontalSpacing(), 12)
         self.assertEqual(grid.verticalSpacing(), 14)
+
     def test_offscreen_tile_does_not_gain_an_impression(self):
         self.tile.move(300, 0)
         self.app.processEvents()

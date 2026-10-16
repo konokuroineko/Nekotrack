@@ -188,6 +188,7 @@ class RecommendationScoringTests(unittest.TestCase):
         self.assertIn("Miyuki Sawashiro", favorited[0]["_recommendation_reason"])
         self.assertIn("favorited", favorited[0]["_recommendation_reason"].casefold())
 
+
 class RecommendationHistoryPersistenceTests(unittest.TestCase):
     def setUp(self):
         self._directory = tempfile.TemporaryDirectory()

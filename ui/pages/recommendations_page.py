@@ -902,11 +902,11 @@ class RecommendationsPage(QWidget):
         self.content_layout.addWidget(summary)
         grid_host = QWidget()
         grid_host.setObjectName("recommendationsGridHost")
+        grid_host.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         grid = QGridLayout(grid_host)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(14)
-        grid.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         available_width = max(
             100,
             self.width() if self.embedded else (
@@ -944,7 +944,7 @@ class RecommendationsPage(QWidget):
             )
             self._tiles.append((tile, dict(work)))
 
-        self.content_layout.addWidget(grid_host)
+        self.content_layout.addWidget(grid_host, 0, Qt.AlignmentFlag.AlignHCenter)
         self.more_status = QLabel()
         self.more_status.setObjectName("recommendationsStatus")
         self.more_status.setWordWrap(True)
