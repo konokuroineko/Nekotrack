@@ -213,6 +213,7 @@ _DEFAULTS = {
     "background_slideshow_interval": 0,
     "background_overlay_opacity": 62,
     "bundle_mode": "main",
+    "recommendation_voice_language": "ALL",
     **{key: False for key in BUNDLE_OPTION_KEYS},
     "setup_complete": False,
 }
@@ -402,7 +403,12 @@ def get(key):
         return parsed
 
     if isinstance(default, str):
-        return value if isinstance(value, str) else default
+        if not isinstance(value, str):
+            return default
+        if key == "recommendation_voice_language":
+            normalized = value.strip().upper()
+            return normalized if normalized in {"JA", "EN", "ALL"} else default
+        return value
 
     return value
 
@@ -415,8 +421,12 @@ def set_value(key, value):
             value = default
     elif isinstance(default, bool):
         value = _safe_boolean(value, default)
-    elif isinstance(default, str) and not isinstance(value, str):
-        value = default
+    elif isinstance(default, str):
+        if not isinstance(value, str):
+            value = default
+        elif key == "recommendation_voice_language":
+            normalized = value.strip().upper()
+            value = normalized if normalized in {"JA", "EN", "ALL"} else default
     qsettings = settings()
     qsettings.setValue(key, value)
     qsettings.sync()

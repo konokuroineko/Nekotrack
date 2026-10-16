@@ -805,6 +805,7 @@ def search_anime(
     genre=None,
     tag=None,
     include_relations=True,
+    include_credit_signals=False,
 ):
     """Search or browse AniList media with optional filters."""
     if media_type not in {None, "ANIME", "MANGA"}:
@@ -926,6 +927,18 @@ def search_anime(
 
     argument_block = ",\n                ".join(argument_lines)
     variable_block = ",\n        ".join(variable_lines)
+    credit_fields = ""
+    if include_credit_signals:
+        credit_fields = """
+        characters(page: 1, perPage: 15, sort: ROLE) {
+            edges { role node { id } voiceActors { id language } }
+            pageInfo { hasNextPage }
+        }
+        staff(page: 1, perPage: 12) {
+            edges { role node { id } }
+            pageInfo { hasNextPage }
+        }
+        """
 
     query = f"""
     query ({variable_block}) {{
@@ -939,6 +952,7 @@ def search_anime(
                 {argument_block}
             ) {{
                 {_media_fields(include_details=False, include_relations=include_relations)}
+                {credit_fields}
             }}
         }}
     }}
@@ -1152,6 +1166,7 @@ def get_anime_discovery_page(page=1, per_page=25, sort="POPULARITY_DESC"):
         media_type="ANIME",
         sort=effective_sort,
         include_relations=False,
+        include_credit_signals=True,
     )
     if not isinstance(response, dict):
         raise RuntimeError("AniList returned an invalid anime catalog page.")

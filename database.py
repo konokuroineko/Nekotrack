@@ -1295,7 +1295,17 @@ def get_staff(work_id):
             )
             ORDER BY people.name
         """, (safe_work_id, safe_work_id)).fetchall()
-        return results
+        from recommendation_engine import staff_role_weight
+        return sorted(
+            results,
+            key=lambda row: (
+                -max(
+                    (staff_role_weight(role) for role in str(row["role"] or "").split("\n")),
+                    default=0.30,
+                ),
+                str(row["name"] or "").casefold(),
+            ),
+        )
     finally:
         connection.close()
 
@@ -2430,9 +2440,16 @@ def get_bundle_staff(work_ids):
     for entry in unique.values():
         entry["role"] = "\n".join(entry.pop("_roles", []))
 
+    from recommendation_engine import staff_role_weight
     return sorted(
         unique.values(),
-        key=lambda row: str(row.get("name") or "").lower(),
+        key=lambda row: (
+            -max(
+                (staff_role_weight(role) for role in str(row.get("role") or "").split("\n")),
+                default=0.30,
+            ),
+            str(row.get("name") or "").casefold(),
+        ),
     )
 
 
@@ -3852,3 +3869,65 @@ def get_entity_favorites(entity_type=None):
         return [dict(row) for row in rows]
     finally:
         connection.close()
+
+
+
+def get_recommendation_credit_profile(work_ids):
+    """Return role- and language-aware credits for local works, keyed by work ID."""
+    ids = _validated_work_ids(work_ids)
+    if ids is None or not ids:
+        return {}
+    profile = {
+        work_id: {"characters": [], "voice_actors": [], "staff": []}
+        for work_id in ids
+    }
+    placeholders = ",".join("?" for _ in ids)
+    connection = get_connection()
+    try:
+        character_rows = connection.execute(
+            f"""
+            SELECT wc.work_id, c.id AS entity_id, wc.role
+            FROM work_characters AS wc
+            JOIN characters AS c ON c.id = wc.character_id
+            WHERE wc.work_id IN ({placeholders})
+            ORDER BY wc.work_id, wc.character_id
+            """, ids
+        ).fetchall()
+        actor_rows = connection.execute(
+            f"""
+            SELECT wcv.work_id, wcv.person_id AS entity_id, wcv.language,
+                   wc.role AS character_role, wcv.character_id
+            FROM work_character_voice_actors AS wcv
+            JOIN work_characters AS wc
+              ON wc.work_id = wcv.work_id
+             AND wc.character_id = wcv.character_id
+            WHERE wcv.work_id IN ({placeholders})
+            ORDER BY wcv.work_id, wcv.character_id, wcv.person_id, wcv.language
+            """, ids
+        ).fetchall()
+        staff_rows = connection.execute(
+            f"""
+            SELECT ws.work_id, ws.person_id AS entity_id, ws.role
+            FROM work_staff AS ws
+            WHERE ws.work_id IN ({placeholders})
+            ORDER BY ws.work_id, ws.person_id, ws.role
+            """, ids
+        ).fetchall()
+    finally:
+        connection.close()
+
+    for row in character_rows:
+        profile[int(row["work_id"])]["characters"].append({
+            "id": int(row["entity_id"]), "role": str(row["role"] or "UNKNOWN"),
+        })
+    for row in actor_rows:
+        profile[int(row["work_id"])]["voice_actors"].append({
+            "id": int(row["entity_id"]), "language": str(row["language"] or ""),
+            "character_id": int(row["character_id"]),
+            "character_role": str(row["character_role"] or "UNKNOWN"),
+        })
+    for row in staff_rows:
+        profile[int(row["work_id"])]["staff"].append({
+            "id": int(row["entity_id"]), "role": str(row["role"] or ""),
+        })
+    return profile
