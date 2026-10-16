@@ -363,7 +363,7 @@ class EpisodeCard(QFrame):
 
     def refresh_theme(self):
         styles = {
-            "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:10px;font-weight:850;letter-spacing:0.4px;",
+            "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:9px;font-weight:850;letter-spacing:0.4px;",
             "detailEpisodeDate": f"color:{COLORS['muted']};font-size:10px;",
             "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:13px;font-weight:750;",
             "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:10px;",
