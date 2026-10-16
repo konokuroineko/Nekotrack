@@ -70,6 +70,9 @@ MAX_RETRIES = 3
 RETRY_DELAY = 1
 ANILIST_REQUEST_TIMEOUT = (5, 15)
 MAX_RETRY_BACKOFF_SECONDS = 4
+# Keep retry sleeps independently patchable in tests; patching time.sleep
+# itself would affect every module because the time module is shared globally.
+_retry_sleep = time.sleep
 MAX_ANILIST_MEDIA_ID = (1 << 31) - 1
 MIN_LOCAL_MEDIA_ID = -((1 << 63) - 1)
 
@@ -236,7 +239,7 @@ def anilist_request(query, variables=None):
                         f"AniList rate limited the request (attempt {attempt + 1}/{MAX_RETRIES}). "
                         f"Retrying in {wait_time:g}s..."
                     )
-                    time.sleep(wait_time)
+                    _retry_sleep(wait_time)
                     continue
 
                 message = error_message(data, getattr(response, "reason", None))
@@ -265,7 +268,7 @@ def anilist_request(query, variables=None):
                         f"AniList server error (attempt {attempt + 1}/{MAX_RETRIES}). "
                         f"Retrying in {wait_time:g}s..."
                     )
-                    time.sleep(wait_time)
+                    _retry_sleep(wait_time)
                     continue
                 raise last_error
 
@@ -321,7 +324,7 @@ def anilist_request(query, variables=None):
                     f"AniList connection failed (attempt {attempt + 1}/{MAX_RETRIES}: "
                     f"{type(error).__name__}). Retrying in {wait_time:g}s..."
                 )
-                time.sleep(wait_time)
+                _retry_sleep(wait_time)
             else:
                 print(f"Failed after {MAX_RETRIES} attempts: {error}")
         except requests.exceptions.RequestException:
