@@ -436,6 +436,33 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
+    def test_deferred_episode_callback_contains_bundle_id_errors(self):
+        page = WorkDetailPage()
+        page.work = {
+            "id": 12345,
+            "type": "ANIME",
+            "format": "TV",
+            "_series_members": [{"id": 12345}],
+        }
+        page._selected_episode_work_id = 12345
+        content = QWidget()
+        root = QVBoxLayout(content)
+        host = QFrame(content)
+        root.addWidget(host)
+        page.scroll_area.setWidget(content)
+        token = page._detail_build_token
+
+        with patch.object(
+            page, "_detail_work_ids",
+            side_effect=RuntimeError("simulated invalid bundle details"),
+        ):
+            page._populate_episode_section(token, content, host)
+
+        self.assertIsNotNone(content.findChild(QLabel, "detailEpisodeMessage"))
+        self.assertIsNone(root.indexOf(host) >= 0 and host.parentWidget() is content)
+        page.deleteLater()
+        self.app.processEvents()
+
     def test_hero_cover_distinguishes_loading_from_unavailable(self):
         page = WorkDetailPage()
         page._apply_detail_styles()
