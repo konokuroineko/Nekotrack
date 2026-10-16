@@ -1178,7 +1178,7 @@ def get_anime_discovery_page(page=1, per_page=25, sort="POPULARITY_DESC"):
     has_next = raw_info.get("hasNextPage")
     if not isinstance(has_next, bool):
         has_next = current_page < last_page
-    has_next = bool(has_next and current_page < last_page + 1)
+    has_next = bool(has_next and current_page < last_page)
 
     raw_media = response.get("media")
     if not isinstance(raw_media, list):

@@ -217,6 +217,16 @@ class RecommendationWorkerTests(unittest.TestCase):
 
 
     @patch("api.search_anime")
+    def test_anime_catalog_respects_provider_last_page_even_if_has_next_is_inconsistent(self, search):
+        search.return_value = {
+            "pageInfo": {"currentPage": 5, "lastPage": 5, "hasNextPage": True},
+            "media": [],
+        }
+        result = api.get_anime_discovery_page(page=5, per_page=25)
+        self.assertFalse(result["pageInfo"]["hasNextPage"])
+        self.assertEqual(result["pageInfo"]["currentPage"], 5)
+
+    @patch("api.search_anime")
     def test_anime_discovery_page_is_paginated_normalized_and_bounded(self, search):
         search.return_value = {
             "pageInfo": {"currentPage": 3, "lastPage": 9, "hasNextPage": True},

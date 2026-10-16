@@ -269,12 +269,23 @@ class EntityProfileUiTests(unittest.TestCase):
             self.assertIsNotNone(profile_name)
 
             header_row = header.layout()
+            # The favorite button shares a compact horizontal title row with
+            # the name, so the name now lives in a nested layout within the
+            # existing vertical profile-text column.
             profile_layout = next(
                 (
                     item.layout()
                     for index in range(header_row.count())
                     if (item := header_row.itemAt(index)).layout() is not None
-                    and item.layout().indexOf(profile_name) >= 0
+                    and (
+                        item.layout().indexOf(profile_name) >= 0
+                        or any(
+                            nested.layout() is not None
+                            and nested.layout().indexOf(profile_name) >= 0
+                            for nested_index in range(item.layout().count())
+                            if (nested := item.layout().itemAt(nested_index))
+                        )
+                    )
                 ),
                 None,
             )
