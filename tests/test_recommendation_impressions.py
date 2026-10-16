@@ -174,7 +174,7 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.page._worker = None
         with (
             patch.object(self.page, "_render_results") as render,
-            patch.object(self.page, "load_more") as load_more,
+            patch.object(self.page, "load_more"),
             patch("ui.pages.recommendations_page.QTimer.singleShot") as single_shot,
         ):
             self.page._recommendations_ready([])
