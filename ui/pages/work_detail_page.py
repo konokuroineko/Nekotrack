@@ -18,7 +18,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, QUrl, QS
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout,
+    QBoxLayout, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout,
     QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QProgressBar,
     QLineEdit, QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction
 )
@@ -1780,6 +1780,11 @@ class WorkDetailPage(QWidget):
         title = QLabel(self._title()); title.setObjectName("detailHeroTitle"); title.setWordWrap(True)
         title.setStyleSheet(f"font-size:34px;font-weight:850;color:{COLORS['primary']};letter-spacing:-1px;")
         title_row = QHBoxLayout()
+        title_row.setObjectName("detailHeroTitleRow")
+        # Qt otherwise mirrors horizontal layout order when the application is
+        # running in RTL mode, which can move the three-dot artwork menu to
+        # the right side of the title. Keep the action pinned to the left.
+        title_row.setDirection(QBoxLayout.Direction.LeftToRight)
         title_row.setSpacing(10)
 
         try:
