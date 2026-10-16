@@ -61,6 +61,26 @@ class UiStartupTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_sidebar_navigation_order_and_branding_details(self):
+        from ui.branding import _NAV_DRAWINGS, _wordmark_svg
+        from ui.main_window import SIDEBAR_NAVIGATION
+
+        self.assertEqual(
+            [(label, page) for _icon, label, page in SIDEBAR_NAVIGATION],
+            [
+                ("Home", "home"),
+                ("Library", "collections"),
+                ("Search", "search"),
+                ("Calendar", "calendar"),
+                ("Favorites", "favorites"),
+                ("Settings", "settings"),
+            ],
+        )
+        self.assertEqual(len({page for _icon, _label, page in SIDEBAR_NAVIGATION}), 6)
+        self.assertIn('stroke-width="3.5"', _wordmark_svg())
+        self.assertIn('<circle cx="12" cy="12" r="3"/>', _NAV_DRAWINGS["settings"])
+        self.assertNotIn("M4 6.2h5.3", _NAV_DRAWINGS["settings"])
+
     def test_brand_assets_and_switch_rendering_on_dark_and_white_surfaces(self):
         from PySide6.QtGui import QColor
         from ui.branding import application_icon, logo_pixmap, wordmark_pixmap
