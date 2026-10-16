@@ -175,8 +175,8 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertLess(card.minimumHeight(), 100)
         self.assertEqual(artwork.size().width(), 132)
         self.assertEqual(artwork.size().height(), 74)
-        self.assertIsNotNone(description)
-        self.assertTrue(description.isHidden())
+        # Empty synopses are omitted entirely rather than taking up row space.
+        self.assertIsNone(description)
 
         card.deleteLater()
         self.app.processEvents()
