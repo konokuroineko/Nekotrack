@@ -1,6 +1,9 @@
+import math
 import threading
+import time
 
 from api import (
+    TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS,
     TMDB_EPISODE_CATALOG_VERSION,
     cache_tmdb_episode_image,
     get_media_details,
@@ -201,7 +204,7 @@ class EpisodeArtwork(QLabel):
         super().__init__(parent)
         self.work_id = int(work_id) if work_id is not None else None
         self.episode_number = int(episode_number) if episode_number is not None else None
-        self.setFixedSize(116, 65)
+        self.setFixedSize(96, 54)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
             f"background:{surface_rgba('background_alt')};border-radius:8px;"
@@ -283,11 +286,11 @@ class EpisodeCard(QFrame):
         self.episode = episode
         self.setObjectName("episodeCard")
         # Compact, horizontal streaming-service style row rather than a bulky card.
-        self.setMinimumHeight(78)
+        self.setMinimumHeight(64)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(7, 6, 8, 6)
+        layout.setContentsMargins(6, 5, 7, 5)
         layout.setSpacing(8)
 
         artwork = EpisodeArtwork(
@@ -2749,8 +2752,8 @@ class WorkDetailPage(QWidget):
         frame.setObjectName("episodesSection")
         frame.setProperty("_episodes_section", True)
         lay = QVBoxLayout(frame)
-        lay.setContentsMargins(16, 12, 16, 12)
-        lay.setSpacing(6)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(5)
 
         header = QHBoxLayout()
 
@@ -2868,8 +2871,9 @@ class WorkDetailPage(QWidget):
             self._episode_catalog_version(selected_id)
             if selected_id is not None else TMDB_EPISODE_CATALOG_VERSION
         )
-        needs_catalog_refresh = (
-            bool(episodes) and catalog_version < TMDB_EPISODE_CATALOG_VERSION
+        needs_catalog_refresh = bool(episodes) and (
+            catalog_version < TMDB_EPISODE_CATALOG_VERSION
+            or self._episode_catalog_is_stale(selected_id)
         )
         if (
             selected_id is not None
@@ -2983,6 +2987,24 @@ class WorkDetailPage(QWidget):
             return max(0, int(metadata.get("version") or 0))
         except (TypeError, ValueError, OverflowError):
             return 0
+
+    def _episode_catalog_is_stale(self, work_id):
+        """Refresh episode metadata at most weekly; missing timestamps are stale."""
+        if work_id is None:
+            return True
+        try:
+            metadata = get_provider_metadata(int(work_id), "tmdb_episode_match_version")
+        except Exception:
+            return True
+        if not isinstance(metadata, dict):
+            return True
+        try:
+            fetched_at = float(metadata.get("fetched_at") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return True
+        if not math.isfinite(fetched_at) or fetched_at <= 0:
+            return True
+        return time.time() - fetched_at >= TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS
 
     def _episode_tmdb_context(self, selected_id, members, selected_work=None):
         selected_id = int(selected_id)
@@ -3173,27 +3195,34 @@ class WorkDetailPage(QWidget):
         payload = payload or {}
         episodes = payload.get("episodes") or []
         self._episode_sync_errors.pop(work_id, None)
-        self._episode_source_status[work_id] = {
-            "tmdb": int(payload.get("tmdb_count") or 0),
-        }
+        if episodes:
+            self._episode_source_status[work_id] = {
+                "tmdb": int(payload.get("tmdb_count") or len(episodes)),
+            }
 
         tmdb_id = payload.get("tmdb_id")
         tmdb_season_number = payload.get("tmdb_season_number")
-        if tmdb_id is not None:
-            save_tmdb_mapping(
-                work_id,
-                tmdb_id,
-                tmdb_season_number,
-            )
-        save_episodes(work_id, episodes)
         if episodes:
             try:
-                if self._episode_catalog_version(work_id) < TMDB_EPISODE_CATALOG_VERSION:
-                    prune_episode_catalog(work_id, episodes)
+                # Only a nonempty, parsed catalog can replace saved episode data
+                # or the mapping. Empty/failed refreshes preserve the last good copy.
+                save_episodes(work_id, episodes)
+                if tmdb_id is not None:
+                    save_tmdb_mapping(
+                        work_id,
+                        tmdb_id,
+                        tmdb_season_number,
+                    )
+                # The replacement is now verified. Prune stale rows on every
+                # successful refresh, not only during a matching-policy migration.
+                prune_episode_catalog(work_id, episodes)
                 save_provider_metadata(
                     work_id,
                     "tmdb_episode_match_version",
-                    {"version": TMDB_EPISODE_CATALOG_VERSION},
+                    {
+                        "version": TMDB_EPISODE_CATALOG_VERSION,
+                        "fetched_at": int(time.time()),
+                    },
                 )
             except Exception as error:
                 log_exception(

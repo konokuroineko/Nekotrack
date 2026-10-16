@@ -36,6 +36,7 @@ __all__ = [
     "get_media_details",
     "get_entity_profile",
     "TMDB_EPISODE_CATALOG_VERSION",
+    "TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS",
     "get_tmdb_access_token",
     "get_tmdb_episode_data",
     "get_tmdb_episode_sample",
@@ -1813,7 +1814,9 @@ def get_media_details(media_id):
 # ---------------------------------------------------------------------------
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
-TMDB_EPISODE_CATALOG_VERSION = 2
+TMDB_EPISODE_CATALOG_VERSION = 3
+# Episode metadata is cached locally and refreshed only when it is at least a week old.
+TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS = 7 * 24 * 60 * 60
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w780"
 TMDB_EPISODE_CACHE_DIRECTORY = Path("data") / "images" / "episodes"
 MAX_TMDB_EPISODE_IMAGE_BYTES = 20 * 1024 * 1024
@@ -2344,6 +2347,29 @@ def _safe_float(value, fallback=0.0):
     return result if math.isfinite(result) else fallback
 
 
+def _safe_episode_number(value):
+    """Accept only plausible positive integer episode numbers from TMDB."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        number = int(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text or len(text) > 7 or not re.fullmatch(r"\+?[0-9]+", text):
+            return None
+        try:
+            number = int(text)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    else:
+        return None
+    return number if 1 <= number <= 1_000_000 else None
+
+
 def _tmdb_search_movies(query, target_date):
     query = str(query or "").strip()
     if not query:
@@ -2663,9 +2689,9 @@ def _get_tmdb_movie_episode(
     expected_episodes=None,
     tmdb_id=None,
 ):
+    # AniList dates can be missing; title similarity and expected episode count
+    # still let TMDB resolve a plausible OVA without a date constraint.
     target_date = _parse_date(start_date)
-    if target_date is None:
-        raise RuntimeError("NekoTrack needs a valid start date to match the OVA.")
 
     try:
         expected = max(1, int(expected_episodes or 1))
@@ -2738,10 +2764,11 @@ def get_tmdb_episode_data(
             tmdb_id,
         )
 
+    # Dates improve matching and let cours be separated, but they are optional
+    # in AniList. A missing start date must not block a known mapping or an
+    # otherwise confident title/count-based match.
     target_start = _parse_date(start_date)
     target_end = _parse_date(end_date)
-    if target_start is None:
-        raise RuntimeError("NekoTrack needs a valid start date to match TMDB.")
 
     if tmdb_id is None:
         candidate = _find_tmdb_series(title_variants, target_start)
@@ -2779,14 +2806,12 @@ def get_tmdb_episode_data(
         raw_episodes = []
 
     selected = []
+    seen_episode_numbers = set()
     for episode in raw_episodes:
         if not isinstance(episode, dict):
             continue
-        try:
-            episode_number = int(episode.get("episode_number"))
-        except (TypeError, ValueError, OverflowError):
-            continue
-        if episode_number < 1:
+        episode_number = _safe_episode_number(episode.get("episode_number"))
+        if episode_number is None:
             continue
 
         # AniList's date interval can separate multiple cours inside a TMDB
@@ -2796,10 +2821,13 @@ def get_tmdb_episode_data(
         air_date = _parse_date(raw_air_date)
         if raw_air_date not in (None, "") and air_date is None:
             continue
-        if air_date is not None and air_date < target_start:
+        if target_start is not None and air_date is not None and air_date < target_start:
             continue
         if target_end is not None and air_date is not None and air_date >= target_end:
             continue
+        if episode_number in seen_episode_numbers:
+            continue
+        seen_episode_numbers.add(episode_number)
 
         thumbnail, image_variants = _pick_best_episode_still(
             tmdb_id,
