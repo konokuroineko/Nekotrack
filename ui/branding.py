@@ -49,8 +49,10 @@ def logo_pixmap(size=128):
 
 
 @lru_cache(maxsize=128)
-def wordmark_pixmap(accent, width=312, height=60, light_mode=False):
-    """Render a transparent black-cat lockup with surface-aware contrast."""
+def wordmark_pixmap(
+    accent, width=312, height=60, light_mode=False, device_pixel_ratio=3.0
+):
+    """Render a crisp high-density wordmark at the requested logical size."""
     accent_color = QColor(accent).name(QColor.NameFormat.HexRgb)
     # Keep the cat and lettering black. On dark surfaces, a restrained pale
     # contour makes the original silhouette legible without inverting it.
@@ -60,7 +62,20 @@ def wordmark_pixmap(accent, width=312, height=60, light_mode=False):
         .replace("__ACCENT__", accent_color)
         .replace("__OUTLINE__", outline)
     )
-    return _render_svg(svg, (max(16, int(width)), max(16, int(height))))
+    logical_width = max(16, int(width))
+    logical_height = max(16, int(height))
+    pixel_ratio = max(1.0, float(device_pixel_ratio))
+    pixmap = _render_svg(
+        svg,
+        (
+            round(logical_width * pixel_ratio),
+            round(logical_height * pixel_ratio),
+        ),
+    )
+    # The pixmap now carries enough real pixels for high-DPI Windows displays.
+    # QLabel can draw it at its native logical size without resampling.
+    pixmap.setDevicePixelRatio(pixel_ratio)
+    return pixmap
 
 
 @lru_cache(maxsize=1)
