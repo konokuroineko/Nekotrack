@@ -136,6 +136,10 @@ class RecommendationsPage(QWidget):
         self._loaded = False
         self._results = []
         self._library_signature = None
+        # A Home refresh can arrive while AniList is still being queried.
+        # Keep the latest snapshot and restart only after the current QThread exits.
+        self._pending_refresh = None
+        self._shutting_down = False
         self._build()
 
     def _build(self):
@@ -199,8 +203,9 @@ class RecommendationsPage(QWidget):
         )
 
     def refresh(self, force=False, library_rows=None):
-        if self._thread is not None and self._thread.isRunning():
+        if self._shutting_down:
             return
+
         try:
             rows = (
                 [dict(row) for row in library_rows]
@@ -219,6 +224,32 @@ class RecommendationsPage(QWidget):
             return
 
         signature = self._rows_signature(rows)
+
+        # Never replace a widget/worker while its thread is alive. If the
+        # library changed (or the user explicitly refreshes), cancel the
+        # current result, remember the newest snapshot, and restart in the
+        # thread-finished callback. The stop event also suppresses stale results.
+        if self._thread is not None:
+            pending_force = bool(force) or bool(
+                self._pending_refresh is not None and self._pending_refresh[0]
+            )
+            try:
+                thread_running = self._thread.isRunning()
+            except RuntimeError:
+                thread_running = False
+
+            if (
+                thread_running
+                and self._pending_refresh is None
+                and not pending_force
+                and signature == self._library_signature
+            ):
+                return
+
+            self._pending_refresh = (pending_force, rows)
+            self._stop_event.set()
+            return
+
         if self._loaded and not force and signature == self._library_signature:
             self._render_results()
             return
@@ -280,9 +311,25 @@ class RecommendationsPage(QWidget):
         self.content_layout.addStretch(1)
 
     def _thread_finished(self, thread):
-        if self._thread is thread:
-            self._thread = None
-            self._worker = None
+        # Ignore a stale completion signal if another lifecycle already took
+        # ownership of the current worker.
+        if self._thread is not thread:
+            return
+
+        self._thread = None
+        self._worker = None
+
+        if self._shutting_down:
+            self._pending_refresh = None
+            return
+
+        pending = self._pending_refresh
+        self._pending_refresh = None
+        if pending is not None:
+            force, rows = pending
+            self.refresh(force=force, library_rows=rows)
+            return
+
         button = self.findChild(QPushButton, "recommendationsRefresh")
         if button is not None:
             button.setEnabled(True)
@@ -369,6 +416,8 @@ class RecommendationsPage(QWidget):
                 widget.deleteLater()
 
     def request_shutdown(self):
+        self._shutting_down = True
+        self._pending_refresh = None
         self._stop_event.set()
         if self._thread is not None:
             self._thread.quit()
