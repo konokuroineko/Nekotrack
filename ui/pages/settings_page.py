@@ -147,10 +147,14 @@ class ThemePresetCard(QFrame):
 class SettingsPage(QWidget):
     settings_changed = Signal(str)
     setup_requested = Signal()
+    restart_requested = Signal()
 
     def __init__(self, background_manager=None):
         super().__init__()
         self.background_manager = background_manager
+        self._active_ui_scale = get("ui_scale")
+        self._ui_scale_combo = None
+        self._ui_scale_restart_action = None
         self._background_list = None
         self._background_status = None
         self._background_interval = None
@@ -247,7 +251,7 @@ class SettingsPage(QWidget):
             [
                 self._combo_row(
                     "UI scale",
-                    "Scale the whole NekoTrack interface relative to Windows display scaling. Restart NekoTrack to apply.",
+                    "Choose a scale for the whole interface. Restart to apply it.",
                     "ui_scale",
                     [
                         (
@@ -257,6 +261,7 @@ class SettingsPage(QWidget):
                         for scale in UI_SCALE_OPTIONS
                     ],
                 ),
+                self._scale_restart_action(),
             ],
         ))
         appearance.addWidget(self._section(
@@ -771,6 +776,16 @@ class SettingsPage(QWidget):
             QComboBox {{
                 min-width:120px;
             }}
+            QLabel#uiScaleRestartLabel {{
+                color:{COLORS['secondary']}; background:transparent; font-size:11px;
+            }}
+            QPushButton#uiScaleRestartButton {{
+                background:{COLORS['accent']}; border:1px solid {COLORS['accent']};
+                border-radius:9px; color:{COLORS['accent_text']}; font-weight:800; padding:8px 14px;
+            }}
+            QPushButton#uiScaleRestartButton:hover {{
+                background:{COLORS['accent_hover']}; border-color:{COLORS['accent_hover']};
+            }}
             QLineEdit {{
                 min-height:38px;
             }}
@@ -967,7 +982,40 @@ class SettingsPage(QWidget):
                 c.itemData(index),
             )
         )
+        if key == "ui_scale":
+            combo.setObjectName("uiScaleCombo")
+            self._ui_scale_combo = combo
+            combo.currentIndexChanged.connect(self._update_ui_scale_restart_visibility)
         return self._row(name, description, combo)
+
+    def _scale_restart_action(self):
+        wrapper = QWidget()
+        wrapper.setObjectName("uiScaleRestartAction")
+        layout = QHBoxLayout(wrapper)
+        layout.setContentsMargins(0, 2, 0, 0)
+        layout.setSpacing(12)
+
+        note = QLabel("Your scale choice is saved. Restart now to apply it.")
+        note.setObjectName("uiScaleRestartLabel")
+        note.setWordWrap(True)
+        layout.addWidget(note, 1)
+
+        button = QPushButton("Restart now")
+        button.setObjectName("uiScaleRestartButton")
+        button.setAccessibleName("Restart NekoTrack to apply UI scale")
+        button.setCursor(Qt.PointingHandCursor)
+        button.clicked.connect(lambda checked=False: self.restart_requested.emit())
+        layout.addWidget(button)
+
+        wrapper.setVisible(False)
+        self._ui_scale_restart_action = wrapper
+        return wrapper
+
+    def _update_ui_scale_restart_visibility(self, _index=None):
+        if self._ui_scale_combo is None or self._ui_scale_restart_action is None:
+            return
+        selected = self._ui_scale_combo.currentData()
+        self._ui_scale_restart_action.setVisible(selected != self._active_ui_scale)
 
     def _check_row(self, name, description, key):
         check = SwitchControl()
