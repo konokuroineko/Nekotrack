@@ -232,35 +232,7 @@ class RecommendationWorkerTests(unittest.TestCase):
 
         search.assert_called_once_with(
             "", page=3, per_page=50, media_type="ANIME",
-            sort="SCORE_DESC", include_relations=False,
-        )
-        self.assertEqual([row["id"] for row in result["media"]], [501])
-        self.assertEqual(result["media"][0]["cover_url"], "https://example.invalid/poster.jpg")
-        self.assertEqual(result["media"][0]["start_year"], 2024)
-        self.assertTrue(result["pageInfo"]["hasNextPage"])
-
-    @patch("api.search_anime")
-    def test_anime_discovery_page_is_paginated_normalized_and_bounded(self, search):
-        search.return_value = {
-            "pageInfo": {"currentPage": 3, "lastPage": 9, "hasNextPage": True},
-            "media": [
-                {
-                    "id": 501, "type": "ANIME", "title": {"romaji": "Catalog entry"},
-                    "coverImage": {"large": "https://example.invalid/poster.jpg"},
-                    "startDate": {"year": 2024},
-                },
-                {"id": 501, "type": "ANIME", "title": {"english": "Duplicate"}},
-                {"id": 502, "type": "MANGA", "title": {"english": "Wrong type"}},
-                {"id": 0, "type": "ANIME", "title": {"english": "Invalid ID"}},
-                {"id": 503, "type": "ANIME", "title": {}},
-            ],
-        }
-
-        result = api.get_anime_discovery_page(page=3, per_page=5000, sort="SCORE_DESC")
-
-        search.assert_called_once_with(
-            "", page=3, per_page=50, media_type="ANIME",
-            sort="SCORE_DESC", include_relations=False,
+            sort="SCORE_DESC", include_relations=False, include_credit_signals=True,
         )
         self.assertEqual([row["id"] for row in result["media"]], [501])
         self.assertEqual(result["media"][0]["cover_url"], "https://example.invalid/poster.jpg")

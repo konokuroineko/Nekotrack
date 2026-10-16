@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
 from api import get_anime_discovery_page, get_media_recommendations
 from database import (
     get_all_library,
+    get_entity_favorites,
+    get_recommendation_credit_profile,
     get_recommendation_history,
     get_work_favorites,
     record_recommendation_impressions,
@@ -49,6 +51,10 @@ class RecommendationWorker(QObject):
         self.catalog_only = not self.fetch_seeds
         self.history = {}
         self.favorite_works = []
+        self.favorite_entities = []
+        self.credit_profile = {}
+        self.source_weights = {}
+        self.voice_language = str(get("recommendation_voice_language") or "ALL").upper()
         self.error_messages = []
 
     @staticmethod
@@ -119,6 +125,12 @@ class RecommendationWorker(QObject):
         except Exception as error:
             self.favorite_works = []
             log_exception("recommendations.favorites_read_failed", error)
+        try:
+            value = get_entity_favorites()
+            self.favorite_entities = [dict(row) for row in (value or []) if isinstance(row, dict)]
+        except Exception as error:
+            self.favorite_entities = []
+            log_exception("recommendations.entity_favorites_read_failed", error)
 
     def _merge_candidate(self, suggestions, candidate, known_ids, source_id=None, source_title=None, catalog=False):
         if not isinstance(candidate, dict):
@@ -200,6 +212,69 @@ class RecommendationWorker(QObject):
                 continue
             known_ids.add(safe_id)
             seeds_by_id.setdefault(safe_id, dict(metadata))
+
+        source_rows = {}
+        for row in self.library_rows:
+            work_id = self._work_id(row)
+            if work_id is not None:
+                source_rows[work_id] = dict(row)
+        for row in self.favorite_works:
+            work_id = self._work_id(row)
+            if work_id is not None:
+                source_rows[work_id] = dict(row)
+        for raw_id, state in self.history.items():
+            if not isinstance(state, dict) or state.get("feedback") != "like":
+                continue
+            metadata = state.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            work_id = self._work_id(metadata)
+            if work_id is None:
+                try:
+                    work_id = int(raw_id)
+                except (TypeError, ValueError, OverflowError):
+                    work_id = None
+            if work_id is not None:
+                source_rows.setdefault(work_id, dict(metadata))
+
+        try:
+            self.credit_profile = get_recommendation_credit_profile(list(source_rows))
+            if not isinstance(self.credit_profile, dict):
+                self.credit_profile = {}
+        except Exception as error:
+            self.credit_profile = {}
+            log_exception("recommendations.credit_profile_read_failed", error)
+
+        favorites_ids = {
+            self._work_id(item) for item in self.favorite_works
+            if self._work_id(item) is not None
+        }
+        self.source_weights = {}
+        for work_id, row in source_rows.items():
+            state = self.history.get(work_id, self.history.get(str(work_id), {}))
+            feedback = state.get("feedback") if isinstance(state, dict) else None
+            status = str(row.get("status") or "").strip().casefold()
+            weight = 1.0
+            if work_id in favorites_ids or row.get("_is_favorite"):
+                weight += 1.2
+            if feedback == "like":
+                weight += 1.8
+            if status in {"watching", "rewatching", "reading", "in progress"}:
+                weight += 0.75
+            elif status == "completed":
+                weight += 0.45
+            try:
+                rating = float(row.get("rating") or 0)
+                if rating > 10:
+                    rating /= 10.0
+                if 0 <= rating <= 10:
+                    weight += min(0.9, rating * 0.09)
+            except (TypeError, ValueError, OverflowError):
+                pass
+            weight = min(3.5, max(0.35, weight))
+            self.source_weights[work_id] = weight
+            if work_id in self.credit_profile and isinstance(self.credit_profile[work_id], dict):
+                self.credit_profile[work_id]["_source_weight"] = weight
 
         suggestions = {}
         errors = []
@@ -311,6 +386,9 @@ class RecommendationWorker(QObject):
             history=self.history,
             favorite_works=self.favorite_works,
             rotation=self.refresh_cycle,
+            credit_profile=self.credit_profile,
+            favorite_entities=self.favorite_entities,
+            voice_language=self.voice_language,
         )
         ranked = inject_rare_exploration(ranked, rotation=self.refresh_cycle, fraction=0.04)
         self.finished.emit(ranked)
@@ -347,6 +425,10 @@ class RecommendationsPage(QWidget):
         self._exposure_counted = {}
         self._history = {}
         self._favorite_works = []
+        self._favorite_entities = []
+        self._credit_profile = {}
+        self._source_weights = {}
+        self._voice_language = str(get("recommendation_voice_language") or "ALL").upper()
         self._impression_timer = QTimer(self)
         self._impression_timer.setInterval(500)
         self._impression_timer.timeout.connect(self._track_visible_impressions)
@@ -624,6 +706,10 @@ class RecommendationsPage(QWidget):
             self._catalog_has_next = bool(worker.catalog_has_next)
             self._history = dict(worker.history or {})
             self._favorite_works = list(worker.favorite_works or [])
+            self._favorite_entities = list(worker.favorite_entities or [])
+            self._credit_profile = dict(worker.credit_profile or {})
+            self._source_weights = dict(worker.source_weights or {})
+            self._voice_language = str(worker.voice_language or "ALL")
             self._loading_more = False
         if worker is not None and worker.catalog_only:
             existing = {
@@ -641,6 +727,9 @@ class RecommendationsPage(QWidget):
                 history=self._history,
                 favorite_works=self._favorite_works,
                 rotation=self._refresh_cycle,
+                credit_profile=self._credit_profile,
+                favorite_entities=self._favorite_entities,
+                voice_language=self._voice_language,
             ),
             rotation=self._refresh_cycle,
             fraction=0.04,
@@ -856,6 +945,9 @@ class RecommendationsPage(QWidget):
                 history=self._history,
                 favorite_works=self._favorite_works,
                 rotation=self._refresh_cycle,
+                credit_profile=self._credit_profile,
+                favorite_entities=self._favorite_entities,
+                voice_language=self._voice_language,
             ),
             rotation=self._refresh_cycle,
             fraction=0.04,
