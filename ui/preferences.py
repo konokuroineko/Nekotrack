@@ -193,11 +193,14 @@ THEME_PRESETS = {
         "card_hover": "#291b1e",
     },
 }
+UI_SCALE_OPTIONS = (80, 90, 100, 110, 125, 150, 175, 200)
+
 _DEFAULTS = {
     **{key: value for key, value in THEME_PRESETS["Neko"].items() if key != "description"},
     "theme_preset": "Neko",
     "light_mode": False,
     "font_size": 13,
+    "ui_scale": 100,
     "card_size": 210,
     "card_gap": 24,
     "corner_radius": 12,
@@ -347,6 +350,7 @@ _INTEGER_BOUNDS = {
     # Keep corrupted/old QSettings values from making the UI unusable.
     # Bounds are intentionally generous so existing custom layouts survive.
     "font_size": (8, 36),
+    "ui_scale": (80, 200),
     "card_size": (120, 480),
     "card_gap": (0, 120),
     "corner_radius": (0, 64),
@@ -392,7 +396,10 @@ def get(key):
         return _safe_boolean(value, default)
 
     if isinstance(default, int):
-        return _safe_integer(key, value, default)
+        parsed = _safe_integer(key, value, default)
+        if key == "ui_scale" and parsed not in UI_SCALE_OPTIONS:
+            return default
+        return parsed
 
     if isinstance(default, str):
         return value if isinstance(value, str) else default
@@ -404,6 +411,8 @@ def set_value(key, value):
     default = _DEFAULTS.get(key)
     if isinstance(default, int) and not isinstance(default, bool):
         value = _safe_integer(key, value, default)
+        if key == "ui_scale" and value not in UI_SCALE_OPTIONS:
+            value = default
     elif isinstance(default, bool):
         value = _safe_boolean(value, default)
     elif isinstance(default, str) and not isinstance(value, str):
