@@ -6,6 +6,7 @@ from unittest.mock import patch
 import database
 from recommendation_engine import (
     character_role_weight,
+    credit_profile_from_media_record,
     exposure_multiplier,
     inject_rare_exploration,
     rank_candidates,
@@ -86,6 +87,27 @@ class RecommendationScoringTests(unittest.TestCase):
         english_candidate = next(row for row in en_ranked if row["id"] == 802)
         self.assertGreater(english_candidate["_recommendation_credit_boost"], 0)
 
+    def test_persisted_media_credits_normalize_and_deduplicate_by_role(self):
+        record = {
+            "characters": {"edges": [
+                {"role": "BACKGROUND", "node": {"id": 71},
+                 "voiceActors": [{"id": 91, "language": "Japanese"}]},
+                {"role": "MAIN", "node": {"id": 71},
+                 "voiceActors": [{"id": 91, "language": "Japanese"}]},
+            ]},
+            "staff": {"edges": [
+                {"role": "Production Assistant", "node": {"id": 99}},
+                {"role": "Series Composition", "node": {"id": 99}},
+            ]},
+        }
+        profile = credit_profile_from_media_record(record)
+        self.assertEqual(len(profile["characters"]), 1)
+        self.assertEqual(profile["characters"][0]["role"], "MAIN")
+        self.assertEqual(len(profile["voice_actors"]), 1)
+        self.assertEqual(profile["voice_actors"][0]["character_role"], "MAIN")
+        self.assertEqual(len(profile["staff"]), 1)
+        self.assertEqual(profile["staff"][0]["role"], "Series Composition")
+
     def test_saved_creator_credit_boosts_important_roles_and_deduplicates(self):
         candidate = {
             "id": 803, "type": "ANIME", "title": {"english": "Candidate"},
@@ -126,6 +148,7 @@ class RecommendationScoringTests(unittest.TestCase):
         self.assertEqual(voice_actor_role_weight("MAIN"), character_role_weight("MAIN"))
         self.assertGreater(staff_role_weight("Series Composition"), staff_role_weight("Production Assistant"))
         self.assertGreater(staff_role_weight("Original story"), staff_role_weight("Background art"))
+        self.assertLess(staff_role_weight("Assistant Director"), staff_role_weight("Director"))
 
 
 class RecommendationHistoryPersistenceTests(unittest.TestCase):
