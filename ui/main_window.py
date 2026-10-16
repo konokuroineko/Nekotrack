@@ -581,8 +581,9 @@ class MainWindow(QMainWindow):
         for name, page in pages.items():
             self.navigation.add_page(name, page)
 
-        # Keep primary destinations in one uninterrupted list. Settings stays
-        # at the bottom, separated by flexible space rather than a category label.
+        # Center primary destinations in the space between the brand and Settings.
+        # The second stretch keeps Settings anchored at the bottom of the sidebar.
+        side.addStretch()
         for nav_item in SIDEBAR_NAVIGATION[:-1]:
             self._add_nav(side, *nav_item)
         side.addStretch()
