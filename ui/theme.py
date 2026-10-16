@@ -222,6 +222,12 @@ def application_stylesheet():
         QLabel, QCheckBox, QRadioButton {{ background: transparent; }}
         QToolTip {{ background: {COLORS['surface_alt']}; color: {COLORS['primary']}; border: 1px solid {COLORS['border']}; padding: 7px 9px; }}
         QLineEdit, QComboBox, QSpinBox {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: {radius}px; color: {COLORS['primary']}; padding: 10px 12px; selection-background-color: {COLORS['accent']}; }}
+        QComboBox {{ padding-right: 34px; }}
+        QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: 32px; border: none; background: transparent; }}
+        QComboBox QAbstractItemView {{ background: {COLORS['surface']}; color: {COLORS['primary']}; border: 1px solid {COLORS['border']}; border-radius: 10px; padding: 4px; outline: none; selection-background-color: {COLORS['accent_soft']}; }}
+        QComboBox QAbstractItemView::item {{ min-height: 28px; padding: 6px 10px; border-radius: 6px; }}
+        QComboBox QAbstractItemView::item:hover {{ background: {COLORS['surface_hover']}; color: {COLORS['primary']}; }}
+        QComboBox QAbstractItemView::item:selected {{ background: {COLORS['accent_soft']}; color: {COLORS['nav_selected_text']}; }}
         QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {COLORS['accent']}; }}
         QPushButton {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: {max(6, radius - 3)}px; color: {COLORS['secondary']}; padding: 9px 13px; font-weight: 600; }}
         QPushButton:hover {{ background: {COLORS['surface_hover']}; border-color: {COLORS['border_hover']}; color: {COLORS['primary']}; }}
@@ -230,13 +236,15 @@ def application_stylesheet():
         QPushButton:disabled {{ color: {COLORS['muted']}; background: {COLORS['background_alt']}; }}
         QScrollArea {{ border: none; background: transparent; }}
         QScrollArea > QWidget > QWidget {{ background: transparent; }}
-        QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px 0; }}
-        QScrollBar::handle:vertical {{ background: {COLORS['border']}; border-radius: 4px; min-height: 36px; }}
-        QScrollBar::handle:vertical:hover {{ background: {COLORS['muted']}; }}
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-        QScrollBar:horizontal {{ background: transparent; height: 8px; }}
-        QScrollBar::handle:horizontal {{ background: {COLORS['border']}; border-radius: 4px; min-width: 36px; }}
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+        QScrollBar:vertical {{ background: transparent; width: 10px; margin: 3px 1px; border: none; }}
+        QScrollBar::handle:vertical {{ background: {COLORS['border']}; border-radius: 5px; min-height: 42px; margin: 1px; }}
+        QScrollBar::handle:vertical:hover {{ background: {COLORS['accent']}; }}
+        QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 1px 3px; border: none; }}
+        QScrollBar::handle:horizontal {{ background: {COLORS['border']}; border-radius: 5px; min-width: 42px; margin: 1px; }}
+        QScrollBar::handle:horizontal:hover {{ background: {COLORS['accent']}; }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical, QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; height: 0px; border: none; background: transparent; image: none; }}
+        QScrollBar::up-arrow, QScrollBar::down-arrow, QScrollBar::left-arrow, QScrollBar::right-arrow {{ width: 0px; height: 0px; border: none; image: none; }}
+        QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
     """
 
 
