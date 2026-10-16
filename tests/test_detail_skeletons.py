@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import (
-    QApplication, QBoxLayout, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton,
+    QApplication, QBoxLayout, QFrame, QHBoxLayout, QLabel, QPushButton,
     QToolButton, QVBoxLayout, QWidget, QWidgetAction,
 )
 
@@ -330,18 +330,12 @@ class DetailSkeletonTests(unittest.TestCase):
         page._is_reading_media = lambda: False
         page.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
-        menus = []
-
-        def capture_menu(menu, *_args, **_kwargs):
-            menus.append(menu)
-
         try:
             with (
                 patch("ui.pages.work_detail_page.get_display_override", return_value={}),
                 patch("ui.pages.work_detail_page.is_work_favorite", return_value=False),
                 patch.object(page, "_load_remote_cover"),
                 patch("ui.pages.work_detail_page.get_library_series", return_value=[]),
-                patch.object(QMenu, "exec", autospec=True, side_effect=capture_menu),
             ):
                 hero = page._hero()
                 row = hero.findChild(QHBoxLayout, "detailHeroTitleRow")
@@ -352,10 +346,10 @@ class DetailSkeletonTests(unittest.TestCase):
                 self.assertIsNotNone(menu_button)
                 self.assertEqual(menu_button.accessibleName(), "More artwork actions")
 
-                page._show_detail_menu()
-                self.assertEqual(len(menus), 1)
+                menu = page._build_detail_menu()
+                self.assertIsNotNone(menu)
                 menu_labels = []
-                for action in menus[0].actions():
+                for action in menu.actions():
                     if isinstance(action, QWidgetAction):
                         button = action.defaultWidget()
                         if isinstance(button, QPushButton):
@@ -365,6 +359,7 @@ class DetailSkeletonTests(unittest.TestCase):
                     button.text() == "Customize title and cover…"
                     for button in hero.findChildren(QPushButton)
                 ))
+                menu.deleteLater()
                 hero.deleteLater()
         finally:
             page.close()
