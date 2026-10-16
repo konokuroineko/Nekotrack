@@ -119,6 +119,10 @@ def application_icon():
 
 
 _NAV_DRAWINGS = {
+    "back": (
+        '<path d="M19 12H5"/>'
+        '<path d="m12 19-7-7 7-7"/>'
+    ),
     "home": (
         '<path d="M3.5 10.5 12 3.8l8.5 6.7"/>'
         '<path d="M5.7 9.1v10.4c0 .6.5 1.1 1.1 1.1h4v-6h2.4v6h4c.6 0 1.1-.5 1.1-1.1V9.1"/>'

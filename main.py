@@ -3,6 +3,9 @@ import shutil
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
+
 
 APP_NAME = "NekoTrack"
 APP_VERSION = "0.1.0-beta.2"
@@ -58,7 +61,7 @@ log_event(
 with log_operation("startup.prepare_user_data"):
     prepare_user_data()
 
-from PySide6.QtWidgets import QApplication, QMessageBox, QProxyStyle, QStyle
+from PySide6.QtWidgets import QApplication, QComboBox, QMessageBox, QProxyStyle, QStyle
 
 install_qt_message_handler()
 
@@ -66,6 +69,7 @@ from ui.branding import application_icon
 from ui.main_window import MainWindow
 from ui.preferences import get
 from ui.scale import configure_ui_scale
+from ui.theme import COLORS
 from ui.setup_wizard import SetupWizard
 from updater import InstallerDownloader, UpdateChecker
 
@@ -74,6 +78,26 @@ class NekoProxyStyle(QProxyStyle):
     """Use Qt styling without the platform focus rectangle."""
     def drawPrimitive(self, element, option, painter, widget=None):
         if element == QStyle.PrimitiveElement.PE_FrameFocusRect:
+            return
+        if (
+            element == QStyle.PrimitiveElement.PE_IndicatorArrowDown
+            and isinstance(widget, QComboBox)
+        ):
+            center = option.rect.center()
+            color = COLORS["accent"] if widget.underMouse() else COLORS["muted"]
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            pen = QPen(QColor(color), 1.8)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPolyline(QPolygonF([
+                QPointF(center.x() - 4.0, center.y() - 1.0),
+                QPointF(center.x(), center.y() + 3.0),
+                QPointF(center.x() + 4.0, center.y() - 1.0),
+            ]))
+            painter.restore()
             return
         super().drawPrimitive(element, option, painter, widget)
 
