@@ -8,7 +8,7 @@ from api import (
 )
 from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer, QSize
 
-from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout
 
 from database import (
     add_to_library,
