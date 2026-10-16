@@ -952,8 +952,6 @@ class SettingsPage(QWidget):
 
     def _combo_row(self, name, description, key, options):
         combo = QComboBox()
-        if key == "ui_scale":
-            combo.setObjectName("uiScaleCombo")
         for label, value in options:
             combo.addItem(label, value)
 
