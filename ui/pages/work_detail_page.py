@@ -2747,6 +2747,7 @@ class WorkDetailPage(QWidget):
 
         frame = QFrame()
         frame.setObjectName("episodesSection")
+        frame.setProperty("_episodes_section", True)
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(16, 12, 16, 12)
         lay.setSpacing(6)
