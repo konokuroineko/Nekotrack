@@ -1,7 +1,8 @@
-"""Persistent, privacy-conscious diagnostics for NekoTrack.
+"""Core logging and privacy-conscious diagnostics for NekoTrack.
 
-The app writes rotating logs under the per-user NekoTrack data directory.
-Run python diagnostics.py --export-to-repo to collect a shareable report.
+The app writes bounded, rotating logs under the per-user NekoTrack data directory.
+The Settings page uses export_diagnostics() to assemble them into one shareable
+report. The command-line export remains available for developer troubleshooting.
 This module intentionally avoids importing Qt or any application modules.
 """
 from __future__ import annotations

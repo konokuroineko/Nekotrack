@@ -401,7 +401,7 @@ class SettingsPage(QWidget):
             [
                 self._row(
                     "Troubleshooting report",
-                    "NekoTrack keeps diagnostic logs locally and can export a redacted report to its app-data folder. The report excludes your library database and artwork; review it for catalog titles and error details before sharing.",
+                    "NekoTrack keeps bounded, rotating logs locally. You do not need to choose between files such as .log and .log.1: this button combines the retained logs into one redacted report in the app-data folder. It excludes your library database and artwork; review it for catalog titles and error details before sharing.",
                     self._diagnostics_export_button(),
                 ),
             ],

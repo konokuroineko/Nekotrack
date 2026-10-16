@@ -1,5 +1,6 @@
 import os
 import unittest
+import time
 from unittest.mock import patch
 
 from PySide6.QtCore import Qt
@@ -15,7 +16,7 @@ from api import (
     TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS,
     TMDB_EPISODE_CATALOG_VERSION,
 )
-from ui.pages.work_detail_page import EpisodeArtwork, EpisodeCard, WorkDetailPage
+from ui.pages.work_detail_page import EpisodeArtwork, EpisodeCard, EpisodeImageCacheWorker, WorkDetailPage
 
 
 class DetailSkeletonTests(unittest.TestCase):
@@ -243,6 +244,111 @@ class DetailSkeletonTests(unittest.TestCase):
         card.deleteLater()
         self.app.processEvents()
 
+    def test_missing_episode_art_is_recorded_as_failure_not_a_successful_batch(self):
+        worker = EpisodeImageCacheWorker(
+            12345,
+            [{"episodeNumber": 1, "thumbnail": "https://image.tmdb.org/t/p/w500/test.jpg"}],
+        )
+        failures = []
+        successes = []
+        worker.error.connect(lambda work_id, message: failures.append((work_id, message)))
+        worker.finished.connect(lambda work_id: successes.append(work_id))
+
+        with (
+            patch(
+                "ui.pages.work_detail_page.cache_tmdb_episode_image",
+                return_value=None,
+            ),
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_path") as save_path,
+            patch("ui.pages.work_detail_page.log_event") as log_event,
+            patch("ui.pages.work_detail_page.log_exception") as log_exception,
+        ):
+            worker.run()
+
+        self.assertEqual(worker.attempted_count, 1)
+        self.assertEqual(worker.cached_count, 0)
+        self.assertEqual(worker.failed_episode_numbers, [1])
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0][0], 12345)
+        self.assertIn("ValueError", failures[0][1])
+        self.assertEqual(successes, [])
+        save_path.assert_not_called()
+        log_exception.assert_called_once()
+        self.assertTrue(any(
+            call.args[0] == "episodes.image_cache_worker_finished"
+            and call.kwargs.get("failed_count") == 1
+            for call in log_event.call_args_list
+        ))
+
+    def test_episode_image_cache_failure_keeps_thread_reference_and_throttles_retry(self):
+        page = WorkDetailPage()
+        page.work = {"id": 12345, "type": "ANIME", "format": "TV"}
+        page._selected_episode_work_id = 12345
+        thread = object()
+        worker = type("FakeWorker", (), {"failed_episode_numbers": [1]})()
+        page._episode_image_cache_threads[12345] = thread
+        page._episode_image_cache_workers[12345] = worker
+
+        with (
+            patch.object(page, "_replace_episode_section") as replace_section,
+            patch("ui.pages.work_detail_page.log_event") as log_event,
+        ):
+            page._episode_image_cache_error(12345, "Episode 1: ValueError")
+
+        self.assertIn(12345, page._episode_image_cache_threads)
+        self.assertIs(page._episode_image_cache_threads[12345], thread)
+        self.assertIn(12345, page._episode_image_cache_workers)
+        self.assertGreater(
+            page._episode_image_cache_retry_after[12345],
+            time.monotonic(),
+        )
+        replace_section.assert_called_once()
+        self.assertTrue(any(
+            call.args[0] == "episodes.image_cache_batch_failed"
+            for call in log_event.call_args_list
+        ))
+
+        # Once the prior worker has stopped, reopening the section during the
+        # cooldown must not spawn another immediate download worker.
+        page._episode_image_cache_cleanup(12345)
+        with (
+            patch("ui.pages.work_detail_page.QThread") as thread_factory,
+            patch("ui.pages.work_detail_page.log_event") as retry_log,
+        ):
+            page._start_episode_image_cache(
+                12345,
+                [{"episodeNumber": 1, "thumbnail": "https://image.tmdb.org/t/p/w500/test.jpg"}],
+            )
+        thread_factory.assert_not_called()
+        self.assertTrue(any(
+            call.args[0] == "episodes.image_cache_retry_suppressed"
+            for call in retry_log.call_args_list
+        ))
+
+        page.deleteLater()
+        self.app.processEvents()
+
+    def test_episode_artwork_shows_unavailable_after_a_failed_cache_attempt(self):
+        card = EpisodeCard({
+            "work_id": 12345,
+            "episode_number": 1,
+            "thumbnail_url": "https://image.tmdb.org/t/p/w500/test.jpg",
+            "air_date": None,
+            "title": "Episode with unavailable art",
+            "description": "Description is still available.",
+            "watched": 0,
+            "thumbnail_cache_failed": True,
+        })
+        artwork = card.findChild(EpisodeArtwork)
+        self.assertIsNotNone(artwork)
+        self.assertEqual(artwork.text(), "UNAVAILABLE")
+        self.assertEqual(
+            card.findChild(QLabel, "detailEpisodeDescription").toolTip(),
+            "Description is still available.",
+        )
+        card.deleteLater()
+        self.app.processEvents()
+
     def test_episode_catalog_refresh_interval_uses_fetch_timestamp(self):
         page = WorkDetailPage()
         now = 2_000_000_000
@@ -450,7 +556,7 @@ class DetailSkeletonTests(unittest.TestCase):
                 "id": 12345, "title": {"english": "Bundle Season"}, "episodes": 2,
                 "format": "TV", "start_year": 2020, "start_month": 1, "start_day": 1,
             }),
-            patch.object(page, "_start_episode_image_cache"),
+            patch.object(page, "_start_episode_image_cache") as start_image_cache,
         ):
             frame = page._episodes_section()
 
@@ -459,6 +565,10 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertEqual(
             cards[0].findChild(QLabel, "detailEpisodeTitle").text(),
             "Valid",
+        )
+        start_image_cache.assert_called_once_with(
+            12345,
+            [{"episodeNumber": 1, "thumbnail": None}],
         )
         frame.deleteLater()
         page.deleteLater()
