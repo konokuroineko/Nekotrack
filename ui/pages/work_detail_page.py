@@ -250,6 +250,15 @@ class EpisodeImageCacheWorker(QObject):
             failed_count=len(self.failed_episode_numbers),
             cancelled=self.cancelled,
         )
+        outcome = "error" if errors else "success"
+        log_event(
+            "episodes.image_cache_completion_signal_emitting",
+            work_id=self.work_id,
+            outcome=outcome,
+            attempted_count=self.attempted_count,
+            cached_count=self.cached_count,
+            failed_count=len(self.failed_episode_numbers),
+        )
         if errors:
             self.error.emit(self.work_id, "; ".join(errors[:3]))
         else:
@@ -3529,8 +3538,17 @@ class WorkDetailPage(QWidget):
         thread.started.connect(worker.run)
         worker.finished.connect(self._episode_image_cache_finished)
         worker.error.connect(self._episode_image_cache_error)
-        worker.finished.connect(thread.quit)
-        worker.error.connect(thread.quit)
+        # QThread.quit() is thread-safe. Invoke it directly from the worker's
+        # signal-emitting thread so teardown does not depend on the GUI queue
+        # being processed while a large detail view is rebuilding.
+        worker.finished.connect(
+            thread.quit,
+            Qt.ConnectionType.DirectConnection,
+        )
+        worker.error.connect(
+            thread.quit,
+            Qt.ConnectionType.DirectConnection,
+        )
         thread.finished.connect(worker.deleteLater)
         # Keep strong references to the QThread and worker until Qt confirms
         # that the background thread has actually stopped.
@@ -3548,6 +3566,11 @@ class WorkDetailPage(QWidget):
 
     def _episode_image_cache_finished(self, work_id):
         work_id = int(work_id)
+        log_event(
+            "episodes.image_cache_completion_received",
+            work_id=work_id,
+            outcome="success",
+        )
         self._episode_image_cache_retry_after.pop(work_id, None)
         if self._shutdown_event.is_set():
             return
@@ -3558,6 +3581,11 @@ class WorkDetailPage(QWidget):
 
     def _episode_image_cache_error(self, work_id, error):
         work_id = int(work_id)
+        log_event(
+            "episodes.image_cache_completion_received",
+            work_id=work_id,
+            outcome="error",
+        )
         if self._shutdown_event.is_set():
             return
 
