@@ -634,6 +634,8 @@ class UiStartupTests(unittest.TestCase):
                 os.chdir(old_cwd)
 
     def test_main_window_builds_with_only_registered_pages(self):
+        from ui.branding import WordmarkLabel
+
         MemorySettings.stores = {
             ("NekoTrack", "NekoTrack"): {
                 preferences._MIGRATION_KEY: True,
@@ -658,11 +660,11 @@ class UiStartupTests(unittest.TestCase):
                         },
                     )
                     self.assertFalse(window.windowIcon().isNull())
-                    self.assertFalse(window.brand_word.pixmap().isNull())
+                    self.assertIsInstance(window.brand_word, WordmarkLabel)
+                    self.assertTrue(window.brand_word._renderer.isValid())
                     self.assertEqual(window.brand_word.width(), 222)
                     self.assertEqual(window.brand_word.height(), 58)
                     self.assertFalse(window.brand_word.hasScaledContents())
-                    self.assertEqual(window.brand_word.pixmap().devicePixelRatioF(), 3.0)
                     self.assertEqual(window.findChild(QFrame, "sidebar").width(), 270)
                     self.assertEqual(window.navigation_buttons["home"].minimumHeight(), 52)
                     self.assertEqual(window.navigation_buttons["home"].iconSize().width(), 20)
