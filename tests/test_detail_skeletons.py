@@ -459,7 +459,7 @@ class DetailSkeletonTests(unittest.TestCase):
             page._populate_episode_section(token, content, host)
 
         self.assertIsNotNone(content.findChild(QLabel, "detailEpisodeMessage"))
-        self.assertIsNone(root.indexOf(host) >= 0 and host.parentWidget() is content)
+        self.assertEqual(root.indexOf(host), -1)
         page.deleteLater()
         self.app.processEvents()
 
