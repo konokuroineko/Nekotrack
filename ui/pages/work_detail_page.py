@@ -2728,6 +2728,10 @@ class WorkDetailPage(QWidget):
             return self._build_episodes_section(defer_cards=defer_cards)
         except Exception as error:
             work_id = self._selected_episode_work_id or self._value("id")
+            try:
+                bundle_ids = self._detail_work_ids()
+            except Exception:
+                bundle_ids = []
             log_exception(
                 "episodes.detail_section_failed",
                 error,
@@ -2739,10 +2743,6 @@ class WorkDetailPage(QWidget):
             frame.setProperty("_episodes_section", True)
             layout = QVBoxLayout(frame)
             layout.setContentsMargins(12, 8, 12, 8)
-            try:
-                bundle_ids = self._detail_work_ids()
-            except Exception:
-                bundle_ids = []
             message = QLabel(
                 "Episode data could not be displayed. The rest of this title is still available."
             )
