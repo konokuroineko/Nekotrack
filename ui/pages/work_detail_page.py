@@ -201,7 +201,7 @@ class EpisodeArtwork(QLabel):
         super().__init__(parent)
         self.work_id = int(work_id) if work_id is not None else None
         self.episode_number = int(episode_number) if episode_number is not None else None
-        self.setFixedSize(116, 65)
+        self.setFixedSize(96, 54)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
             f"background:{surface_rgba('background_alt')};border-radius:8px;"
@@ -283,11 +283,11 @@ class EpisodeCard(QFrame):
         self.episode = episode
         self.setObjectName("episodeCard")
         # Compact, horizontal streaming-service style row rather than a bulky card.
-        self.setMinimumHeight(78)
+        self.setMinimumHeight(64)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(7, 6, 8, 6)
+        layout.setContentsMargins(6, 5, 7, 5)
         layout.setSpacing(8)
 
         artwork = EpisodeArtwork(
@@ -2749,8 +2749,8 @@ class WorkDetailPage(QWidget):
         frame.setObjectName("episodesSection")
         frame.setProperty("_episodes_section", True)
         lay = QVBoxLayout(frame)
-        lay.setContentsMargins(16, 12, 16, 12)
-        lay.setSpacing(6)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(5)
 
         header = QHBoxLayout()
 
