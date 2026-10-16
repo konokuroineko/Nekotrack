@@ -1023,6 +1023,7 @@ class SettingsPage(QWidget):
 
         wrapper.setVisible(False)
         self._ui_scale_restart_action = wrapper
+        self._update_ui_scale_restart_visibility()
         return wrapper
 
     def _update_ui_scale_restart_visibility(self, _index=None):
