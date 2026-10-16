@@ -872,7 +872,7 @@ class RecommendationsPage(QWidget):
             if (candidate_id := RecommendationWorker._work_id(item)) is not None
         }
         self._render_results(preserve_scroll=True)
-        # Disliking the final visible suggestion should not strand the user
+        # Hiding the final visible suggestion should not strand the user
         # on an empty page while more AniList catalog pages remain.
         if not self._results and self._catalog_has_next and not self._loading_more:
             QTimer.singleShot(0, self.load_more)
