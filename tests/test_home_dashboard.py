@@ -27,9 +27,11 @@ class HomeDashboardTests(unittest.TestCase):
             candidate.start()
             self.addCleanup(candidate.stop)
         page = HomePage()
-        self.addCleanup(page.close)
-        self.addCleanup(page.deleteLater)
+        # unittest cleanups run in reverse registration order: close the
+        # widget, schedule deletion, process Qt events, then restore patches.
         self.addCleanup(self.app.processEvents)
+        self.addCleanup(page.deleteLater)
+        self.addCleanup(page.close)
         return page
 
     def test_home_removes_hero_and_summary_cards_and_embeds_recommendations(self):
@@ -119,8 +121,6 @@ class HomeDashboardTests(unittest.TestCase):
         refresh_mock.assert_called_once_with()
 
     def test_calendar_button_emits_navigation_request(self):
-        from PySide6.QtWidgets import QPushButton
-
         page = self._make_empty_home()
         requests = []
         page.calendar_requested.connect(lambda: requests.append(True))
