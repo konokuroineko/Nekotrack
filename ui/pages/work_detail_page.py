@@ -1805,6 +1805,7 @@ class WorkDetailPage(QWidget):
             menu_button = QToolButton()
             menu_button.setObjectName("detailMenu")
             menu_button.setText("⋮")
+            menu_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
             menu_button.setFixedSize(42, 42)
             menu_button.setCursor(Qt.PointingHandCursor)
             menu_button.setAccessibleName("More artwork actions")
