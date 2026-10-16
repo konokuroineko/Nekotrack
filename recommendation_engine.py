@@ -1,8 +1,10 @@
-"""Small, explainable recommendation scoring helpers.
+"""Single source of truth for NekoTrack's recommendation algorithm.
 
-Pure functions live here so ranking behaviour can be tested without Qt or a live
-AniList connection. Credit-role weights are centralized for shared use by the
-profile UI and recommendation model as those relationship signals are loaded.
+Keep seed weights, candidate eligibility/merging, preference learning, credit
+weights, ranking, explanation text, and exploration here. The UI, AniList API,
+and database modules should gather and display data rather than make ranking
+decisions. Pure functions make the algorithm easy to tune and test without Qt
+or a live network connection.
 """
 
 import math
@@ -113,6 +115,78 @@ def _work_title(work):
     return str(title or "Untitled")
 
 
+def work_id(work):
+    """Return a positive work ID, or None for malformed data."""
+    return _work_id(work)
+
+
+def work_title(work):
+    """Return the best available work title for sorting and explanations."""
+    return _work_title(work)
+
+
+def media_type(work):
+    """Return a normalized AniList media type."""
+    return str(work.get("type") or "").strip().upper() if isinstance(work, dict) else ""
+
+
+def seed_strength(work, favorite_ids=None, history=None):
+    """Prioritize personal seed works before making expensive recommendation calls."""
+    work_id_value = _work_id(work)
+    history = history or {}
+    favorite_ids = favorite_ids or set()
+    state = history.get(work_id_value, history.get(str(work_id_value), {}))
+    status = str(work.get("status") or "").casefold() if isinstance(work, dict) else ""
+    score = 0.0
+    if work_id_value in favorite_ids or (isinstance(work, dict) and work.get("_is_favorite")):
+        score += 24.0
+    if isinstance(state, dict) and state.get("feedback") == "like":
+        score += 30.0
+    score += {
+        "watching": 12.0, "rewatching": 11.0, "reading": 12.0,
+        "completed": 8.0, "planning": 3.0, "plan to watch": 3.0,
+        "plan to read": 3.0,
+    }.get(status, 0.0)
+    try:
+        rating = float(work.get("rating") or 0)
+        if rating > 10:
+            rating /= 10.0
+        if 0 <= rating <= 10:
+            score += rating * 1.5
+    except (TypeError, ValueError, OverflowError):
+        pass
+    if media_type(work) == "ANIME":
+        score += 1.0
+    return score
+
+
+def source_weight_for_work(work_id_value, work, favorite_ids=None, history=None):
+    """Weight a saved work's credits by favorite, feedback, status, and rating."""
+    favorite_ids = favorite_ids or set()
+    history = history or {}
+    state = history.get(work_id_value, history.get(str(work_id_value), {}))
+    feedback = state.get("feedback") if isinstance(state, dict) else None
+    status = str(work.get("status") or "").strip().casefold() if isinstance(work, dict) else ""
+    weight = 1.0
+    if work_id_value in favorite_ids or (isinstance(work, dict) and work.get("_is_favorite")):
+        weight += 1.2
+    if feedback == "like":
+        weight += 1.8
+    if status in {"watching", "rewatching", "reading", "in progress"}:
+        weight += 0.75
+    elif status == "completed":
+        weight += 0.45
+    try:
+        rating = float(work.get("rating") or 0)
+        if rating > 10:
+            rating /= 10.0
+        if 0 <= rating <= 10:
+            weight += min(0.9, rating * 0.09)
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return min(3.5, max(0.35, weight))
+
+
 def _terms(work):
     if not isinstance(work, dict):
         return set()
@@ -216,6 +290,52 @@ def _display_credit_name(record):
     if isinstance(value, dict):
         value = value.get("full") or value.get("userPreferred") or value.get("native")
     return str(value or "").strip()
+
+
+def merge_recommendation_candidate(
+    suggestions, candidate, known_ids, history, source_id=None,
+    source_title=None, catalog=False,
+):
+    """Validate and combine candidate metadata from all discovery sources."""
+    if not isinstance(candidate, dict):
+        return False
+    candidate_id = _work_id(candidate)
+    if candidate_id is None or candidate_id in known_ids:
+        return False
+    if media_type(candidate) not in {"ANIME", "MANGA"}:
+        return False
+    history = history or {}
+    state = history.get(candidate_id, history.get(str(candidate_id), {}))
+    if isinstance(state, dict) and state.get("feedback") == "dislike":
+        return False
+
+    entry = suggestions.get(candidate_id)
+    if entry is None:
+        entry = dict(candidate)
+        entry["_recommendation_source_ids"] = []
+        entry["_recommendation_source_titles"] = []
+        entry["_recommendation_count"] = 0
+        entry["_recommendation_catalog_source"] = False
+        suggestions[candidate_id] = entry
+    else:
+        # A later source may have better cover, synopsis, dates, or credit detail.
+        for key, value in candidate.items():
+            if key not in entry or entry.get(key) in (None, "", [], {}):
+                entry[key] = value
+
+    if source_id is not None and source_id not in entry["_recommendation_source_ids"]:
+        entry["_recommendation_source_ids"].append(source_id)
+        entry["_recommendation_source_titles"].append(str(source_title or "a saved title"))
+        entry["_recommendation_count"] += 1
+    if catalog:
+        entry["_recommendation_catalog_source"] = True
+        cover = entry.get("coverImage")
+        if isinstance(cover, dict) and cover.get("large"):
+            entry.setdefault("cover_url", cover["large"])
+        start_date = entry.get("startDate")
+        if isinstance(start_date, dict) and start_date.get("year") is not None:
+            entry.setdefault("start_year", start_date["year"])
+    return True
 
 
 def credit_profile_from_media_record(work):
@@ -579,4 +699,10 @@ __all__ = [
     "recommendation_reason",
     "rank_candidates",
     "inject_rare_exploration",
+    "work_id",
+    "work_title",
+    "media_type",
+    "seed_strength",
+    "source_weight_for_work",
+    "merge_recommendation_candidate",
 ]

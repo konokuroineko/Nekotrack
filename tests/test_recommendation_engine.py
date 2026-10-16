@@ -9,7 +9,10 @@ from recommendation_engine import (
     credit_profile_from_media_record,
     exposure_multiplier,
     inject_rare_exploration,
+    merge_recommendation_candidate,
     rank_candidates,
+    seed_strength,
+    source_weight_for_work,
     staff_role_weight,
     voice_actor_role_weight,
 )
@@ -187,6 +190,49 @@ class RecommendationScoringTests(unittest.TestCase):
         )
         self.assertIn("Miyuki Sawashiro", favorited[0]["_recommendation_reason"])
         self.assertIn("favorited", favorited[0]["_recommendation_reason"].casefold())
+
+    def test_seed_weights_and_candidate_merging_live_in_the_algorithm_module(self):
+        work = {
+            "id": 901,
+            "type": "ANIME",
+            "status": "watching",
+            "rating": 8,
+        }
+        plain_seed = seed_strength(work, set(), {})
+        preferred_seed = seed_strength(
+            work, {901}, {901: {"feedback": "like"}}
+        )
+        self.assertGreater(preferred_seed, plain_seed)
+        self.assertEqual(source_weight_for_work(901, {"status": "planning"}, set(), {}), 1.0)
+        self.assertEqual(
+            source_weight_for_work(
+                901, work, {901}, {901: {"feedback": "like"}}
+            ),
+            3.5,
+        )
+
+        suggestions = {}
+        known_ids = set()
+        candidate = {
+            "id": 902, "type": "ANIME",
+            "title": {"english": "Merged candidate"},
+        }
+        self.assertTrue(merge_recommendation_candidate(
+            suggestions, candidate, known_ids, {},
+            source_id=901, source_title="Saved A",
+        ))
+        self.assertTrue(merge_recommendation_candidate(
+            suggestions, candidate, known_ids, {},
+            source_id=903, source_title="Saved B",
+        ))
+        self.assertEqual(suggestions[902]["_recommendation_count"], 2)
+        self.assertEqual(
+            suggestions[902]["_recommendation_source_titles"], ["Saved A", "Saved B"]
+        )
+        self.assertFalse(merge_recommendation_candidate(
+            suggestions, {"id": 904, "type": "ANIME"}, known_ids,
+            {904: {"feedback": "dislike"}},
+        ))
 
 
 class RecommendationHistoryPersistenceTests(unittest.TestCase):

@@ -271,7 +271,7 @@ class SettingsPage(QWidget):
             [
                 self._combo_row(
                     "Card size",
-                    "Choose how large Library posters should appear.",
+                    "Choose how large posters appear in Library, Search, and Recommendations.",
                     "card_size",
                     [
                         ("Compact", 180),

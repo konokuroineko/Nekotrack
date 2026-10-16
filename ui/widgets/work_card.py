@@ -59,11 +59,16 @@ class WorkCard(QFrame):
     _cover_cache = {}
     _cover_failures = set()
 
-    def __init__(self, work, progress_editable=False, mode="library", add_callback=None, show_add_button=True, parent=None):
+    def __init__(
+        self, work, progress_editable=False, mode="library", add_callback=None,
+        show_add_button=True, parent=None, recommendation_reason=None,
+    ):
         super().__init__(parent)
         self.work = work
         self.mode = mode
         self.add_callback = add_callback
+        self.recommendation_reason = str(recommendation_reason or "").strip()
+        self.recommendation_reason_label = None
         self._network_manager = QNetworkAccessManager(self)
         self._cover_reply = None
         self.setObjectName("posterCard")
@@ -122,8 +127,21 @@ class WorkCard(QFrame):
 
         content = QVBoxLayout()
         content.setContentsMargins(0, 0, 0, 0)
-        content.setSpacing(0 if has_bundle else series_height)
+        content.setSpacing(
+            5 if self.recommendation_reason else (0 if has_bundle else series_height)
+        )
         content.addWidget(title)
+
+        if self.recommendation_reason:
+            reason_label = QLabel(self.recommendation_reason)
+            reason_label.setObjectName("recommendationReason")
+            reason_label.setWordWrap(True)
+            reason_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            reason_label.setFixedWidth(max(1, card_width - 12))
+            reason_label.setMargin(0)
+            reason_label.setToolTip(self.recommendation_reason)
+            self.recommendation_reason_label = reason_label
+            content.addWidget(reason_label)
 
         if has_bundle:
             series_info = QLabel(str(summary or f"{int(series_count)} entries"))
@@ -172,11 +190,18 @@ class WorkCard(QFrame):
 
 
         self.adjustSize()
+        content_height = (
+            (2 * title_metrics.lineSpacing())
+            + (self.recommendation_reason_label.sizeHint().height()
+               if self.recommendation_reason_label is not None else 0)
+            + (series_height if has_bundle else 0)
+            + (meta.sizeHint().height() if meta is not None else 0)
+        )
+        content_spacing_height = max(0, content.count() - 1) * content.spacing()
         target_height = (
             self.cover.height()
-            + (2 * title_metrics.lineSpacing())
-            + series_height
-            + (meta.sizeHint().height() if meta is not None else 0)
+            + content_height
+            + content_spacing_height
             + (add_button.sizeHint().height() if add_button is not None else 0)
             + root.contentsMargins().top()
             + root.contentsMargins().bottom()
@@ -256,6 +281,11 @@ class WorkCard(QFrame):
             QLabel#title {{ color: {COLORS['primary']}; font-size: {get('font_size')}px; font-weight: 760; }}
             QFrame#posterCard:hover QLabel#title {{ color: {COLORS['primary']}; }}
             QLabel#meta {{ color: {COLORS['muted']}; font-size: 11px; }}
+            QLabel#recommendationReason {{
+                color: {COLORS['secondary']};
+                font-size: {max(9, int(get('font_size') or 13) - 2)}px;
+                font-weight: 500;
+            }}
             QLabel#seriesInfo {{ color: {COLORS['primary']}; font-size: 10px; font-weight: 800; }}
             QPushButton#add {{ background: {COLORS['accent']}; color: {COLORS['accent_text']}; border: none; border-radius: 8px; padding: 7px; font-weight: 800; }}
             QPushButton#add:hover {{ background: {COLORS['accent_hover']}; }}

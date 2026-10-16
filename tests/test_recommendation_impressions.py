@@ -6,8 +6,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication, QGridLayout, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QGridLayout, QLabel, QPushButton, QSizePolicy, QWidget,
+)
 
+from ui.preferences import get
 from ui.pages.recommendations_page import RecommendationsPage
 from ui.widgets.work_card import WorkCard
 
@@ -56,12 +59,15 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.assertTrue(self.page.load_more_button.isEnabled())
         self.assertEqual(self.page.load_more_button.text(), "Load more")
 
-    def test_recommendation_cards_are_compact_without_heart_or_dislike_buttons(self):
+    def test_recommendation_reason_is_inside_the_card_and_layout_respects_settings(self):
         self.page.resize(900, 700)
         self.page._results = [{
             "id": 9877,
             "type": "ANIME",
             "title": {"english": "Compact recommendation"},
+            "format": "TV",
+            "start_year": 2025,
+            "averageScore": 86,
             "_recommendation_reason": "Shares Japanese voice actor Miyuki Sawashiro with A Series You Enjoyed",
         }]
         self.page._history = {}
@@ -69,24 +75,39 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.page._render_results(preserve_scroll=False)
         self.app.processEvents()
 
-        tile = self.page._tiles[0][0]
-        card = tile.findChild(WorkCard)
-        reason = tile.findChild(QLabel, "recommendationsReason")
-        self.assertIsNotNone(card)
+        card = self.page._tiles[0][0]
+        reason = card.findChild(QLabel, "recommendationReason")
+        title = card.findChild(QLabel, "title")
+        metadata = card.findChild(QLabel, "meta")
+        self.assertIsInstance(card, WorkCard)
         self.assertIsNotNone(reason)
-        self.assertEqual(tile.width(), card.width())
-        self.assertEqual(reason.width(), card.width())
+        self.assertIsNotNone(title)
+        self.assertIsNotNone(metadata)
+        self.assertIs(reason.parentWidget(), card)
+        self.assertLess(title.y(), reason.y())
+        self.assertLess(reason.y(), metadata.y())
+        self.assertLess(reason.width(), card.width())
 
-        buttons = [button.text() for button in tile.findChildren(QPushButton)]
+        buttons = [button.text() for button in card.findChildren(QPushButton)]
         self.assertNotIn("♥", buttons)
         self.assertNotIn("♡", buttons)
         self.assertNotIn("×", buttons)
-        self.assertNotIn("QFrame#recommendationsTile:hover", self.page.styleSheet())
+        self.assertNotIn("recommendationsTile", card.objectName())
 
         grid = self.page.findChild(QGridLayout)
         self.assertIsNotNone(grid)
-        self.assertEqual(grid.horizontalSpacing(), 12)
-        self.assertEqual(grid.verticalSpacing(), 14)
+        expected_gap = min(120, max(0, int(get("card_gap") or 0)))
+        self.assertEqual(grid.horizontalSpacing(), expected_gap)
+        self.assertEqual(grid.verticalSpacing(), expected_gap)
+        grid_host = self.page.findChild(QWidget, "recommendationsGridHost")
+        self.assertIsNotNone(grid_host)
+        self.assertEqual(
+            grid_host.sizePolicy().horizontalPolicy(),
+            QSizePolicy.Policy.Expanding,
+        )
+        self.assertGreater(grid.columnStretch(0), 0)
+
+
 
     def test_offscreen_tile_does_not_gain_an_impression(self):
         self.tile.move(300, 0)

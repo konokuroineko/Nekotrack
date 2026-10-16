@@ -24,7 +24,13 @@ from ui.theme import COLORS
 from recommendation_engine import (
     credit_profile_from_media_record,
     inject_rare_exploration,
+    media_type as recommendation_media_type,
+    merge_recommendation_candidate,
     rank_candidates,
+    seed_strength,
+    source_weight_for_work,
+    work_id as recommendation_work_id,
+    work_title as recommendation_work_title,
 )
 from ui.widgets.work_card import WorkCard
 
@@ -71,49 +77,15 @@ class RecommendationWorker(QObject):
 
     @staticmethod
     def _work_id(work):
-        try:
-            work_id = int(work.get("id"))
-        except (TypeError, ValueError, OverflowError):
-            return None
-        return work_id if work_id > 0 else None
+        return recommendation_work_id(work)
 
     @staticmethod
     def _title(work):
-        title = work.get("title")
-        if isinstance(title, dict):
-            return str(title.get("english") or title.get("romaji") or title.get("native") or "Untitled")
-        return str(title or "Untitled")
+        return recommendation_work_title(work)
 
     @classmethod
     def _media_type(cls, work):
-        return str(work.get("type") or "").strip().upper()
-
-    @staticmethod
-    def _seed_strength(work, favorite_ids, history):
-        work_id = RecommendationWorker._work_id(work)
-        state = history.get(work_id, {}) if work_id is not None else {}
-        status = str(work.get("status") or "").casefold()
-        score = 0.0
-        if work_id in favorite_ids or work.get("_is_favorite"):
-            score += 24.0
-        if isinstance(state, dict) and state.get("feedback") == "like":
-            score += 30.0
-        score += {
-            "watching": 12.0, "rewatching": 11.0, "reading": 12.0,
-            "completed": 8.0, "planning": 3.0, "plan to watch": 3.0,
-            "plan to read": 3.0,
-        }.get(status, 0.0)
-        try:
-            rating = float(work.get("rating") or 0)
-            if rating > 10:
-                rating /= 10.0
-            if 0 <= rating <= 10:
-                score += rating * 1.5
-        except (TypeError, ValueError, OverflowError):
-            pass
-        if RecommendationWorker._media_type(work) == "ANIME":
-            score += 1.0
-        return score
+        return recommendation_media_type(work)
 
     def _read_learning_data(self):
         try:
@@ -134,47 +106,6 @@ class RecommendationWorker(QObject):
         except Exception as error:
             self.favorite_entities = []
             log_exception("recommendations.entity_favorites_read_failed", error)
-
-    def _merge_candidate(self, suggestions, candidate, known_ids, source_id=None, source_title=None, catalog=False):
-        if not isinstance(candidate, dict):
-            return False
-        work_id = self._work_id(candidate)
-        if work_id is None or work_id in known_ids:
-            return False
-        kind = self._media_type(candidate)
-        if kind not in {"ANIME", "MANGA"}:
-            return False
-        feedback = self.history.get(work_id, {})
-        if isinstance(feedback, dict) and feedback.get("feedback") == "dislike":
-            return False
-
-        entry = suggestions.get(work_id)
-        if entry is None:
-            entry = dict(candidate)
-            entry["_recommendation_source_ids"] = []
-            entry["_recommendation_source_titles"] = []
-            entry["_recommendation_count"] = 0
-            entry["_recommendation_catalog_source"] = False
-            suggestions[work_id] = entry
-        else:
-            # Keep richer metadata if one candidate source returned more fields.
-            for key, value in candidate.items():
-                if key not in entry or entry.get(key) in (None, "", [], {}):
-                    entry[key] = value
-
-        if source_id is not None and source_id not in entry["_recommendation_source_ids"]:
-            entry["_recommendation_source_ids"].append(source_id)
-            entry["_recommendation_source_titles"].append(str(source_title or "a saved title"))
-            entry["_recommendation_count"] += 1
-        if catalog:
-            entry["_recommendation_catalog_source"] = True
-            cover = entry.get("coverImage")
-            if isinstance(cover, dict) and cover.get("large"):
-                entry.setdefault("cover_url", cover["large"])
-            start_date = entry.get("startDate")
-            if isinstance(start_date, dict) and start_date.get("year") is not None:
-                entry.setdefault("start_year", start_date["year"])
-        return True
 
     def run(self):
         self._read_learning_data()
@@ -301,27 +232,9 @@ class RecommendationWorker(QObject):
         }
         self.source_weights = {}
         for work_id, row in source_rows.items():
-            state = self.history.get(work_id, self.history.get(str(work_id), {}))
-            feedback = state.get("feedback") if isinstance(state, dict) else None
-            status = str(row.get("status") or "").strip().casefold()
-            weight = 1.0
-            if work_id in favorites_ids or row.get("_is_favorite"):
-                weight += 1.2
-            if feedback == "like":
-                weight += 1.8
-            if status in {"watching", "rewatching", "reading", "in progress"}:
-                weight += 0.75
-            elif status == "completed":
-                weight += 0.45
-            try:
-                rating = float(row.get("rating") or 0)
-                if rating > 10:
-                    rating /= 10.0
-                if 0 <= rating <= 10:
-                    weight += min(0.9, rating * 0.09)
-            except (TypeError, ValueError, OverflowError):
-                pass
-            weight = min(3.5, max(0.35, weight))
+            weight = source_weight_for_work(
+                work_id, row, favorites_ids, self.history
+            )
             self.source_weights[work_id] = weight
             profile = self.credit_profile.get(work_id)
             if isinstance(profile, dict):
@@ -336,7 +249,7 @@ class RecommendationWorker(QObject):
             seeds = sorted(
                 seeds_by_id.values(),
                 key=lambda work: (
-                    -self._seed_strength(work, favorite_ids, self.history),
+                    -seed_strength(work, favorite_ids, self.history),
                     self._title(work).casefold(),
                     self._work_id(work) or 0,
                 ),
@@ -364,8 +277,8 @@ class RecommendationWorker(QObject):
                     if self.stop_event.is_set():
                         self.finished.emit([])
                         return
-                    self._merge_candidate(
-                        suggestions, record, known_ids,
+                    merge_recommendation_candidate(
+                        suggestions, record, known_ids, self.history,
                         source_id=seed_id, source_title=self._title(seed),
                     )
 
@@ -414,7 +327,9 @@ class RecommendationWorker(QObject):
                     if self.stop_event.is_set():
                         self.finished.emit([])
                         return
-                    if self._merge_candidate(suggestions, candidate, known_ids, catalog=True):
+                    if merge_recommendation_candidate(
+                        suggestions, candidate, known_ids, self.history, catalog=True
+                    ):
                         new_catalog_candidates += 1
 
             if self.fetch_seeds or not self.catalog_has_next or new_catalog_candidates >= 12:
@@ -472,6 +387,8 @@ class RecommendationsPage(QWidget):
         self._visibility_viewport = None
         self._active_scroll_bar = None
         self._tiles = []
+        self._rendered_columns = 0
+        self._layout_refresh_pending = False
         self._exposure_visible_since = {}
         self._exposure_counted = {}
         self._history = {}
@@ -513,6 +430,41 @@ class RecommendationsPage(QWidget):
         if self.scroll is not None:
             self.set_visibility_viewport(self.scroll.viewport(), self.scroll.verticalScrollBar())
         self._apply_theme()
+
+    def _available_feed_width(self):
+        """Use the real viewport width, including the initial show/resize path."""
+        width = self.width()
+        if not self.embedded and self.scroll is not None:
+            width = self.scroll.viewport().width() or width
+        if width < 300 and self._visibility_viewport is not None:
+            width = max(width, self._visibility_viewport.width())
+        return max(100, int(width or 100))
+
+    def _grid_gap(self):
+        try:
+            return min(120, max(0, int(get("card_gap") or 0)))
+        except (TypeError, ValueError, OverflowError):
+            return 24
+
+    def _columns_for_width(self, width):
+        card_width = max(1, int(get("card_size") or 210) + 8)
+        gap = self._grid_gap()
+        return max(1, min(8, (max(100, int(width)) + gap) // (card_width + gap)))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._shutting_down or not self._results or self._layout_refresh_pending:
+            return
+        if self._columns_for_width(self._available_feed_width()) != self._rendered_columns:
+            self._layout_refresh_pending = True
+            QTimer.singleShot(0, self._refresh_grid_for_resize)
+
+    def _refresh_grid_for_resize(self):
+        self._layout_refresh_pending = False
+        if self._shutting_down or not self._results:
+            return
+        if self._columns_for_width(self._available_feed_width()) != self._rendered_columns:
+            self._render_results(preserve_scroll=True)
 
     def set_visibility_viewport(self, viewport, scroll_bar=None):
         """Use the actual Home or Recommendations viewport for pagination and impressions."""
@@ -902,49 +854,38 @@ class RecommendationsPage(QWidget):
         self.content_layout.addWidget(summary)
         grid_host = QWidget()
         grid_host.setObjectName("recommendationsGridHost")
-        grid_host.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        grid_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         grid = QGridLayout(grid_host)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(14)
-        available_width = max(
-            100,
-            self.width() if self.embedded else (
-                self.scroll.viewport().width() or self.width() - 320
-            ),
-        )
-        poster_width = int(get("card_size") or 210) + 8
-        columns = max(2, min(5, (available_width - 50) // (poster_width + 16)))
+        gap = self._grid_gap()
+        grid.setHorizontalSpacing(gap)
+        grid.setVerticalSpacing(gap)
+        available_width = self._available_feed_width()
+        columns = self._columns_for_width(available_width)
+        self._rendered_columns = columns
+        for column in range(columns):
+            grid.setColumnStretch(column, 1)
+
         for index, work in enumerate(self._results):
-            tile = QFrame()
-            tile.setObjectName("recommendationsTile")
-            tile.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Maximum)
-            layout = QVBoxLayout(tile)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(5)
-            card = WorkCard(
-                work, mode="search", add_callback=self.add_callback,
-                show_add_button=True, parent=tile,
-            )
-            card_width = max(1, card.sizeHint().width())
-            tile.setFixedWidth(card_width)
-            card.clicked.connect(self.work_selected.emit)
-            layout.addWidget(card, 0, Qt.AlignmentFlag.AlignHCenter)
-
             reason = str(work.get("_recommendation_reason") or "Discovered from AniList")
-            reason_label = QLabel(reason)
-            reason_label.setObjectName("recommendationsReason")
-            reason_label.setWordWrap(True)
-            reason_label.setFixedWidth(card_width)
-            layout.addWidget(reason_label)
-
+            card = WorkCard(
+                work,
+                mode="search",
+                add_callback=self.add_callback,
+                show_add_button=True,
+                parent=grid_host,
+                recommendation_reason=reason,
+            )
+            card.clicked.connect(self.work_selected.emit)
             grid.addWidget(
-                tile, index // columns, index % columns,
+                card,
+                index // columns,
+                index % columns,
                 Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter,
             )
-            self._tiles.append((tile, dict(work)))
+            self._tiles.append((card, dict(work)))
 
-        self.content_layout.addWidget(grid_host, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.content_layout.addWidget(grid_host)
         self.more_status = QLabel()
         self.more_status.setObjectName("recommendationsStatus")
         self.more_status.setWordWrap(True)
@@ -1017,10 +958,6 @@ class RecommendationsPage(QWidget):
             QLabel#recommendationsSubtitle, QLabel#recommendationsStatus {{
                 color:{COLORS['secondary']}; background:transparent; font-size:12px;
             }}
-            QLabel#recommendationsReason {{
-                color:{COLORS['secondary']}; background:transparent; font-size:11px;
-            }}
-            QFrame#recommendationsTile {{ background:transparent; border:none; border-radius:0; }}
             QPushButton#recommendationsRefresh {{
                 background:{COLORS['accent']}; color:{COLORS['accent_text']}; border:1px solid {COLORS['accent']};
                 border-radius:8px; padding:9px 13px; font-weight:800;
