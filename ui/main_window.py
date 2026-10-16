@@ -1048,6 +1048,24 @@ class MainWindow(QMainWindow):
             work_id = int(work["id"])
         except (KeyError, TypeError, ValueError, OverflowError):
             work_id = None
+
+        # Prefer the richer local snapshot for an already imported individual
+        # work, but keep a Search-produced bundle record intact.
+        if work_id is not None and not (
+            isinstance(work, dict) and work.get("_series_members")
+        ):
+            try:
+                saved_work = get_work(work_id)
+            except Exception as error:
+                log_exception(
+                    "work_details.search_local_lookup_failed",
+                    error,
+                    work_id=work_id,
+                )
+                saved_work = None
+            if saved_work is not None:
+                work = saved_work
+
         log_event(
             "work_details.search_selected",
             work_id=work_id,
