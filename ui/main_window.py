@@ -37,7 +37,7 @@ from image_cache import download_cover
 from library_import_queue import LibraryImportQueue
 from diagnostics import diagnostic_context, log_event, log_exception, log_operation
 from ui.backgrounds import BackgroundCanvas, BackgroundManager
-from ui.branding import application_icon, navigation_icon, wordmark_pixmap
+from ui.branding import application_icon, navigation_icon, WordmarkLabel
 from ui.navigation import NavigationController
 from ui.preferences import get
 from ui.setup_wizard import SetupWizard
@@ -545,7 +545,7 @@ class MainWindow(QMainWindow):
         brand = QHBoxLayout(brand_badge)
         brand.setContentsMargins(4, 4, 4, 4)
         brand.setSpacing(0)
-        word = QLabel()
+        word = WordmarkLabel()
         word.setObjectName("brandWord")
         word.setAccessibleName("NekoTrack")
         word.setFixedSize(222, 58)
@@ -842,10 +842,8 @@ class MainWindow(QMainWindow):
             pass
 
     def _update_brand_word(self):
-        self.brand_word.setPixmap(
-            wordmark_pixmap(
-                COLORS["accent"], 222, 58, light_mode=get("light_mode")
-            )
+        self.brand_word.set_wordmark(
+            COLORS["accent"], light_mode=get("light_mode")
         )
         self.brand_word.setAccessibleName("NekoTrack")
         self.brand_word.setStyleSheet("background:transparent;border:none;padding:0;")
