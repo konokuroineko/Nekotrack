@@ -603,7 +603,9 @@ class MainWindow(QMainWindow):
         self.recommendations_page.search_requested.connect(
             lambda: self.navigation.show("search")
         )
-        self.favorites_page.work_selected.connect(self.show_work_details)
+        self.favorites_page.entity_selected.connect(
+            lambda kind, entity: self.show_entity_profile(kind, entity)
+        )
         self.favorites_page.search_requested.connect(
             lambda: self.navigation.show("search")
         )
