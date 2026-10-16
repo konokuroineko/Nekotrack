@@ -217,6 +217,53 @@ class UiStartupTests(unittest.TestCase):
             else:
                 os.environ["QT_SCALE_FACTOR"] = previous_factor
 
+    def test_settings_exports_diagnostics_to_app_data_with_one_click(self):
+        previous_stores = MemorySettings.stores
+        MemorySettings.stores = {}
+        try:
+            with (
+                patch.object(preferences, "QSettings", MemorySettings),
+                patch("ui.pages.settings_page.get_all_library", return_value=[]),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                data_dir = Path(directory)
+                expected_report = data_dir / "nekotrack_diagnostics.txt"
+                with (
+                    patch(
+                        "ui.pages.settings_page.default_app_data_dir",
+                        return_value=data_dir,
+                    ),
+                    patch(
+                        "ui.pages.settings_page.export_diagnostics",
+                        return_value=expected_report,
+                    ) as export_report,
+                    patch("ui.pages.settings_page.QMessageBox.information") as show_success,
+                    patch(
+                        "ui.pages.settings_page.QDesktopServices.openUrl",
+                        return_value=True,
+                    ) as open_folder,
+                ):
+                    settings_page = SettingsPage()
+                    button = next(
+                        (
+                            item
+                            for item in settings_page.findChildren(QPushButton)
+                            if item.accessibleName() == "Export NekoTrack diagnostics"
+                        ),
+                        None,
+                    )
+                    self.assertIsNotNone(button, "Settings needs an accessible diagnostics export button")
+                    button.click()
+
+                    export_report.assert_called_once_with(output_path=expected_report)
+                    show_success.assert_called_once()
+                    open_folder.assert_called_once()
+                    settings_page.close()
+                    settings_page.deleteLater()
+                    self.app.processEvents()
+        finally:
+            MemorySettings.stores = previous_stores
+
     def test_brand_assets_and_switch_rendering_on_dark_and_white_surfaces(self):
         from PySide6.QtGui import QColor
         from ui.branding import application_icon, logo_pixmap, wordmark_pixmap
