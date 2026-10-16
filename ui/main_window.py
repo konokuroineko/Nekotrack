@@ -1358,7 +1358,7 @@ class MainWindow(QMainWindow):
                 voice_actors=state["voice_actors"],
             )
             return
-        self.navigation.show("work_detail")
+        self.navigation.back(fallback="work_detail", skip=("entity_profile",))
 
     def show_relation(self, relation):
         if not relation:
