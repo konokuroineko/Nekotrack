@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from PySide6.QtWidgets import (
-    QApplication, QGridLayout, QLabel, QPushButton, QSizePolicy, QWidget,
+    QApplication, QGridLayout, QLabel, QPushButton, QToolButton, QSizePolicy, QWidget,
 )
 
 from ui.preferences import get
