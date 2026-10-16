@@ -237,8 +237,13 @@ class WorkCard(QFrame):
 
 
         self.adjustSize()
+        title_row_height = max(
+            2 * title_metrics.lineSpacing(),
+            self.recommendation_menu_button.sizeHint().height()
+            if self.recommendation_menu_button is not None else 0,
+        )
         content_height = (
-            (2 * title_metrics.lineSpacing())
+            title_row_height
             + (self.recommendation_reason_label.sizeHint().height()
                if self.recommendation_reason_label is not None else 0)
             + (series_height if has_bundle else 0)
@@ -336,29 +341,6 @@ class WorkCard(QFrame):
             QLabel#seriesInfo {{ color: {COLORS['primary']}; font-size: 10px; font-weight: 800; }}
             QPushButton#add {{ background: {COLORS['accent']}; color: {COLORS['accent_text']}; border: none; border-radius: 8px; padding: 7px; font-weight: 800; }}
             QPushButton#add:hover {{ background: {COLORS['accent_hover']}; }}
-            QPushButton#recommendationLike, QPushButton#recommendationDislike {{
-                background:{surface_rgba('surface_alt')};
-                color:{COLORS['secondary']};
-                border:1px solid {COLORS['frame']};
-                border-radius:7px;
-                padding:4px 6px;
-                font-size:11px;
-                font-weight:750;
-            }}
-            QPushButton#recommendationLike:hover, QPushButton#recommendationDislike:hover {{
-                color:{COLORS['primary']};
-                border-color:{COLORS['accent']};
-            }}
-            QPushButton#recommendationLike:checked {{
-                background:{surface_rgba('accent_soft')};
-                color:{COLORS['primary']};
-                border-color:{COLORS['accent']};
-            }}
-            QPushButton#recommendationDislike:checked {{
-                background:{surface_rgba('surface_hover')};
-                color:{COLORS['primary']};
-                border-color:{COLORS['accent']};
-            }}
         """)
         if hasattr(self, "title_label"):
             self.title_label.setStyleSheet(
