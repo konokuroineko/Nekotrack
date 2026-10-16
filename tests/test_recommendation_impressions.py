@@ -167,7 +167,7 @@ class RecommendationImpressionTests(unittest.TestCase):
                 },
             ),
         ):
-            button = self.page.findChild(QPushButton, "recommendationMenuButton")
+            button = self.page.findChild(QToolButton, "recommendationMenuButton")
             self.assertIsNotNone(button)
             self.assertIsNone(self.page.findChild(QPushButton, "recommendationLike"))
             self.assertIsNone(self.page.findChild(QPushButton, "recommendationDislike"))
