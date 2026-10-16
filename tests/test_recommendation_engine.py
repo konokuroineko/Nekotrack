@@ -146,6 +146,13 @@ class RecommendationHistoryPersistenceTests(unittest.TestCase):
             "title": {"english": "Saved feedback"},
             "genres": ["Mystery"], "tags": [{"name": "Investigation"}],
             "cover_url": "https://example.invalid/cover.jpg",
+            "characters": {"edges": [{
+                "role": "MAIN", "node": {"id": 712},
+                "voiceActors": [{"id": 913, "language": "Japanese"}],
+            }]},
+            "staff": {"edges": [{
+                "role": "Series Composition", "node": {"id": 994},
+            }]},
         }
         self.assertTrue(database.set_recommendation_feedback(831, "like", work))
         self.assertEqual(database.record_recommendation_impressions([work]), 1)
@@ -156,6 +163,14 @@ class RecommendationHistoryPersistenceTests(unittest.TestCase):
         self.assertEqual(history[831]["feedback"], "like")
         self.assertEqual(history[831]["impressions"], 2)
         self.assertEqual(history[831]["metadata"]["genres"], ["Mystery"])
+        self.assertEqual(
+            history[831]["metadata"]["characters"]["edges"][0]["voiceActors"][0]["language"],
+            "Japanese",
+        )
+        self.assertEqual(
+            history[831]["metadata"]["staff"]["edges"][0]["role"],
+            "Series Composition",
+        )
         self.assertTrue(database.set_recommendation_feedback(831, "dislike", work))
         self.assertEqual(database.get_recommendation_history()[831]["feedback"], "dislike")
 

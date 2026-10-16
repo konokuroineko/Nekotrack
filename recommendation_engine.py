@@ -206,6 +206,73 @@ def _edge_id(value):
     return parsed if parsed > 0 else None
 
 
+def credit_profile_from_media_record(work):
+    """Normalize provider credit edges into source-title signals for local learning."""
+    if not isinstance(work, dict):
+        return {"characters": [], "voice_actors": [], "staff": []}
+
+    characters_by_id = {}
+    actors_by_key = {}
+    staff_by_id = {}
+
+    connection = work.get("characters")
+    edges = connection.get("edges") if isinstance(connection, dict) else []
+    if isinstance(edges, list):
+        for edge in edges[:50]:
+            if not isinstance(edge, dict):
+                continue
+            node = edge.get("node") if isinstance(edge.get("node"), dict) else {}
+            character_id = _edge_id(node)
+            if character_id is None:
+                continue
+            role = str(edge.get("role") or "UNKNOWN")
+            previous = characters_by_id.get(character_id)
+            if previous is None or character_role_weight(role) > character_role_weight(previous["role"]):
+                characters_by_id[character_id] = {"id": character_id, "role": role}
+
+            voice_actors = edge.get("voiceActors")
+            if not isinstance(voice_actors, list):
+                continue
+            for voice in voice_actors[:30]:
+                if not isinstance(voice, dict):
+                    continue
+                voice_id = _edge_id(voice)
+                if voice_id is None:
+                    continue
+                language = str(voice.get("language") or "")
+                key = (voice_id, language.casefold())
+                record = {
+                    "id": voice_id,
+                    "language": language[:30],
+                    "character_id": character_id,
+                    "character_role": role,
+                }
+                previous = actors_by_key.get(key)
+                if previous is None or voice_actor_role_weight(role) > voice_actor_role_weight(previous["character_role"]):
+                    actors_by_key[key] = record
+
+    staff_connection = work.get("staff")
+    staff_edges = staff_connection.get("edges") if isinstance(staff_connection, dict) else []
+    if isinstance(staff_edges, list):
+        for edge in staff_edges[:60]:
+            if not isinstance(edge, dict):
+                continue
+            node = edge.get("node") if isinstance(edge.get("node"), dict) else {}
+            person_id = _edge_id(node)
+            if person_id is None:
+                continue
+            role = str(edge.get("role") or "")
+            previous = staff_by_id.get(person_id)
+            if previous is None or staff_role_weight(role) > staff_role_weight(previous["role"]):
+                staff_by_id[person_id] = {"id": person_id, "role": role[:250]}
+
+    return {
+        "characters": list(characters_by_id.values()),
+        "voice_actors": list(actors_by_key.values()),
+        "staff": list(staff_by_id.values()),
+    }
+
+
 def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_language):
     source_weights = Counter()
     for payload in (credit_profile or {}).values():
@@ -216,6 +283,10 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
         except (TypeError, ValueError, OverflowError):
             source_weight = 1.0
         source_weight = min(3.5, max(0.0, source_weight))
+        # Deduplicate each contributor within one source work, keeping their
+        # strongest credited role. Multiple character/staff edges must not
+        # multiply the same identity's influence.
+        per_source = {}
         for kind in ("characters", "voice_actors", "staff"):
             credits = payload.get(kind)
             if not isinstance(credits, list):
@@ -227,15 +298,19 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
                 if entity_id is None:
                     continue
                 if kind == "characters":
+                    key = ("character", entity_id)
                     weight = character_role_weight(credit.get("role"))
-                    source_weights[("character", entity_id)] += source_weight * weight
                 elif kind == "voice_actors":
                     if not _language_matches(credit.get("language"), voice_language):
                         continue
+                    key = ("voice_actor", entity_id)
                     weight = voice_actor_role_weight(credit.get("character_role"))
-                    source_weights[("voice_actor", entity_id)] += source_weight * weight
                 else:
-                    source_weights[("staff", entity_id)] += source_weight * staff_role_weight(credit.get("role"))
+                    key = ("staff", entity_id)
+                    weight = staff_role_weight(credit.get("role"))
+                per_source[key] = max(per_source.get(key, 0.0), weight)
+        for key, weight in per_source.items():
+            source_weights[key] += source_weight * weight
 
     favorites = set()
     for entry in favorite_entities or []:
@@ -431,6 +506,7 @@ __all__ = [
     "character_role_weight",
     "voice_actor_role_weight",
     "staff_role_weight",
+    "credit_profile_from_media_record",
     "exposure_multiplier",
     "recommendation_reason",
     "rank_candidates",

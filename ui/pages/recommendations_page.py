@@ -22,7 +22,11 @@ from database import (
 from diagnostics import log_exception
 from ui.preferences import get
 from ui.theme import COLORS
-from recommendation_engine import inject_rare_exploration, rank_candidates
+from recommendation_engine import (
+    credit_profile_from_media_record,
+    inject_rare_exploration,
+    rank_candidates,
+)
 from ui.widgets.work_card import WorkCard
 
 
@@ -214,28 +218,53 @@ class RecommendationWorker(QObject):
             seeds_by_id.setdefault(safe_id, dict(metadata))
 
         source_rows = {}
+
+        def merge_source_record(raw_record):
+            if not isinstance(raw_record, dict):
+                return
+            work_id = self._work_id(raw_record)
+            if work_id is None:
+                return
+            merged = source_rows.setdefault(work_id, {})
+            for key, value in raw_record.items():
+                if value in (None, "", [], {}):
+                    continue
+                if merged.get(key) in (None, "", [], {}):
+                    merged[key] = value
+                    continue
+                if key in {"characters", "staff"} and isinstance(value, dict) and isinstance(merged.get(key), dict):
+                    old_edges = merged[key].get("edges")
+                    new_edges = value.get("edges")
+                    if isinstance(old_edges, list) and isinstance(new_edges, list):
+                        seen_credit_keys = set()
+                        combined = []
+                        for edge in old_edges + new_edges:
+                            if not isinstance(edge, dict):
+                                continue
+                            node = edge.get("node") if isinstance(edge.get("node"), dict) else {}
+                            credit_id = self._safe_int(node.get("id"), 0)
+                            credit_key = (credit_id, str(edge.get("role") or "").casefold())
+                            if credit_id > 0 and credit_key not in seen_credit_keys:
+                                seen_credit_keys.add(credit_key)
+                                combined.append(edge)
+                        merged[key] = {"edges": combined[:60]}
+
         for row in self.library_rows:
-            work_id = self._work_id(row)
-            if work_id is not None:
-                source_rows[work_id] = dict(row)
+            merge_source_record(dict(row))
         for row in self.favorite_works:
-            work_id = self._work_id(row)
-            if work_id is not None:
-                source_rows[work_id] = dict(row)
+            merge_source_record(dict(row))
         for raw_id, state in self.history.items():
             if not isinstance(state, dict) or state.get("feedback") != "like":
                 continue
             metadata = state.get("metadata")
             if not isinstance(metadata, dict):
                 continue
-            work_id = self._work_id(metadata)
-            if work_id is None:
+            if self._work_id(metadata) is None:
                 try:
-                    work_id = int(raw_id)
+                    metadata = {"id": int(raw_id), **metadata}
                 except (TypeError, ValueError, OverflowError):
-                    work_id = None
-            if work_id is not None:
-                source_rows.setdefault(work_id, dict(metadata))
+                    continue
+            merge_source_record(metadata)
 
         try:
             self.credit_profile = get_recommendation_credit_profile(list(source_rows))
@@ -244,6 +273,18 @@ class RecommendationWorker(QObject):
         except Exception as error:
             self.credit_profile = {}
             log_exception("recommendations.credit_profile_read_failed", error)
+
+        for work_id, record in source_rows.items():
+            remote_credits = credit_profile_from_media_record(record)
+            profile = self.credit_profile.setdefault(
+                work_id, {"characters": [], "voice_actors": [], "staff": []}
+            )
+            for kind in ("characters", "voice_actors", "staff"):
+                local_values = profile.get(kind)
+                if not isinstance(local_values, list):
+                    local_values = []
+                local_values.extend(remote_credits[kind])
+                profile[kind] = local_values
 
         favorites_ids = {
             self._work_id(item) for item in self.favorite_works

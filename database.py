@@ -3661,8 +3661,73 @@ def _recommendation_metadata_json(metadata):
         "_recommendation_source_titles", "_recommendation_reason",
     )
     snapshot = {key: metadata[key] for key in allowed if key in metadata}
+
+    # Persist only the relationship fields needed for local learning. Keep
+    # records deliberately small and numeric; provider biographies, images and
+    # other unexpected payload cannot balloon the recommendation-history DB.
+    characters = metadata.get("characters")
+    if isinstance(characters, dict):
+        edges = characters.get("edges")
+        if isinstance(edges, list):
+            safe_edges = []
+            for edge in edges[:30]:
+                if not isinstance(edge, dict):
+                    continue
+                node = edge.get("node")
+                try:
+                    character_id = _validated_work_id(node.get("id")) if isinstance(node, dict) else None
+                except (TypeError, ValueError, OverflowError):
+                    character_id = None
+                if character_id is None or character_id <= 0:
+                    continue
+                safe_edge = {
+                    "role": str(edge.get("role") or "UNKNOWN")[:40],
+                    "node": {"id": character_id},
+                }
+                voices = edge.get("voiceActors")
+                if isinstance(voices, list):
+                    safe_voices = []
+                    for voice in voices[:20]:
+                        if not isinstance(voice, dict):
+                            continue
+                        try:
+                            actor_id = _validated_work_id(voice.get("id"))
+                        except (TypeError, ValueError, OverflowError):
+                            continue
+                        if actor_id is None or actor_id <= 0:
+                            continue
+                        safe_voices.append({
+                            "id": actor_id,
+                            "language": str(voice.get("language") or "")[:30],
+                        })
+                    safe_edge["voiceActors"] = safe_voices
+                safe_edges.append(safe_edge)
+            snapshot["characters"] = {"edges": safe_edges}
+
+    staff = metadata.get("staff")
+    if isinstance(staff, dict):
+        edges = staff.get("edges")
+        if isinstance(edges, list):
+            safe_edges = []
+            for edge in edges[:40]:
+                if not isinstance(edge, dict):
+                    continue
+                node = edge.get("node")
+                try:
+                    person_id = _validated_work_id(node.get("id")) if isinstance(node, dict) else None
+                except (TypeError, ValueError, OverflowError):
+                    person_id = None
+                if person_id is None or person_id <= 0:
+                    continue
+                safe_edges.append({
+                    "role": str(edge.get("role") or "")[:250],
+                    "node": {"id": person_id},
+                })
+            snapshot["staff"] = {"edges": safe_edges}
+
     try:
-        return json.dumps(snapshot, ensure_ascii=False, allow_nan=False)
+        encoded = json.dumps(snapshot, ensure_ascii=False, allow_nan=False)
+        return encoded if len(encoded) <= 128 * 1024 else "{}"
     except (TypeError, ValueError, OverflowError, RecursionError):
         return "{}"
 
