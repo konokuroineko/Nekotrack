@@ -112,10 +112,17 @@ class UiStartupTests(unittest.TestCase):
         for origin in ("home", "search"):
             stack = QStackedWidget()
             navigation = NavigationController(stack)
-            for page_name in ("home", "collections", "search", "work_detail"):
+            for page_name in (
+                "home", "collections", "search", "work_detail", "entity_profile"
+            ):
                 navigation.add_page(page_name, QWidget())
             navigation.show(origin, record_history=False)
             navigation.show("work_detail")
+            navigation.show("entity_profile")
+            self.assertEqual(
+                navigation.back(fallback="work_detail", skip=("entity_profile",)),
+                "work_detail",
+            )
             self.assertEqual(
                 navigation.back(fallback="collections", skip=("work_detail",)),
                 origin,
