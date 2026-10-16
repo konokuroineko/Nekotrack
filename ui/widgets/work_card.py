@@ -4,7 +4,7 @@ import re
 from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QFont, QFontMetrics
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout, QSizePolicy
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QSizePolicy
 
 from database import save_cover_path
 from ui.display_identity import get_display_override
@@ -62,6 +62,7 @@ class WorkCard(QFrame):
     def __init__(
         self, work, progress_editable=False, mode="library", add_callback=None,
         show_add_button=True, parent=None, recommendation_reason=None,
+        show_recommendation_feedback=False,
     ):
         super().__init__(parent)
         self.work = work
@@ -69,6 +70,8 @@ class WorkCard(QFrame):
         self.add_callback = add_callback
         self.recommendation_reason = str(recommendation_reason or "").strip()
         self.recommendation_reason_label = None
+        self.recommendation_like_button = None
+        self.recommendation_dislike_button = None
         self._network_manager = QNetworkAccessManager(self)
         self._cover_reply = None
         self.setObjectName("posterCard")
@@ -186,6 +189,29 @@ class WorkCard(QFrame):
             add_button.clicked.connect(self._add_clicked)
             root.addWidget(add_button)
 
+        feedback_layout = None
+        if show_recommendation_feedback:
+            feedback_layout = QHBoxLayout()
+            feedback_layout.setContentsMargins(0, 0, 0, 0)
+            feedback_layout.setSpacing(6)
+            self.recommendation_like_button = QPushButton("Like")
+            self.recommendation_like_button.setObjectName("recommendationLike")
+            self.recommendation_like_button.setAccessibleName("Like this recommendation")
+            self.recommendation_like_button.setToolTip("Show NekoTrack you want more titles like this")
+            self.recommendation_like_button.setCheckable(True)
+            self.recommendation_like_button.setCursor(Qt.PointingHandCursor)
+            self.recommendation_like_button.setFixedHeight(27)
+            self.recommendation_dislike_button = QPushButton("Not for me")
+            self.recommendation_dislike_button.setObjectName("recommendationDislike")
+            self.recommendation_dislike_button.setAccessibleName("Dislike this recommendation")
+            self.recommendation_dislike_button.setToolTip("Hide this title and use it to avoid similar recommendations")
+            self.recommendation_dislike_button.setCheckable(True)
+            self.recommendation_dislike_button.setCursor(Qt.PointingHandCursor)
+            self.recommendation_dislike_button.setFixedHeight(27)
+            feedback_layout.addWidget(self.recommendation_like_button, 1)
+            feedback_layout.addWidget(self.recommendation_dislike_button, 1)
+            root.addLayout(feedback_layout)
+
         root.addStretch(1)
 
 
@@ -203,9 +229,14 @@ class WorkCard(QFrame):
             + content_height
             + content_spacing_height
             + (add_button.sizeHint().height() if add_button is not None else 0)
+            + (feedback_layout.sizeHint().height() if feedback_layout is not None else 0)
             + root.contentsMargins().top()
             + root.contentsMargins().bottom()
-            + root.spacing() * (1 + (1 if add_button is not None else 0))
+            + root.spacing() * (
+                1
+                + (1 if add_button is not None else 0)
+                + (1 if feedback_layout is not None else 0)
+            )
         )
         self.setFixedHeight(target_height)
 
@@ -289,6 +320,29 @@ class WorkCard(QFrame):
             QLabel#seriesInfo {{ color: {COLORS['primary']}; font-size: 10px; font-weight: 800; }}
             QPushButton#add {{ background: {COLORS['accent']}; color: {COLORS['accent_text']}; border: none; border-radius: 8px; padding: 7px; font-weight: 800; }}
             QPushButton#add:hover {{ background: {COLORS['accent_hover']}; }}
+            QPushButton#recommendationLike, QPushButton#recommendationDislike {{
+                background:{surface_rgba('surface_alt')};
+                color:{COLORS['secondary']};
+                border:1px solid {COLORS['frame']};
+                border-radius:7px;
+                padding:4px 6px;
+                font-size:11px;
+                font-weight:750;
+            }}
+            QPushButton#recommendationLike:hover, QPushButton#recommendationDislike:hover {{
+                color:{COLORS['primary']};
+                border-color:{COLORS['accent']};
+            }}
+            QPushButton#recommendationLike:checked {{
+                background:{surface_rgba('accent_soft')};
+                color:{COLORS['primary']};
+                border-color:{COLORS['accent']};
+            }}
+            QPushButton#recommendationDislike:checked {{
+                background:{surface_rgba('surface_hover')};
+                color:{COLORS['primary']};
+                border-color:{COLORS['accent']};
+            }}
         """)
         if hasattr(self, "title_label"):
             self.title_label.setStyleSheet(

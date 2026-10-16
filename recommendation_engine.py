@@ -585,6 +585,7 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
 def rank_candidates(
     candidates, history=None, favorite_works=None, rotation=0,
     credit_profile=None, favorite_entities=None, voice_language="ALL",
+    exclude_seen=False,
 ):
     """Score candidates with local feedback, weighted credits and exposure."""
     history = history or {}
@@ -603,7 +604,15 @@ def rank_candidates(
         if not isinstance(item_history, dict):
             item_history = {}
         # An explicit dislike is a suppression rule, not an exploration hint.
-        if item_history.get("feedback") == "dislike":
+        feedback = item_history.get("feedback")
+        if feedback == "dislike":
+            continue
+        # Discovery refreshes should prefer titles the user has not actually
+        # seen in the feed. An explicit like opts that title back in, while
+        # the default keeps standalone scoring and current-feed reranking
+        # backwards-compatible.
+        impressions = max(0, _safe_int(item_history.get("impressions")))
+        if exclude_seen and impressions > 0 and feedback != "like":
             continue
 
         terms = _terms(raw)

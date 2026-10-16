@@ -174,7 +174,10 @@ class HomePage(QWidget):
         # Reuse the already-loaded local rows instead of querying SQLite a
         # second time just to seed recommendations.
         self.content_layout.addWidget(self.recommendations_page)
-        self.recommendations_page.refresh(library_rows=library)
+        # A new Home visit starts a new recommendation cycle. Feedback and
+        # exposure history are loaded by the worker, and the discovery sort
+        # rotates so the same first page is not shown forever.
+        self.recommendations_page.refresh(force=True, library_rows=library)
         self.content_layout.addStretch(1)
         self._apply_theme_styles()
 
