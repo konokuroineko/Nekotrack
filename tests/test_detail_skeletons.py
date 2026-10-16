@@ -1,5 +1,6 @@
 import os
 import unittest
+import time
 from unittest.mock import patch
 
 from PySide6.QtCore import Qt
@@ -299,7 +300,7 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertIn(12345, page._episode_image_cache_workers)
         self.assertGreater(
             page._episode_image_cache_retry_after[12345],
-            __import__("time").monotonic(),
+            time.monotonic(),
         )
         replace_section.assert_called_once()
         self.assertTrue(any(
@@ -555,7 +556,7 @@ class DetailSkeletonTests(unittest.TestCase):
                 "id": 12345, "title": {"english": "Bundle Season"}, "episodes": 2,
                 "format": "TV", "start_year": 2020, "start_month": 1, "start_day": 1,
             }),
-            patch.object(page, "_start_episode_image_cache"),
+            patch.object(page, "_start_episode_image_cache") as start_image_cache,
         ):
             frame = page._episodes_section()
 
@@ -564,6 +565,10 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertEqual(
             cards[0].findChild(QLabel, "detailEpisodeTitle").text(),
             "Valid",
+        )
+        start_image_cache.assert_called_once_with(
+            12345,
+            [{"episodeNumber": 1, "thumbnail": None}],
         )
         frame.deleteLater()
         page.deleteLater()
