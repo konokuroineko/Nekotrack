@@ -49,7 +49,7 @@ class HomeDashboardTests(unittest.TestCase):
             self.assertTrue(page.recommendations_page.embedded)
             self.assertEqual(page.content_layout.indexOf(page.recommendations_page), 3)
             refresh_mock.assert_called_once_with(
-                page.recommendations_page, library_rows=[]
+                page.recommendations_page, force=True, library_rows=[]
             )
             self.assertIs(
                 page.content.findChild(RecommendationsPage),
