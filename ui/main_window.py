@@ -600,6 +600,9 @@ class MainWindow(QMainWindow):
         self.navigation.page_changed.connect(self.update_navigation_state)
         self.navigation.page_changed.connect(self._page_changed)
         self.home_page.work_selected.connect(self.show_work_details)
+        self.home_page.calendar_requested.connect(
+            lambda: self.navigation.show("calendar")
+        )
         self.recommendations_page.work_selected.connect(self.show_work_details)
         self.recommendations_page.search_requested.connect(
             lambda: self.navigation.show("search")
