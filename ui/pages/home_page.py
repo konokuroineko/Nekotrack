@@ -56,6 +56,9 @@ class HomePage(QWidget):
         outer.addWidget(self.scroll_area)
 
         self.recommendations_page = RecommendationsPage(add_callback, embedded=True)
+        self.recommendations_page.set_visibility_viewport(
+            self.scroll_area.viewport(), self.scroll_area.verticalScrollBar()
+        )
         self._apply_theme_styles()
         self.refresh()
 

@@ -221,6 +221,7 @@ class SettingsPage(QWidget):
         general = add_category("General")
         appearance = add_category("Appearance")
         library = add_category("Library")
+        discovery = add_category("Discovery")
         integrations = add_category("Integrations")
         data_storage = add_category("Data & Storage")
         advanced = add_category("Advanced")
@@ -270,7 +271,7 @@ class SettingsPage(QWidget):
             [
                 self._combo_row(
                     "Card size",
-                    "Choose how large Library posters should appear.",
+                    "Choose how large posters appear in Library, Search, and Recommendations.",
                     "card_size",
                     [
                         ("Compact", 180),
@@ -340,6 +341,21 @@ class SettingsPage(QWidget):
         library.addWidget(self._section(
             "Bundling",
             [self._bundle_options_row()],
+        ))
+        discovery.addWidget(self._section(
+            "Recommendations",
+            [
+                self._combo_row(
+                    "Voice-actor language",
+                    "Choose which voice performances influence recommendations. Production staff remain language-neutral.",
+                    "recommendation_voice_language",
+                    [
+                        ("Japanese audio / sub", "JA"),
+                        ("English dub", "EN"),
+                        ("All voice languages / no preference", "ALL"),
+                    ],
+                ),
+            ],
         ))
 
         token_input = QLineEdit()

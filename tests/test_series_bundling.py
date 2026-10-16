@@ -138,5 +138,51 @@ class BundleOptionTests(unittest.TestCase):
         self.assertEqual(groups[0]["_series_count"], 1)
 
 
+
+
+class AutoBundleActionTests(unittest.TestCase):
+    def test_auto_bundle_reuses_library_grouping_and_persists_its_member_snapshot(self):
+        import sqlite3
+
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        connection.row_factory = sqlite3.Row
+        current = connection.execute("SELECT 501 AS id").fetchone()
+        related = connection.execute("SELECT 502 AS id").fetchone()
+        group = {
+            "id": 501,
+            "title": {"english": "Current"},
+            "_series_count": 2,
+            "_series_members": [current, related],
+        }
+        with (
+            patch("series.get_all_library", return_value=[current, related]),
+            patch("series.sync_library_relations", return_value=True) as sync,
+            patch("series.get_library_series", side_effect=[[group], [group]]),
+            patch("series.save_automatic_bundle_membership", return_value=True) as save,
+        ):
+            result = series.auto_bundle_library_work(501)
+
+        sync.assert_called_once_with(force_ids={501})
+        save.assert_called_once_with(501, [501, 502])
+        self.assertEqual(result["count"], 2)
+        self.assertTrue(result["relations_refreshed"])
+        self.assertEqual(result["group"], group)
+
+    def test_auto_bundle_refuses_non_library_work_before_touching_relations(self):
+        with patch("series.get_all_library", return_value=[]), patch(
+            "series.sync_library_relations"
+        ) as sync:
+            with self.assertRaisesRegex(ValueError, "Library"):
+                series.auto_bundle_library_work(501)
+        sync.assert_not_called()
+
+    def test_auto_bundle_refuses_non_anilist_ids(self):
+        with patch("series.get_all_library") as get_library:
+            with self.assertRaisesRegex(ValueError, "AniList"):
+                series.auto_bundle_library_work(-501)
+        get_library.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

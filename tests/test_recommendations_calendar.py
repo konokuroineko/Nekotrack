@@ -66,6 +66,73 @@ class AniListRecommendationsTests(unittest.TestCase):
 
 
 class RecommendationWorkerTests(unittest.TestCase):
+    def test_empty_or_manga_only_library_still_uses_anime_catalog(self):
+        from ui.pages.recommendations_page import RecommendationWorker
+
+        catalog = {
+            "pageInfo": {"currentPage": 1, "lastPage": 5, "hasNextPage": True},
+            "media": [{
+                "id": 801, "type": "ANIME",
+                "title": {"english": "Catalog Anime"},
+                "cover_url": "https://example.invalid/801.jpg",
+                "genres": ["Adventure"],
+            }],
+        }
+        finished = []
+        worker = RecommendationWorker([
+            {"id": -12, "type": "MANGA", "title": "Local manga only"}
+        ])
+        worker.finished.connect(finished.append)
+        with (
+            patch("ui.pages.recommendations_page.get_media_recommendations", return_value=[]),
+            patch("ui.pages.recommendations_page.get_anime_discovery_page", return_value=catalog),
+            patch("ui.pages.recommendations_page.get_work_favorites", return_value=[]),
+            patch("ui.pages.recommendations_page.get_entity_favorites", return_value=[]),
+            patch("ui.pages.recommendations_page.get_recommendation_credit_profile", return_value={}),
+            patch("ui.pages.recommendations_page.get_recommendation_history", return_value={}),
+        ):
+            worker.run()
+
+        self.assertEqual(len(finished), 1)
+        self.assertEqual([work["id"] for work in finished[0]], [801])
+        self.assertTrue(worker.catalog_has_next)
+        self.assertEqual(worker.catalog_next_page, 2)
+
+    def test_worker_does_not_truncate_a_valid_candidate_batch_at_forty(self):
+        from ui.pages.recommendations_page import RecommendationWorker
+
+        many = [
+            {
+                "id": 1000 + index, "type": "ANIME",
+                "title": {"english": f"Candidate {index:02d}"},
+                "averageScore": 75 + index % 20,
+                "_recommendation_rating": 70 + index % 25,
+            }
+            for index in range(55)
+        ]
+        finished = []
+        worker = RecommendationWorker([{
+            "id": 9, "type": "ANIME", "title": {"english": "Seed"}
+        }])
+        worker.finished.connect(finished.append)
+        with (
+            patch("ui.pages.recommendations_page.get_media_recommendations", return_value=many),
+            patch(
+                "ui.pages.recommendations_page.get_anime_discovery_page",
+                return_value={
+                    "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+                    "media": [],
+                },
+            ),
+            patch("ui.pages.recommendations_page.get_work_favorites", return_value=[]),
+            patch("ui.pages.recommendations_page.get_entity_favorites", return_value=[]),
+            patch("ui.pages.recommendations_page.get_recommendation_credit_profile", return_value={}),
+            patch("ui.pages.recommendations_page.get_recommendation_history", return_value={}),
+        ):
+            worker.run()
+
+        self.assertEqual(len(finished[0]), 55)
+
     def test_library_signature_uses_the_worker_title_normalizer(self):
         from ui.pages.recommendations_page import RecommendationsPage
 
@@ -123,7 +190,20 @@ class RecommendationWorkerTests(unittest.TestCase):
         finished = []
         worker = RecommendationWorker(library)
         worker.finished.connect(finished.append)
-        with patch("ui.pages.recommendations_page.get_media_recommendations", side_effect=[first, second]):
+        with (
+            patch("ui.pages.recommendations_page.get_media_recommendations", side_effect=[first, second]),
+            patch(
+                "ui.pages.recommendations_page.get_anime_discovery_page",
+                return_value={
+                    "pageInfo": {"currentPage": 1, "lastPage": 1, "hasNextPage": False},
+                    "media": [],
+                },
+            ),
+            patch("ui.pages.recommendations_page.get_work_favorites", return_value=[]),
+            patch("ui.pages.recommendations_page.get_entity_favorites", return_value=[]),
+            patch("ui.pages.recommendations_page.get_recommendation_credit_profile", return_value={}),
+            patch("ui.pages.recommendations_page.get_recommendation_history", return_value={}),
+        ):
             worker.run()
 
         self.assertEqual(len(finished), 1)
@@ -135,6 +215,44 @@ class RecommendationWorkerTests(unittest.TestCase):
             ["Seed One", "Seed Two"],
         )
 
+
+    @patch("api.search_anime")
+    def test_anime_catalog_respects_provider_last_page_even_if_has_next_is_inconsistent(self, search):
+        search.return_value = {
+            "pageInfo": {"currentPage": 5, "lastPage": 5, "hasNextPage": True},
+            "media": [],
+        }
+        result = api.get_anime_discovery_page(page=5, per_page=25)
+        self.assertFalse(result["pageInfo"]["hasNextPage"])
+        self.assertEqual(result["pageInfo"]["currentPage"], 5)
+
+    @patch("api.search_anime")
+    def test_anime_discovery_page_is_paginated_normalized_and_bounded(self, search):
+        search.return_value = {
+            "pageInfo": {"currentPage": 3, "lastPage": 9, "hasNextPage": True},
+            "media": [
+                {
+                    "id": 501, "type": "ANIME", "title": {"romaji": "Catalog entry"},
+                    "coverImage": {"large": "https://example.invalid/poster.jpg"},
+                    "startDate": {"year": 2024},
+                },
+                {"id": 501, "type": "ANIME", "title": {"english": "Duplicate"}},
+                {"id": 502, "type": "MANGA", "title": {"english": "Wrong type"}},
+                {"id": 0, "type": "ANIME", "title": {"english": "Invalid ID"}},
+                {"id": 503, "type": "ANIME", "title": {}},
+            ],
+        }
+
+        result = api.get_anime_discovery_page(page=3, per_page=5000, sort="SCORE_DESC")
+
+        search.assert_called_once_with(
+            "", page=3, per_page=50, media_type="ANIME",
+            sort="SCORE_DESC", include_relations=False, include_credit_signals=True,
+        )
+        self.assertEqual([row["id"] for row in result["media"]], [501])
+        self.assertEqual(result["media"][0]["cover_url"], "https://example.invalid/poster.jpg")
+        self.assertEqual(result["media"][0]["start_year"], 2024)
+        self.assertTrue(result["pageInfo"]["hasNextPage"])
 
 class ReleaseReminderDatabaseTests(unittest.TestCase):
     def setUp(self):
