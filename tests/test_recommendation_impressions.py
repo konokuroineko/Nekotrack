@@ -167,19 +167,24 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.assertNotIn(9877, remaining_ids)
         self.assertIn(9878, remaining_ids)
 
-    def test_empty_catalog_feed_automatically_loads_another_page(self):
+    def test_empty_catalog_feed_automatically_loads_after_worker_cleanup(self):
         self.page._results = []
         self.page._catalog_has_next = True
         self.page._loading_more = False
-        self.page._worker = None
+        self.page._loaded = True
+        self.page._pending_refresh = None
+        thread = object()
+        self.page._thread = thread
         with (
-            patch.object(self.page, "_render_results") as render,
-            patch.object(self.page, "load_more"),
+            patch.object(self.page, "_update_load_more_ui"),
+            patch.object(self.page, "_maybe_load_more") as maybe_load_more,
             patch("ui.pages.recommendations_page.QTimer.singleShot") as single_shot,
         ):
-            self.page._recommendations_ready([])
+            self.page._thread_finished(thread)
 
-        render.assert_called_once()
+        self.assertIsNone(self.page._thread)
+        self.assertIsNone(self.page._worker)
+        maybe_load_more.assert_not_called()
         self.assertTrue(any(
             len(call.args) == 2
             and call.args[0] == 0
