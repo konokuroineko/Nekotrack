@@ -7,6 +7,7 @@ from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QFrame,
+    QMessageBox,
     QBoxLayout,
     QGridLayout,
     QLayout,
@@ -21,6 +22,8 @@ from PySide6.QtWidgets import (
 )
 
 from api import get_entity_profile, _normalize_anilist_profile_description
+from database import is_entity_favorite, set_entity_favorite
+from diagnostics import log_exception
 from ui.theme import COLORS, card_stylesheet, muted_label_stylesheet
 from ui.widgets.character_card import CharacterArtwork
 from ui.widgets.person_card import PersonCard
@@ -875,6 +878,17 @@ class EntityProfilePage(QWidget):
                 font-size:30px;
                 font-weight:900;
             }}
+            QPushButton#profileFavoriteButton {{
+                min-width:42px; max-width:42px; min-height:42px; max-height:42px;
+                padding:0; border-radius:12px; font-size:21px; font-weight:850;
+                color:{COLORS['secondary']}; background:{COLORS['surface_alt']};
+                border:1px solid {COLORS['border']};
+            }}
+            QPushButton#profileFavoriteButton:hover,
+            QPushButton#profileFavoriteButton:checked {{
+                color:{COLORS['accent']}; background:{COLORS['accent_soft']};
+                border-color:{COLORS['accent']};
+            }}
             QLabel#profileKind {{
                 color:{COLORS['accent']};
                 font-size:11px;
@@ -1091,6 +1105,56 @@ class EntityProfilePage(QWidget):
             self.page_status.setText("Showing saved information")
         self._render_profile()
 
+    def _profile_entity_id(self):
+        record = self.current_record or {}
+        raw_id = (
+            self._value(record, "id")
+            if self.current_type == "character"
+            else self._value(record, "person_id", self._value(record, "id"))
+        )
+        try:
+            numeric_id = int(raw_id)
+        except (TypeError, ValueError, OverflowError):
+            remote_id = self._remote_data.get("id") if isinstance(self._remote_data, dict) else None
+            try:
+                numeric_id = int(remote_id)
+            except (TypeError, ValueError, OverflowError):
+                return None
+        return numeric_id if numeric_id > 0 else None
+
+    def _toggle_entity_favorite(self, entity_type, entity_id, name, favorite, button):
+        try:
+            # Voice-actor favorites are identities, not a single language credit.
+            # The selected audio language filters each candidate credit in the
+            # ranking model instead of locking this person to one performance.
+            saved = set_entity_favorite(
+                entity_type, entity_id, bool(favorite), name=name, language=None
+            )
+            if not saved:
+                raise RuntimeError("The favorite state was rejected by the local database.")
+        except Exception as error:
+            log_exception(
+                "profile.entity_favorite_toggle_failed",
+                error,
+                entity_type=entity_type,
+                entity_id=entity_id,
+            )
+            button.setChecked(not bool(favorite))
+            QMessageBox.warning(
+                self,
+                "Favorite could not be saved",
+                "NekoTrack could not update this profile's favorite state.",
+            )
+            return
+        button.setText("♥" if favorite else "♡")
+        button.setAccessibleName(
+            "Remove from favorites" if favorite else "Add to favorites"
+        )
+        button.setToolTip(
+            "Remove from favorites" if favorite
+            else "Favorite this profile to improve recommendations"
+        )
+
     def _render_profile(self):
         # Profile data and remote artwork can finish in either order. Cancel the
         # previous portrait request before replacing its target widget.
@@ -1149,7 +1213,33 @@ class EntityProfilePage(QWidget):
         title = QLabel(name)
         title.setObjectName("profileName")
         title.setWordWrap(True)
-        profile_text.addWidget(title)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(10)
+        title_row.addWidget(title, 1)
+        entity_id = self._profile_entity_id()
+        if entity_id is not None:
+            favorite_enabled = is_entity_favorite(self.current_type, entity_id)
+            favorite_button = QPushButton("♥" if favorite_enabled else "♡")
+            favorite_button.setObjectName("profileFavoriteButton")
+            favorite_button.setCheckable(True)
+            favorite_button.setChecked(favorite_enabled)
+            favorite_button.setAccessibleName(
+                "Remove from favorites" if favorite_enabled else "Add to favorites"
+            )
+            favorite_button.setToolTip(
+                "Remove from favorites" if favorite_enabled
+                else "Favorite this profile to improve recommendations"
+            )
+            favorite_button.clicked.connect(
+                lambda checked, kind=self.current_type, item_id=entity_id,
+                       entity_name=name, button=favorite_button:
+                    self._toggle_entity_favorite(
+                        kind, item_id, entity_name, checked, button
+                    )
+            )
+            title_row.addWidget(favorite_button, 0, Qt.AlignTop)
+        profile_text.addLayout(title_row)
 
         # AniList biographies sometimes start with short X: Y facts (including
         # hobbies or other nonstandard labels). Move a consecutive leading block

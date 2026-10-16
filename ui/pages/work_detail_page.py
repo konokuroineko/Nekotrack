@@ -10,7 +10,7 @@ from html import escape as html_escape
 from pathlib import Path
 from shiboken6 import isValid
 
-from PySide6.QtCore import QObject, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread, QTimer
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread, QTimer
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
@@ -30,7 +30,7 @@ from database import (
     save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
     set_episode_watched, set_reading_progress_count,
 )
-from series import get_library_series
+from series import auto_bundle_library_work, get_library_series
 from ui.display_identity import copy_custom_cover, get_display_override, invalidate_display_override
 from ui.branding import navigation_icon
 from ui.preferences import get
@@ -42,6 +42,29 @@ from ui.widgets.relation_card import RelationCard
 
 
 IMAGE_DIRECTORY = Path("data") / "images" / "works"
+
+
+
+class AutoBundleSignals(QObject):
+    finished = Signal(int, object)
+    failed = Signal(int, str)
+
+
+class AutoBundleWorker(QRunnable):
+    """Perform relation refresh and existing automatic grouping off the GUI thread."""
+
+    def __init__(self, work_id):
+        super().__init__()
+        self.work_id = int(work_id)
+        self.signals = AutoBundleSignals()
+
+    def run(self):
+        try:
+            result = auto_bundle_library_work(self.work_id)
+        except Exception as error:
+            self.signals.failed.emit(self.work_id, str(error))
+        else:
+            self.signals.finished.emit(self.work_id, result)
 
 
 class EpisodeSyncWorker(QObject):
@@ -630,6 +653,7 @@ class WorkDetailPage(QWidget):
         self._cover_manager = QNetworkAccessManager(self)
         self._cover_reply = None
         self._delete_overlay = None
+        self._auto_bundle_workers = {}
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -1121,15 +1145,16 @@ class WorkDetailPage(QWidget):
             QPushButton#detailBackButton:pressed {{ background:{COLORS['accent_soft']}; }}
             QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:2px solid transparent; border-radius:{get('corner_radius') + 2}px; font-size:30px; font-weight:900; padding:0; }}
             QToolButton#detailMenu:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
-            QPushButton#detailFavoriteButton, QPushButton#detailCustomizeButton {{
-                background:{COLORS['surface_alt']}; color:{COLORS['primary']}; border:1px solid {COLORS['border']};
-                border-radius:8px; padding:8px 10px; font-size:11px; font-weight:800;
+            QPushButton#detailFavoriteButton {{
+                background:{COLORS['surface_alt']}; color:{COLORS['secondary']};
+                border:1px solid {COLORS['border']}; border-radius:12px;
+                padding:0; font-size:21px; font-weight:850;
+                min-width:42px; max-width:42px; min-height:42px; max-height:42px;
             }}
-            QPushButton#detailFavoriteButton:hover, QPushButton#detailCustomizeButton:hover {{
-                background:{COLORS['accent_soft']}; border-color:{COLORS['accent']};
-            }}
+            QPushButton#detailFavoriteButton:hover,
             QPushButton#detailFavoriteButton:checked {{
-                background:{COLORS['accent_soft']}; color:{COLORS['accent']}; border-color:{COLORS['accent']};
+                background:{COLORS['accent_soft']}; color:{COLORS['accent']};
+                border-color:{COLORS['accent']};
             }}
             QFrame#deleteOverlay {{ background:{COLORS['surface']}; border:1px solid {COLORS['frame']}; border-radius:18px; }}
             QLabel#deleteTitle {{ color:{COLORS['primary']}; font-size:19px; font-weight:850; }}
@@ -1651,51 +1676,48 @@ class WorkDetailPage(QWidget):
         title = QLabel(self._title()); title.setObjectName("detailHeroTitle"); title.setWordWrap(True)
         title.setStyleSheet(f"font-size:34px;font-weight:850;color:{COLORS['primary']};letter-spacing:-1px;")
         title_row = QHBoxLayout()
-        title_row.setSpacing(12)
-        title_row.addWidget(title, 1)
-        if self._library_group() is not None:
+        title_row.setSpacing(10)
+
+        try:
+            favorite_work_id = int(self._value("id"))
+            if favorite_work_id <= 0:
+                favorite_work_id = None
+        except (TypeError, ValueError, OverflowError):
+            favorite_work_id = None
+
+        # Keep actions grouped on the title's leading edge, even when the work
+        # has not been added to the Library yet.
+        if favorite_work_id is not None:
             menu_button = QToolButton()
             menu_button.setObjectName("detailMenu")
             menu_button.setText("⋮")
             menu_button.setFixedSize(42, 42)
             menu_button.setCursor(Qt.PointingHandCursor)
+            menu_button.setAccessibleName("More artwork actions")
+            menu_button.setToolTip("More actions, customization, and bundling")
             menu_button.clicked.connect(self._show_detail_menu)
             title_row.addWidget(menu_button, 0, Qt.AlignTop)
 
-        if self._value("id") is not None:
-            try:
-                favorite_work_id = int(self._value("id"))
-            except (TypeError, ValueError, OverflowError):
-                favorite_work_id = None
-            if favorite_work_id is not None:
-                favorite_enabled = is_work_favorite(favorite_work_id)
-                favorite_button = QPushButton(
-                    "♥ Favorited" if favorite_enabled else "♡ Favorite"
-                )
-                favorite_button.setObjectName("detailFavoriteButton")
-                favorite_button.setCheckable(True)
-                favorite_button.setChecked(favorite_enabled)
-                favorite_button.setAccessibleName("Toggle favorite")
-                favorite_button.setToolTip("Save this title independently of Library membership")
-                favorite_button.clicked.connect(
-                    lambda checked, work_id=favorite_work_id, button=favorite_button:
-                        self._toggle_favorite(work_id, checked, button)
-                )
-                title_row.addWidget(favorite_button, 0, Qt.AlignTop)
+        title_row.addWidget(title, 1)
 
-                members = self._value("_series_members") or []
-                is_bundle = len(members) > 1
-                try:
-                    is_bundle = is_bundle or int(self._value("_series_count") or 0) > 1
-                except (TypeError, ValueError, OverflowError):
-                    pass
-                if not is_bundle:
-                    customize_button = QPushButton("Customize")
-                    customize_button.setObjectName("detailCustomizeButton")
-                    customize_button.setAccessibleName("Customize title and cover")
-                    customize_button.setToolTip("Set a global display title or cover for this title")
-                    customize_button.clicked.connect(self._open_display_identity_editor)
-                    title_row.addWidget(customize_button, 0, Qt.AlignTop)
+        if favorite_work_id is not None:
+            favorite_enabled = is_work_favorite(favorite_work_id)
+            favorite_button = QPushButton("♥" if favorite_enabled else "♡")
+            favorite_button.setObjectName("detailFavoriteButton")
+            favorite_button.setCheckable(True)
+            favorite_button.setChecked(favorite_enabled)
+            favorite_button.setAccessibleName(
+                "Remove from favorites" if favorite_enabled else "Add to favorites"
+            )
+            favorite_button.setToolTip(
+                "Remove from favorites" if favorite_enabled
+                else "Add to favorites (independent of Library membership)"
+            )
+            favorite_button.clicked.connect(
+                lambda checked, work_id=favorite_work_id, button=favorite_button:
+                    self._toggle_favorite(work_id, checked, button)
+            )
+            title_row.addWidget(favorite_button, 0, Qt.AlignTop)
         info.addLayout(title_row)
         alt = self._value("native") or self._value("title_native") or ""
         if alt:
@@ -1829,7 +1851,11 @@ class WorkDetailPage(QWidget):
 
     def _show_detail_menu(self):
         group = self._library_group()
-        if group is None:
+        try:
+            work_id = int(self._value("id"))
+        except (TypeError, ValueError, OverflowError):
+            work_id = None
+        if work_id is None or work_id <= 0:
             return
 
         menu = QMenu(self)
@@ -1881,31 +1907,114 @@ class WorkDetailPage(QWidget):
             action.setDefaultWidget(button)
             menu.addAction(action)
 
-        add_item("Add to bundle", "detailMenuItem", self._open_add_bundle_dialog)
-        add_item("Remove from bundle", "detailMenuItem", self._open_remove_bundle_dialog)
-
-        menu.addSeparator()
-
-        try:
-            has_bundle = len(group.get("_series_members") or []) > 1
-        except (TypeError, ValueError):
-            has_bundle = False
-
-        if has_bundle:
+        if group is None:
+            # Individual, not-yet-library titles can still get a display override.
             add_item(
-                "Edit Bundle Appearance…",
+                "Customize title and cover…",
                 "detailMenuItem",
-                lambda: self.bundle_edit_requested.emit(group),
+                self._open_display_identity_editor,
             )
+        else:
+            members = group.get("_series_members") or []
+            try:
+                is_bundle = len(members) > 1 or int(group.get("_series_count") or 0) > 1
+            except (TypeError, ValueError, OverflowError):
+                is_bundle = len(members) > 1
 
-        menu.addSeparator()
-        add_item("Delete", "detailDeleteItem", lambda: self._show_delete_confirmation(group))
+            add_item("Auto-bundle related works", "detailMenuItem", self._start_auto_bundle)
+            add_item("Add to bundle", "detailMenuItem", self._open_add_bundle_dialog)
+            add_item("Remove from bundle", "detailMenuItem", self._open_remove_bundle_dialog)
+            menu.addSeparator()
+
+            if is_bundle:
+                add_item(
+                    "Edit Bundle Appearance…",
+                    "detailMenuItem",
+                    lambda: self.bundle_edit_requested.emit(group),
+                )
+            else:
+                add_item(
+                    "Customize title and cover…",
+                    "detailMenuItem",
+                    self._open_display_identity_editor,
+                )
+
+            menu.addSeparator()
+            add_item("Delete", "detailDeleteItem", lambda: self._show_delete_confirmation(group))
 
         button = self.sender()
         menu.exec(
             button.mapToGlobal(button.rect().bottomLeft())
             if isinstance(button, QToolButton)
             else self.mapToGlobal(self.rect().center())
+        )
+
+    def _start_auto_bundle(self):
+        try:
+            work_id = int(self._value("id"))
+        except (TypeError, ValueError, OverflowError):
+            QMessageBox.warning(self, "Auto-bundle unavailable", "This title has no valid AniList ID.")
+            return
+        if work_id <= 0:
+            QMessageBox.information(
+                self,
+                "Auto-bundle unavailable",
+                "Automatic bundling needs AniList relation metadata. This title is not linked to an AniList work.",
+            )
+            return
+        if work_id in self._auto_bundle_workers:
+            QMessageBox.information(
+                self, "Auto-bundle", "A relation refresh is already running for this title."
+            )
+            return
+        worker = AutoBundleWorker(work_id)
+        worker.signals.finished.connect(self._auto_bundle_finished)
+        worker.signals.failed.connect(self._auto_bundle_failed)
+        self._auto_bundle_workers[work_id] = worker
+        QThreadPool.globalInstance().start(worker)
+
+    def _auto_bundle_finished(self, work_id, payload):
+        self._auto_bundle_workers.pop(int(work_id), None)
+        if self._shutdown_event.is_set() or not isinstance(payload, dict):
+            return
+        group = payload.get("group")
+        member_ids = payload.get("member_ids") or []
+        try:
+            count = max(0, int(payload.get("count") or 0))
+        except (TypeError, ValueError, OverflowError):
+            count = len(member_ids)
+
+        self.bundle_changed.emit()
+        try:
+            current_id = int(self._value("id"))
+        except (TypeError, ValueError, OverflowError):
+            current_id = None
+        if group is not None and current_id in member_ids:
+            self.invalidate_detail_cache(member_ids)
+            self.set_work(group)
+
+        if count > 1:
+            message = (
+                f"Auto-bundle found and saved {count} eligible Library titles using "
+                "NekoTrack's existing relations, settings, and exclusions."
+            )
+        else:
+            message = (
+                "No additional eligible related works were found in your Library. "
+                "Your existing bundle preferences and exclusions were respected."
+            )
+        if not payload.get("relations_refreshed"):
+            message += "\nSome relation data may have come from the existing local cache."
+        QMessageBox.information(self, "Auto-bundle", message)
+
+    def _auto_bundle_failed(self, work_id, message):
+        self._auto_bundle_workers.pop(int(work_id), None)
+        if self._shutdown_event.is_set():
+            return
+        QMessageBox.warning(
+            self,
+            "Auto-bundle failed",
+            f"NekoTrack could not finish automatic bundling. Your existing bundles were left in place.\n\n{message}",
         )
 
     def _open_add_bundle_dialog(self):
@@ -3407,10 +3516,13 @@ class WorkDetailPage(QWidget):
             )
             button.setChecked(not bool(favorite))
             return
-        button.setText("♥ Favorited" if favorite else "♡ Favorite")
+        button.setText("♥" if favorite else "♡")
+        button.setAccessibleName(
+            "Remove from favorites" if favorite else "Add to favorites"
+        )
         button.setToolTip(
-            "Remove this title from Favorites" if favorite
-            else "Save this title independently of Library membership"
+            "Remove from favorites" if favorite
+            else "Add to favorites (independent of Library membership)"
         )
 
     def _refresh_identity_after_edit(self, work_id):
