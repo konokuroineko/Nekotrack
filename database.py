@@ -327,6 +327,26 @@ def initialize_database():
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS recommendation_history (
+            work_id INTEGER PRIMARY KEY,
+            impressions INTEGER NOT NULL DEFAULT 0 CHECK (impressions >= 0),
+            feedback TEXT CHECK (feedback IN ('like', 'dislike') OR feedback IS NULL),
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at DATETIME
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS entity_favorites (
+            entity_type TEXT NOT NULL CHECK (entity_type IN ('character', 'staff', 'voice_actor')),
+            entity_id INTEGER NOT NULL CHECK (entity_id > 0),
+            entity_name TEXT NOT NULL DEFAULT '',
+            language TEXT,
+            added_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (entity_type, entity_id)
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS work_display_overrides (
             work_id INTEGER PRIMARY KEY,
             custom_title TEXT,
@@ -3587,3 +3607,248 @@ def get_all_library():
     """).fetchall()
     connection.close()
     return results
+
+
+# ---------------------------------------------------------------------------
+# Personalized recommendation feedback and entity favorites
+# ---------------------------------------------------------------------------
+
+def get_work_favorites():
+    """Return saved media favorites as lightweight work dictionaries."""
+    connection = get_connection()
+    try:
+        rows = connection.execute(
+            "SELECT work_id, work_data_json FROM user_favorites ORDER BY added_date DESC"
+        ).fetchall()
+        results = []
+        for row in rows:
+            try:
+                item = json.loads(row["work_data_json"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                item = {}
+            if not isinstance(item, dict):
+                item = {}
+            item.setdefault("id", int(row["work_id"]))
+            results.append(item)
+        return results
+    finally:
+        connection.close()
+
+
+def _recommendation_metadata_json(metadata):
+    if not isinstance(metadata, dict):
+        return "{}"
+    allowed = (
+        "id", "title", "type", "format", "genres", "tags", "averageScore",
+        "popularity", "coverImage", "cover_url", "startDate", "start_year",
+        "_recommendation_source_titles", "_recommendation_reason",
+    )
+    snapshot = {key: metadata[key] for key in allowed if key in metadata}
+    try:
+        return json.dumps(snapshot, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return "{}"
+
+
+def record_recommendation_impressions(items):
+    """Increment impressions only for recommendations that actually entered view."""
+    prepared = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            work_id = _validated_work_id(item.get("id"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if work_id <= 0:
+            continue
+        prepared.append((work_id, _recommendation_metadata_json(item)))
+
+    if not prepared:
+        return 0
+    connection = get_connection()
+    try:
+        connection.executemany(
+            """
+            INSERT INTO recommendation_history
+                (work_id, impressions, metadata_json, first_seen_at, last_seen_at)
+            VALUES (?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(work_id) DO UPDATE SET
+                impressions = recommendation_history.impressions + 1,
+                metadata_json = CASE
+                    WHEN excluded.metadata_json != '{}' THEN excluded.metadata_json
+                    ELSE recommendation_history.metadata_json
+                END,
+                last_seen_at = CURRENT_TIMESTAMP
+            """,
+            prepared,
+        )
+        connection.commit()
+        return len(prepared)
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def set_recommendation_feedback(work_id, feedback, metadata=None):
+    """Persist an explicit like/dislike (or clear it with None) for a title."""
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if safe_work_id <= 0 or feedback not in (None, "like", "dislike"):
+        return False
+    metadata_json = _recommendation_metadata_json(metadata)
+    connection = get_connection()
+    try:
+        connection.execute(
+            """
+            INSERT INTO recommendation_history
+                (work_id, impressions, feedback, metadata_json, first_seen_at)
+            VALUES (?, 0, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(work_id) DO UPDATE SET
+                feedback = excluded.feedback,
+                metadata_json = CASE
+                    WHEN excluded.metadata_json != '{}' THEN excluded.metadata_json
+                    ELSE recommendation_history.metadata_json
+                END
+            """,
+            (safe_work_id, feedback, metadata_json),
+        )
+        connection.commit()
+        return True
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def get_recommendation_history():
+    """Return recommendation feedback/exposure history keyed by media ID."""
+    connection = get_connection()
+    try:
+        rows = connection.execute(
+            """
+            SELECT work_id, impressions, feedback, metadata_json, first_seen_at, last_seen_at
+            FROM recommendation_history
+            ORDER BY work_id
+            """
+        ).fetchall()
+        history = {}
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                metadata = {}
+            history[int(row["work_id"])] = {
+                "work_id": int(row["work_id"]),
+                "impressions": max(0, int(row["impressions"] or 0)),
+                "feedback": row["feedback"],
+                "metadata": metadata if isinstance(metadata, dict) else {},
+                "first_seen_at": row["first_seen_at"],
+                "last_seen_at": row["last_seen_at"],
+            }
+        return history
+    finally:
+        connection.close()
+
+
+def _normalize_entity_favorite_type(entity_type):
+    value = str(entity_type or "").strip().casefold().replace(" ", "_")
+    aliases = {
+        "character": "character",
+        "characters": "character",
+        "staff": "staff",
+        "person": "staff",
+        "people": "staff",
+        "voice_actor": "voice_actor",
+        "voice_actors": "voice_actor",
+        "voiceactor": "voice_actor",
+    }
+    return aliases.get(value)
+
+
+def is_entity_favorite(entity_type, entity_id):
+    kind = _normalize_entity_favorite_type(entity_type)
+    try:
+        numeric_id = int(entity_id)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if kind is None or isinstance(entity_id, bool) or numeric_id <= 0:
+        return False
+    connection = get_connection()
+    try:
+        return connection.execute(
+            "SELECT 1 FROM entity_favorites WHERE entity_type = ? AND entity_id = ?",
+            (kind, numeric_id),
+        ).fetchone() is not None
+    finally:
+        connection.close()
+
+
+def set_entity_favorite(entity_type, entity_id, favorite, name="", language=None):
+    """Persist a favorite character, production staff member, or voice actor."""
+    kind = _normalize_entity_favorite_type(entity_type)
+    try:
+        numeric_id = int(entity_id)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if kind is None or isinstance(entity_id, bool) or numeric_id <= 0:
+        return False
+    if not isinstance(favorite, bool):
+        return False
+
+    connection = get_connection()
+    try:
+        if favorite:
+            connection.execute(
+                """
+                INSERT INTO entity_favorites (entity_type, entity_id, entity_name, language)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+                    entity_name = CASE WHEN excluded.entity_name != ''
+                                       THEN excluded.entity_name
+                                       ELSE entity_favorites.entity_name END,
+                    language = COALESCE(excluded.language, entity_favorites.language)
+                """,
+                (kind, numeric_id, str(name or "").strip(), str(language).strip() if language else None),
+            )
+        else:
+            connection.execute(
+                "DELETE FROM entity_favorites WHERE entity_type = ? AND entity_id = ?",
+                (kind, numeric_id),
+            )
+        connection.commit()
+        return True
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def get_entity_favorites(entity_type=None):
+    """Return saved entity favorites, optionally for one normalized entity type."""
+    kind = _normalize_entity_favorite_type(entity_type) if entity_type is not None else None
+    if entity_type is not None and kind is None:
+        return []
+    connection = get_connection()
+    try:
+        if kind is None:
+            rows = connection.execute(
+                "SELECT entity_type, entity_id, entity_name, language, added_date "
+                "FROM entity_favorites ORDER BY added_date DESC, entity_name"
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT entity_type, entity_id, entity_name, language, added_date "
+                "FROM entity_favorites WHERE entity_type = ? "
+                "ORDER BY added_date DESC, entity_name",
+                (kind,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
