@@ -1904,7 +1904,9 @@ def _parse_date(value):
 
 
 def _normalize_title(value):
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+    # Keep Unicode letters and digits so Japanese native titles can match
+    # TMDB's original_name field instead of normalizing to an empty string.
+    return re.sub(r"[\W_]+", "", str(value or "").casefold(), flags=re.UNICODE)
 
 
 def _title_similarity(left, right):

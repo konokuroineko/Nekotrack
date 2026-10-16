@@ -23,6 +23,15 @@ class TMDBEpisodeMatchingTests(unittest.TestCase):
         ):
             self.assertEqual(api.get_tmdb_access_token(), "local-token")
 
+    def test_title_matching_supports_native_japanese_titles(self):
+        native_title = "葬送のフリーレン"
+        candidate = {
+            "id": 311,
+            "name": native_title,
+            "original_name": native_title,
+        }
+        self.assertEqual(api._candidate_title_similarity(candidate, [native_title]), 1.0)
+
     def test_tv_search_retries_without_year_when_filtered_results_are_unrelated(self):
         unrelated = {
             "results": [{
