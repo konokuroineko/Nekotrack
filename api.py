@@ -292,6 +292,7 @@ def anilist_request(query, variables=None):
             return _normalize_anilist_description_fields(result)
 
         except (
+            requests.exceptions.SSLError,
             requests.exceptions.ConnectionError,
             requests.exceptions.Timeout,
             requests.exceptions.ChunkedEncodingError,
@@ -305,7 +306,11 @@ def anilist_request(query, variables=None):
                 log_event(
                     "api.retry_scheduled",
                     provider="AniList",
-                    reason="network_error",
+                    reason=(
+                        "ssl_error"
+                        if isinstance(error, requests.exceptions.SSLError)
+                        else "network_error"
+                    ),
                     attempt=attempt + 1,
                     max_attempts=MAX_RETRIES,
                     retry_seconds=wait_time,
