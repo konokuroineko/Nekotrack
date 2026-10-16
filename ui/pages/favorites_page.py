@@ -1,23 +1,22 @@
-"""A persistent Favorites destination, independent of Library membership."""
+"""A persistent Favorites destination for character, voice-actor, and staff profiles."""
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from database import get_favorite_works, set_work_favorite
+from database import get_entity_favorites, set_entity_favorite
 from diagnostics import log_exception
 from ui.theme import COLORS, surface_rgba
-from ui.widgets.work_card import WorkCard
 
 
 class FavoritesPage(QWidget):
-    work_selected = Signal(object)
+    entity_selected = Signal(str, object)
     search_requested = Signal()
 
     def __init__(self):
         super().__init__()
-        self._works = []
+        self._favorites = []
         self.setObjectName("favoritesPage")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -46,7 +45,7 @@ class FavoritesPage(QWidget):
         title = QLabel("Favorites")
         title.setObjectName("favoritesTitle")
         subtitle = QLabel(
-            "Keep the titles you love close, even when they are not in your Library."
+            "Your saved characters, voice actors, and production staff."
         )
         subtitle.setObjectName("favoritesSubtitle")
         subtitle.setWordWrap(True)
@@ -58,68 +57,141 @@ class FavoritesPage(QWidget):
         refresh_button.clicked.connect(self.refresh)
         header_layout.addWidget(refresh_button, 0, Qt.AlignmentFlag.AlignVCenter)
         self.content_layout.addWidget(header)
+
         try:
-            self._works = [dict(row) for row in get_favorite_works()]
+            rows = get_entity_favorites()
+            self._favorites = [
+                dict(row) for row in (rows or [])
+                if isinstance(row, dict) or hasattr(row, "keys")
+            ]
         except Exception as error:
-            log_exception("favorites.load_failed", error)
-            self._works = []
+            log_exception("favorites.entity_load_failed", error)
+            self._favorites = []
             self._show_empty("Favorites could not be loaded. Refresh to try again.")
             return
 
-        if not self._works:
+        valid = []
+        for row in self._favorites:
+            kind = str(row.get("entity_type") or "").strip().casefold()
+            if kind not in {"character", "voice_actor", "staff"}:
+                continue
+            try:
+                entity_id = int(row.get("entity_id"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if entity_id <= 0:
+                continue
+            item = dict(row)
+            item["entity_type"] = kind
+            item["entity_id"] = entity_id
+            item["entity_name"] = str(item.get("entity_name") or "").strip()
+            valid.append(item)
+        self._favorites = valid
+
+        if not self._favorites:
             self._show_empty(
-                "Open any title and press Favorite to save it here. Favorites are separate from Library membership."
+                "Open a character, voice actor, or production staff profile and use its favorite control to save it here."
             )
             return
 
-        count = QLabel(f"{len(self._works)} favorite{'s' if len(self._works) != 1 else ''}")
+        count = QLabel(
+            f"{len(self._favorites)} saved profile{'s' if len(self._favorites) != 1 else ''}"
+        )
         count.setObjectName("favoritesCount")
         self.content_layout.addWidget(count)
         grid_host = QWidget()
+        grid_host.setObjectName("favoritesGridHost")
         grid = QGridLayout(grid_host)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(16)
-        grid.setVerticalSpacing(22)
-        columns = 4
-        for index, work in enumerate(self._works):
+        grid.setVerticalSpacing(16)
+        for column in range(3):
+            grid.setColumnStretch(column, 1)
+
+        for index, favorite in enumerate(self._favorites):
+            kind = favorite["entity_type"]
+            entity_id = favorite["entity_id"]
+            name = favorite["entity_name"] or f"Unknown {self._kind_label(kind).lower()}"
+            record = self._profile_record(favorite)
             tile = QFrame()
             tile.setObjectName("favoritesTile")
             layout = QVBoxLayout(tile)
-            layout.setContentsMargins(5, 5, 5, 10)
-            layout.setSpacing(8)
-            card = WorkCard(work, mode="library", parent=tile)
-            card.clicked.connect(self.work_selected.emit)
-            layout.addWidget(card, 0, Qt.AlignmentFlag.AlignHCenter)
-            if work.get("status"):
-                status = QLabel(f"In Library · {work['status']}")
-            else:
-                status = QLabel("Not in Library")
-            status.setObjectName("favoritesStatus")
-            status.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-            layout.addWidget(status)
-            remove = QPushButton("Remove favorite")
-            remove.setObjectName("favoritesRemove")
-            remove.setAccessibleName("Remove favorite")
-            remove.clicked.connect(
-                lambda _=False, work_id=work.get("id"): self._remove_favorite(work_id)
+            layout.setContentsMargins(16, 14, 16, 14)
+            layout.setSpacing(9)
+
+            type_label = QLabel(self._kind_label(kind))
+            type_label.setObjectName("favoritesKind")
+            layout.addWidget(type_label)
+
+            title = QLabel(name)
+            title.setObjectName("favoritesEntityName")
+            title.setWordWrap(True)
+            title.setToolTip(name)
+            layout.addWidget(title)
+
+            language = str(favorite.get("language") or "").strip()
+            if kind == "voice_actor" and language:
+                language_label = QLabel(language.replace("_", " ").replace("-", " ").title())
+                language_label.setObjectName("favoritesLanguage")
+                layout.addWidget(language_label)
+
+            actions = QHBoxLayout()
+            actions.setSpacing(8)
+            open_button = QPushButton("Open profile")
+            open_button.setObjectName("favoritesOpen")
+            open_button.clicked.connect(
+                lambda _checked=False, entity_kind=kind, item=record:
+                    self.entity_selected.emit(entity_kind, item)
             )
-            layout.addWidget(remove)
-            grid.addWidget(tile, index // columns, index % columns, Qt.AlignmentFlag.AlignTop)
+            remove_button = QPushButton("Remove")
+            remove_button.setObjectName("favoritesRemove")
+            remove_button.setAccessibleName(f"Remove {name} from favorites")
+            remove_button.clicked.connect(
+                lambda _checked=False, entity_kind=kind, item_id=entity_id:
+                    self._remove_favorite(entity_kind, item_id)
+            )
+            actions.addWidget(open_button, 1)
+            actions.addWidget(remove_button)
+            layout.addLayout(actions)
+            grid.addWidget(tile, index // 3, index % 3, Qt.AlignmentFlag.AlignTop)
+
         self.content_layout.addWidget(grid_host)
         self.content_layout.addStretch(1)
         self._apply_theme()
+
+    @staticmethod
+    def _kind_label(kind):
+        return {
+            "character": "Character",
+            "voice_actor": "Voice actor",
+            "staff": "Production staff",
+        }.get(kind, "Profile")
+
+    @staticmethod
+    def _profile_record(favorite):
+        entity_id = int(favorite["entity_id"])
+        name = str(favorite.get("entity_name") or "")
+        kind = favorite["entity_type"]
+        if kind == "character":
+            return {"id": entity_id, "character_name": name, "name": name}
+        return {
+            "id": entity_id,
+            "person_id": entity_id,
+            "name": name,
+            "language": favorite.get("language"),
+        }
 
     def _show_empty(self, message):
         empty = QFrame()
         empty.setObjectName("favoritesEmpty")
         box = QVBoxLayout(empty)
         box.setContentsMargins(22, 22, 22, 22)
-        title = QLabel("Nothing favorited yet")
+        title = QLabel("No saved profiles yet")
         title.setObjectName("favoritesTitle")
         detail = QLabel(message)
         detail.setObjectName("favoritesSubtitle")
         detail.setWordWrap(True)
-        explore = QPushButton("Explore the catalog")
+        explore = QPushButton("Explore titles")
         explore.setObjectName("favoritesAction")
         explore.clicked.connect(self.search_requested.emit)
         box.addWidget(title)
@@ -129,11 +201,18 @@ class FavoritesPage(QWidget):
         self.content_layout.addStretch(1)
         self._apply_theme()
 
-    def _remove_favorite(self, work_id):
+    def _remove_favorite(self, entity_type, entity_id):
         try:
-            set_work_favorite(work_id, False)
+            saved = set_entity_favorite(entity_type, entity_id, False)
+            if not saved:
+                raise RuntimeError("The favorite state was rejected by the local database.")
         except Exception as error:
-            log_exception("favorites.remove_failed", error, work_id=work_id)
+            log_exception(
+                "favorites.entity_remove_failed",
+                error,
+                entity_type=entity_type,
+                entity_id=entity_id,
+            )
             return
         self.refresh()
 
@@ -147,8 +226,6 @@ class FavoritesPage(QWidget):
 
     def refresh_theme(self):
         self._apply_theme()
-        for card in self.findChildren(WorkCard):
-            card.refresh_theme()
 
     def _apply_theme(self):
         self.setStyleSheet(f"""
@@ -157,6 +234,10 @@ class FavoritesPage(QWidget):
             QFrame#favoritesHeader, QFrame#favoritesEmpty {{
                 background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:14px;
             }}
+            QFrame#favoritesTile {{
+                background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:12px;
+            }}
+            QFrame#favoritesTile:hover {{ border-color:{COLORS['accent']}; }}
             QLabel#favoritesTitle {{
                 color:{COLORS['primary']}; background:transparent; font-size:22px; font-weight:850;
             }}
@@ -166,27 +247,32 @@ class FavoritesPage(QWidget):
             QLabel#favoritesCount {{
                 color:{COLORS['muted']}; background:transparent; font-size:11px; font-weight:800;
             }}
-            QLabel#favoritesStatus {{
-                color:{COLORS['muted']}; background:transparent; font-size:10px;
+            QLabel#favoritesKind {{
+                color:{COLORS['accent']}; background:transparent; font-size:10px; font-weight:850;
             }}
-            QFrame#favoritesTile {{
-                background:transparent; border:1px solid transparent; border-radius:12px;
+            QLabel#favoritesEntityName {{
+                color:{COLORS['primary']}; background:transparent; font-size:15px; font-weight:800;
             }}
-            QFrame#favoritesTile:hover {{
-                background:{surface_rgba('surface')}; border-color:{COLORS['border']};
+            QLabel#favoritesLanguage {{
+                color:{COLORS['secondary']}; background:transparent; font-size:11px;
             }}
             QPushButton#favoritesAction {{
                 background:{COLORS['accent']}; color:{COLORS['accent_text']}; border:1px solid {COLORS['accent']};
                 border-radius:8px; padding:9px 13px; font-weight:800;
             }}
+            QPushButton#favoritesAction:hover {{ background:{COLORS['accent_hover']}; }}
+            QPushButton#favoritesOpen {{
+                background:{surface_rgba('surface_alt')}; color:{COLORS['primary']}; border:1px solid {COLORS['border']};
+                border-radius:8px; padding:8px 11px; font-weight:800;
+            }}
+            QPushButton#favoritesOpen:hover {{ border-color:{COLORS['accent']}; }}
             QPushButton#favoritesRemove {{
-                background:transparent; color:{COLORS['muted']}; border:1px solid {COLORS['border']};
-                border-radius:8px; padding:7px 9px; font-size:10px;
+                background:transparent; color:{COLORS['secondary']}; border:1px solid {COLORS['border']};
+                border-radius:8px; padding:8px 10px; font-weight:750;
             }}
             QPushButton#favoritesRemove:hover {{
-                background:{surface_rgba('accent_soft')}; color:{COLORS['primary']}; border-color:{COLORS['accent']};
+                background:{surface_rgba('surface_hover')}; color:{COLORS['primary']}; border-color:{COLORS['accent']};
             }}
         """)
 
 
-__all__ = ["FavoritesPage"]
