@@ -827,10 +827,16 @@ class WorkDetailPage(QWidget):
 
         for member in members:
             try:
-                work_id = int(member["id"])
-            except (KeyError, TypeError, ValueError):
+                if isinstance(member, dict):
+                    raw_id = member.get("id")
+                else:
+                    raw_id = member["id"]
+                if isinstance(raw_id, bool):
+                    continue
+                work_id = int(raw_id)
+            except (KeyError, TypeError, ValueError, OverflowError):
                 continue
-            if work_id not in ids:
+            if work_id > 0 and work_id not in ids:
                 ids.append(work_id)
 
         if ids:
@@ -838,8 +844,11 @@ class WorkDetailPage(QWidget):
 
         work_id = self._value("id")
         try:
-            return [int(work_id)] if work_id is not None else []
-        except (TypeError, ValueError):
+            if work_id is None or isinstance(work_id, bool):
+                return []
+            work_id = int(work_id)
+            return [work_id] if work_id > 0 else []
+        except (TypeError, ValueError, OverflowError):
             return []
 
     def _prepare_detail_state(self, work):
@@ -1354,7 +1363,16 @@ class WorkDetailPage(QWidget):
         batch_size = 6
         end = min(offset + batch_size, len(episodes))
         for ep in episodes[offset:end]:
-            card = EpisodeCard(ep)
+            try:
+                card = EpisodeCard(ep)
+            except Exception as error:
+                log_exception(
+                    "episodes.deferred_card_render_failed",
+                    error,
+                    work_id=ep.get("work_id") if isinstance(ep, dict) else None,
+                    episode_number=ep.get("episode_number") if isinstance(ep, dict) else None,
+                )
+                continue
             card.watched_changed.connect(self._episode_toggled)
             layout.addWidget(card)
 
@@ -2714,13 +2732,17 @@ class WorkDetailPage(QWidget):
                 "episodes.detail_section_failed",
                 error,
                 work_id=work_id,
-                bundle_work_ids=self._detail_work_ids(),
+                bundle_work_ids=bundle_ids,
             )
             frame = QFrame()
             frame.setObjectName("episodesSection")
             frame.setProperty("_episodes_section", True)
             layout = QVBoxLayout(frame)
             layout.setContentsMargins(12, 8, 12, 8)
+            try:
+                bundle_ids = self._detail_work_ids()
+            except Exception:
+                bundle_ids = []
             message = QLabel(
                 "Episode data could not be displayed. The rest of this title is still available."
             )
