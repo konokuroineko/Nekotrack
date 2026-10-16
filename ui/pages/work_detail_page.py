@@ -32,6 +32,7 @@ from database import (
 )
 from series import get_library_series
 from ui.display_identity import copy_custom_cover, get_display_override, invalidate_display_override
+from ui.branding import navigation_icon
 from ui.preferences import get
 from ui.pages.search_page import SearchPage
 from ui.theme import COLORS, muted_label_stylesheet
@@ -336,6 +337,8 @@ class EpisodeCard(QFrame):
                 label.setStyleSheet(stylesheet)
         for artwork in self.findChildren(EpisodeArtwork):
             artwork.refresh_theme()
+        for button in self.findChildren(QPushButton, "detailBackButton"):
+            button.setIcon(navigation_icon("back", COLORS["secondary"]))
         self.update()
 
     @staticmethod
@@ -853,8 +856,14 @@ class WorkDetailPage(QWidget):
         root.setContentsMargins(42, 34, 42, 50)
         root.setSpacing(22)
 
-        back = QPushButton("‹  Back to Library")
-        back.setObjectName("back")
+        back = QPushButton()
+        back.setObjectName("detailBackButton")
+        back.setIcon(navigation_icon("back", COLORS["secondary"]))
+        back.setIconSize(QSize(22, 22))
+        back.setFixedSize(42, 42)
+        back.setAccessibleName("Back")
+        back.setToolTip("Back")
+        back.setCursor(Qt.PointingHandCursor)
         back.clicked.connect(self.back_requested)
         root.addWidget(back, alignment=Qt.AlignLeft)
         root.addWidget(self._hero())
@@ -1107,6 +1116,9 @@ class WorkDetailPage(QWidget):
                 color:{COLORS['muted']};
                 background:{COLORS['surface_alt']};
             }}
+            QPushButton#detailBackButton {{ background:transparent; border:1px solid transparent; border-radius:21px; padding:0; }}
+            QPushButton#detailBackButton:hover {{ background:{COLORS['surface_hover']}; border-color:{COLORS['border']}; }}
+            QPushButton#detailBackButton:pressed {{ background:{COLORS['accent_soft']}; }}
             QToolButton#detailMenu {{ background:transparent; color:{COLORS['primary']}; border:2px solid transparent; border-radius:{get('corner_radius') + 2}px; font-size:30px; font-weight:900; padding:0; }}
             QToolButton#detailMenu:hover {{ background:{COLORS['surface_hover']}; color:{COLORS['accent_hover']}; border-color:{COLORS['accent']}; }}
             QPushButton#detailFavoriteButton, QPushButton#detailCustomizeButton {{
