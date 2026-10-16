@@ -199,34 +199,44 @@ class FavoritesIdentityOverrideTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
-    def test_favorites_page_refreshes_and_removes_favorites(self):
+    def test_favorites_page_opens_and_removes_entity_profiles(self):
         rows = [{
-            "id": 102,
-            "title": "Favorite Only",
-            "type": "ANIME",
-            "format": "TV",
-            "status": None,
-            "cover_url": None,
-            "cover_path": None,
+            "entity_type": "voice_actor",
+            "entity_id": 903,
+            "entity_name": "Example Voice Actor",
+            "language": "Japanese",
         }]
         with (
-            patch("ui.pages.favorites_page.get_favorite_works", side_effect=[rows, []]),
-            patch("ui.pages.favorites_page.set_work_favorite") as remove,
+            patch("ui.pages.favorites_page.get_entity_favorites", side_effect=[rows, []]),
+            patch("ui.pages.favorites_page.set_entity_favorite", return_value=True) as remove,
         ):
             page = FavoritesPage()
             self.app.processEvents()
             self.assertEqual(
-                [label.text() for label in page.findChildren(QLabel, "favoritesStatus")],
-                ["Not in Library"],
+                [label.text() for label in page.findChildren(QLabel, "favoritesKind")],
+                ["Voice actor"],
             )
+            self.assertEqual(
+                [label.text() for label in page.findChildren(QLabel, "favoritesEntityName")],
+                ["Example Voice Actor"],
+            )
+            selected = []
+            page.entity_selected.connect(lambda kind, record: selected.append((kind, record)))
+            open_button = page.findChild(QPushButton, "favoritesOpen")
+            self.assertIsNotNone(open_button)
+            open_button.click()
+            self.assertEqual(selected[0][0], "voice_actor")
+            self.assertEqual(selected[0][1]["person_id"], 903)
+            self.assertEqual(selected[0][1]["language"], "Japanese")
+
             button = page.findChild(QPushButton, "favoritesRemove")
             self.assertIsNotNone(button)
             button.click()
             self.app.processEvents()
-            remove.assert_called_once_with(102, False)
+            remove.assert_called_once_with("voice_actor", 903, False)
             self.assertTrue(
                 any(
-                    label.text() == "Nothing favorited yet"
+                    label.text() == "No saved profiles yet"
                     for label in page.findChildren(QLabel)
                 )
             )
