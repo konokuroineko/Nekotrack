@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -72,6 +73,60 @@ class RecommendationScoringTests(unittest.TestCase):
         self.assertNotIn(4, ids)
         self.assertLess(ids.index(2), ids.index(3))
         self.assertIn("Mystery", ranked[ids.index(2)]["_recommendation_reason"])
+
+    def test_new_recommendation_choices_adjust_genres_sources_and_permanently_hide_only_one_id(self):
+        history = {
+            900: {
+                "work_id": 900,
+                "feedback": "more_like_this",
+                "impressions": 1,
+                "metadata": {
+                    "id": 900, "genres": ["Mystery"],
+                    "_recommendation_source_ids": [41],
+                },
+            },
+            901: {
+                "work_id": 901,
+                "feedback": "less_like_this",
+                "impressions": 1,
+                "metadata": {
+                    "id": 901, "genres": ["Sports"],
+                    "_recommendation_source_ids": [42],
+                },
+            },
+            999: {
+                "work_id": 999,
+                "feedback": "never_show",
+                "impressions": 1,
+                "metadata": {"id": 999, "genres": ["Drama"]},
+            },
+        }
+        candidates = [
+            {"id": 11, "type": "ANIME", "title": {"english": "Preferred relation"},
+             "genres": ["Mystery"], "_recommendation_source_ids": [41], "averageScore": 80, "popularity": 500},
+            {"id": 12, "type": "ANIME", "title": {"english": "Other relation"},
+             "genres": ["Mystery"], "_recommendation_source_ids": [77], "averageScore": 80, "popularity": 500},
+            {"id": 13, "type": "ANIME", "title": {"english": "Rejected relation"},
+             "genres": ["Sports"], "_recommendation_source_ids": [42], "averageScore": 80, "popularity": 500},
+            {"id": 14, "type": "ANIME", "title": {"english": "Other sport"},
+             "genres": ["Sports"], "_recommendation_source_ids": [77], "averageScore": 80, "popularity": 500},
+            {"id": 999, "type": "ANIME", "title": {"english": "Never show"},
+             "genres": ["Drama"], "_recommendation_source_ids": [77], "averageScore": 100, "popularity": 10000},
+        ]
+
+        ranked = rank_candidates(candidates, history=history, rotation=0)
+        ids = [item["id"] for item in ranked]
+        self.assertNotIn(999, ids)
+        self.assertLess(ids.index(11), ids.index(12))
+        self.assertLess(ids.index(14), ids.index(13))
+
+        suggestions = {}
+        self.assertFalse(merge_recommendation_candidate(
+            suggestions,
+            candidates[-1],
+            set(),
+            history,
+        ))
 
     def test_favorite_character_and_language_matched_voice_actors_boost_candidates(self):
         candidates = [
@@ -282,6 +337,7 @@ class RecommendationHistoryPersistenceTests(unittest.TestCase):
             "staff": {"edges": [{
                 "role": "Series Composition", "node": {"id": 994},
             }]},
+            "_recommendation_source_ids": [12, 34, 12, "invalid", -1],
         }
         self.assertTrue(database.set_recommendation_feedback(831, "like", work))
         self.assertEqual(database.record_recommendation_impressions([work]), 1)
@@ -292,6 +348,7 @@ class RecommendationHistoryPersistenceTests(unittest.TestCase):
         self.assertEqual(history[831]["feedback"], "like")
         self.assertEqual(history[831]["impressions"], 2)
         self.assertEqual(history[831]["metadata"]["genres"], ["Mystery"])
+        self.assertEqual(history[831]["metadata"]["_recommendation_source_ids"], [12, 34])
         self.assertEqual(
             history[831]["metadata"]["characters"]["edges"][0]["voiceActors"][0]["language"],
             "Japanese",
@@ -302,11 +359,40 @@ class RecommendationHistoryPersistenceTests(unittest.TestCase):
         )
         self.assertTrue(database.set_recommendation_feedback(831, "dislike", work))
         self.assertEqual(database.get_recommendation_history()[831]["feedback"], "dislike")
+        for choice in ("more_like_this", "less_like_this", "never_show"):
+            self.assertTrue(database.set_recommendation_feedback(831, choice, work))
+            self.assertEqual(database.get_recommendation_history()[831]["feedback"], choice)
+
+    def test_old_history_table_migrates_without_losing_rows(self):
+        connection = sqlite3.connect(self._database_path)
+        connection.execute("DROP TABLE recommendation_history")
+        connection.execute("""
+            CREATE TABLE recommendation_history (
+                work_id INTEGER PRIMARY KEY,
+                impressions INTEGER NOT NULL DEFAULT 0 CHECK (impressions >= 0),
+                feedback TEXT CHECK (feedback IN ('like', 'dislike') OR feedback IS NULL),
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_seen_at DATETIME
+            )
+        """)
+        connection.execute(
+            "INSERT INTO recommendation_history (work_id, impressions, feedback, metadata_json) VALUES (?, ?, ?, ?)",
+            (88, 7, "like", '{"id":88,"genres":["Mystery"]}'),
+        )
+        connection.commit()
+        connection.close()
+
+        database.initialize_database()
+        self.assertEqual(database.get_recommendation_history()[88]["impressions"], 7)
+        self.assertTrue(database.set_recommendation_feedback(89, "never_show"))
+        self.assertEqual(database.get_recommendation_history()[89]["feedback"], "never_show")
 
     def test_invalid_feedback_and_impression_ids_are_ignored(self):
         self.assertFalse(database.set_recommendation_feedback(True, "like"))
         self.assertFalse(database.set_recommendation_feedback(0, "like"))
         self.assertFalse(database.set_recommendation_feedback(832, "maybe"))
+        self.assertFalse(database.set_recommendation_feedback(832, "hide"))
         self.assertEqual(database.record_recommendation_impressions([
             {"id": True}, {"id": 0}, {"id": "bad"}, None
         ]), 0)
