@@ -1098,7 +1098,7 @@ class MainWindow(QMainWindow):
                 source_work=state["source_work"],
                 voice_actors=state["voice_actors"],
             )
-            self.navigation.show("entity_profile", record_history=False)
+            self.navigation.back(fallback="entity_profile", skip=("work_detail",))
             return
         self.navigation.back(fallback="collections", skip=("work_detail",))
 
