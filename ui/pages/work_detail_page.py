@@ -1958,7 +1958,7 @@ class WorkDetailPage(QWidget):
                 return group
         return None
 
-    def _show_detail_menu(self):
+    def _build_detail_menu(self):
         group = self._library_group()
         try:
             work_id = int(self._value("id"))
@@ -2051,6 +2051,12 @@ class WorkDetailPage(QWidget):
             menu.addSeparator()
             add_item("Delete", "detailDeleteItem", lambda: self._show_delete_confirmation(group))
 
+        return menu
+
+    def _show_detail_menu(self):
+        menu = self._build_detail_menu()
+        if menu is None:
+            return
         button = self.sender()
         menu.exec(
             button.mapToGlobal(button.rect().bottomLeft())
