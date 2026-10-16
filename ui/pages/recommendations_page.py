@@ -356,7 +356,6 @@ class RecommendationWorker(QObject):
             self.catalog_has_next = bool(has_next) if isinstance(has_next, bool) else current_page < last_page
             self.catalog_next_page = current_page + 1 if self.catalog_has_next else current_page
 
-            before_ids = set(suggestions)
             media = payload.get("media") if isinstance(payload, dict) else []
             if isinstance(media, list):
                 for candidate in media:
