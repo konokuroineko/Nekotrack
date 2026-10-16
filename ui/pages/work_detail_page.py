@@ -201,16 +201,16 @@ class EpisodeArtwork(QLabel):
         super().__init__(parent)
         self.work_id = int(work_id) if work_id is not None else None
         self.episode_number = int(episode_number) if episode_number is not None else None
-        self.setFixedSize(132, 74)
+        self.setFixedSize(116, 65)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
-            f"background:{surface_rgba('background_alt')};border-radius:10px;"
+            f"background:{surface_rgba('background_alt')};border-radius:8px;"
             f"color:{COLORS['muted']};font-size:11px;font-weight:800;"
         )
 
     def refresh_theme(self):
         self.setStyleSheet(
-            f"background:{surface_rgba('background_alt')};border-radius:10px;"
+            f"background:{surface_rgba('background_alt')};border-radius:8px;"
             f"color:{COLORS['muted']};font-size:11px;font-weight:800;"
         )
         self.update()
@@ -264,7 +264,7 @@ class EpisodeArtwork(QLabel):
 
         rect = result.rect().adjusted(1, 1, -1, -1)
         path = QPainterPath()
-        path.addRoundedRect(rect, 8, 8)
+        path.addRoundedRect(rect, 7, 7)
 
         painter.save()
         painter.setClipPath(path)
@@ -282,36 +282,37 @@ class EpisodeCard(QFrame):
         super().__init__(parent)
         self.episode = episode
         self.setObjectName("episodeCard")
-        self.setMinimumHeight(90)
+        # Compact, horizontal streaming-service style row rather than a bulky card.
+        self.setMinimumHeight(78)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 8, 10, 8)
-        layout.setSpacing(10)
+        layout.setContentsMargins(7, 6, 8, 6)
+        layout.setSpacing(8)
 
         artwork = EpisodeArtwork(
             episode["work_id"],
             episode["episode_number"],
         )
         artwork.load(episode["thumbnail_url"])
-        layout.addWidget(artwork, 0, Qt.AlignTop)
+        layout.addWidget(artwork, 0, Qt.AlignVCenter)
 
         body = QVBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(2)
+        body.setSpacing(1)
 
         top = QHBoxLayout()
         number = QLabel(f"EP {int(episode['episode_number']):02d}")
         number.setObjectName("detailEpisodeNumber")
         number.setStyleSheet(
-            f"color:{COLORS['accent']};font-size:10px;font-weight:850;"
+            f"color:{COLORS['accent']};font-size:9px;font-weight:850;"
             "letter-spacing:0.4px;"
         )
         top.addWidget(number)
 
         date = QLabel(self._format_date(episode["air_date"]))
         date.setObjectName("detailEpisodeDate")
-        date.setStyleSheet(f"color:{COLORS['muted']};font-size:11px;")
+        date.setStyleSheet(f"color:{COLORS['muted']};font-size:10px;")
         top.addStretch()
         if date.text():
             top.addWidget(date)
@@ -327,21 +328,26 @@ class EpisodeCard(QFrame):
         title.setMinimumWidth(0)
         title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         title.setStyleSheet(
-            f"color:{COLORS['primary']};font-size:14px;font-weight:750;"
+            f"color:{COLORS['primary']};font-size:13px;font-weight:750;"
         )
+        title.setToolTip(self._episode_full_title)
         body.addWidget(title)
 
-        description_text = str(episode["description"] or "").strip()
-        description = QLabel(description_text)
-        description.setObjectName("detailEpisodeDescription")
-        description.setWordWrap(True)
-        description.setTextFormat(Qt.PlainText)
-        description.setMaximumHeight(30)
-        description.setStyleSheet(
-            f"color:{COLORS['secondary']};font-size:11px;"
-        )
-        description.setVisible(bool(description_text))
-        if description_text:
+        self._episode_full_description = str(episode["description"] or "").strip()
+        self._episode_description_label = None
+        if self._episode_full_description:
+            description = QLabel(self._episode_full_description)
+            self._episode_description_label = description
+            description.setObjectName("detailEpisodeDescription")
+            description.setWordWrap(False)
+            description.setMinimumWidth(0)
+            description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            description.setTextFormat(Qt.PlainText)
+            description.setFixedHeight(15)
+            description.setToolTip(self._episode_full_description)
+            description.setStyleSheet(
+                f"color:{COLORS['secondary']};font-size:10px;"
+            )
             body.addWidget(description)
 
         layout.addLayout(body, 1)
@@ -353,14 +359,14 @@ class EpisodeCard(QFrame):
             lambda checked, n=int(episode["episode_number"]):
                 self.watched_changed.emit(n, checked)
         )
-        layout.addWidget(watched, 0, Qt.AlignTop)
+        layout.addWidget(watched, 0, Qt.AlignVCenter)
 
     def refresh_theme(self):
         styles = {
             "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:10px;font-weight:850;letter-spacing:0.4px;",
             "detailEpisodeDate": f"color:{COLORS['muted']};font-size:10px;",
-            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:14px;font-weight:750;",
-            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:11px;",
+            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:13px;font-weight:750;",
+            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:10px;",
         }
         for label in self.findChildren(QLabel):
             stylesheet = styles.get(label.objectName())
@@ -371,6 +377,7 @@ class EpisodeCard(QFrame):
         for button in self.findChildren(QPushButton, "detailBackButton"):
             button.setIcon(navigation_icon("back", COLORS["secondary"]))
         self._update_episode_title()
+        self._update_episode_description()
         self.update()
 
     def _update_episode_title(self):
@@ -386,9 +393,23 @@ class EpisodeCard(QFrame):
             )
         )
 
+    def _update_episode_description(self):
+        """Keep synopsis to one line while retaining the full text in a tooltip."""
+        label = self._episode_description_label
+        if label is None or label.width() <= 0:
+            return
+        label.setText(
+            label.fontMetrics().elidedText(
+                self._episode_full_description,
+                Qt.ElideRight,
+                label.contentsRect().width(),
+            )
+        )
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_episode_title()
+        self._update_episode_description()
 
     @staticmethod
     def _format_date(value):
@@ -742,20 +763,20 @@ class WorkDetailPage(QWidget):
         strip = QWidget()
         strip.setObjectName("detailSkeletonEpisodeStrip")
         layout = QHBoxLayout(strip)
-        layout.setContentsMargins(0, 4, 0, 4)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 3, 0, 3)
+        layout.setSpacing(10)
         for _index in range(4):
             card = QFrame()
             card.setObjectName("detailSkeletonEpisodeCard")
-            card.setFixedWidth(156)
+            card.setFixedWidth(136)
             card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(8, 8, 8, 10)
-            card_layout.setSpacing(8)
+            card_layout.setContentsMargins(6, 6, 6, 8)
+            card_layout.setSpacing(6)
             card_layout.addWidget(
-                self._skeleton_block(82, None, "detailSkeletonCover")
+                self._skeleton_block(64, None, "detailSkeletonCover")
             )
-            card_layout.addWidget(self._skeleton_block(10, 112))
-            card_layout.addWidget(self._skeleton_block(8, 76))
+            card_layout.addWidget(self._skeleton_block(9, 96))
+            card_layout.addWidget(self._skeleton_block(7, 66))
             layout.addWidget(card, 0, Qt.AlignTop)
         layout.addStretch(1)
         return strip
@@ -1104,6 +1125,7 @@ class WorkDetailPage(QWidget):
             QPushButton#back:hover {{ color: {COLORS['primary']}; }}
             QFrame#hero {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 22px; }}
             QFrame#section {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 18px; }}
+            QFrame#episodesSection {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 14px; }}
             QFrame#episodeCard {{
                 background: transparent;
                 border: none;
@@ -1219,7 +1241,7 @@ class WorkDetailPage(QWidget):
             # These section frames have their own local stylesheet, which takes
             # precedence over the page's stylesheet and must be regenerated.
             for frame in content.findChildren(QFrame):
-                if frame.objectName() in {"charactersSection", "section"}:
+                if frame.objectName() in {"charactersSection", "section", "episodesSection"}:
                     frame.setStyleSheet(self._detail_section_frame_stylesheet())
 
             # Cards and episode widgets use local stylesheets too. Refresh them
@@ -2724,10 +2746,10 @@ class WorkDetailPage(QWidget):
             )
 
         frame = QFrame()
-        frame.setObjectName("section")
+        frame.setObjectName("episodesSection")
         lay = QVBoxLayout(frame)
-        lay.setContentsMargins(18, 16, 18, 16)
-        lay.setSpacing(8)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(6)
 
         header = QHBoxLayout()
 
@@ -2745,7 +2767,7 @@ class WorkDetailPage(QWidget):
             title = QLabel("Episodes")
 
         title.setStyleSheet(
-            f"font-size:16px;font-weight:800;color:{COLORS['primary']};"
+            f"font-size:15px;font-weight:800;color:{COLORS['primary']};"
         )
         header.addWidget(title)
 
@@ -2761,7 +2783,7 @@ class WorkDetailPage(QWidget):
                 background:{surface_rgba('surface_alt')};
                 border:1px solid {COLORS['border']};
                 border-radius:6px;
-                padding:3px 7px;
+                padding:2px 6px;
                 font-size:9px;
                 font-weight:800;
             }}
@@ -2793,7 +2815,7 @@ class WorkDetailPage(QWidget):
                     color:{COLORS['primary']};
                     border:1px solid {COLORS['border']};
                     border-radius:7px;
-                    padding:5px 9px;
+                    padding:4px 8px;
                     font-weight:800;
                 }}
                 QToolButton:hover {{
@@ -3289,6 +3311,7 @@ class WorkDetailPage(QWidget):
         return (
             f"QFrame#charactersSection {{ background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
             f" QFrame#section {{ background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
+            f" QFrame#episodesSection {{ background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:14px; }}"
         )
 
     @staticmethod

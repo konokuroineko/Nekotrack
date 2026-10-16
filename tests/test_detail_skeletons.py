@@ -172,11 +172,31 @@ class DetailSkeletonTests(unittest.TestCase):
         artwork = card.findChild(EpisodeArtwork)
         description = card.findChild(QLabel, "detailEpisodeDescription")
 
-        self.assertLess(card.minimumHeight(), 100)
-        self.assertEqual(artwork.size().width(), 132)
-        self.assertEqual(artwork.size().height(), 74)
+        self.assertLess(card.minimumHeight(), 80)
+        self.assertEqual(artwork.size().width(), 116)
+        self.assertEqual(artwork.size().height(), 65)
         # Empty synopses are omitted entirely rather than taking up row space.
         self.assertIsNone(description)
+
+        card.deleteLater()
+        self.app.processEvents()
+
+    def test_episode_synopses_are_single_line_with_full_tooltip(self):
+        synopsis = "A long synopsis that should stay compact in the episode list."
+        card = EpisodeCard({
+            "work_id": 12345,
+            "episode_number": 12,
+            "thumbnail_url": None,
+            "air_date": None,
+            "title": "A very long episode title",
+            "description": synopsis,
+            "watched": 0,
+        })
+        description = card.findChild(QLabel, "detailEpisodeDescription")
+        self.assertIsNotNone(description)
+        self.assertFalse(description.wordWrap())
+        self.assertEqual(description.toolTip(), synopsis)
+        self.assertLess(card.minimumHeight(), 80)
 
         card.deleteLater()
         self.app.processEvents()
