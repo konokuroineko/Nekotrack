@@ -95,6 +95,104 @@ class TMDBEpisodeMatchingTests(unittest.TestCase):
         )
         self.assertEqual(selected["season_number"], 1)
 
+    def test_missing_start_date_uses_a_cached_tmdb_mapping(self):
+        season_payload = {
+            "episodes": [
+                {
+                    "id": 1, "episode_number": 1, "name": "Dated Episode",
+                    "overview": "", "air_date": "2020-01-01", "still_path": None,
+                },
+                {
+                    "id": 2, "episode_number": 2, "name": "Undated Episode",
+                    "overview": "", "air_date": None, "still_path": None,
+                },
+            ]
+        }
+        with patch("api._tmdb_get", return_value=season_payload) as request, patch(
+            "api._pick_best_episode_still", return_value=(None, 0)
+        ):
+            data = api.get_tmdb_episode_data(
+                ["Example Show"], None, tmdb_id=99, tmdb_season_number=1
+            )
+
+        request.assert_called_once_with(
+            "/tv/99/season/1", {"language": "en-US"}
+        )
+        self.assertEqual(
+            [item["episodeNumber"] for item in data["episodes"]], [1, 2]
+        )
+
+    def test_missing_start_date_can_match_series_and_select_by_episode_count(self):
+        series_payload = {
+            "seasons": [
+                {"season_number": 1, "air_date": "2020-01-01", "episode_count": 12},
+                {"season_number": 2, "air_date": "2021-01-01", "episode_count": 24},
+            ]
+        }
+        season_payload = {
+            "episodes": [
+                {
+                    "id": 1, "episode_number": 1, "name": "Episode One",
+                    "overview": "", "air_date": "2020-01-01", "still_path": None,
+                }
+            ]
+        }
+        with patch("api._find_tmdb_series", return_value={"id": 99}) as find_series, patch(
+            "api._tmdb_get", side_effect=[series_payload, season_payload]
+        ) as request, patch("api._pick_best_episode_still", return_value=(None, 0)):
+            data = api.get_tmdb_episode_data(
+                ["Example Show"], None, expected_episodes=12
+            )
+
+        find_series.assert_called_once_with(["Example Show"], None)
+        self.assertEqual(data["tmdb_season_number"], 1)
+        self.assertEqual([item["episodeNumber"] for item in data["episodes"]], [1])
+        self.assertEqual(
+            [call.args[0] for call in request.call_args_list],
+            ["/tv/99", "/tv/99/season/1"],
+        )
+
+    def test_tv_episode_parser_rejects_fractional_boolean_and_duplicate_numbers(self):
+        season_payload = {
+            "episodes": [
+                {
+                    "id": 1, "episode_number": True, "name": "Boolean Number",
+                    "overview": "", "air_date": None, "still_path": None,
+                },
+                {
+                    "id": 2, "episode_number": 1.5, "name": "Fractional Number",
+                    "overview": "", "air_date": None, "still_path": None,
+                },
+                {
+                    "id": 3, "episode_number": 0, "name": "Zero Number",
+                    "overview": "", "air_date": None, "still_path": None,
+                },
+                {
+                    "id": 4, "episode_number": "1", "name": "Valid Episode",
+                    "overview": "", "air_date": None, "still_path": None,
+                },
+                {
+                    "id": 5, "episode_number": 1, "name": "Duplicate Episode",
+                    "overview": "", "air_date": None, "still_path": None,
+                },
+                {
+                    "id": 6, "episode_number": 1_000_001, "name": "Unreasonable Number",
+                    "overview": "", "air_date": None, "still_path": None,
+                },
+            ]
+        }
+        with patch("api._tmdb_get", return_value=season_payload), patch(
+            "api._pick_best_episode_still", return_value=(None, 0)
+        ):
+            data = api.get_tmdb_episode_data(
+                ["Example Show"], None, tmdb_id=99, tmdb_season_number=1
+            )
+
+        self.assertEqual(
+            [(item["episodeNumber"], item["title"]) for item in data["episodes"]],
+            [(1, "Valid Episode")],
+        )
+
     def test_selected_season_keeps_undated_entries_and_does_not_truncate(self):
         season_payload = {
             "episodes": [
