@@ -4,7 +4,7 @@ import re
 from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QFont, QFontMetrics
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout, QSizePolicy
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QSizePolicy
 
 from database import save_cover_path
 from ui.display_identity import get_display_override
