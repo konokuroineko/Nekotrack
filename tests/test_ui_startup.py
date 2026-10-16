@@ -237,11 +237,8 @@ class UiStartupTests(unittest.TestCase):
                         "ui.pages.settings_page.export_diagnostics",
                         return_value=expected_report,
                     ) as export_report,
-                    patch("ui.pages.settings_page.QMessageBox.information") as show_success,
-                    patch(
-                        "ui.pages.settings_page.QDesktopServices.openUrl",
-                        return_value=True,
-                    ) as open_folder,
+                    patch("ui.pages.settings_page.QMessageBox") as message_box,
+                    patch("ui.pages.settings_page.QDesktopServices") as desktop_services,
                 ):
                     settings_page = SettingsPage()
                     button = next(
@@ -256,8 +253,8 @@ class UiStartupTests(unittest.TestCase):
                     button.click()
 
                     export_report.assert_called_once_with(output_path=expected_report)
-                    show_success.assert_called_once()
-                    open_folder.assert_called_once()
+                    message_box.information.assert_called_once()
+                    desktop_services.openUrl.assert_called_once()
                     settings_page.close()
                     settings_page.deleteLater()
                     self.app.processEvents()
