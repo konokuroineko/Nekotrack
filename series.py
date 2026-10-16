@@ -12,6 +12,7 @@ from database import (
     get_connection,
     get_manual_bundle_links,
     save_anime,
+    save_automatic_bundle_membership,
 )
 from ui.preferences import get
 
@@ -1108,14 +1109,30 @@ def _relation_data_for(ids):
     return rows
 
 
-def sync_library_relations():
-    """Persist complete relation snapshots for every unchecked library work."""
+def sync_library_relations(force_ids=None):
+    """Persist complete relation snapshots, optionally refreshing chosen works.
+
+    A forced refresh is used by the explicit Auto-bundle action. Existing
+    background startup sync remains incremental, and failed or partial provider
+    responses are never treated as authoritative empty relation snapshots.
+    """
     rows = list(get_all_library())
     if not rows:
         return False
 
     ids = {int(row["id"]) for row in rows}
-    pending = ids - _relation_sync_checked_ids
+    if force_ids is None:
+        pending = ids - _relation_sync_checked_ids
+    else:
+        requested = set()
+        for raw_id in force_ids:
+            try:
+                work_id = int(raw_id)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if work_id > 0:
+                requested.add(work_id)
+        pending = ids.intersection(requested)
     if not pending:
         return False
 
@@ -1182,6 +1199,75 @@ def sync_library_relations():
 
     return changed
 
+
+
+
+def auto_bundle_library_work(work_id):
+    """Refresh provider relations and persist the existing Library grouping for one work.
+
+    This deliberately reuses get_library_series() and the same grouping rules as
+    Search/Library, including user preferences, manual links, and exclusions.
+    """
+    try:
+        numeric_id = int(work_id)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("A valid AniList work ID is required.")
+    if numeric_id <= 0:
+        raise ValueError("Automatic provider bundling requires an AniList work ID.")
+
+    rows = list(get_all_library())
+    if not any(int(row["id"]) == numeric_id for row in rows):
+        raise ValueError("Add this title to the Library before automatic bundling.")
+
+    changed = sync_library_relations(force_ids={numeric_id})
+    groups = get_library_series()
+    group = next(
+        (
+            item for item in groups
+            if any(
+                int(member.get("id") or 0) == numeric_id
+                for member in (item.get("_series_members") or [])
+            )
+        ),
+        None,
+    )
+    if group is None:
+        raise RuntimeError("The updated Library grouping could not be rebuilt.")
+
+    members = []
+    for member in group.get("_series_members") or []:
+        try:
+            member_id = int(member["id"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if member_id > 0 and member_id not in members:
+            members.append(member_id)
+
+    if len(members) > 1:
+        # Existing exclusions are enforced by get_library_series() before this
+        # snapshot is persisted. Never create a separate grouping algorithm.
+        if not save_automatic_bundle_membership(min(members), members):
+            raise RuntimeError("NekoTrack could not save the automatic bundle.")
+        # Re-read so the returned group reflects the persisted bundle snapshot
+        # and any existing user appearance overrides.
+        refreshed = get_library_series()
+        group = next(
+            (
+                item for item in refreshed
+                if any(
+                    int(member.get("id") or 0) == numeric_id
+                    for member in (item.get("_series_members") or [])
+                )
+            ),
+            group,
+        )
+
+    return {
+        "group": group,
+        "member_ids": members,
+        "count": len(members),
+        "relations_refreshed": bool(changed),
+    }
 
 def get_library_series():
     rows = list(get_all_library())
