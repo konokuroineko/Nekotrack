@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
     QCheckBox,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QMessageBox,
     QScrollArea,
     QSlider,
     QTabWidget,
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from diagnostics import default_app_data_dir, export_diagnostics, log_event, log_exception
 from database import get_all_library
 from ui.bundle_options import BUNDLE_OPTION_GROUPS, BUNDLE_OPTION_KEYS
 from ui.preferences import (
@@ -393,6 +396,16 @@ class SettingsPage(QWidget):
             self._info_row("Catalog metadata", "AniList + MangaBaka + TMDB"),
         ]
         data_storage.addWidget(self._section("Local data", data_rows))
+        data_storage.addWidget(self._section(
+            "Diagnostics",
+            [
+                self._row(
+                    "Troubleshooting report",
+                    "NekoTrack keeps diagnostic logs locally and can export a redacted report to its app-data folder. The report excludes your library database and artwork; review it for catalog titles and error details before sharing.",
+                    self._diagnostics_export_button(),
+                ),
+            ],
+        ))
 
         setup_button = QPushButton("Run setup wizard again")
         setup_button.setObjectName("settingsAction")
@@ -1076,6 +1089,47 @@ class SettingsPage(QWidget):
             new_light_mode=new_mode,
         )
         self._apply("light_mode")
+
+    def _diagnostics_export_button(self):
+        button = QPushButton("Export diagnostics")
+        button.setObjectName("settingsAction")
+        button.setAccessibleName("Export NekoTrack diagnostics")
+        button.setToolTip(
+            "Create a redacted troubleshooting report in the NekoTrack app-data folder."
+        )
+        button.clicked.connect(self._export_diagnostics)
+        return button
+
+    def _export_diagnostics(self, _checked=False):
+        destination = default_app_data_dir() / "nekotrack_diagnostics.txt"
+        try:
+            log_event("diagnostics.export_started", report_name=destination.name)
+            output = export_diagnostics(output_path=destination)
+        except Exception as error:
+            log_exception(
+                "diagnostics.export_failed",
+                error,
+                report_name=destination.name,
+            )
+            QMessageBox.warning(
+                self,
+                "Diagnostics export failed",
+                "NekoTrack couldn't create the report in its app-data folder. "
+                "Check that the folder is writable and try again.\n\n"
+                f"Details: {error}",
+            )
+            return
+
+        log_event("diagnostics.export_completed", report_name=output.name)
+        QMessageBox.information(
+            self,
+            "Diagnostics exported",
+            "Your troubleshooting report was saved here:\n\n"
+            f"{output}\n\n"
+            "The report can contain catalog titles and error details. "
+            "Review it before sharing.",
+        )
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(output.parent)))
 
     def _info_row(self, name, value):
         value_label = QLabel(value)
