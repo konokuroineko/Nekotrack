@@ -82,40 +82,26 @@ def wordmark_pixmap(
 
 
 class WordmarkLabel(QLabel):
-    """Paint a supersampled wordmark for cleaner edges at small sidebar sizes."""
+    """Paint the simplified wordmark directly from SVG for crisp sidebar edges."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._pixmap = QPixmap()
+        self._renderer = None
 
     def set_wordmark(self, accent, light_mode=False):
-        # The traced logo contains detail finer than a single pixel at its
-        # 222x58 sidebar size. Render it at 4x (or the display's higher DPR)
-        # and let Qt downsample it, which smooths those tiny contour changes
-        # without changing the shared SVG artwork or its larger uses.
-        rect = self.contentsRect()
-        width = rect.width() if rect.width() > 1 else self.width()
-        height = rect.height() if rect.height() > 1 else self.height()
-        width = max(16, width)
-        height = max(16, height)
-        pixel_ratio = max(4.0, float(self.devicePixelRatioF()))
-        self._pixmap = wordmark_pixmap(
-            accent,
-            width,
-            height,
-            light_mode,
-            device_pixel_ratio=pixel_ratio,
-        )
+        svg = _styled_wordmark_svg(accent, light_mode)
+        self._renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
         self.update()
 
     def paintEvent(self, event):
-        if self._pixmap.isNull():
+        if self._renderer is None or not self._renderer.isValid():
             return super().paintEvent(event)
 
         painter = QPainter(self)
         try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-            painter.drawPixmap(self.contentsRect(), self._pixmap)
+            self._renderer.render(painter, QRectF(self.contentsRect()))
         finally:
             painter.end()
 
