@@ -106,6 +106,43 @@ class UiStartupTests(unittest.TestCase):
             else:
                 os.environ["QT_SCALE_FACTOR"] = original_scale
 
+    def test_search_result_opens_without_blocking_on_anilist_details(self):
+        MemorySettings.stores = {
+            ("NekoTrack", "NekoTrack"): {
+                preferences._MIGRATION_KEY: True,
+                "_theme_palette_version": preferences._THEME_PALETTE_VERSION,
+                "theme_preset": "Neko",
+                "setup_complete": True,
+            },
+            ("AniTrack", "AniTrack"): {},
+        }
+        window = None
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                with (
+                    patch.object(preferences, "QSettings", MemorySettings),
+                    patch("ui.main_window.get_media_details") as fetch_details,
+                    patch.object(MainWindow, "show_work_details") as open_detail,
+                    patch.object(MainWindow, "_start_existing_library_episode_preload"),
+                ):
+                    window = MainWindow()
+                    work = {
+                        "id": 21355,
+                        "type": "ANIME",
+                        "title": {"english": "Example Search Result"},
+                    }
+                    window.show_search_work(work)
+                    open_detail.assert_called_once_with(work)
+                    fetch_details.assert_not_called()
+            finally:
+                if window is not None:
+                    window.close()
+                    window.deleteLater()
+                    self.app.processEvents()
+                os.chdir(old_cwd)
+
     def test_navigation_back_uses_the_actual_previous_page(self):
         from PySide6.QtWidgets import QStackedWidget, QWidget
         from ui.navigation import NavigationController
