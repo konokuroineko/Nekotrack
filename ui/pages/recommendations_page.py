@@ -17,6 +17,7 @@ from database import (
     get_recommendation_history,
     get_work_favorites,
     record_recommendation_impressions,
+    set_recommendation_feedback,
 )
 from diagnostics import log_exception
 from ui.preferences import get
@@ -759,6 +760,12 @@ class RecommendationsPage(QWidget):
         self._loaded = True
         self._load_more_failed = False
         self._render_results(preserve_scroll=bool(worker is not None and worker.catalog_only))
+        # A first page can contain only titles already in the library or titles
+        # the user explicitly disliked. Keep walking the catalog in the
+        # background while it has pages left; an empty page has no scrollbar
+        # range to trigger ordinary infinite-scroll pagination.
+        if not self._results and self._catalog_has_next:
+            QTimer.singleShot(0, self.load_more)
 
     def _recommendations_failed(self, message):
         if self._stop_event.is_set():
@@ -841,6 +848,56 @@ class RecommendationsPage(QWidget):
         self.content_layout.addStretch(1)
         self._update_load_more_ui()
 
+    def _record_recommendation_feedback(self, work, feedback):
+        """Persist feedback, immediately rerank the current feed, and refill it if needed."""
+        if feedback not in {"like", "dislike"}:
+            return
+        work_id = RecommendationWorker._work_id(work)
+        if work_id is None:
+            return
+
+        try:
+            if not set_recommendation_feedback(work_id, feedback, work):
+                raise RuntimeError("The recommendation feedback could not be saved.")
+            history = get_recommendation_history()
+            self._history = history if isinstance(history, dict) else {}
+        except Exception as error:
+            log_exception(
+                "recommendations.feedback_save_failed",
+                error,
+                work_id=work_id,
+                feedback=feedback,
+            )
+            status = getattr(self, "more_status", None)
+            if status is not None:
+                status.setText("Your feedback couldn't be saved. Try again.")
+            return
+
+        self._results = rank_candidates(
+            self._results,
+            history=self._history,
+            favorite_works=self._favorite_works,
+            rotation=self._refresh_cycle,
+            credit_profile=self._credit_profile,
+            favorite_entities=self._favorite_entities,
+            voice_language=self._voice_language,
+        )
+        self._results = inject_rare_exploration(
+            self._results,
+            rotation=self._refresh_cycle,
+            fraction=0.04,
+        )
+        self._candidate_ids = {
+            candidate_id
+            for item in self._results
+            if (candidate_id := RecommendationWorker._work_id(item)) is not None
+        }
+        self._render_results(preserve_scroll=True)
+        # Disliking the final visible suggestion should not strand the user
+        # on an empty page while more AniList catalog pages remain.
+        if not self._results and self._catalog_has_next and not self._loading_more:
+            QTimer.singleShot(0, self.load_more)
+
     def _render_results(self, preserve_scroll=True):
         old_bar = self._active_scrollbar()
         old_value = old_bar.value() if preserve_scroll and old_bar is not None else 0
@@ -881,7 +938,32 @@ class RecommendationsPage(QWidget):
                 show_add_button=True,
                 parent=grid_host,
                 recommendation_reason=reason,
+                show_recommendation_feedback=True,
             )
+            work_id = RecommendationWorker._work_id(work)
+            history_state = (
+                self._history.get(work_id, {})
+                if work_id is not None and isinstance(self._history, dict)
+                else {}
+            )
+            if not isinstance(history_state, dict):
+                history_state = {}
+            if card.recommendation_like_button is not None:
+                card.recommendation_like_button.setChecked(
+                    history_state.get("feedback") == "like"
+                )
+                card.recommendation_like_button.clicked.connect(
+                    lambda _checked=False, item=dict(work):
+                        self._record_recommendation_feedback(item, "like")
+                )
+            if card.recommendation_dislike_button is not None:
+                card.recommendation_dislike_button.setChecked(
+                    history_state.get("feedback") == "dislike"
+                )
+                card.recommendation_dislike_button.clicked.connect(
+                    lambda _checked=False, item=dict(work):
+                        self._record_recommendation_feedback(item, "dislike")
+                )
             card.clicked.connect(self.work_selected.emit)
             row = index // columns
             row_start = row * columns
