@@ -3033,9 +3033,18 @@ class WorkDetailPage(QWidget):
                 if thumbnail and not Path(thumbnail).is_file():
                     episode["thumbnail_cache_failed"] = True
         if selected_id is not None and episodes:
+            # The saved/local row schema differs from the upstream TMDB shape
+            # expected by EpisodeImageCacheWorker. Translate it explicitly so
+            # saved remote thumbnails also get cached after a restart.
             self._start_episode_image_cache(
                 selected_id,
-                [dict(episode) for episode in episodes],
+                [
+                    {
+                        "episodeNumber": episode["episode_number"],
+                        "thumbnail": episode["thumbnail_url"],
+                    }
+                    for episode in episodes
+                ],
             )
 
         frame = QFrame()
