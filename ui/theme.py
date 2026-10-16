@@ -228,6 +228,11 @@ def application_stylesheet():
         QComboBox QAbstractItemView::item {{ min-height: 28px; padding: 6px 10px; border-radius: 6px; }}
         QComboBox QAbstractItemView::item:hover {{ background: {COLORS['surface_hover']}; color: {COLORS['primary']}; }}
         QComboBox QAbstractItemView::item:selected {{ background: {COLORS['accent_soft']}; color: {COLORS['nav_selected_text']}; }}
+        QSlider::groove:horizontal {{ height: 6px; background: {COLORS['border']}; border: none; border-radius: 3px; }}
+        QSlider::sub-page:horizontal {{ background: {COLORS['accent']}; border: none; border-radius: 3px; }}
+        QSlider::add-page:horizontal {{ background: {COLORS['surface_alt']}; border: none; border-radius: 3px; }}
+        QSlider::handle:horizontal {{ width: 16px; margin: -6px 0; background: {COLORS['primary']}; border: 2px solid {COLORS['accent']}; border-radius: 8px; }}
+        QSlider::handle:horizontal:hover {{ background: {COLORS['accent_hover']}; border-color: {COLORS['accent_hover']}; }}
         QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {COLORS['accent']}; }}
         QPushButton {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: {max(6, radius - 3)}px; color: {COLORS['secondary']}; padding: 9px 13px; font-weight: 600; }}
         QPushButton:hover {{ background: {COLORS['surface_hover']}; border-color: {COLORS['border_hover']}; color: {COLORS['primary']}; }}
