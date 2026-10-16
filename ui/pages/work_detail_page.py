@@ -1,6 +1,7 @@
 import threading
 
 from api import (
+    TMDB_EPISODE_CATALOG_VERSION,
     cache_tmdb_episode_image,
     get_media_details,
     get_media_staff_page,
@@ -28,7 +29,7 @@ from database import (
     get_tmdb_mapping, get_work, get_provider_metadata,
     save_work_display_override, set_work_favorite, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
-    set_episode_watched, set_reading_progress_count,
+    set_episode_watched, set_reading_progress_count, prune_episode_catalog,
 )
 from series import auto_bundle_library_work, get_library_series
 from ui.display_identity import copy_custom_cover, get_display_override, invalidate_display_override
@@ -2810,11 +2811,19 @@ class WorkDetailPage(QWidget):
             lay.addWidget(label)
             return frame
 
-        # Refresh each season once per detail-page session. This also clears
-        # stale thumbnail URLs left by earlier episode imports.
+        # Refresh missing data and migrate existing catalogs once when the
+        # matching policy changes. Upserts keep watched flags; a verified
+        # replacement catalog also prunes stale episode numbers.
+        catalog_version = (
+            self._episode_catalog_version(selected_id)
+            if selected_id is not None else TMDB_EPISODE_CATALOG_VERSION
+        )
+        needs_catalog_refresh = (
+            bool(episodes) and catalog_version < TMDB_EPISODE_CATALOG_VERSION
+        )
         if (
             selected_id is not None
-            and not episodes
+            and (not episodes or needs_catalog_refresh)
             and selected_id not in self._episode_sync_completed
             and selected_id not in self._episode_sync_errors
         ):
@@ -2910,6 +2919,21 @@ class WorkDetailPage(QWidget):
         self._selected_episode_work_id = int(work_id)
         self._replace_episode_section()
 
+    def _episode_catalog_version(self, work_id):
+        """Return the saved matching-policy version, or zero for older catalogs."""
+        if work_id is None:
+            return 0
+        try:
+            metadata = get_provider_metadata(int(work_id), "tmdb_episode_match_version")
+        except Exception:
+            return 0
+        if not isinstance(metadata, dict):
+            return 0
+        try:
+            return max(0, int(metadata.get("version") or 0))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
     def _episode_tmdb_context(self, selected_id, members, selected_work=None):
         selected_id = int(selected_id)
         selected_work = selected_work or get_work(selected_id)
@@ -2948,7 +2972,13 @@ class WorkDetailPage(QWidget):
         ]
         title_variants = list(dict.fromkeys(value for value in title_variants if value))
 
-        tmdb_id, tmdb_season_number = get_tmdb_mapping(selected_id)
+        # Older saved mappings came from the less selective matcher. Re-resolve
+        # them once under the current catalog version rather than trusting a
+        # potentially wrong series/season ID forever.
+        if self._episode_catalog_version(selected_id) < TMDB_EPISODE_CATALOG_VERSION:
+            tmdb_id, tmdb_season_number = None, None
+        else:
+            tmdb_id, tmdb_season_number = get_tmdb_mapping(selected_id)
 
         expected_episodes = selected_work["episodes"]
         media_format = str(selected_work["format"] or "").upper()
@@ -3106,6 +3136,22 @@ class WorkDetailPage(QWidget):
                 tmdb_season_number,
             )
         save_episodes(work_id, episodes)
+        if episodes:
+            try:
+                if self._episode_catalog_version(work_id) < TMDB_EPISODE_CATALOG_VERSION:
+                    prune_episode_catalog(work_id, episodes)
+                save_provider_metadata(
+                    work_id,
+                    "tmdb_episode_match_version",
+                    {"version": TMDB_EPISODE_CATALOG_VERSION},
+                )
+            except Exception as error:
+                log_exception(
+                    "tmdb.episode_catalog_migration_failed",
+                    error,
+                    work_id=work_id,
+                    episode_count=len(episodes),
+                )
         self._episode_sync_completed.add(work_id)
         if self._shutdown_event.is_set():
             return

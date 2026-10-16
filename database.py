@@ -1407,6 +1407,66 @@ def save_episodes(work_id, episode_data):
         connection.close()
 
 
+def prune_episode_catalog(work_id, episode_data):
+    """Remove stale episode rows after a verified replacement catalog loads.
+
+    Rows with the same episode number remain, preserving their watched state.
+    Empty or invalid provider responses never prune existing data.
+    """
+    safe_work_id = _validated_work_id(work_id)
+    try:
+        episodes = list(episode_data or [])
+    except TypeError:
+        return 0
+
+    valid_numbers = set()
+    for episode in episodes:
+        if not isinstance(episode, dict):
+            continue
+        number = _safe_optional_integer(
+            episode.get("episodeNumber"), 1, _MAX_TRACKED_EPISODE_NUMBER
+        )
+        if number is not None:
+            valid_numbers.add(number)
+    if not valid_numbers:
+        return 0
+
+    numbers = sorted(valid_numbers)
+    placeholders = ", ".join("?" for _ in numbers)
+    params = (safe_work_id, *numbers)
+    connection = get_connection()
+    try:
+        connection.execute(
+            f"""
+            DELETE FROM release_reminders
+            WHERE work_id = ? AND episode_number NOT IN ({placeholders})
+            """,
+            params,
+        )
+        cursor = connection.execute(
+            f"""
+            DELETE FROM episodes
+            WHERE work_id = ? AND episode_number NOT IN ({placeholders})
+            """,
+            params,
+        )
+        connection.execute(
+            """
+            UPDATE user_library
+            SET progress_episodes = MIN(COALESCE(progress_episodes, 0), ?)
+            WHERE work_id = ?
+            """,
+            (len(numbers), safe_work_id),
+        )
+        connection.commit()
+        return max(0, int(cursor.rowcount))
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def get_episodes(work_id):
     try:
         safe_work_id = _validated_work_id(work_id)
