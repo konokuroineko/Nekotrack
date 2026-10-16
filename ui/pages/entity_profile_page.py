@@ -1219,7 +1219,19 @@ class EntityProfilePage(QWidget):
         title_row.addWidget(title, 1)
         entity_id = self._profile_entity_id()
         if entity_id is not None:
-            favorite_enabled = is_entity_favorite(self.current_type, entity_id)
+            try:
+                favorite_enabled = is_entity_favorite(self.current_type, entity_id)
+            except Exception as error:
+                # Profiles should remain readable if a test/legacy connection has
+                # not yet run the additive database migration. Normal app startup
+                # initializes the new favorites table before this page is opened.
+                log_exception(
+                    "profile.entity_favorite_read_failed",
+                    error,
+                    entity_type=self.current_type,
+                    entity_id=entity_id,
+                )
+                favorite_enabled = False
             favorite_button = QPushButton("♥" if favorite_enabled else "♡")
             favorite_button.setObjectName("profileFavoriteButton")
             favorite_button.setCheckable(True)

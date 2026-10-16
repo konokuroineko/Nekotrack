@@ -675,7 +675,7 @@ class UiStartupTests(unittest.TestCase):
                             for index in range(settings_page.category_tabs.count())
                         ],
                         [
-                            "General", "Appearance", "Library",
+                            "General", "Appearance", "Library", "Discovery",
                             "Integrations", "Data & Storage", "Advanced",
                         ],
                     )

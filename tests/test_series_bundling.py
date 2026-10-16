@@ -158,7 +158,7 @@ class AutoBundleActionTests(unittest.TestCase):
         with (
             patch("series.get_all_library", return_value=[current, related]),
             patch("series.sync_library_relations", return_value=True) as sync,
-            patch("series.get_library_series", side_effect=[group, group]),
+            patch("series.get_library_series", side_effect=[[group], [group]]),
             patch("series.save_automatic_bundle_membership", return_value=True) as save,
         ):
             result = series.auto_bundle_library_work(501)
