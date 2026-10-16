@@ -1,6 +1,7 @@
 import threading
 
 from api import (
+    TMDB_EPISODE_CATALOG_VERSION,
     cache_tmdb_episode_image,
     get_media_details,
     get_media_staff_page,
@@ -28,7 +29,7 @@ from database import (
     get_tmdb_mapping, get_work, get_provider_metadata,
     save_work_display_override, set_work_favorite, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
-    set_episode_watched, set_reading_progress_count,
+    set_episode_watched, set_reading_progress_count, prune_episode_catalog,
 )
 from series import auto_bundle_library_work, get_library_series
 from ui.display_identity import copy_custom_cover, get_display_override, invalidate_display_override
@@ -200,16 +201,16 @@ class EpisodeArtwork(QLabel):
         super().__init__(parent)
         self.work_id = int(work_id) if work_id is not None else None
         self.episode_number = int(episode_number) if episode_number is not None else None
-        self.setFixedSize(180, 102)
+        self.setFixedSize(116, 65)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
-            f"background:{surface_rgba('background_alt')};border-radius:10px;"
+            f"background:{surface_rgba('background_alt')};border-radius:8px;"
             f"color:{COLORS['muted']};font-size:11px;font-weight:800;"
         )
 
     def refresh_theme(self):
         self.setStyleSheet(
-            f"background:{surface_rgba('background_alt')};border-radius:10px;"
+            f"background:{surface_rgba('background_alt')};border-radius:8px;"
             f"color:{COLORS['muted']};font-size:11px;font-weight:800;"
         )
         self.update()
@@ -263,7 +264,7 @@ class EpisodeArtwork(QLabel):
 
         rect = result.rect().adjusted(1, 1, -1, -1)
         path = QPainterPath()
-        path.addRoundedRect(rect, 10, 10)
+        path.addRoundedRect(rect, 7, 7)
 
         painter.save()
         painter.setClipPath(path)
@@ -281,60 +282,73 @@ class EpisodeCard(QFrame):
         super().__init__(parent)
         self.episode = episode
         self.setObjectName("episodeCard")
-        self.setMinimumHeight(126)
+        # Compact, horizontal streaming-service style row rather than a bulky card.
+        self.setMinimumHeight(78)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 12, 14, 12)
-        layout.setSpacing(14)
+        layout.setContentsMargins(7, 6, 8, 6)
+        layout.setSpacing(8)
 
         artwork = EpisodeArtwork(
             episode["work_id"],
             episode["episode_number"],
         )
         artwork.load(episode["thumbnail_url"])
-        layout.addWidget(artwork, 0, Qt.AlignTop)
+        layout.addWidget(artwork, 0, Qt.AlignVCenter)
 
         body = QVBoxLayout()
-        body.setSpacing(4)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(1)
 
         top = QHBoxLayout()
-        number = QLabel(f"EPISODE {int(episode['episode_number']):02d}")
+        number = QLabel(f"EP {int(episode['episode_number']):02d}")
         number.setObjectName("detailEpisodeNumber")
         number.setStyleSheet(
-            f"color:{COLORS['accent']};font-size:11px;font-weight:900;"
-            "letter-spacing:0.6px;"
+            f"color:{COLORS['accent']};font-size:9px;font-weight:850;"
+            "letter-spacing:0.4px;"
         )
         top.addWidget(number)
 
         date = QLabel(self._format_date(episode["air_date"]))
         date.setObjectName("detailEpisodeDate")
-        date.setStyleSheet(f"color:{COLORS['muted']};font-size:11px;")
+        date.setStyleSheet(f"color:{COLORS['muted']};font-size:10px;")
         top.addStretch()
         if date.text():
             top.addWidget(date)
         body.addLayout(top)
 
-        title = QLabel(episode["title"] or f"Episode {episode['episode_number']}")
-        title.setObjectName("detailEpisodeTitle")
-        title.setWordWrap(True)
-        title.setStyleSheet(
-            f"color:{COLORS['primary']};font-size:15px;font-weight:800;"
+        self._episode_full_title = str(
+            episode["title"] or f"Episode {episode['episode_number']}"
         )
+        title = QLabel(self._episode_full_title)
+        self._episode_title_label = title
+        title.setObjectName("detailEpisodeTitle")
+        title.setWordWrap(False)
+        title.setMinimumWidth(0)
+        title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        title.setStyleSheet(
+            f"color:{COLORS['primary']};font-size:13px;font-weight:750;"
+        )
+        title.setToolTip(self._episode_full_title)
         body.addWidget(title)
 
-        description_text = str(episode["description"] or "").strip()
-        description = QLabel(
-            description_text if description_text else "Synopsis unavailable."
-        )
-        description.setObjectName("detailEpisodeDescription")
-        description.setWordWrap(True)
-        description.setTextFormat(Qt.PlainText)
-        description.setMaximumHeight(42)
-        description.setStyleSheet(
-            f"color:{COLORS['secondary']};font-size:12px;"
-        )
-        body.addWidget(description, 1)
+        self._episode_full_description = str(episode["description"] or "").strip()
+        self._episode_description_label = None
+        if self._episode_full_description:
+            description = QLabel(self._episode_full_description)
+            self._episode_description_label = description
+            description.setObjectName("detailEpisodeDescription")
+            description.setWordWrap(False)
+            description.setMinimumWidth(0)
+            description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            description.setTextFormat(Qt.PlainText)
+            description.setFixedHeight(15)
+            description.setToolTip(self._episode_full_description)
+            description.setStyleSheet(
+                f"color:{COLORS['secondary']};font-size:10px;"
+            )
+            body.addWidget(description)
 
         layout.addLayout(body, 1)
 
@@ -345,14 +359,14 @@ class EpisodeCard(QFrame):
             lambda checked, n=int(episode["episode_number"]):
                 self.watched_changed.emit(n, checked)
         )
-        layout.addWidget(watched, 0, Qt.AlignTop)
+        layout.addWidget(watched, 0, Qt.AlignVCenter)
 
     def refresh_theme(self):
         styles = {
-            "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:11px;font-weight:900;letter-spacing:0.6px;",
-            "detailEpisodeDate": f"color:{COLORS['muted']};font-size:11px;",
-            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:15px;font-weight:800;",
-            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:12px;",
+            "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:9px;font-weight:850;letter-spacing:0.4px;",
+            "detailEpisodeDate": f"color:{COLORS['muted']};font-size:10px;",
+            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:13px;font-weight:750;",
+            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:10px;",
         }
         for label in self.findChildren(QLabel):
             stylesheet = styles.get(label.objectName())
@@ -362,7 +376,40 @@ class EpisodeCard(QFrame):
             artwork.refresh_theme()
         for button in self.findChildren(QPushButton, "detailBackButton"):
             button.setIcon(navigation_icon("back", COLORS["secondary"]))
+        self._update_episode_title()
+        self._update_episode_description()
         self.update()
+
+    def _update_episode_title(self):
+        """Ellide long episode titles to keep the compact row height stable."""
+        label = getattr(self, "_episode_title_label", None)
+        if label is None or label.width() <= 0:
+            return
+        label.setText(
+            label.fontMetrics().elidedText(
+                self._episode_full_title,
+                Qt.ElideRight,
+                label.contentsRect().width(),
+            )
+        )
+
+    def _update_episode_description(self):
+        """Keep synopsis to one line while retaining the full text in a tooltip."""
+        label = self._episode_description_label
+        if label is None or label.width() <= 0:
+            return
+        label.setText(
+            label.fontMetrics().elidedText(
+                self._episode_full_description,
+                Qt.ElideRight,
+                label.contentsRect().width(),
+            )
+        )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_episode_title()
+        self._update_episode_description()
 
     @staticmethod
     def _format_date(value):
@@ -716,20 +763,20 @@ class WorkDetailPage(QWidget):
         strip = QWidget()
         strip.setObjectName("detailSkeletonEpisodeStrip")
         layout = QHBoxLayout(strip)
-        layout.setContentsMargins(0, 4, 0, 4)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 3, 0, 3)
+        layout.setSpacing(10)
         for _index in range(4):
             card = QFrame()
             card.setObjectName("detailSkeletonEpisodeCard")
-            card.setFixedWidth(156)
+            card.setFixedWidth(136)
             card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(8, 8, 8, 10)
-            card_layout.setSpacing(8)
+            card_layout.setContentsMargins(6, 6, 6, 8)
+            card_layout.setSpacing(6)
             card_layout.addWidget(
-                self._skeleton_block(82, None, "detailSkeletonCover")
+                self._skeleton_block(64, None, "detailSkeletonCover")
             )
-            card_layout.addWidget(self._skeleton_block(10, 112))
-            card_layout.addWidget(self._skeleton_block(8, 76))
+            card_layout.addWidget(self._skeleton_block(9, 96))
+            card_layout.addWidget(self._skeleton_block(7, 66))
             layout.addWidget(card, 0, Qt.AlignTop)
         layout.addStretch(1)
         return strip
@@ -1078,14 +1125,17 @@ class WorkDetailPage(QWidget):
             QPushButton#back:hover {{ color: {COLORS['primary']}; }}
             QFrame#hero {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 22px; }}
             QFrame#section {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 18px; }}
+            QFrame#episodesSection {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 14px; }}
             QFrame#episodeCard {{
-                background: {surface_rgba('surface_alt')};
-                border: 1px solid {COLORS['border']};
-                border-radius: 14px;
+                background: transparent;
+                border: none;
+                border-bottom: 1px solid {COLORS['border']};
+                border-radius: 0px;
             }}
             QFrame#episodeCard:hover {{
-                background: {surface_rgba('surface_hover')};
-                border-color: {COLORS['border_hover']};
+                background: {surface_rgba('surface_alt')};
+                border-bottom-color: {COLORS['border_hover']};
+                border-radius: 8px;
             }}
             QFrame#detailSkeletonSection {{
                 background:{surface_rgba('surface')};
@@ -1191,7 +1241,7 @@ class WorkDetailPage(QWidget):
             # These section frames have their own local stylesheet, which takes
             # precedence over the page's stylesheet and must be regenerated.
             for frame in content.findChildren(QFrame):
-                if frame.objectName() in {"charactersSection", "section"}:
+                if frame.objectName() in {"charactersSection", "section", "episodesSection"}:
                     frame.setStyleSheet(self._detail_section_frame_stylesheet())
 
             # Cards and episode widgets use local stylesheets too. Refresh them
@@ -2696,10 +2746,11 @@ class WorkDetailPage(QWidget):
             )
 
         frame = QFrame()
-        frame.setObjectName("section")
+        frame.setObjectName("episodesSection")
+        frame.setProperty("_episodes_section", True)
         lay = QVBoxLayout(frame)
-        lay.setContentsMargins(20, 18, 20, 20)
-        lay.setSpacing(10)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(6)
 
         header = QHBoxLayout()
 
@@ -2717,7 +2768,7 @@ class WorkDetailPage(QWidget):
             title = QLabel("Episodes")
 
         title.setStyleSheet(
-            f"font-size:17px;font-weight:800;color:{COLORS['primary']};"
+            f"font-size:15px;font-weight:800;color:{COLORS['primary']};"
         )
         header.addWidget(title)
 
@@ -2732,9 +2783,9 @@ class WorkDetailPage(QWidget):
                 color:{COLORS['secondary']};
                 background:{surface_rgba('surface_alt')};
                 border:1px solid {COLORS['border']};
-                border-radius:8px;
-                padding:4px 8px;
-                font-size:10px;
+                border-radius:6px;
+                padding:2px 6px;
+                font-size:9px;
                 font-weight:800;
             }}
             """
@@ -2764,8 +2815,8 @@ class WorkDetailPage(QWidget):
                     background:{surface_rgba('surface_alt')};
                     color:{COLORS['primary']};
                     border:1px solid {COLORS['border']};
-                    border-radius:9px;
-                    padding:7px 12px;
+                    border-radius:7px;
+                    padding:4px 8px;
                     font-weight:800;
                 }}
                 QToolButton:hover {{
@@ -2810,11 +2861,19 @@ class WorkDetailPage(QWidget):
             lay.addWidget(label)
             return frame
 
-        # Refresh each season once per detail-page session. This also clears
-        # stale thumbnail URLs left by earlier episode imports.
+        # Refresh missing data and migrate existing catalogs once when the
+        # matching policy changes. Upserts keep watched flags; a verified
+        # replacement catalog also prunes stale episode numbers.
+        catalog_version = (
+            self._episode_catalog_version(selected_id)
+            if selected_id is not None else TMDB_EPISODE_CATALOG_VERSION
+        )
+        needs_catalog_refresh = (
+            bool(episodes) and catalog_version < TMDB_EPISODE_CATALOG_VERSION
+        )
         if (
             selected_id is not None
-            and not episodes
+            and (not episodes or needs_catalog_refresh)
             and selected_id not in self._episode_sync_completed
             and selected_id not in self._episode_sync_errors
         ):
@@ -2910,6 +2969,21 @@ class WorkDetailPage(QWidget):
         self._selected_episode_work_id = int(work_id)
         self._replace_episode_section()
 
+    def _episode_catalog_version(self, work_id):
+        """Return the saved matching-policy version, or zero for older catalogs."""
+        if work_id is None:
+            return 0
+        try:
+            metadata = get_provider_metadata(int(work_id), "tmdb_episode_match_version")
+        except Exception:
+            return 0
+        if not isinstance(metadata, dict):
+            return 0
+        try:
+            return max(0, int(metadata.get("version") or 0))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
     def _episode_tmdb_context(self, selected_id, members, selected_work=None):
         selected_id = int(selected_id)
         selected_work = selected_work or get_work(selected_id)
@@ -2948,7 +3022,13 @@ class WorkDetailPage(QWidget):
         ]
         title_variants = list(dict.fromkeys(value for value in title_variants if value))
 
-        tmdb_id, tmdb_season_number = get_tmdb_mapping(selected_id)
+        # Older saved mappings came from the less selective matcher. Re-resolve
+        # them once under the current catalog version rather than trusting a
+        # potentially wrong series/season ID forever.
+        if self._episode_catalog_version(selected_id) < TMDB_EPISODE_CATALOG_VERSION:
+            tmdb_id, tmdb_season_number = None, None
+        else:
+            tmdb_id, tmdb_season_number = get_tmdb_mapping(selected_id)
 
         expected_episodes = selected_work["episodes"]
         media_format = str(selected_work["format"] or "").upper()
@@ -3106,6 +3186,22 @@ class WorkDetailPage(QWidget):
                 tmdb_season_number,
             )
         save_episodes(work_id, episodes)
+        if episodes:
+            try:
+                if self._episode_catalog_version(work_id) < TMDB_EPISODE_CATALOG_VERSION:
+                    prune_episode_catalog(work_id, episodes)
+                save_provider_metadata(
+                    work_id,
+                    "tmdb_episode_match_version",
+                    {"version": TMDB_EPISODE_CATALOG_VERSION},
+                )
+            except Exception as error:
+                log_exception(
+                    "tmdb.episode_catalog_migration_failed",
+                    error,
+                    work_id=work_id,
+                    episode_count=len(episodes),
+                )
         self._episode_sync_completed.add(work_id)
         if self._shutdown_event.is_set():
             return
@@ -3216,6 +3312,7 @@ class WorkDetailPage(QWidget):
         return (
             f"QFrame#charactersSection {{ background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
             f" QFrame#section {{ background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:18px; }}"
+            f" QFrame#episodesSection {{ background:{surface_rgba('surface')}; border:1px solid {COLORS['frame']}; border-radius:14px; }}"
         )
 
     @staticmethod

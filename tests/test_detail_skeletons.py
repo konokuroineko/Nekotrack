@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QVBoxLayout, QWidget
 
-from ui.pages.work_detail_page import WorkDetailPage
+from ui.pages.work_detail_page import EpisodeArtwork, EpisodeCard, WorkDetailPage
 
 
 class DetailSkeletonTests(unittest.TestCase):
@@ -156,6 +156,49 @@ class DetailSkeletonTests(unittest.TestCase):
         ))
 
         page.deleteLater()
+        self.app.processEvents()
+
+    def test_episode_rows_are_compact_and_hide_empty_synopsis(self):
+        episode = {
+            "work_id": 12345,
+            "episode_number": 1,
+            "thumbnail_url": None,
+            "air_date": None,
+            "title": "Episode title",
+            "description": "",
+            "watched": 0,
+        }
+        card = EpisodeCard(episode)
+        artwork = card.findChild(EpisodeArtwork)
+        description = card.findChild(QLabel, "detailEpisodeDescription")
+
+        self.assertLess(card.minimumHeight(), 80)
+        self.assertEqual(artwork.size().width(), 116)
+        self.assertEqual(artwork.size().height(), 65)
+        # Empty synopses are omitted entirely rather than taking up row space.
+        self.assertIsNone(description)
+
+        card.deleteLater()
+        self.app.processEvents()
+
+    def test_episode_synopses_are_single_line_with_full_tooltip(self):
+        synopsis = "A long synopsis that should stay compact in the episode list."
+        card = EpisodeCard({
+            "work_id": 12345,
+            "episode_number": 12,
+            "thumbnail_url": None,
+            "air_date": None,
+            "title": "A very long episode title",
+            "description": synopsis,
+            "watched": 0,
+        })
+        description = card.findChild(QLabel, "detailEpisodeDescription")
+        self.assertIsNotNone(description)
+        self.assertFalse(description.wordWrap())
+        self.assertEqual(description.toolTip(), synopsis)
+        self.assertLess(card.minimumHeight(), 80)
+
+        card.deleteLater()
         self.app.processEvents()
 
     def test_hero_cover_distinguishes_loading_from_unavailable(self):

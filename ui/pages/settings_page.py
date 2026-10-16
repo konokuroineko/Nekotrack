@@ -360,7 +360,7 @@ class SettingsPage(QWidget):
 
         token_input = QLineEdit()
         token_input.setEchoMode(QLineEdit.EchoMode.Password)
-        token_input.setPlaceholderText("TMDB API Read Access Token")
+        token_input.setPlaceholderText("Optional fallback: TMDB API Read Access Token")
         token_input.setText(str(get("tmdb_api_token") or ""))
         token_input.setAccessibleName("TMDB API Read Access Token")
 
@@ -380,7 +380,7 @@ class SettingsPage(QWidget):
             [
                 self._row(
                     "API Read Access Token",
-                    "Used for episode metadata and episode artwork. Stored locally in NekoTrack settings.",
+                    "Used when this build has no shared app token. Set NEKOTRACK_TMDB_ACCESS_TOKEN in the app's runtime environment to provide one shared credential for all users; it takes priority over this local fallback.",
                     token_wrapper,
                 ),
             ],

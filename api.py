@@ -4,6 +4,7 @@ import datetime as _dt
 from email.utils import parsedate_to_datetime
 import hashlib
 import math
+import os
 import re
 import requests
 import tempfile
@@ -34,6 +35,8 @@ __all__ = [
     "get_anime_discovery_page",
     "get_media_details",
     "get_entity_profile",
+    "TMDB_EPISODE_CATALOG_VERSION",
+    "get_tmdb_access_token",
     "get_tmdb_episode_data",
     "get_tmdb_episode_sample",
     "test_tmdb_connection",
@@ -1810,6 +1813,7 @@ def get_media_details(media_id):
 # ---------------------------------------------------------------------------
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
+TMDB_EPISODE_CATALOG_VERSION = 2
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w780"
 TMDB_EPISODE_CACHE_DIRECTORY = Path("data") / "images" / "episodes"
 MAX_TMDB_EPISODE_IMAGE_BYTES = 20 * 1024 * 1024
@@ -1819,8 +1823,20 @@ MAX_TMDB_EPISODE_IMAGE_PIXELS = 32_000_000
 MAX_TMDB_IMAGE_REDIRECTS = 5
 
 
-def _tmdb_token():
+def get_tmdb_access_token():
+    """Return the app-wide TMDB token, falling back to this user's local setting.
+
+    Packaged builds can provide one shared application credential through the
+    environment without asking every user to configure their own token.
+    """
+    app_token = str(os.environ.get("NEKOTRACK_TMDB_ACCESS_TOKEN") or "").strip()
+    if app_token:
+        return app_token
     return str(get("tmdb_api_token") or "").strip()
+
+
+def _tmdb_token():
+    return get_tmdb_access_token()
 
 
 def test_tmdb_connection(token):
@@ -1851,7 +1867,7 @@ def _tmdb_get(path, params=None):
     token = _tmdb_token()
     if not token:
         raise RuntimeError(
-            "TMDB API token is not configured. Open Settings and enter your TMDB API Read Access Token."
+            "TMDB is not configured for this NekoTrack build. Provide the shared app token through NEKOTRACK_TMDB_ACCESS_TOKEN or enter a token in Settings."
         )
 
     endpoint = str(path).lstrip("/")
@@ -1888,28 +1904,52 @@ def _parse_date(value):
 
 
 def _normalize_title(value):
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+    # Keep Unicode letters and digits so Japanese native titles can match
+    # TMDB's original_name field instead of normalizing to an empty string.
+    return re.sub(r"[\W_]+", "", str(value or "").casefold(), flags=re.UNICODE)
+
+
+def _title_similarity(left, right):
+    """Compare normalized Latin-script titles without accepting random results."""
+    name = _normalize_title(left)
+    query = _normalize_title(right)
+    if not name or not query:
+        return 0.0
+    if name == query:
+        return 1.0
+    if name in query or query in name:
+        containment = min(len(name), len(query)) / max(len(name), len(query))
+        return 0.72 + 0.28 * containment
+    return SequenceMatcher(None, name, query, autojunk=False).ratio()
+
+
+def _candidate_title_similarity(candidate, title_variants):
+    if not isinstance(candidate, dict):
+        return 0.0
+    names = (candidate.get("name"), candidate.get("original_name"))
+    variants = [
+        str(value).strip()
+        for value in (title_variants or [])
+        if str(value or "").strip()
+    ]
+    return max(
+        (
+            _title_similarity(name, variant)
+            for name in names
+            for variant in variants
+        ),
+        default=0.0,
+    )
 
 
 def _candidate_score(candidate, title_variants, target_date):
     candidate = candidate if isinstance(candidate, dict) else {}
-    names = {
-        _normalize_title(candidate.get("name")),
-        _normalize_title(candidate.get("original_name")),
-    }
-    queries = {
-        _normalize_title(value)
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    }
-
-    score = 0
-    if names & queries:
-        score += 1000
+    score = _candidate_title_similarity(candidate, title_variants) * 1000
 
     candidate_date = _parse_date(candidate.get("first_air_date"))
     if candidate_date and target_date:
-        score -= abs((candidate_date - target_date).days) / 10
+        # Title identity matters more than popularity or a modest date mismatch.
+        score -= abs((candidate_date - target_date).days) / 60
 
     countries = candidate.get("origin_country") or []
     if isinstance(countries, str):
@@ -1921,6 +1961,7 @@ def _candidate_score(candidate, title_variants, target_date):
 
     score += min(max(_safe_float(candidate.get("popularity")), 0.0), 20.0)
     return score
+
 
 def _find_tmdb_series(title_variants, target_date):
     variants = [
@@ -1941,7 +1982,13 @@ def _find_tmdb_series(title_variants, target_date):
         for candidate in _tmdb_result_records(_tmdb_get("/search/tv", params)):
             candidates[candidate["id"]] = candidate
 
-    if not candidates:
+    # Year-filtered search can be non-empty but unrelated. Retry without the
+    # year unless the results resemble the requested title.
+    best_similarity = max(
+        (_candidate_title_similarity(item, variants) for item in candidates.values()),
+        default=0.0,
+    )
+    if not candidates or best_similarity < 0.72:
         for query in variants[:3]:
             payload = _tmdb_get(
                 "/search/tv",
@@ -1953,12 +2000,37 @@ def _find_tmdb_series(title_variants, target_date):
     if not candidates:
         raise RuntimeError("TMDB could not find a matching TV series.")
 
-    return max(
+    best = max(
         candidates.values(),
         key=lambda candidate: _candidate_score(candidate, variants, target_date),
     )
+    similarity = _candidate_title_similarity(best, variants)
+    if similarity < 0.60:
+        raise RuntimeError(
+            "TMDB returned TV shows, but none closely matched this title. "
+            "NekoTrack refused to guess and risk importing unrelated episodes."
+        )
 
-def _find_tmdb_season(series_details, target_date):
+    candidate_date = _parse_date(best.get("first_air_date"))
+    if (
+        candidate_date is not None
+        and target_date is not None
+        and abs((candidate_date - target_date).days) > 730
+        and similarity < 0.80
+    ):
+        raise RuntimeError(
+            "TMDB found a weak title match with a very different start date. "
+            "NekoTrack refused to import potentially unrelated episodes."
+        )
+    return best
+
+
+def _find_tmdb_season(
+    series_details,
+    target_date,
+    target_end=None,
+    expected_episodes=None,
+):
     if not isinstance(series_details, dict):
         raise RuntimeError("TMDB returned an invalid TV series payload.")
     raw_seasons = series_details.get("seasons")
@@ -1980,13 +2052,42 @@ def _find_tmdb_season(series_details, target_date):
     if not seasons:
         raise RuntimeError("TMDB series has no usable seasons.")
 
+    target_date = _parse_date(target_date)
+    target_end = _parse_date(target_end)
+    try:
+        expected_count = int(expected_episodes or 0)
+    except (TypeError, ValueError, OverflowError):
+        expected_count = 0
+
     def score(season):
         season_date = _parse_date(season.get("air_date"))
-        if season_date is None or target_date is None:
-            return (1, 999999, season["season_number"])
+        if season_date is not None and target_date is not None:
+            date_distance = abs((season_date - target_date).days)
+        else:
+            date_distance = 365 if target_date is not None else 0
+
+        try:
+            listed_count = int(season.get("episode_count") or 0)
+        except (TypeError, ValueError, OverflowError):
+            listed_count = 0
+        count_penalty = (
+            min(abs(listed_count - expected_count), 100) * 8
+            if expected_count > 0 and listed_count > 0
+            else 0
+        )
+        # Season 0 is usually specials. Don't let a nearby one-episode special
+        # beat a regular season whose date and episode count match the catalog.
+        special_penalty = (
+            45 if season["season_number"] == 0 and expected_count >= 3 else 0
+        )
+        starts_after_next_entry = bool(
+            season_date is not None
+            and target_end is not None
+            and season_date >= target_end
+        )
         return (
-            0,
-            abs((season_date - target_date).days),
+            starts_after_next_entry,
+            date_distance + count_penalty + special_penalty,
             season["season_number"],
         )
 
@@ -2655,7 +2756,9 @@ def get_tmdb_episode_data(
     # When the season is already mapped, skip the unnecessary series-details request.
     if tmdb_season_number is None:
         series_details = _tmdb_get(f"/tv/{tmdb_id}")
-        selected_season = _find_tmdb_season(series_details, target_start)
+        selected_season = _find_tmdb_season(
+            series_details, target_start, target_end, expected_episodes
+        )
         tmdb_season_number = selected_season["season_number"]
     try:
         tmdb_season_number = int(tmdb_season_number)
@@ -2686,10 +2789,16 @@ def get_tmdb_episode_data(
         if episode_number < 1:
             continue
 
-        air_date = _parse_date(episode.get("air_date"))
-        if air_date is None or air_date < target_start:
+        # AniList's date interval can separate multiple cours inside a TMDB
+        # season, so honor explicit dates outside the interval. A missing date
+        # alone is not enough to discard an otherwise valid episode.
+        raw_air_date = episode.get("air_date")
+        air_date = _parse_date(raw_air_date)
+        if raw_air_date not in (None, "") and air_date is None:
             continue
-        if target_end is not None and air_date >= target_end:
+        if air_date is not None and air_date < target_start:
+            continue
+        if target_end is not None and air_date is not None and air_date >= target_end:
             continue
 
         thumbnail, image_variants = _pick_best_episode_still(
@@ -2703,7 +2812,7 @@ def get_tmdb_episode_data(
             "episodeNumber": episode_number,
             "title": name if isinstance(name, str) and name.strip() else f"Episode {episode_number}",
             "description": overview if isinstance(overview, str) and overview.strip() else None,
-            "airdate": air_date.isoformat(),
+            "airdate": air_date.isoformat() if air_date else None,
             "thumbnail": thumbnail,
             "episode_type": episode.get("episode_type"),
             "tmdb_episode_id": episode.get("id"),
@@ -2711,14 +2820,6 @@ def get_tmdb_episode_data(
         })
 
     selected.sort(key=lambda item: item["episodeNumber"])
-
-    if expected_episodes:
-        try:
-            expected = int(expected_episodes)
-        except (TypeError, ValueError, OverflowError):
-            expected = 0
-        if expected > 0 and len(selected) > expected:
-            selected = selected[:expected]
 
     return {
         "tmdb_id": tmdb_id,

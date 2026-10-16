@@ -1,6 +1,6 @@
 from requests.exceptions import RequestException
 
-from api import test_tmdb_connection
+from api import get_tmdb_access_token, test_tmdb_connection
 from PySide6.QtCore import QObject, QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
@@ -394,7 +394,7 @@ class SetupWizard(QDialog):
 
         title, subtitle = self._heading(
             "Connect TMDB",
-            "NekoTrack uses a TMDB API Read Access Token for episode data and episode artwork.",
+            "A packaged build can provide one shared TMDB application token, so users don't need their own. For local development, enter a token here only if no app token is configured.",
         )
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -411,7 +411,7 @@ class SetupWizard(QDialog):
 
         self.tmdb_token = QLineEdit()
         self.tmdb_token.setEchoMode(QLineEdit.Password)
-        self.tmdb_token.setPlaceholderText("Paste your TMDB v4 API Read Access Token")
+        self.tmdb_token.setPlaceholderText("Optional fallback: TMDB v4 API Read Access Token")
         self.tmdb_token.setText(str(get("tmdb_api_token") or ""))
         panel_layout.addWidget(self.tmdb_token)
 
@@ -489,9 +489,13 @@ class SetupWizard(QDialog):
         self.accept()
 
     def _test_tmdb(self):
-        token = self.tmdb_token.text().strip()
+        # A build-provided app token works even when the per-user field is blank.
+        token = self.tmdb_token.text().strip() or get_tmdb_access_token()
         if not token:
-            self.tmdb_status.setText("Enter a token first.")
+            self.tmdb_status.setText(
+                "This build has no shared TMDB token configured. "
+                "Enter a token to test TMDB, or skip and configure it later."
+            )
             return
 
         self.test_button.setEnabled(False)
