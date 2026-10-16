@@ -167,6 +167,58 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
+    def test_ready_detail_defers_episode_cards_until_page_is_attached(self):
+        page = WorkDetailPage()
+        page.work = {
+            "id": 12345,
+            "type": "ANIME",
+            "format": "TV",
+            "title": {"english": "Bundled season"},
+            "_series_members": [{"id": 12345}],
+        }
+        page._selected_episode_work_id = 12345
+        episode_frame = QFrame()
+        episode_frame.setProperty("_episodes_section", True)
+        episode_frame._pending_episode_cards = [
+            {
+                "work_id": 12345,
+                "episode_number": number,
+                "title": f"Episode {number}",
+                "description": "",
+                "air_date": "",
+                "thumbnail_url": None,
+                "watched": 0,
+            }
+            for number in range(1, 14)
+        ]
+
+        with (
+            patch.object(page, "_local_detail_ready", return_value=(True, True)),
+            patch.object(page, "_hero", return_value=QFrame()),
+            patch.object(page, "_mangabaka_section", return_value=None),
+            patch.object(page, "_is_reading_media", return_value=False),
+            patch.object(page, "_episodes_section", return_value=episode_frame) as episodes,
+            patch.object(page, "_build_detail_sections_local"),
+        ):
+            content, ready = page._build_detail_content([12345], defer_missing=False)
+
+        self.assertTrue(ready)
+        episodes.assert_called_once_with(defer_cards=True)
+        self.assertEqual(content.findChildren(EpisodeCard), [])
+        page.scroll_area.setWidget(content)
+
+        with patch("ui.pages.work_detail_page.QTimer.singleShot") as schedule:
+            page._queue_pending_episode_cards(content)
+            self.assertEqual(content.findChildren(EpisodeCard), [])
+            callback = schedule.call_args.args[1]
+            with patch("ui.pages.work_detail_page.QTimer.singleShot") as next_batch:
+                callback()
+                self.assertEqual(len(content.findChildren(EpisodeCard)), 6)
+                next_batch.assert_called_once()
+
+        page.deleteLater()
+        self.app.processEvents()
+
     def test_episode_rows_are_compact_and_hide_empty_synopsis(self):
         episode = {
             "work_id": 12345,
