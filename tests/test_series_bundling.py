@@ -138,15 +138,17 @@ class BundleOptionTests(unittest.TestCase):
         self.assertEqual(groups[0]["_series_count"], 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 
 class AutoBundleActionTests(unittest.TestCase):
     def test_auto_bundle_reuses_library_grouping_and_persists_its_member_snapshot(self):
-        current = {"id": 501, "title": {"english": "Current"}}
-        related = {"id": 502, "title": {"english": "Related"}}
+        import sqlite3
+
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        connection.row_factory = sqlite3.Row
+        current = connection.execute("SELECT 501 AS id").fetchone()
+        related = connection.execute("SELECT 502 AS id").fetchone()
         group = {
             "id": 501,
             "title": {"english": "Current"},
@@ -180,3 +182,7 @@ class AutoBundleActionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "AniList"):
                 series.auto_bundle_library_work(-501)
         get_library.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

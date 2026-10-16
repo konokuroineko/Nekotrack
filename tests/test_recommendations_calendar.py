@@ -87,6 +87,8 @@ class RecommendationWorkerTests(unittest.TestCase):
             patch("ui.pages.recommendations_page.get_media_recommendations", return_value=[]),
             patch("ui.pages.recommendations_page.get_anime_discovery_page", return_value=catalog),
             patch("ui.pages.recommendations_page.get_work_favorites", return_value=[]),
+            patch("ui.pages.recommendations_page.get_entity_favorites", return_value=[]),
+            patch("ui.pages.recommendations_page.get_recommendation_credit_profile", return_value={}),
             patch("ui.pages.recommendations_page.get_recommendation_history", return_value={}),
         ):
             worker.run()
@@ -123,13 +125,14 @@ class RecommendationWorkerTests(unittest.TestCase):
                 },
             ),
             patch("ui.pages.recommendations_page.get_work_favorites", return_value=[]),
+            patch("ui.pages.recommendations_page.get_entity_favorites", return_value=[]),
+            patch("ui.pages.recommendations_page.get_recommendation_credit_profile", return_value={}),
             patch("ui.pages.recommendations_page.get_recommendation_history", return_value={}),
         ):
             worker.run()
 
         self.assertEqual(len(finished[0]), 55)
 
-    def test_worker_excludes_library_entries_and_ranks_repeat_suggestions_first(self):
     def test_library_signature_uses_the_worker_title_normalizer(self):
         from ui.pages.recommendations_page import RecommendationsPage
 
@@ -197,6 +200,8 @@ class RecommendationWorkerTests(unittest.TestCase):
                 },
             ),
             patch("ui.pages.recommendations_page.get_work_favorites", return_value=[]),
+            patch("ui.pages.recommendations_page.get_entity_favorites", return_value=[]),
+            patch("ui.pages.recommendations_page.get_recommendation_credit_profile", return_value={}),
             patch("ui.pages.recommendations_page.get_recommendation_history", return_value={}),
         ):
             worker.run()
