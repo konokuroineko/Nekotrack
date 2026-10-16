@@ -679,13 +679,22 @@ def rank_candidates(
             + community_score * 0.05
             + min(12.0, math.log1p(popularity)) * 0.25
             + min(35.0, positive_overlap * 8.5)
-            + min(18.0, positive_source_overlap * 7.0)
             + credit_boost
             - min(48.0, negative_overlap * 10.0)
-            - min(24.0, negative_source_overlap * 8.0)
         )
         impressions = max(0, _safe_int(item_history.get("impressions")))
-        score = max(0.1, raw_score) * exposure_multiplier(impressions)
+        # Apply relation/source preferences after the base-score floor. Otherwise,
+        # a strong genre penalty can clamp every similar title to 0.1 and erase
+        # the distinction between the title that caused the suggestion and others.
+        source_multiplier = (
+            (1.0 + min(0.30, positive_source_overlap * 0.20))
+            / (1.0 + min(0.60, negative_source_overlap * 0.30))
+        )
+        score = (
+            max(0.1, raw_score)
+            * exposure_multiplier(impressions)
+            * source_multiplier
+        )
         item = dict(raw)
         item["_recommendation_score"] = round(score, 6)
         item["_recommendation_exposure_multiplier"] = exposure_multiplier(impressions)
