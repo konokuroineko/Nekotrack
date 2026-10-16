@@ -144,21 +144,21 @@ class UiStartupTests(unittest.TestCase):
                 restart_button = settings_page.findChild(QPushButton, "uiScaleRestartButton")
                 self.assertIsNotNone(combo)
                 self.assertIsNotNone(restart_button)
-                self.assertTrue(restart_button.isHidden())
+                self.assertTrue(restart_button.parentWidget().isHidden())
 
                 requested = []
                 settings_page.restart_requested.connect(lambda: requested.append(True))
                 combo.setCurrentIndex(combo.findData(125))
                 self.app.processEvents()
                 self.assertEqual(preferences.get("ui_scale"), 125)
-                self.assertFalse(restart_button.isHidden())
+                self.assertFalse(restart_button.parentWidget().isHidden())
 
                 # Rebuilding Settings must not hide a scale change that has
                 # been saved but has not yet been applied at application start.
                 rebuilt_page = SettingsPage()
                 rebuilt_button = rebuilt_page.findChild(QPushButton, "uiScaleRestartButton")
                 self.assertIsNotNone(rebuilt_button)
-                self.assertFalse(rebuilt_button.isHidden())
+                self.assertFalse(rebuilt_button.parentWidget().isHidden())
 
                 restart_button.click()
                 self.assertEqual(requested, [True])
