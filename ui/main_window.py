@@ -436,11 +436,11 @@ class NavigationButton(QPushButton):
         self.label = label
         self.setText(label)
         self.setIcon(navigation_icon(icon_name, COLORS["secondary"]))
-        self.setIconSize(QSize(18, 18))
+        self.setIconSize(QSize(20, 20))
         self.setCheckable(True)
         self.setFocusPolicy(Qt.NoFocus)
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(44)
+        self.setMinimumHeight(52)
         self.setProperty("navButton", True)
 
     def refresh_icon(self, color=None):
@@ -534,22 +534,21 @@ class MainWindow(QMainWindow):
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(250)
+        sidebar.setFixedWidth(270)
         side = QVBoxLayout(sidebar)
         side.setContentsMargins(18, 22, 18, 20)
         side.setSpacing(5)
 
         brand_badge = QFrame()
         brand_badge.setObjectName("brandBadge")
-        brand_badge.setFixedSize(214, 66)
+        brand_badge.setFixedSize(230, 72)
         brand = QHBoxLayout(brand_badge)
-        brand.setContentsMargins(5, 5, 5, 5)
+        brand.setContentsMargins(4, 4, 4, 4)
         brand.setSpacing(0)
         word = QLabel()
         word.setObjectName("brandWord")
         word.setAccessibleName("NekoTrack")
-        word.setFixedSize(202, 52)
-        word.setScaledContents(True)
+        word.setFixedSize(222, 58)
         word.setStyleSheet("background:transparent;border:none;padding:0;")
         self.brand_word = word
         self._update_brand_word()
@@ -639,7 +638,7 @@ class MainWindow(QMainWindow):
             QFrame#sidebar {{ background:{COLORS['sidebar']}; border-right:1px solid {COLORS['frame']}; }}
             QFrame#brandBadge {{ background:transparent; border:none; }}
             QLabel#brandWord {{ background:transparent; border:none; padding:0; }}
-            QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:10px; padding:11px 13px; text-align:left; font-size:13px; font-weight:600; }}
+            QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:11px; padding:13px 15px; text-align:left; font-size:14px; font-weight:600; }}
             QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
             QPushButton[navButton="true"]:focus {{ background:{COLORS['surface']}; border-color:{COLORS['nav_selected_frame']}; outline:none; }}
             QPushButton[navButton="true"]:checked {{ background:{COLORS['accent_soft']}; border-color:{COLORS['nav_selected_frame']}; color:{COLORS['nav_selected_text']}; }}
@@ -698,6 +697,9 @@ class MainWindow(QMainWindow):
         if changed_key in ("theme_preset", "light_mode"):
             self._apply_theme_live()
             return
+        if changed_key == "ui_scale":
+            # Qt applies the global scale multiplier only at the next startup.
+            return
         if self._settings_rebuild_pending:
             return
         self._settings_rebuild_pending = True
@@ -714,7 +716,7 @@ class MainWindow(QMainWindow):
             QFrame#sidebar {{ background:{COLORS['sidebar']}; border-right:1px solid {COLORS['frame']}; }}
             QFrame#brandBadge {{ background:transparent; border:none; }}
             QLabel#brandWord {{ background:transparent; border:none; padding:0; }}
-            QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:10px; padding:11px 13px; text-align:left; font-size:13px; font-weight:600; }}
+            QPushButton[navButton="true"] {{ background:transparent; border:1px solid transparent; color:{COLORS['secondary']}; border-radius:11px; padding:13px 15px; text-align:left; font-size:14px; font-weight:600; }}
             QPushButton[navButton="true"]:hover {{ background:{COLORS['surface']}; color:{COLORS['primary']}; }}
             QPushButton[navButton="true"]:focus {{ background:{COLORS['surface']}; border-color:{COLORS['nav_selected_frame']}; outline:none; }}
             QPushButton[navButton="true"]:checked {{ background:{COLORS['accent_soft']}; border-color:{COLORS['nav_selected_frame']}; color:{COLORS['nav_selected_text']}; }}
@@ -842,7 +844,7 @@ class MainWindow(QMainWindow):
     def _update_brand_word(self):
         self.brand_word.setPixmap(
             wordmark_pixmap(
-                COLORS["accent"], 202, 52, light_mode=get("light_mode")
+                COLORS["accent"], 222, 58, light_mode=get("light_mode")
             )
         )
         self.brand_word.setAccessibleName("NekoTrack")
