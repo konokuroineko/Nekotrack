@@ -1114,23 +1114,22 @@ class WorkDetailPage(QWidget):
         frames = [content, *content.findChildren(QFrame)]
         for frame in frames:
             episodes = getattr(frame, "_pending_episode_cards", None)
-            if not episodes:
+            if not episodes or getattr(frame, "_episode_cards_rendering", False):
                 continue
-            try:
-                delattr(frame, "_pending_episode_cards")
-            except AttributeError:
-                pass
             token = self._detail_build_token
+            offset = max(0, int(getattr(frame, "_episode_cards_rendered_count", 0) or 0))
+            frame._episode_cards_rendering = True
             log_event(
                 "episodes.card_render_queued",
                 work_id=self._selected_episode_work_id,
                 episode_count=len(episodes),
+                rendered_count=offset,
                 batch_size=6,
             )
             QTimer.singleShot(
                 0,
-                lambda token=token, page=content, section=frame, data=episodes:
-                    self._populate_episode_cards(token, page, section, data, 0),
+                lambda token=token, page=content, section=frame, data=episodes, start=offset:
+                    self._populate_episode_cards(token, page, section, data, start),
             )
             return
 
@@ -1459,19 +1458,28 @@ class WorkDetailPage(QWidget):
 
 
     def _populate_episode_cards(self, token, content, frame, episodes, offset):
-        if token != self._detail_build_token:
-            return
-        if self.scroll_area.widget() is not content:
+        if token != self._detail_build_token or self.scroll_area.widget() is not content:
+            frame._episode_cards_rendering = False
+            # If this cached page has already become active again, retry with
+            # its current token rather than abandoning its remaining cards.
+            if self.scroll_area.widget() is content:
+                QTimer.singleShot(
+                    0,
+                    lambda page=content: self._queue_pending_episode_cards(page),
+                )
             return
 
         root = content.layout()
         if root is None or root.indexOf(frame) < 0:
+            frame._episode_cards_rendering = False
             return
 
         layout = frame.layout()
         if layout is None:
+            frame._episode_cards_rendering = False
             return
 
+        frame._episode_cards_rendering = True
         batch_size = 6
         end = min(offset + batch_size, len(episodes))
         for ep in episodes[offset:end]:
@@ -1488,6 +1496,7 @@ class WorkDetailPage(QWidget):
             card.watched_changed.connect(self._episode_toggled)
             layout.addWidget(card)
 
+        frame._episode_cards_rendered_count = end
         if end < len(episodes):
             QTimer.singleShot(
                 0,
@@ -1500,6 +1509,16 @@ class WorkDetailPage(QWidget):
                         next_offset,
                     ),
             )
+        else:
+            frame._episode_cards_rendering = False
+            try:
+                delattr(frame, "_pending_episode_cards")
+            except AttributeError:
+                pass
+            try:
+                delattr(frame, "_episode_cards_rendered_count")
+            except AttributeError:
+                pass
 
 
     def _build_detail_sections_local(self, layout, detail_ids):
