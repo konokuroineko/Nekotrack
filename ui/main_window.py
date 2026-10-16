@@ -659,13 +659,9 @@ class MainWindow(QMainWindow):
         self._ui_root_stack.addWidget(root)
         self._ui_root_stack.setCurrentWidget(root)
 
-        QTimer.singleShot(500, self._preload_library_details)
-
-    def _preload_library_details(self):
-        try:
-            self.work_detail_page.preload_works(list(self.library_page.all_anime or []))
-        except Exception as error:
-            print(f"Library detail preload failed: {error}")
+        # Do not eagerly build/cache a full Qt widget tree for every Library
+        # entry on the GUI thread. Detail views are rendered when selected and
+        # episode cards are created in bounded event-loop batches.
 
     def _refresh_library_after_bundle_change(self):
         # Wait until the detail-page deletion/link change has fully returned to
@@ -917,6 +913,11 @@ class MainWindow(QMainWindow):
                     JOIN user_library ON user_library.work_id = works.id
                     WHERE COALESCE(works.episodes, 0) > 0
                       AND UPPER(COALESCE(works.type, '')) = 'ANIME'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM episodes
+                          WHERE episodes.work_id = works.id
+                      )
                     ORDER BY user_library.added_date
                     """
                 ).fetchall()
@@ -926,13 +927,7 @@ class MainWindow(QMainWindow):
         finally:
             connection.close()
 
-        missing_ids = []
-        for work_id in library_ids:
-            try:
-                if not get_episodes(work_id):
-                    missing_ids.append(work_id)
-            except Exception:
-                continue
+        missing_ids = library_ids
 
         if not missing_ids:
             return
@@ -972,14 +967,20 @@ class MainWindow(QMainWindow):
                 [dict(episode) for episode in (episodes or [])],
             )
 
-            # Episode data is now complete, so the corresponding detail view
-            # can finally be built and placed in the same global cache used by
-            # newly imported Library entries.
-            for group in self.library_page.all_anime or []:
-                members = group.get("_series_members") or []
-                if any(int(member["id"]) == int(work_id) for member in members):
-                    self.work_detail_page.preload_work(group)
-                    break
+            # If this season belongs to the currently open bundle, replace its
+            # loading section now. Never pre-build hidden full detail widget
+            # trees for every Library group in the GUI thread.
+            current_work = getattr(self.work_detail_page, "work", None)
+            if current_work is not None:
+                try:
+                    if int(work_id) in self.work_detail_page._detail_work_ids():
+                        self.work_detail_page._replace_episode_section()
+                except Exception as error:
+                    log_exception(
+                        "library.episode_preload.refresh_open_detail_failed",
+                        error,
+                        work_id=work_id,
+                    )
         except Exception as error:
             log_exception("library.episode_preload.ui_finalize_failed", error,
                           work_id=work_id)
@@ -1040,66 +1041,22 @@ class MainWindow(QMainWindow):
 
 
     def show_search_work(self, work):
+        """Open a Search result immediately; enrichment runs in background workers."""
+        if not work:
+            return
         try:
-            from api import get_media_details
-            details = get_media_details(work["id"])
-            save_anime(details)
-            character_connection = details.get("characters")
-            character_edges = (
-                character_connection.get("edges")
-                if isinstance(character_connection, dict)
-                else None
-            )
-            if details.get("_characters_snapshot_valid", True) is False:
-                save_characters(work["id"], None)
-            else:
-                save_characters(work["id"], character_edges)
-            staff_connection = details.get("staff")
-            staff_edges = (
-                staff_connection.get("edges")
-                if isinstance(staff_connection, dict)
-                else None
-            )
-            try:
-                work_id = int(work["id"])
-            except (KeyError, TypeError, ValueError, OverflowError):
-                work_id = 0
-            if details.get("_staff_snapshot_valid", True) is False:
-                save_staff(work_id, None)
-            else:
-                save_staff(work_id, staff_edges)
-
-            try:
-                linked_anilist_id = int(
-                    details.get("_anilist_id") or work_id
-                )
-            except (TypeError, ValueError, OverflowError):
-                linked_anilist_id = 0
-            staff_page_info = details.get("_anilist_staff_page_info")
-            if not isinstance(staff_page_info, dict):
-                staff_page_info = (
-                    staff_connection.get("pageInfo")
-                    if isinstance(staff_connection, dict) else None
-                )
-            if linked_anilist_id > 0 and isinstance(staff_page_info, dict):
-                if work_id < 0:
-                    save_provider_metadata(
-                        work_id,
-                        "anilist_media_id",
-                        {"id": linked_anilist_id},
-                        provider_id=linked_anilist_id,
-                    )
-                save_provider_metadata(
-                    work_id,
-                    "anilist_staff_page_info",
-                    staff_page_info,
-                    provider_id=linked_anilist_id,
-                )
-            self.show_work_details(get_work(work["id"]) or work)
-        except Exception as error:
-            log_exception("work_details.search_enrichment_failed", error,
-                          work_id=work.get("id") if hasattr(work, "get") else None)
-            self.show_work_details(work)
+            work_id = int(work["id"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            work_id = None
+        log_event(
+            "work_details.search_selected",
+            work_id=work_id,
+            enrichment="background",
+        )
+        # show_work_details queues the existing bounded LibraryImportWorker
+        # for missing provider data. Never call get_media_details/GraphQL in
+        # this Qt slot: connection retries must not freeze the main window.
+        self.show_work_details(work)
 
     def show_profile_credit_work(self, work):
         """Open a work from a character/staff credit inside NekoTrack."""
@@ -1482,9 +1439,8 @@ class MainWindow(QMainWindow):
         if self._shutdown_event.is_set():
             return
 
-        # Continue the preload by caching the already-saved TMDB episode
-        # artwork. This is entirely background work and also benefits works
-        # that are already open.
+        # Cache the already-saved TMDB episode artwork; no hidden detail UI
+        # should be built just because a background import finished.
         try:
             episodes = get_episodes(work_id)
             self.work_detail_page._start_episode_image_cache(
@@ -1495,23 +1451,6 @@ class MainWindow(QMainWindow):
             print(
                 f"Episode image preload failed for work {work_id}: {error}"
             )
-
-        # Warm the imported Library entry so its detail widgets are ready
-        # before the user opens it.
-        def _preload_imported_group():
-            try:
-                for group in self.library_page.all_anime or []:
-                    members = group.get("_series_members") or []
-                    if any(int(member["id"]) == work_id for member in members):
-                        self.work_detail_page.preload_work(group)
-                        return
-                saved = get_work(work_id)
-                if saved is not None:
-                    self.work_detail_page.preload_work(saved)
-            except Exception as error:
-                print(f"Library detail preload failed for work {work_id}: {error}")
-
-        QTimer.singleShot(0, _preload_imported_group)
 
         # Refresh an already-open detail page after background enrichment so
         # newly imported characters/staff appear without another click.
