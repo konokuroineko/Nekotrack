@@ -463,6 +463,18 @@ class NavigationButton(QPushButton):
         self.refresh_icon()
 
 
+# This order is also used by the sidebar regression tests. The final item is
+# anchored at the bottom of the sidebar; all category heading labels are omitted.
+SIDEBAR_NAVIGATION = (
+    ("home", "Home", "home"),
+    ("library", "Library", "collections"),
+    ("search", "Search", "search"),
+    ("calendar", "Calendar", "calendar"),
+    ("favorites", "Favorites", "favorites"),
+    ("settings", "Settings", "settings"),
+)
+
+
 class MainWindow(QMainWindow):
     _library_import_thread_stopped = Signal(object, object, int)
 
@@ -569,31 +581,12 @@ class MainWindow(QMainWindow):
         for name, page in pages.items():
             self.navigation.add_page(name, page)
 
-        self._section(
-            side,
-            "YOUR SPACE",
-            [
-                ("home", "Home", "home"),
-                ("library", "Library", "collections"),
-                ("calendar", "Calendar", "calendar"),
-                ("favorites", "Favorites", "favorites"),
-            ],
-        )
-        self._section(
-            side,
-            "CATALOG",
-            [
-                ("search", "Search", "search"),
-            ],
-        )
+        # Keep primary destinations in one uninterrupted list. Settings stays
+        # at the bottom, separated by flexible space rather than a category label.
+        for nav_item in SIDEBAR_NAVIGATION[:-1]:
+            self._add_nav(side, *nav_item)
         side.addStretch()
-        self._section(
-            side,
-            "PREFERENCES",
-            [
-                ("settings", "Settings", "settings"),
-            ],
-        )
+        self._add_nav(side, *SIDEBAR_NAVIGATION[-1])
 
         if not hasattr(self, "_last_navigation_page"):
             self._last_navigation_page = None
@@ -853,14 +846,6 @@ class MainWindow(QMainWindow):
         )
         self.brand_word.setAccessibleName("NekoTrack")
         self.brand_word.setStyleSheet("background:transparent;border:none;padding:0;")
-
-    def _section(self, layout, title, items):
-        label = QLabel(title)
-        label.setStyleSheet(f"color:{COLORS['muted']}; font-size:10px; font-weight:800; letter-spacing:1.5px; padding:7px 12px 5px;")
-        layout.addWidget(label)
-        for icon, text, name in items:
-            self._add_nav(layout, icon, text, name)
-        layout.addSpacing(14)
 
     def _add_nav(self, layout, icon, label, page_name):
         button = NavigationButton(icon, label)
