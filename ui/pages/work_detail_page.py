@@ -1823,7 +1823,7 @@ class WorkDetailPage(QWidget):
         )
 
 
-        def _populate_detail_section(
+    def _populate_detail_section(
         self,
         token,
         content,
