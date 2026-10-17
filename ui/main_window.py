@@ -1103,7 +1103,7 @@ class MainWindow(QMainWindow):
             "work_details.open_flow_completed",
             work_id=selected_work_id,
             member_count=len(member_ids),
-            enrichment_count=sum(
+            pending_enrichment_count=sum(
                 1 for work_id in member_ids
                 if work_id in self._detail_enrichment_ids
             ),
