@@ -596,6 +596,29 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
+    def test_episode_image_plan_logs_missing_and_stale_local_artwork(self):
+        page = WorkDetailPage()
+        with patch("ui.pages.work_detail_page.log_event") as logged:
+            page._start_episode_image_cache(
+                12345,
+                [
+                    {"episodeNumber": 2, "thumbnail": None},
+                    {"episodeNumber": 4, "thumbnail": "missing-cache/episode-4.jpg"},
+                ],
+            )
+
+        plan = next(
+            call for call in logged.call_args_list
+            if call.args and call.args[0] == "episodes.image_cache_plan"
+        )
+        self.assertEqual(plan.kwargs["missing_thumbnail_count"], 1)
+        self.assertEqual(plan.kwargs["missing_thumbnail_episode_numbers"], [2])
+        self.assertEqual(plan.kwargs["broken_local_path_count"], 1)
+        self.assertEqual(plan.kwargs["broken_local_path_episode_numbers"], [4])
+
+        page.deleteLater()
+        self.app.processEvents()
+
     def test_missing_episode_art_is_recorded_as_failure_not_a_successful_batch(self):
         worker = EpisodeImageCacheWorker(
             12345,
