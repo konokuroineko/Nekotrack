@@ -18,7 +18,7 @@ from api import (
     TMDB_EPISODE_CATALOG_VERSION,
 )
 from ui.pages.work_detail_page import (
-    DetailSectionDataWorker, EpisodeArtwork, EpisodeCard,
+    EpisodeArtwork, EpisodeCard,
     EpisodeImageCacheWorker, WorkDetailPage,
 )
 
