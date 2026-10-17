@@ -3099,7 +3099,7 @@ class WorkDetailPage(QWidget):
                     IMAGE_DIRECTORY.mkdir(parents=True, exist_ok=True)
                     path = IMAGE_DIRECTORY / f"{work_id}.jpg"
                     if pix.save(str(path), "JPG", 85):
-                        save_cover_path(work_id, str(path))
+                        self._queue_cover_path_save(work_id, str(path))
                 except Exception:
                     pass
             else:
@@ -3113,6 +3113,52 @@ class WorkDetailPage(QWidget):
 
         if reply is not None:
             reply.deleteLater()
+
+    def _queue_cover_path_save(self, work_id, path):
+        if self._shutdown_event.is_set():
+            return
+        thread = QThread(self)
+        thread.setProperty("cover_path_work_id", int(work_id))
+        worker = CoverPathSaveWorker(work_id, path)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.data_ready.connect(self._cover_path_save_data_ready)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._cover_path_save_thread_stopped)
+        thread.finished.connect(thread.deleteLater)
+        self._cover_path_save_jobs[thread] = {
+            "thread": thread,
+            "worker": worker,
+            "work_id": int(work_id),
+            "filename": Path(str(path)).name,
+        }
+        log_event(
+            "work_detail.cover_path_persist_scheduled",
+            work_id=int(work_id),
+            filename=Path(str(path)).name,
+        )
+        thread.start()
+
+    def _cover_path_save_data_ready(self, work_id, success, error_message):
+        log_event(
+            "work_detail.cover_path_persist_result_received",
+            work_id=work_id,
+            success=bool(success),
+            error_summary=str(error_message or "")[:300],
+        )
+
+    def _cover_path_save_thread_stopped(self):
+        thread = self.sender()
+        if thread is None:
+            return
+        job = self._cover_path_save_jobs.pop(thread, None)
+        if job is not None:
+            log_event(
+                "work_detail.cover_path_persist_thread_stopped",
+                work_id=job.get("work_id"),
+                filename=job.get("filename"),
+            )
 
     def _library_group(self):
         # Library cards already carry their complete series grouping. Reuse it
@@ -4003,25 +4049,36 @@ class WorkDetailPage(QWidget):
             })
         return normalized
 
-    def _build_episodes_section(self, defer_cards=False):
+    def _build_episodes_section(self, defer_cards=False, loaded_data=None):
         if self._is_reading_media():
             return self._reading_section()
 
-        members = self._episode_members()
-        member_ids = {int(member["id"]) for member in members}
-        if self._selected_episode_work_id not in member_ids:
-            self._selected_episode_work_id = (
-                int(members[0]["id"])
-                if members
-                else self._value("id")
+        if loaded_data is None:
+            members = self._episode_members()
+            member_ids = {int(member["id"]) for member in members}
+            if self._selected_episode_work_id not in member_ids:
+                self._selected_episode_work_id = (
+                    int(members[0]["id"]) if members else self._value("id")
+                )
+            selected_id = self._selected_episode_work_id
+            raw_episodes = get_episodes(selected_id) if selected_id is not None else []
+            episodes = self._normalize_episode_rows(selected_id, raw_episodes)
+            selected_work = None
+            catalog_version = None
+            needs_catalog_refresh = None
+        else:
+            members = list(loaded_data.get("members") or [])
+            selected_id = int(
+                loaded_data.get("work_id") or self._selected_episode_work_id or 0
             )
+            episodes = list(loaded_data.get("episodes") or [])
+            selected_work = loaded_data.get("work")
+            catalog_version = int(loaded_data.get("catalog_version") or 0)
+            needs_catalog_refresh = bool(loaded_data.get("needs_catalog_refresh"))
 
-        selected_id = self._selected_episode_work_id
-        raw_episodes = get_episodes(selected_id) if selected_id is not None else []
-        episodes = self._normalize_episode_rows(selected_id, raw_episodes)
         retry_after = (
             self._episode_image_cache_retry_after.get(int(selected_id), 0.0)
-            if selected_id is not None else 0.0
+            if selected_id else 0.0
         )
         retry_suppressed = retry_after > time.monotonic()
         if retry_suppressed:
@@ -4029,10 +4086,8 @@ class WorkDetailPage(QWidget):
                 thumbnail = str(episode.get("thumbnail_url") or "").strip()
                 if thumbnail and not Path(thumbnail).is_file():
                     episode["thumbnail_cache_failed"] = True
-        if selected_id is not None and episodes:
-            # The saved/local row schema differs from the upstream TMDB shape
-            # expected by EpisodeImageCacheWorker. Translate it explicitly so
-            # saved remote thumbnails also get cached after a restart.
+        if selected_id and episodes:
+            # Keep saved-row keys separate from the TMDB worker's image-cache schema.
             self._start_episode_image_cache(
                 selected_id,
                 [
@@ -4148,7 +4203,11 @@ class WorkDetailPage(QWidget):
 
         lay.addLayout(header)
 
-        selected_work = get_work(selected_id) if selected_id is not None else None
+        selected_work = (
+            loaded_data.get("work")
+            if loaded_data is not None
+            else (get_work(selected_id) if selected_id is not None else None)
+        )
         if selected_work is None:
             # Stale season selections can outlive the row they referenced, and
             # a freshly selected title may still be importing. Keep the page
@@ -4163,14 +4222,18 @@ class WorkDetailPage(QWidget):
         # Refresh missing data and migrate existing catalogs once when the
         # matching policy changes. Upserts keep watched flags; a verified
         # replacement catalog also prunes stale episode numbers.
-        catalog_version = (
-            self._episode_catalog_version(selected_id)
-            if selected_id is not None else TMDB_EPISODE_CATALOG_VERSION
-        )
-        needs_catalog_refresh = bool(episodes) and (
-            catalog_version < TMDB_EPISODE_CATALOG_VERSION
-            or self._episode_catalog_is_stale(selected_id)
-        )
+        if loaded_data is None:
+            catalog_version = (
+                self._episode_catalog_version(selected_id)
+                if selected_id is not None else TMDB_EPISODE_CATALOG_VERSION
+            )
+            needs_catalog_refresh = bool(episodes) and (
+                catalog_version < TMDB_EPISODE_CATALOG_VERSION
+                or self._episode_catalog_is_stale(selected_id)
+            )
+        else:
+            catalog_version = int(loaded_data.get("catalog_version") or 0)
+            needs_catalog_refresh = bool(loaded_data.get("needs_catalog_refresh"))
         if (
             selected_id is not None
             and (not episodes or needs_catalog_refresh)
@@ -4178,19 +4241,29 @@ class WorkDetailPage(QWidget):
             and selected_id not in self._episode_sync_errors
         ):
             try:
-                (
-                    title_variants,
-                    start_date,
-                    end_date,
-                    expected_episodes,
-                    tmdb_id,
-                    tmdb_season_number,
-                    media_format,
-                ) = self._episode_tmdb_context(
-                    selected_id,
-                    members,
-                    selected_work,
-                )
+                if loaded_data is not None:
+                    context = loaded_data.get("tmdb_context") or {}
+                    title_variants = list(context.get("title_variants") or [])
+                    start_date = context.get("start_date")
+                    end_date = context.get("end_date")
+                    expected_episodes = context.get("expected_episodes")
+                    tmdb_id = context.get("tmdb_id")
+                    tmdb_season_number = context.get("tmdb_season_number")
+                    media_format = context.get("media_format")
+                else:
+                    (
+                        title_variants,
+                        start_date,
+                        end_date,
+                        expected_episodes,
+                        tmdb_id,
+                        tmdb_season_number,
+                        media_format,
+                    ) = self._episode_tmdb_context(
+                        selected_id,
+                        members,
+                        selected_work,
+                    )
                 self._start_episode_sync(
                     selected_id,
                     title_variants,
@@ -4726,10 +4799,10 @@ class WorkDetailPage(QWidget):
                     break
 
     def _replace_episode_section(self):
+        """Replace the current episode panel with a skeleton, then reload it off-thread."""
         content = self.scroll_area.widget()
         if content is None:
             return
-
         root = content.layout()
         if root is None:
             return
@@ -4741,53 +4814,109 @@ class WorkDetailPage(QWidget):
                 continue
 
             old_frame = widget
-            new_frame = self._episodes_section(defer_cards=True)
-            new_frame.setProperty("_episodes_section", True)
+            if self._is_reading_media():
+                new_frame = self._episodes_section(defer_cards=True)
+                new_frame.setProperty("_episodes_section", True)
+                root.replaceWidget(old_frame, new_frame)
+                old_frame.deleteLater()
+                return
+
+            new_frame = self._episode_section_loading_frame()
             root.replaceWidget(old_frame, new_frame)
             old_frame.deleteLater()
-
-            episodes = getattr(new_frame, "_pending_episode_cards", None)
-            if episodes:
-                token = self._detail_build_token
-                QTimer.singleShot(
-                    0,
-                    lambda token=token, page=content, frame=new_frame, data=episodes:
-                        self._populate_episode_cards(token, page, frame, data, 0),
-                )
+            content._episode_section_ready = False
+            content._episode_section_success = True
+            self._update_detail_cacheable(content)
+            token = self._detail_build_token
+            log_event(
+                "work_detail.episode_section_reload_requested",
+                token=token,
+                work_id=self._selected_episode_work_id,
+                reason="catalog_or_artwork_changed",
+            )
+            QTimer.singleShot(
+                0,
+                lambda token=token, page=content, frame=new_frame:
+                    self._populate_episode_section(token, page, frame, 0),
+            )
             return
 
     def _episode_toggled(self, number, checked):
-        work_id = self._selected_episode_work_id
-        if work_id is None:
-            work_id = self._value("id")
+        raw_work_id = self._selected_episode_work_id or self._value("id")
+        try:
+            work_id = int(raw_work_id)
+            episode_number = int(number)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if work_id <= 0 or episode_number <= 0 or self._shutdown_event.is_set():
+            return
 
-        set_episode_watched(work_id, number, checked)
+        thread = QThread(self)
+        thread.setProperty("episode_progress_work_id", work_id)
+        worker = EpisodeProgressWorker(work_id, episode_number, checked)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.data_ready.connect(self._episode_progress_data_ready)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._episode_progress_thread_stopped)
+        thread.finished.connect(thread.deleteLater)
+        self._episode_progress_jobs[thread] = {
+            "thread": thread,
+            "worker": worker,
+            "work_id": work_id,
+            "episode_number": episode_number,
+        }
+        log_event(
+            "episodes.progress_write_scheduled",
+            work_id=work_id,
+            episode_number=episode_number,
+            watched=bool(checked),
+            active_progress_writes=len(self._episode_progress_jobs),
+        )
+        thread.start()
 
-        episodes = get_episodes(work_id)
-        watched = sum(1 for ep in episodes if ep["watched"])
-        total = len(episodes)
-
+    def _episode_progress_data_ready(self, work_id, watched_count, total, error_message):
+        log_event(
+            "episodes.progress_ui_callback",
+            work_id=work_id,
+            watched_count=watched_count,
+            total_count=total,
+            success=not bool(error_message),
+            error_summary=str(error_message)[:300],
+        )
+        if self._shutdown_event.is_set() or self._selected_episode_work_id != int(work_id):
+            return
         content = self.scroll_area.widget()
         if content is None or content.layout() is None:
             return
-
         root = content.layout()
         for index in range(root.count()):
             item = root.itemAt(index)
             widget = item.widget() if item is not None else None
             if widget is None or not widget.property("_episodes_section"):
                 continue
-
-            labels = widget.findChildren(QLabel)
-            for label in labels:
+            for label in widget.findChildren(QLabel):
                 if label.text().endswith("watched") or label.text() == "No episode list saved":
-                    label.setText(
-                        f"{watched} / {total} watched"
-                        if total
-                        else "No episode list saved"
-                    )
-                    break
+                    if not error_message:
+                        label.setText(
+                            f"{watched_count} / {total} watched"
+                            if total
+                            else "No episode list saved"
+                        )
+                    return
+
+    def _episode_progress_thread_stopped(self):
+        thread = self.sender()
+        if thread is None:
             return
+        job = self._episode_progress_jobs.pop(thread, None)
+        if job is not None:
+            log_event(
+                "episodes.progress_thread_stopped",
+                work_id=job.get("work_id"),
+                episode_number=job.get("episode_number"),
+            )
 
     def _detail_section_frame_stylesheet(self):
         return (
