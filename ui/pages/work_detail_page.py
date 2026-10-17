@@ -2204,6 +2204,7 @@ class WorkDetailPage(QWidget):
             "result_handled": False,
             "thread_stopped": False,
             "retry": False,
+            "reload_after": False,
         }
         self._last_ui_phase = "episode_section_worker_scheduled"
         log_event(
@@ -2421,7 +2422,12 @@ class WorkDetailPage(QWidget):
         if not job.get("thread_stopped"):
             return
         self._episode_section_load_jobs.pop(key, None)
-        if job.get("retry") and not self._shutdown_event.is_set():
+        if self._shutdown_event.is_set():
+            return
+        if job.get("reload_after"):
+            QTimer.singleShot(0, self._replace_episode_section)
+            return
+        if job.get("retry"):
             QTimer.singleShot(
                 250,
                 lambda token=job["token"], content=job["content"], host=job["host"],
@@ -4877,6 +4883,23 @@ class WorkDetailPage(QWidget):
             return
         root = content.layout()
         if root is None:
+            return
+
+        raw_work_id = self._selected_episode_work_id or self._value("id")
+        try:
+            selected_work_id = int(raw_work_id)
+        except (TypeError, ValueError, OverflowError):
+            selected_work_id = 0
+        active_key = (int(self._detail_build_token), selected_work_id)
+        active_job = self._episode_section_load_jobs.get(active_key)
+        if active_job is not None:
+            active_job["reload_after"] = True
+            log_event(
+                "work_detail.episode_section_reload_deferred",
+                token=self._detail_build_token,
+                work_id=selected_work_id,
+                reason="episode_reader_already_active",
+            )
             return
 
         for index in range(root.count()):
