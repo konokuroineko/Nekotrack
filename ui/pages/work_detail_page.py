@@ -2784,6 +2784,16 @@ class WorkDetailPage(QWidget):
             return
 
         section_started_at = context["section_started_at"]
+        widget_build_started_at = time.perf_counter()
+        self._last_ui_phase = f"detail_section_widget_build:{title}"
+        outcome = "success"
+        log_event(
+            "work_detail.section_widget_build_started",
+            section=title,
+            work_ids=list(detail_ids),
+            item_count=len(items or []),
+            thread_ident=threading.get_ident(),
+        )
         try:
             if title == "Staff":
                 section_widget = self._staff_section(detail_ids, items)
@@ -2797,6 +2807,7 @@ class WorkDetailPage(QWidget):
                     empty_message=self._detail_empty_message(title, detail_ids),
                 )
         except Exception as error:
+            outcome = "error"
             content._detail_sections_success = False
             log_exception(
                 "work_detail.section_widget_build_failed",
@@ -2811,6 +2822,15 @@ class WorkDetailPage(QWidget):
             error_label.setStyleSheet(muted_label_stylesheet())
             error_layout.addWidget(error_label)
 
+        log_event(
+            "work_detail.section_widget_build_completed",
+            section=title,
+            work_ids=list(detail_ids),
+            item_count=len(items or []),
+            outcome=outcome,
+            elapsed_ms=round((time.perf_counter() - widget_build_started_at) * 1000, 2),
+            thread_ident=threading.get_ident(),
+        )
         layout.insertWidget(loading_index, section_widget)
         layout.removeWidget(loading)
         loading.deleteLater()
@@ -2819,8 +2839,10 @@ class WorkDetailPage(QWidget):
             section=title,
             work_ids=list(detail_ids),
             elapsed_ms=round((time.perf_counter() - section_started_at) * 1000, 2),
+            widget_build_elapsed_ms=round((time.perf_counter() - widget_build_started_at) * 1000, 2),
             item_count=len(items or []),
         )
+        self._last_ui_phase = "detail_page_idle"
 
         next_specs = {
             "Characters": (
