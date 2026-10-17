@@ -1293,6 +1293,9 @@ class WorkDetailPage(QWidget):
         self._cover_path_save_sequence = 0
         self._last_ui_heartbeat_at = time.monotonic()
         self._last_ui_phase = "detail_page_idle"
+        self._ui_watchdog_work_id = None
+        self._ui_watchdog_bundle_ids = ()
+        self._ui_stall_watchdog_last_log_at = 0.0
         self._ui_heartbeat_timer = QTimer(self)
         self._ui_heartbeat_timer.setInterval(500)
         self._ui_heartbeat_timer.timeout.connect(self._detail_ui_heartbeat)
@@ -1310,6 +1313,12 @@ class WorkDetailPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self.scroll_area)
+        self._ui_stall_watchdog_thread = threading.Thread(
+            target=self._ui_stall_watchdog_loop,
+            name="NekoTrack-UI-Stall-Watchdog",
+            daemon=True,
+        )
+        self._ui_stall_watchdog_thread.start()
 
     def _skeleton_block(self, height=10, width=None, object_name="detailSkeletonBlock"):
         block = QFrame()
@@ -1412,6 +1421,37 @@ class WorkDetailPage(QWidget):
             style.unpolish(label)
             style.polish(label)
         label.update()
+
+    def _ui_stall_watchdog_loop(self):
+        """Log UI stalls from a daemon thread even while Qt's event loop is blocked."""
+        while not self._shutdown_event.wait(0.25):
+            now = time.monotonic()
+            try:
+                last_heartbeat = float(self._last_ui_heartbeat_at)
+            except (TypeError, ValueError, OverflowError):
+                last_heartbeat = now
+            stall_seconds = max(0.0, now - last_heartbeat)
+            if stall_seconds < 1.5:
+                self._ui_stall_watchdog_last_log_at = 0.0
+                continue
+
+            last_logged = self._ui_stall_watchdog_last_log_at
+            if last_logged and now - last_logged < 5.0:
+                continue
+            self._ui_stall_watchdog_last_log_at = now
+            try:
+                log_event(
+                    "work_detail.ui_watchdog_stall_detected",
+                    work_id=self._ui_watchdog_work_id,
+                    bundle_work_ids=list(self._ui_watchdog_bundle_ids),
+                    member_count=len(self._ui_watchdog_bundle_ids),
+                    stall_ms=round(stall_seconds * 1000, 2),
+                    last_ui_phase=self._last_ui_phase,
+                    watchdog_thread_ident=threading.get_ident(),
+                )
+            except Exception:
+                # Diagnostics must never be able to crash the watchdog itself.
+                pass
 
     def _detail_ui_heartbeat(self):
         """Record long event-loop stalls with the last UI phase that was running."""
@@ -1856,6 +1896,20 @@ class WorkDetailPage(QWidget):
         self._detail_build_token += 1
 
         raw_members = work.get("_series_members") if hasattr(work, "get") else None
+        try:
+            self._ui_watchdog_work_id = int(work.get("id")) if hasattr(work, "get") else None
+        except (TypeError, ValueError, OverflowError):
+            self._ui_watchdog_work_id = None
+        member_ids = []
+        for member in raw_members or [work]:
+            try:
+                raw_id = member.get("id") if hasattr(member, "get") else member["id"]
+                member_id = int(raw_id)
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            if member_id > 0 and member_id not in member_ids:
+                member_ids.append(member_id)
+        self._ui_watchdog_bundle_ids = tuple(member_ids)
         self._last_ui_phase = "detail_state_prepare"
         prepare_started_at = time.perf_counter()
         log_event(
