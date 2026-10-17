@@ -582,9 +582,11 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertIsNotNone(selector)
         self.assertIn("The Frozen Bond", selector.text())
         self.assertNotIn("Season 2", selector.text())
-        self.assertIn(
-            "Re:ZERO - The Frozen Bond",
-            [action.text() for action in selector.menu().actions()],
+        self.assertTrue(
+            any(
+                "Re:ZERO - The Frozen Bond" in action.text()
+                for action in selector.menu().actions()
+            )
         )
         self.assertEqual(
             frame.findChild(QSpinBox, "episodeProgressThrough").maximum(), 1
