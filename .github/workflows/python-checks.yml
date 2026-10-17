@@ -18,7 +18,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.11", "3.12"]
+        # Python 3.14 is the runtime used for local crash reports. Keep it in
+        # CI so Qt/PySide6 and thread-lifecycle behavior are checked there too.
+        python-version: ["3.11", "3.12", "3.14"]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
