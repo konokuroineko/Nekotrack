@@ -1027,35 +1027,86 @@ class MainWindow(QMainWindow):
             member_count=len(members),
         )
 
+        member_ids = []
         seen = set()
-        pending_imports = []
         for member in members:
-            work_id = member.get("id") if hasattr(member, "get") else None
+            raw_id = member.get("id") if hasattr(member, "get") else None
             try:
-                work_id = int(work_id)
-            except (TypeError, ValueError):
+                member_id = int(raw_id)
+            except (TypeError, ValueError, OverflowError):
                 continue
-            if work_id in seen or work_id in self._detail_enrichment_ids:
-                continue
-            seen.add(work_id)
+            if member_id > 0 and member_id not in seen:
+                seen.add(member_id)
+                member_ids.append(member_id)
 
+        # Do not walk the database for every bundle member in the same GUI
+        # event that opens the page. Check a few members between paint turns.
+        QTimer.singleShot(
+            0,
+            lambda ids=tuple(member_ids), selected=selected_work_id:
+                self._queue_detail_enrichment_batch(ids, selected, 0),
+        )
+        log_event(
+            "work_details.open_flow_scheduled",
+            work_id=selected_work_id,
+            member_count=len(members),
+            unique_member_count=len(member_ids),
+        )
+
+
+    def _queue_detail_enrichment_batch(self, member_ids, selected_work_id, offset=0):
+        """Check imported metadata in small GUI turns after the detail shell is visible."""
+        if self._shutdown_requested or self._shutdown_event.is_set():
+            return
+
+        batch_size = 3
+        batch = member_ids[offset:offset + batch_size]
+        pending_imports = []
+        for work_id in batch:
+            if work_id in self._detail_enrichment_ids:
+                continue
             try:
                 needs_enrichment = not characters_are_loaded(work_id)
-            except Exception:
+            except Exception as error:
+                log_exception(
+                    "work_details.enrichment_check_failed",
+                    error,
+                    selected_work_id=selected_work_id,
+                    work_id=work_id,
+                )
                 needs_enrichment = False
 
-            if not needs_enrichment:
-                continue
-
-            self._detail_enrichment_ids.add(work_id)
-            pending_imports.append(work_id)
+            if needs_enrichment:
+                self._detail_enrichment_ids.add(work_id)
+                pending_imports.append(work_id)
 
         self._queue_library_imports(pending_imports)
+        next_offset = offset + len(batch)
+        log_event(
+            "work_details.enrichment_batch_checked",
+            work_id=selected_work_id,
+            checked_count=len(batch),
+            queued_count=len(pending_imports),
+            checked_total=next_offset,
+            member_count=len(member_ids),
+        )
+
+        if next_offset < len(member_ids):
+            QTimer.singleShot(
+                0,
+                lambda ids=member_ids, selected=selected_work_id, start=next_offset:
+                    self._queue_detail_enrichment_batch(ids, selected, start),
+            )
+            return
+
         log_event(
             "work_details.open_flow_completed",
             work_id=selected_work_id,
-            member_count=len(members),
-            enrichment_count=len(pending_imports),
+            member_count=len(member_ids),
+            pending_enrichment_count=sum(
+                1 for work_id in member_ids
+                if work_id in self._detail_enrichment_ids
+            ),
         )
 
 
