@@ -1849,7 +1849,7 @@ def get_media_details(media_id):
 # ---------------------------------------------------------------------------
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
-TMDB_EPISODE_CATALOG_VERSION = 3
+TMDB_EPISODE_CATALOG_VERSION = 4
 # Episode metadata is cached locally and refreshed only when it is at least a week old.
 TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS = 7 * 24 * 60 * 60
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w780"
@@ -2646,7 +2646,7 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
         except OSError:
             cached_data = b""
         if cached_data and _valid_image_data(cached_data):
-            return str(path)
+            return str(path.resolve())
         try:
             path.unlink()
         except OSError:
@@ -2681,7 +2681,7 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
 
     if not path.is_file() or path.stat().st_size == 0:
         return None
-    return str(path)
+    return str(path.resolve())
 
 
 def _pick_best_movie_image(movie_id, movie):
@@ -2790,7 +2790,7 @@ def get_tmdb_episode_data(
     tmdb_season_number=None,
     media_format=None,
 ):
-    """Resolve one NekoTrack season and fetch its TMDB episode data."""
+    """Resolve a NekoTrack season and fetch its TMDB episode data."""
     if str(media_format or "").upper() == "OVA":
         return _get_tmdb_movie_episode(
             title_variants,
@@ -2800,8 +2800,8 @@ def get_tmdb_episode_data(
         )
 
     # Dates improve matching and let cours be separated, but they are optional
-    # in AniList. A missing start date must not block a known mapping or an
-    # otherwise confident title/count-based match.
+    # in AniList. A missing or malformed episode date must not make a valid row
+    # disappear from the user's episode list.
     target_start = _parse_date(start_date)
     target_end = _parse_date(end_date)
 
@@ -2840,55 +2840,145 @@ def get_tmdb_episode_data(
     if not isinstance(raw_episodes, list):
         raw_episodes = []
 
-    selected = []
+    candidates = []
     seen_episode_numbers = set()
+    invalid_air_date_count = 0
     for episode in raw_episodes:
         if not isinstance(episode, dict):
             continue
         episode_number = _safe_episode_number(episode.get("episode_number"))
-        if episode_number is None:
-            continue
-
-        # AniList's date interval can separate multiple cours inside a TMDB
-        # season, so honor explicit dates outside the interval. A missing date
-        # alone is not enough to discard an otherwise valid episode.
-        raw_air_date = episode.get("air_date")
-        air_date = _parse_date(raw_air_date)
-        if raw_air_date not in (None, "") and air_date is None:
-            continue
-        if target_start is not None and air_date is not None and air_date < target_start:
-            continue
-        if target_end is not None and air_date is not None and air_date >= target_end:
-            continue
-        if episode_number in seen_episode_numbers:
+        if episode_number is None or episode_number in seen_episode_numbers:
             continue
         seen_episode_numbers.add(episode_number)
 
+        raw_air_date = episode.get("air_date")
+        air_date = _parse_date(raw_air_date)
+        if raw_air_date not in (None, "") and air_date is None:
+            # Keep rows with corrupt date metadata as undated instead of
+            # silently dropping them from an otherwise usable episode list.
+            invalid_air_date_count += 1
+
+        outside_date_window = bool(
+            air_date is not None
+            and (
+                (target_start is not None and air_date < target_start)
+                or (target_end is not None and air_date >= target_end)
+            )
+        )
+        name = episode.get("name")
+        overview = episode.get("overview")
+        candidates.append({
+            "episodeNumber": episode_number,
+            "title": (
+                name if isinstance(name, str) and name.strip()
+                else f"Episode {episode_number}"
+            ),
+            "description": (
+                overview if isinstance(overview, str) and overview.strip()
+                else None
+            ),
+            "airdate": air_date.isoformat() if air_date else None,
+            "episode_type": episode.get("episode_type"),
+            "tmdb_episode_id": episode.get("id"),
+            "_parsed_air_date": air_date,
+            "_outside_date_window": outside_date_window,
+            "_raw_episode": episode,
+        })
+
+    selected = [item for item in candidates if not item["_outside_date_window"]]
+    date_excluded = [item for item in candidates if item["_outside_date_window"]]
+    restored_internal_gap_numbers = []
+    selected_numbers = [item["episodeNumber"] for item in selected]
+    if selected_numbers:
+        lower_number = min(selected_numbers)
+        upper_number = max(selected_numbers)
+        # Date metadata sometimes disagrees with the episode ordering. Restore
+        # an excluded row when it sits between retained episode numbers; that
+        # is more likely a bad boundary/date than a separate neighboring cour.
+        internal_gap_rows = [
+            item for item in date_excluded
+            if lower_number < item["episodeNumber"] < upper_number
+            and any(number < item["episodeNumber"] for number in selected_numbers)
+            and any(number > item["episodeNumber"] for number in selected_numbers)
+        ]
+        if internal_gap_rows:
+            restored_internal_gap_numbers = [
+                item["episodeNumber"] for item in internal_gap_rows
+            ]
+            selected.extend(internal_gap_rows)
+            internal_ids = set(restored_internal_gap_numbers)
+            date_excluded = [
+                item for item in date_excluded
+                if item["episodeNumber"] not in internal_ids
+            ]
+
+    try:
+        expected_count = max(0, int(expected_episodes or 0))
+    except (TypeError, ValueError, OverflowError):
+        expected_count = 0
+    restored_to_expected_numbers = []
+    if expected_count > len(selected) and date_excluded:
+        def boundary_distance(item):
+            air_date = item["_parsed_air_date"]
+            if air_date is None:
+                return (10**9, item["episodeNumber"])
+            if target_start is not None and air_date < target_start:
+                distance = (target_start - air_date).days
+            elif target_end is not None and air_date >= target_end:
+                distance = (air_date - target_end).days
+            else:
+                distance = 10**9
+            return (distance, item["episodeNumber"])
+
+        date_excluded.sort(key=boundary_distance)
+        needed = expected_count - len(selected)
+        additional = date_excluded[:needed]
+        restored_to_expected_numbers = [
+            item["episodeNumber"] for item in additional
+        ]
+        selected.extend(additional)
+
+    selected.sort(key=lambda item: item["episodeNumber"])
+    output = []
+    for item in selected:
+        episode = item["_raw_episode"]
         thumbnail, image_variants = _pick_best_episode_still(
             tmdb_id,
             tmdb_season_number,
             episode,
         )
-        name = episode.get("name")
-        overview = episode.get("overview")
-        selected.append({
-            "episodeNumber": episode_number,
-            "title": name if isinstance(name, str) and name.strip() else f"Episode {episode_number}",
-            "description": overview if isinstance(overview, str) and overview.strip() else None,
-            "airdate": air_date.isoformat() if air_date else None,
-            "thumbnail": thumbnail,
-            "episode_type": episode.get("episode_type"),
-            "tmdb_episode_id": episode.get("id"),
-            "tmdb_image_count": image_variants,
-        })
+        item.pop("_parsed_air_date", None)
+        item.pop("_outside_date_window", None)
+        item.pop("_raw_episode", None)
+        item["thumbnail"] = thumbnail
+        item["tmdb_image_count"] = image_variants
+        output.append(item)
 
-    selected.sort(key=lambda item: item["episodeNumber"])
-
+    missing_thumbnail_numbers = [
+        item["episodeNumber"] for item in output if not item.get("thumbnail")
+    ]
+    log_event(
+        "tmdb.episode_catalog_resolved",
+        tmdb_id=tmdb_id,
+        tmdb_season_number=tmdb_season_number,
+        raw_episode_count=len(raw_episodes),
+        valid_candidate_count=len(candidates),
+        expected_episode_count=expected_count,
+        selected_episode_count=len(output),
+        date_filtered_count=len(candidates) - len(selected),
+        restored_internal_gap_count=len(restored_internal_gap_numbers),
+        restored_internal_gap_numbers=restored_internal_gap_numbers[:40],
+        restored_to_expected_count=len(restored_to_expected_numbers),
+        restored_to_expected_numbers=restored_to_expected_numbers[:40],
+        invalid_air_date_count=invalid_air_date_count,
+        missing_thumbnail_count=len(missing_thumbnail_numbers),
+        missing_thumbnail_episode_numbers=missing_thumbnail_numbers[:40],
+    )
     return {
         "tmdb_id": tmdb_id,
         "tmdb_season_number": tmdb_season_number,
-        "episodes": selected,
-        "tmdb_count": len(selected),
+        "episodes": output,
+        "tmdb_count": len(output),
     }
 
 def get_tmdb_episode_sample(
