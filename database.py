@@ -1724,6 +1724,80 @@ def set_episode_watched(work_id, episode_number, watched):
         connection.close()
 
 
+
+def set_episode_progress(work_id, watched_episode_numbers):
+    """Set watched progress for an ordered selection of episode primary keys.
+
+    The caller converts a display-order progress value to saved episode IDs.
+    Rows not included are set unwatched so a user can move progress backwards.
+    """
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return 0, 0
+
+    try:
+        values = list(watched_episode_numbers or [])
+    except TypeError:
+        values = []
+    safe_numbers = []
+    seen = set()
+    for value in values:
+        number = _safe_optional_integer(
+            value, 1, _MAX_TRACKED_EPISODE_NUMBER
+        )
+        if number is None or isinstance(value, bool) or number in seen:
+            continue
+        seen.add(number)
+        safe_numbers.append(number)
+
+    connection = get_connection()
+    try:
+        connection.execute(
+            "UPDATE episodes SET watched = 0 WHERE work_id = ?",
+            (safe_work_id,),
+        )
+        connection.executemany(
+            """
+            UPDATE episodes SET watched = 1
+            WHERE work_id = ? AND episode_number = ?
+            """,
+            ((safe_work_id, number) for number in safe_numbers),
+        )
+        watched_count = connection.execute(
+            "SELECT COUNT(*) FROM episodes WHERE work_id = ? AND watched = 1",
+            (safe_work_id,),
+        ).fetchone()[0]
+        total = connection.execute(
+            "SELECT COUNT(*) FROM episodes WHERE work_id = ?",
+            (safe_work_id,),
+        ).fetchone()[0]
+        if connection.execute(
+            "SELECT 1 FROM user_library WHERE work_id = ?",
+            (safe_work_id,),
+        ).fetchone():
+            status = (
+                "Completed" if total and watched_count >= total
+                else "Watching" if watched_count
+                else "Planning"
+            )
+            connection.execute(
+                """
+                UPDATE user_library
+                SET progress_episodes = ?, status = ?, updated_date = CURRENT_TIMESTAMP
+                WHERE work_id = ?
+                """,
+                (watched_count, status, safe_work_id),
+            )
+        connection.commit()
+        return watched_count, total
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def get_provider_metadata(work_id, provider="mangabaka"):
     """Return preserved raw metadata for a work and provider, if available."""
     try:
