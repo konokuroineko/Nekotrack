@@ -1180,7 +1180,8 @@ class DetailSkeletonTests(unittest.TestCase):
         message = content.findChild(QLabel, "detailEpisodeMessage")
         self.assertIsNotNone(message)
         self.assertIn("could not be loaded", message.text())
-        self.assertEqual(root.indexOf(host), -1)
+        # Qt has already deleted the old placeholder frame after replacing it.
+        self.assertGreaterEqual(root.indexOf(message.parentWidget()), 0)
         self.assertFalse(page._episode_section_load_jobs)
         page.deleteLater()
         self.app.processEvents()
