@@ -237,6 +237,393 @@ class EpisodeSyncWorker(QObject):
             self.finished.emit(self.work_id, payload)
 
 
+
+class EpisodeSectionDataWorker(QObject):
+    """Load an episode section's database snapshot without blocking Qt's GUI thread."""
+
+    data_ready = Signal(int, int, object)
+    finished = Signal()
+
+    def __init__(self, token, work_id, members, attempt=0):
+        super().__init__()
+        self.token = int(token)
+        self.work_id = int(work_id)
+        self.attempt = max(0, int(attempt))
+        self.members = []
+        for member in members or []:
+            def value(key, default=None):
+                if hasattr(member, "get"):
+                    return member.get(key, default)
+                try:
+                    return member[key]
+                except (KeyError, IndexError, TypeError):
+                    return default
+            try:
+                member_id = int(value("id"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if member_id <= 0:
+                continue
+            raw_title = value("title")
+            title = dict(raw_title) if isinstance(raw_title, dict) else str(raw_title or "Untitled")
+            raw_date = value("startDate")
+            start_date = dict(raw_date) if isinstance(raw_date, dict) else {}
+            self.members.append({
+                "id": member_id,
+                "title": title,
+                "startDate": start_date,
+                "start_year": value("start_year"),
+                "start_month": value("start_month"),
+                "start_day": value("start_day"),
+            })
+
+    def _phase(self, phase, operation):
+        started_at = time.perf_counter()
+        log_event(
+            "episodes.section_load_phase_started",
+            token=self.token,
+            work_id=self.work_id,
+            phase=phase,
+            attempt=self.attempt,
+            thread_ident=threading.get_ident(),
+        )
+        outcome = "success"
+        try:
+            return operation()
+        except Exception:
+            outcome = "error"
+            raise
+        finally:
+            log_event(
+                "episodes.section_load_phase_completed",
+                token=self.token,
+                work_id=self.work_id,
+                phase=phase,
+                attempt=self.attempt,
+                outcome=outcome,
+                elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                thread_ident=threading.get_ident(),
+            )
+
+    @staticmethod
+    def _field(member, key, default=None):
+        if hasattr(member, "get"):
+            return member.get(key, default)
+        try:
+            return member[key]
+        except (KeyError, IndexError, TypeError):
+            return default
+
+    @classmethod
+    def _member_date(cls, member):
+        raw_date = cls._field(member, "startDate") or {}
+        if not isinstance(raw_date, dict):
+            raw_date = {}
+        year = raw_date.get("year") or cls._field(member, "start_year")
+        month = raw_date.get("month") or cls._field(member, "start_month")
+        day = raw_date.get("day") or cls._field(member, "start_day")
+        if year in (None, ""):
+            return None
+        try:
+            return f"{int(year):04d}-{int(month or 1):02d}-{int(day or 1):02d}"
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    @classmethod
+    def _member_display_title(cls, member):
+        raw_title = cls._field(member, "title")
+        if isinstance(raw_title, dict):
+            return str(
+                raw_title.get("english")
+                or raw_title.get("romaji")
+                or raw_title.get("native")
+                or "Untitled"
+            ).strip()
+        return str(raw_title or "Untitled").strip()
+
+    def run(self):
+        started_at = time.perf_counter()
+        log_event(
+            "episodes.section_load_worker_started",
+            token=self.token,
+            work_id=self.work_id,
+            attempt=self.attempt,
+            member_count=len(self.members),
+            thread_ident=threading.get_ident(),
+        )
+        payload = {
+            "status": "error",
+            "work_id": self.work_id,
+            "members": self.members,
+            "attempt": self.attempt,
+        }
+        try:
+            work_row = self._phase(
+                "work_row_read",
+                lambda: get_work(self.work_id),
+            )
+            if work_row is None:
+                payload["status"] = "missing_work"
+            else:
+                work = dict(work_row)
+                raw_rows = self._phase(
+                    "episode_rows_read",
+                    lambda: get_episodes(self.work_id),
+                )
+                episodes = WorkDetailPage._normalize_episode_rows(
+                    self.work_id, raw_rows
+                )
+                payload.update({
+                    "status": "ok",
+                    "work": work,
+                    "episodes": episodes,
+                })
+                try:
+                    metadata = self._phase(
+                        "catalog_metadata_read",
+                        lambda: get_provider_metadata(
+                            self.work_id, "tmdb_episode_match_version"
+                        ),
+                    )
+                except Exception as error:
+                    metadata = None
+                    log_exception(
+                        "episodes.section_catalog_metadata_read_failed",
+                        error,
+                        work_id=self.work_id,
+                        attempt=self.attempt,
+                    )
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                try:
+                    catalog_version = max(0, int(metadata.get("version") or 0))
+                except (TypeError, ValueError, OverflowError):
+                    catalog_version = 0
+                try:
+                    fetched_at = float(metadata.get("fetched_at") or 0)
+                except (TypeError, ValueError, OverflowError):
+                    fetched_at = 0.0
+                catalog_stale = (
+                    not math.isfinite(fetched_at)
+                    or fetched_at <= 0
+                    or time.time() - fetched_at >= TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS
+                )
+                needs_refresh = not episodes or (
+                    bool(episodes)
+                    and (
+                        catalog_version < TMDB_EPISODE_CATALOG_VERSION
+                        or catalog_stale
+                    )
+                )
+                payload.update({
+                    "catalog_version": catalog_version,
+                    "catalog_stale": bool(catalog_stale),
+                    "needs_catalog_refresh": bool(needs_refresh),
+                })
+
+                if needs_refresh:
+                    member_ids = [int(member["id"]) for member in self.members]
+                    try:
+                        selected_index = member_ids.index(self.work_id)
+                    except ValueError:
+                        selected_index = 0
+                    selected_member = (
+                        self.members[selected_index]
+                        if self.members
+                        else {"id": self.work_id, "title": work.get("title") or "Untitled"}
+                    )
+                    start_date = self._member_date(selected_member)
+                    end_date = (
+                        self._member_date(self.members[selected_index + 1])
+                        if selected_index + 1 < len(self.members)
+                        else None
+                    )
+                    title_variants = [
+                        str(work.get("title") or "").strip(),
+                        self._member_display_title(selected_member),
+                    ]
+                    try:
+                        alternates = self._phase(
+                            "alternate_titles_read",
+                            lambda: get_alternate_titles(self.work_id),
+                        )
+                        if isinstance(alternates, (list, tuple)):
+                            title_variants.extend(
+                                str(value).strip()
+                                for value in alternates
+                                if value is not None and str(value).strip()
+                            )
+                    except Exception as error:
+                        log_exception(
+                            "episodes.section_alternate_titles_read_failed",
+                            error,
+                            work_id=self.work_id,
+                            attempt=self.attempt,
+                        )
+                    title_variants = list(dict.fromkeys(
+                        value for value in title_variants if value
+                    ))
+
+                    if catalog_version < TMDB_EPISODE_CATALOG_VERSION:
+                        tmdb_id, tmdb_season_number = None, None
+                    else:
+                        try:
+                            tmdb_id, tmdb_season_number = self._phase(
+                                "tmdb_mapping_read",
+                                lambda: get_tmdb_mapping(self.work_id),
+                            )
+                        except Exception as error:
+                            tmdb_id, tmdb_season_number = None, None
+                            log_exception(
+                                "episodes.section_tmdb_mapping_read_failed",
+                                error,
+                                work_id=self.work_id,
+                                attempt=self.attempt,
+                            )
+                    payload["tmdb_context"] = {
+                        "title_variants": title_variants,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "expected_episodes": work.get("episodes"),
+                        "tmdb_id": tmdb_id,
+                        "tmdb_season_number": tmdb_season_number,
+                        "media_format": str(work.get("format") or "").upper(),
+                    }
+        except Exception as error:
+            payload = {
+                "status": "error",
+                "work_id": self.work_id,
+                "members": self.members,
+                "attempt": self.attempt,
+                "error_summary": str(error)[:600],
+            }
+            log_exception(
+                "episodes.section_load_worker_failed",
+                error,
+                token=self.token,
+                work_id=self.work_id,
+                attempt=self.attempt,
+                elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                thread_ident=threading.get_ident(),
+            )
+
+        payload["load_elapsed_ms"] = round((time.perf_counter() - started_at) * 1000, 2)
+        log_event(
+            "episodes.section_load_worker_completed",
+            token=self.token,
+            work_id=self.work_id,
+            attempt=self.attempt,
+            status=payload.get("status"),
+            episode_count=len(payload.get("episodes") or []),
+            member_count=len(self.members),
+            elapsed_ms=payload["load_elapsed_ms"],
+            catalog_version=payload.get("catalog_version"),
+            catalog_stale=payload.get("catalog_stale"),
+            needs_catalog_refresh=payload.get("needs_catalog_refresh"),
+            thread_ident=threading.get_ident(),
+        )
+        self.data_ready.emit(self.token, self.work_id, payload)
+        self.finished.emit()
+
+
+class EpisodeProgressWorker(QObject):
+    """Persist a watched checkbox and recalculate its counter off the GUI thread."""
+
+    data_ready = Signal(int, int, int, str)
+    finished = Signal()
+
+    def __init__(self, work_id, episode_number, watched):
+        super().__init__()
+        self.work_id = int(work_id)
+        self.episode_number = int(episode_number)
+        self.watched = bool(watched)
+
+    def run(self):
+        started_at = time.perf_counter()
+        error_message = ""
+        watched_count = 0
+        total = 0
+        log_event(
+            "episodes.progress_write_started",
+            work_id=self.work_id,
+            episode_number=self.episode_number,
+            watched=self.watched,
+            thread_ident=threading.get_ident(),
+        )
+        try:
+            set_episode_watched(self.work_id, self.episode_number, self.watched)
+            rows = get_episodes(self.work_id)
+            watched_count = sum(1 for row in rows if bool(row["watched"]))
+            total = len(rows)
+        except Exception as error:
+            error_message = str(error)[:600]
+            log_exception(
+                "episodes.progress_write_failed",
+                error,
+                work_id=self.work_id,
+                episode_number=self.episode_number,
+                watched=self.watched,
+                elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2),
+            )
+        else:
+            log_event(
+                "episodes.progress_write_completed",
+                work_id=self.work_id,
+                episode_number=self.episode_number,
+                watched=self.watched,
+                watched_count=watched_count,
+                total_count=total,
+                elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                thread_ident=threading.get_ident(),
+            )
+        self.data_ready.emit(self.work_id, watched_count, total, error_message)
+        self.finished.emit()
+
+
+class CoverPathSaveWorker(QObject):
+    """Persist downloaded cover metadata without blocking the GUI callback."""
+
+    data_ready = Signal(int, bool, str)
+    finished = Signal()
+
+    def __init__(self, work_id, path):
+        super().__init__()
+        self.work_id = int(work_id)
+        self.path = str(path)
+
+    def run(self):
+        started_at = time.perf_counter()
+        error_message = ""
+        log_event(
+            "work_detail.cover_path_persist_started",
+            work_id=self.work_id,
+            filename=Path(self.path).name,
+            thread_ident=threading.get_ident(),
+        )
+        try:
+            save_cover_path(self.work_id, self.path)
+        except Exception as error:
+            error_message = str(error)[:600]
+            log_exception(
+                "work_detail.cover_path_persist_failed",
+                error,
+                work_id=self.work_id,
+                filename=Path(self.path).name,
+                elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                thread_ident=threading.get_ident(),
+            )
+        else:
+            log_event(
+                "work_detail.cover_path_persist_completed",
+                work_id=self.work_id,
+                filename=Path(self.path).name,
+                elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                thread_ident=threading.get_ident(),
+            )
+        self.data_ready.emit(self.work_id, not bool(error_message), error_message)
+        self.finished.emit()
+
+
 class StaffPageWorker(QObject):
     """Fetch the next bounded page of AniList credits for each eligible work."""
 
@@ -396,7 +783,7 @@ class EpisodeArtwork(QLabel):
         super().__init__(parent)
         self.work_id = int(work_id) if work_id is not None else None
         self.episode_number = int(episode_number) if episode_number is not None else None
-        self.setFixedSize(96, 54)
+        self.setFixedSize(148, 83)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
             f"background:{surface_rgba('background_alt')};border-radius:8px;"
@@ -477,13 +864,13 @@ class EpisodeCard(QFrame):
         super().__init__(parent)
         self.episode = episode
         self.setObjectName("episodeCard")
-        # Compact, horizontal streaming-service style row rather than a bulky card.
-        self.setMinimumHeight(64)
+        # A clean streaming-style row: readable synopsis, balanced artwork and a clear watch control.
+        self.setMinimumHeight(104)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 5, 7, 5)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(12)
 
         artwork = EpisodeArtwork(
             episode["work_id"],
@@ -496,20 +883,23 @@ class EpisodeCard(QFrame):
 
         body = QVBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(1)
+        body.setSpacing(3)
 
         top = QHBoxLayout()
         number = QLabel(f"EP {int(episode['episode_number']):02d}")
         number.setObjectName("detailEpisodeNumber")
         number.setStyleSheet(
-            f"color:{COLORS['accent']};font-size:9px;font-weight:850;"
-            "letter-spacing:0.4px;"
+            f"color:{COLORS['accent']};background:{surface_rgba('surface_hover')};"
+            f"border:1px solid {COLORS['border']};border-radius:6px;"
+            "font-size:10px;font-weight:850;letter-spacing:0.4px;padding:3px 7px;"
         )
         top.addWidget(number)
 
         date = QLabel(self._format_date(episode["air_date"]))
         date.setObjectName("detailEpisodeDate")
-        date.setStyleSheet(f"color:{COLORS['muted']};font-size:10px;")
+        date.setStyleSheet(
+            f"color:{COLORS['muted']};font-size:10px;font-weight:650;"
+        )
         top.addStretch()
         if date.text():
             top.addWidget(date)
@@ -525,7 +915,7 @@ class EpisodeCard(QFrame):
         title.setMinimumWidth(0)
         title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         title.setStyleSheet(
-            f"color:{COLORS['primary']};font-size:13px;font-weight:750;"
+            f"color:{COLORS['primary']};font-size:14px;font-weight:800;"
         )
         title.setToolTip(self._episode_full_title)
         body.addWidget(title)
@@ -536,14 +926,14 @@ class EpisodeCard(QFrame):
             description = QLabel(self._episode_full_description)
             self._episode_description_label = description
             description.setObjectName("detailEpisodeDescription")
-            description.setWordWrap(False)
+            description.setWordWrap(True)
             description.setMinimumWidth(0)
+            description.setMaximumHeight(32)
             description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             description.setTextFormat(Qt.PlainText)
-            description.setFixedHeight(15)
             description.setToolTip(self._episode_full_description)
             description.setStyleSheet(
-                f"color:{COLORS['secondary']};font-size:10px;"
+                f"color:{COLORS['secondary']};font-size:11px;"
             )
             body.addWidget(description)
 
@@ -551,7 +941,10 @@ class EpisodeCard(QFrame):
 
         watched = QCheckBox()
         watched.setChecked(bool(episode["watched"]))
+        watched.setObjectName("episodeWatchedCheckbox")
+        watched.setAccessibleName(f"Mark episode {int(episode['episode_number'])} as watched")
         watched.setCursor(Qt.PointingHandCursor)
+        watched.setToolTip("Mark as watched")
         watched.toggled.connect(
             lambda checked, n=int(episode["episode_number"]):
                 self.watched_changed.emit(n, checked)
@@ -562,8 +955,8 @@ class EpisodeCard(QFrame):
         styles = {
             "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:9px;font-weight:850;letter-spacing:0.4px;",
             "detailEpisodeDate": f"color:{COLORS['muted']};font-size:10px;",
-            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:13px;font-weight:750;",
-            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:10px;",
+            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:14px;font-weight:800;",
+            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:11px;",
         }
         for label in self.findChildren(QLabel):
             stylesheet = styles.get(label.objectName())
@@ -593,15 +986,11 @@ class EpisodeCard(QFrame):
     def _update_episode_description(self):
         """Keep synopsis to one line while retaining the full text in a tooltip."""
         label = self._episode_description_label
-        if label is None or label.width() <= 0:
+        if label is None:
             return
-        label.setText(
-            label.fontMetrics().elidedText(
-                self._episode_full_description,
-                Qt.ElideRight,
-                label.contentsRect().width(),
-            )
-        )
+        # Keep up to two readable lines; the tooltip retains the complete synopsis.
+        label.setText(self._episode_full_description)
+        label.setToolTip(self._episode_full_description)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -898,6 +1287,19 @@ class WorkDetailPage(QWidget):
         self._detail_build_token = 0
         self._detail_content_cache = {}
         self._detail_section_jobs = {}
+        self._episode_section_load_jobs = {}
+        self._episode_progress_jobs = {}
+        self._cover_path_save_jobs = {}
+        self._cover_path_save_sequence = 0
+        self._last_ui_heartbeat_at = time.monotonic()
+        self._last_ui_phase = "detail_page_idle"
+        self._ui_watchdog_work_id = None
+        self._ui_watchdog_bundle_ids = ()
+        self._ui_stall_watchdog_last_log_at = 0.0
+        self._ui_heartbeat_timer = QTimer(self)
+        self._ui_heartbeat_timer.setInterval(500)
+        self._ui_heartbeat_timer.timeout.connect(self._detail_ui_heartbeat)
+        self._ui_heartbeat_timer.start()
         self._episode_sync_completed = set()
         self._episode_sync_errors = {}
         self._episode_source_status = {}
@@ -911,6 +1313,12 @@ class WorkDetailPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self.scroll_area)
+        self._ui_stall_watchdog_thread = threading.Thread(
+            target=self._ui_stall_watchdog_loop,
+            name="NekoTrack-UI-Stall-Watchdog",
+            daemon=True,
+        )
+        self._ui_stall_watchdog_thread.start()
 
     def _skeleton_block(self, height=10, width=None, object_name="detailSkeletonBlock"):
         block = QFrame()
@@ -985,6 +1393,22 @@ class WorkDetailPage(QWidget):
         layout.addStretch(1)
         return strip
 
+    def _episode_section_loading_frame(self, message="Loading episode data…", include_skeleton=True):
+        frame = QFrame()
+        frame.setObjectName("episodesSection")
+        frame.setProperty("_episodes_section", True)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+        label = QLabel(str(message))
+        label.setObjectName("detailEpisodeLoadingLabel")
+        label.setWordWrap(True)
+        label.setStyleSheet(muted_label_stylesheet())
+        layout.addWidget(label)
+        if include_skeleton:
+            layout.addWidget(self._episode_skeleton_strip())
+        return frame
+
     def _set_cover_placeholder(self, label, loading, text):
         """Switch the hero cover between skeleton and honest missing-cover states."""
         if label is None or not isValid(label):
@@ -998,9 +1422,64 @@ class WorkDetailPage(QWidget):
             style.polish(label)
         label.update()
 
+    def _ui_stall_watchdog_loop(self):
+        """Log UI stalls from a daemon thread even while Qt's event loop is blocked."""
+        while not self._shutdown_event.wait(0.25):
+            now = time.monotonic()
+            try:
+                last_heartbeat = float(self._last_ui_heartbeat_at)
+            except (TypeError, ValueError, OverflowError):
+                last_heartbeat = now
+            stall_seconds = max(0.0, now - last_heartbeat)
+            if stall_seconds < 1.5:
+                self._ui_stall_watchdog_last_log_at = 0.0
+                continue
+
+            last_logged = self._ui_stall_watchdog_last_log_at
+            if last_logged and now - last_logged < 5.0:
+                continue
+            self._ui_stall_watchdog_last_log_at = now
+            try:
+                log_event(
+                    "work_detail.ui_watchdog_stall_detected",
+                    work_id=self._ui_watchdog_work_id,
+                    bundle_work_ids=list(self._ui_watchdog_bundle_ids),
+                    member_count=len(self._ui_watchdog_bundle_ids),
+                    stall_ms=round(stall_seconds * 1000, 2),
+                    last_ui_phase=self._last_ui_phase,
+                    watchdog_thread_ident=threading.get_ident(),
+                )
+            except Exception:
+                # Diagnostics must never be able to crash the watchdog itself.
+                pass
+
+    def _detail_ui_heartbeat(self):
+        """Record long event-loop stalls with the last UI phase that was running."""
+        now = time.monotonic()
+        elapsed = max(0.0, now - self._last_ui_heartbeat_at)
+        self._last_ui_heartbeat_at = now
+        if elapsed < 1.5:
+            return
+        work_id = self._selected_episode_work_id or self._value("id")
+        try:
+            detail_ids = self._detail_work_ids()
+        except Exception:
+            detail_ids = []
+        log_event(
+            "work_detail.ui_stall_detected",
+            work_id=work_id,
+            bundle_work_ids=detail_ids,
+            member_count=len(detail_ids),
+            stall_ms=round(elapsed * 1000, 2),
+            last_ui_phase=self._last_ui_phase,
+            thread_ident=threading.get_ident(),
+        )
+
     def request_shutdown(self):
         """Cancel queued episode-image work and stop detail-page QThreads safely."""
         self._shutdown_event.set()
+        if hasattr(self, "_ui_heartbeat_timer"):
+            self._ui_heartbeat_timer.stop()
         threads = []
         if self._episode_sync_thread is not None:
             threads.append(self._episode_sync_thread)
@@ -1010,6 +1489,21 @@ class WorkDetailPage(QWidget):
         threads.extend(
             job["thread"]
             for job in self._detail_section_jobs.values()
+            if job.get("thread") is not None
+        )
+        threads.extend(
+            job["thread"]
+            for job in self._episode_section_load_jobs.values()
+            if job.get("thread") is not None
+        )
+        threads.extend(
+            job["thread"]
+            for job in self._episode_progress_jobs.values()
+            if job.get("thread") is not None
+        )
+        threads.extend(
+            job["thread"]
+            for job in self._cover_path_save_jobs.values()
             if job.get("thread") is not None
         )
         for thread in threads:
@@ -1178,7 +1672,21 @@ class WorkDetailPage(QWidget):
         back.setCursor(Qt.PointingHandCursor)
         back.clicked.connect(self.back_requested)
         root.addWidget(back, alignment=Qt.AlignLeft)
-        root.addWidget(self._hero())
+        hero_started_at = time.perf_counter()
+        self._last_ui_phase = "hero_widget_build"
+        log_event(
+            "work_detail.hero_build_started",
+            work_ids=detail_ids,
+            member_count=len(detail_ids),
+        )
+        hero = self._hero()
+        log_event(
+            "work_detail.hero_build_completed",
+            work_ids=detail_ids,
+            member_count=len(detail_ids),
+            elapsed_ms=round((time.perf_counter() - hero_started_at) * 1000, 2),
+        )
+        root.addWidget(hero)
 
         episode_host = QFrame()
         episode_host.setObjectName("section")
@@ -1198,11 +1706,8 @@ class WorkDetailPage(QWidget):
             episode_host.deleteLater()
             episode_host = ready_episode_frame
         else:
-            loading_episodes = QLabel("Loading episode data…")
-            loading_episodes.setObjectName("detailEpisodeLoadingLabel")
-            loading_episodes.setWordWrap(True)
-            episode_layout.addWidget(loading_episodes)
-            episode_layout.addWidget(self._episode_skeleton_strip())
+            episode_host.deleteLater()
+            episode_host = self._episode_section_loading_frame()
         root.addWidget(episode_host)
 
         mangabaka_section = self._mangabaka_section()
@@ -1390,7 +1895,36 @@ class WorkDetailPage(QWidget):
         self._episode_sync_errors = {}
         self._detail_build_token += 1
 
+        raw_members = work.get("_series_members") if hasattr(work, "get") else None
+        try:
+            self._ui_watchdog_work_id = int(work.get("id")) if hasattr(work, "get") else None
+        except (TypeError, ValueError, OverflowError):
+            self._ui_watchdog_work_id = None
+        member_ids = []
+        for member in raw_members or [work]:
+            try:
+                raw_id = member.get("id") if hasattr(member, "get") else member["id"]
+                member_id = int(raw_id)
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            if member_id > 0 and member_id not in member_ids:
+                member_ids.append(member_id)
+        self._ui_watchdog_bundle_ids = tuple(member_ids)
+        self._last_ui_phase = "detail_state_prepare"
+        prepare_started_at = time.perf_counter()
+        log_event(
+            "work_detail.detail_state_prepare_started",
+            work_id=work.get("id") if hasattr(work, "get") else None,
+            member_count=len(raw_members) if raw_members else 1,
+        )
         detail_ids = self._prepare_detail_state(work)
+        log_event(
+            "work_detail.detail_state_prepare_completed",
+            work_ids=detail_ids,
+            member_count=len(detail_ids),
+            elapsed_ms=round((time.perf_counter() - prepare_started_at) * 1000, 2),
+        )
+        self._last_ui_phase = "detail_shell_build"
         log_event(
             "work_detail.open_started",
             work_ids=detail_ids,
@@ -1419,7 +1953,9 @@ class WorkDetailPage(QWidget):
                 "work_detail.open_completed",
                 work_ids=detail_ids,
                 cache_hit=True,
+                shell_elapsed_ms=round((time.perf_counter() - open_started_at) * 1000, 2),
             )
+            self._last_ui_phase = "detail_page_idle"
             return
 
         content, _ready = self._build_detail_content(
@@ -1437,6 +1973,7 @@ class WorkDetailPage(QWidget):
             phase="skeleton_attached",
             shell_elapsed_ms=round((time.perf_counter() - open_started_at) * 1000, 2),
         )
+        self._last_ui_phase = "detail_page_idle"
 
     def _apply_detail_styles(self):
         self.setStyleSheet(f"""
@@ -1446,15 +1983,24 @@ class WorkDetailPage(QWidget):
             QFrame#section {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 18px; }}
             QFrame#episodesSection {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 14px; }}
             QFrame#episodeCard {{
-                background: transparent;
-                border: none;
-                border-bottom: 1px solid {COLORS['border']};
-                border-radius: 0px;
+                background: {surface_rgba('surface_alt')};
+                border: 1px solid {COLORS['border']};
+                border-radius: 12px;
             }}
             QFrame#episodeCard:hover {{
-                background: {surface_rgba('surface_alt')};
-                border-bottom-color: {COLORS['border_hover']};
-                border-radius: 8px;
+                background: {surface_rgba('surface_hover')};
+                border-color: {COLORS['border_hover']};
+            }}
+            QCheckBox#episodeWatchedCheckbox {{ padding: 6px; }}
+            QCheckBox#episodeWatchedCheckbox::indicator {{
+                width: 19px; height: 19px;
+                border: 1px solid {COLORS['border_hover']};
+                border-radius: 10px;
+                background: {surface_rgba('background_alt')};
+            }}
+            QCheckBox#episodeWatchedCheckbox::indicator:checked {{
+                background: {COLORS['accent']};
+                border-color: {COLORS['accent']};
             }}
             QFrame#detailSkeletonSection {{
                 background:{surface_rgba('surface')};
@@ -1642,100 +2188,308 @@ class WorkDetailPage(QWidget):
                 )
 
     def _populate_episode_section_impl(self, token, content, host, attempt=0):
-        if token != self._detail_build_token:
+        """Schedule active episode catalog reads on a worker thread."""
+        if token != self._detail_build_token or self.scroll_area.widget() is not content:
             return
-        if self.scroll_area.widget() is not content:
+        root = content.layout()
+        if root is None or root.indexOf(host) < 0:
             return
 
-        # Detail selection and catalog import run in parallel. Keep the
-        # skeleton alive until every bundled row exists, rather than treating a
-        # missing SQLite row as an empty season and crashing during TMDB setup.
-        if not self._is_reading_media():
-            selected_work_id = self._selected_episode_work_id or self._value("id")
-            missing_work_ids = (
-                [selected_work_id]
-                if selected_work_id is not None and get_work(selected_work_id) is None
-                else []
-            )
-            if missing_work_ids:
-                if attempt < 120:
-                    QTimer.singleShot(
-                        250,
-                        lambda token=token, page=content, section=host,
-                               next_attempt=attempt + 1:
-                            self._populate_episode_section(
-                                token, page, section, next_attempt
-                            ),
-                    )
-                    return
-
-                error_frame = QFrame()
-                error_frame.setObjectName("section")
-                error_frame.setProperty("_episodes_section", True)
-                error_layout = QVBoxLayout(error_frame)
-                error_layout.setContentsMargins(20, 18, 20, 20)
-                message = QLabel(
-                    "Title data is taking longer than expected. "
-                    "Go back and reopen this title to try again."
-                )
-                message.setWordWrap(True)
-                message.setStyleSheet(muted_label_stylesheet())
-                error_layout.addWidget(message)
-
-                root = content.layout()
-                if root is None:
-                    error_frame.deleteLater()
-                    return
-                index = root.indexOf(host)
-                if index < 0:
-                    error_frame.deleteLater()
-                    return
-                root.replaceWidget(host, error_frame)
+        if self._is_reading_media():
+            try:
+                new_frame = self._reading_section()
+                new_frame.setProperty("_reading_section", True)
+                root.replaceWidget(host, new_frame)
                 host.deleteLater()
+                content._episode_section_ready = True
+                content._episode_section_success = True
+                self._update_detail_cacheable(content)
+            except Exception as error:
+                log_exception("reading.detail_section_build_failed", error)
+            return
+
+        raw_work_id = self._selected_episode_work_id or self._value("id")
+        try:
+            selected_work_id = int(raw_work_id)
+        except (TypeError, ValueError, OverflowError):
+            selected_work_id = 0
+        if selected_work_id <= 0:
+            self._replace_episode_load_error(
+                content, host, "A valid season ID was not available."
+            )
+            content._episode_section_ready = True
+            content._episode_section_success = False
+            self._update_detail_cacheable(content)
+            return
+
+        key = (int(token), selected_work_id)
+        if key in self._episode_section_load_jobs:
+            log_event(
+                "episodes.section_load_duplicate_suppressed",
+                token=token,
+                work_id=selected_work_id,
+                attempt=attempt,
+            )
+            return
+
+        members = self._episode_members()
+        thread = QThread(self)
+        thread.setProperty("episode_section_load_token", int(token))
+        thread.setProperty("episode_section_load_work_id", selected_work_id)
+        worker = EpisodeSectionDataWorker(
+            token, selected_work_id, members, attempt=attempt
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.data_ready.connect(self._episode_section_data_ready)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._episode_section_load_thread_stopped)
+        thread.finished.connect(thread.deleteLater)
+        self._episode_section_load_jobs[key] = {
+            "thread": thread,
+            "worker": worker,
+            "content": content,
+            "host": host,
+            "token": int(token),
+            "work_id": selected_work_id,
+            "attempt": int(attempt),
+            "started_at": time.perf_counter(),
+            "result_handled": False,
+            "thread_stopped": False,
+            "retry": False,
+            "reload_after": False,
+        }
+        self._last_ui_phase = "episode_section_worker_scheduled"
+        log_event(
+            "episodes.section_load_scheduled",
+            token=token,
+            work_id=selected_work_id,
+            attempt=attempt,
+            member_count=len(members),
+            active_load_count=len(self._episode_section_load_jobs),
+            thread_ident=threading.get_ident(),
+        )
+        thread.start()
+
+    def _replace_episode_load_error(self, content, host, message):
+        root = content.layout() if content is not None else None
+        if root is None or host is None or root.indexOf(host) < 0:
+            return None
+        frame = self._episode_section_loading_frame(
+            message, include_skeleton=False
+        )
+        label = frame.findChild(QLabel, "detailEpisodeLoadingLabel")
+        if label is not None:
+            label.setObjectName("detailEpisodeMessage")
+        root.replaceWidget(host, frame)
+        host.deleteLater()
+        return frame
+
+    def _episode_section_data_ready(self, token, work_id, payload):
+        try:
+            key = (int(token), int(work_id))
+        except (TypeError, ValueError, OverflowError):
+            return
+        job = self._episode_section_load_jobs.get(key)
+        if job is None:
+            log_event(
+                "episodes.section_load_orphan_result",
+                token=token,
+                work_id=work_id,
+            )
+            return
+
+        content = job["content"]
+        host = job["host"]
+        attempt = job["attempt"]
+        payload = payload if isinstance(payload, dict) else {"status": "error"}
+        root = content.layout() if content is not None else None
+
+        if self._shutdown_event.is_set():
+            self._episode_section_result_handled(key, job)
+            return
+
+        if (
+            token != self._detail_build_token
+            or self.scroll_area.widget() is not content
+            or self._selected_episode_work_id != int(work_id)
+            or root is None
+            or root.indexOf(host) < 0
+        ):
+            log_event(
+                "episodes.section_load_result_discarded",
+                token=token,
+                work_id=work_id,
+                current_token=self._detail_build_token,
+                current_work_id=self._selected_episode_work_id,
+                reason="page_or_season_changed",
+                load_elapsed_ms=payload.get("load_elapsed_ms"),
+            )
+            self._episode_section_result_handled(key, job)
+            return
+
+        status = str(payload.get("status") or "error")
+        if status == "missing_work":
+            if attempt < 120:
+                job["retry"] = True
+                if attempt == 0 or (attempt + 1) % 10 == 0:
+                    log_event(
+                        "episodes.section_load_waiting_for_import",
+                        token=token,
+                        work_id=work_id,
+                        attempt=attempt,
+                        next_retry_ms=250,
+                        elapsed_ms=round(
+                            (time.perf_counter() - job["started_at"]) * 1000, 2
+                        ),
+                    )
+            else:
+                self._replace_episode_load_error(
+                    content,
+                    host,
+                    "Season data is still being imported. Go back and reopen this title to retry.",
+                )
                 content._episode_section_ready = True
                 content._episode_section_success = False
                 self._update_detail_cacheable(content)
                 log_event(
                     "work_detail.episode_section_build_failed",
-                    work_id=getattr(self, "_selected_episode_work_id", None),
-                    reason="work_rows_missing_after_timeout",
+                    token=token,
+                    work_id=work_id,
+                    reason="work_row_missing_after_timeout",
                     attempt=attempt,
+                    load_elapsed_ms=payload.get("load_elapsed_ms"),
                 )
-                return
-
-        new_frame = self._episodes_section(defer_cards=True)
-        new_frame.setProperty("_episodes_section", True)
-
-        root = content.layout()
-        if root is None:
+            self._episode_section_result_handled(key, job)
             return
 
-        index = root.indexOf(host)
-        if index < 0:
-            return
-
-        root.replaceWidget(host, new_frame)
-        host.deleteLater()
-        content._episode_section_ready = True
-        content._episode_section_success = (
-            new_frame.findChild(QLabel, "detailEpisodeMessage") is None
-        )
-        self._update_detail_cacheable(content)
-        log_event(
-            "work_detail.episode_section_rendered",
-            work_id=getattr(self, "_selected_episode_work_id", None),
-            episode_card_count=len(getattr(new_frame, "_pending_episode_cards", []) or []),
-            success=content._episode_section_success,
-        )
-
-        episodes = getattr(new_frame, "_pending_episode_cards", None)
-        if episodes:
-            QTimer.singleShot(
-                0,
-                lambda token=token, page=content, frame=new_frame, data=episodes:
-                    self._populate_episode_cards(token, page, frame, data, 0),
+        if status != "ok":
+            error_summary = str(payload.get("error_summary") or "Unknown database error")
+            self._replace_episode_load_error(
+                content,
+                host,
+                "Episode data could not be loaded. The detailed error was recorded in nekotrack.log.",
             )
+            content._episode_section_ready = True
+            content._episode_section_success = False
+            self._update_detail_cacheable(content)
+            log_event(
+                "work_detail.episode_section_load_failed",
+                token=token,
+                work_id=work_id,
+                attempt=attempt,
+                error_summary=error_summary[:400],
+                load_elapsed_ms=payload.get("load_elapsed_ms"),
+            )
+            self._episode_section_result_handled(key, job)
+            return
 
+        ui_started_at = time.perf_counter()
+        self._last_ui_phase = "episode_section_widget_construction"
+        try:
+            new_frame = self._build_episodes_section(
+                defer_cards=True, loaded_data=payload
+            )
+            new_frame.setProperty("_episodes_section", True)
+            root.replaceWidget(host, new_frame)
+            host.deleteLater()
+            content._episode_section_ready = True
+            content._episode_section_success = (
+                new_frame.findChild(QLabel, "detailEpisodeMessage") is None
+            )
+            self._update_detail_cacheable(content)
+            episodes = getattr(new_frame, "_pending_episode_cards", None)
+            log_event(
+                "work_detail.episode_section_rendered",
+                token=token,
+                work_id=work_id,
+                member_count=len(payload.get("members") or []),
+                episode_card_count=len(episodes or []),
+                success=content._episode_section_success,
+                worker_elapsed_ms=payload.get("load_elapsed_ms"),
+                widget_build_elapsed_ms=round(
+                    (time.perf_counter() - ui_started_at) * 1000, 2
+                ),
+                total_elapsed_ms=round(
+                    (time.perf_counter() - job["started_at"]) * 1000, 2
+                ),
+                thread_ident=threading.get_ident(),
+            )
+            if episodes:
+                QTimer.singleShot(
+                    0,
+                    lambda token=token, page=content, frame=new_frame, data=episodes:
+                        self._populate_episode_cards(token, page, frame, data, 0),
+                )
+        except Exception as error:
+            log_exception(
+                "work_detail.episode_section_widget_build_failed",
+                error,
+                token=token,
+                work_id=work_id,
+                worker_elapsed_ms=payload.get("load_elapsed_ms"),
+            )
+            self._replace_episode_load_error(
+                content,
+                host,
+                "Episode data could not be displayed. The error was recorded in nekotrack.log.",
+            )
+            content._episode_section_ready = True
+            content._episode_section_success = False
+            self._update_detail_cacheable(content)
+        finally:
+            self._last_ui_phase = "detail_page_idle"
+            self._episode_section_result_handled(key, job)
+
+    def _episode_section_load_thread_stopped(self):
+        thread = self.sender()
+        if thread is None:
+            return
+        try:
+            key = (
+                int(thread.property("episode_section_load_token")),
+                int(thread.property("episode_section_load_work_id")),
+            )
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            return
+        job = self._episode_section_load_jobs.get(key)
+        if job is None or job.get("thread") is not thread:
+            return
+        job["thread_stopped"] = True
+        log_event(
+            "episodes.section_load_thread_stopped",
+            token=key[0],
+            work_id=key[1],
+            attempt=job.get("attempt"),
+            elapsed_ms=round(
+                (time.perf_counter() - job["started_at"]) * 1000, 2
+            ),
+        )
+        if job.get("result_handled"):
+            self._episode_section_result_handled(key, job)
+
+    def _episode_section_result_handled(self, key, job):
+        if self._episode_section_load_jobs.get(key) is not job:
+            return
+        job["result_handled"] = True
+        if not job.get("thread_stopped"):
+            return
+        self._episode_section_load_jobs.pop(key, None)
+        if self._shutdown_event.is_set():
+            return
+        if job.get("reload_after"):
+            QTimer.singleShot(0, self._replace_episode_section)
+            return
+        if job.get("retry"):
+            QTimer.singleShot(
+                250,
+                lambda token=job["token"], content=job["content"], host=job["host"],
+                       next_attempt=job["attempt"] + 1:
+                    self._populate_episode_section(
+                        token, content, host, next_attempt
+                    ),
+            )
 
     def _populate_episode_cards(self, token, content, frame, episodes, offset):
         if token != self._detail_build_token or self.scroll_area.widget() is not content:
@@ -1760,8 +2514,17 @@ class WorkDetailPage(QWidget):
             return
 
         frame._episode_cards_rendering = True
+        batch_started_at = time.perf_counter()
         batch_size = 6
         end = min(offset + batch_size, len(episodes))
+        log_event(
+            "episodes.card_render_batch_started",
+            work_id=self._selected_episode_work_id,
+            offset=offset,
+            requested_count=end - offset,
+            total_count=len(episodes),
+            thread_ident=threading.get_ident(),
+        )
         for ep in episodes[offset:end]:
             try:
                 card = EpisodeCard(ep)
@@ -1777,6 +2540,15 @@ class WorkDetailPage(QWidget):
             layout.addWidget(card)
 
         frame._episode_cards_rendered_count = end
+        log_event(
+            "episodes.card_render_batch_completed",
+            work_id=self._selected_episode_work_id,
+            offset=offset,
+            rendered_count=end - offset,
+            total_count=len(episodes),
+            elapsed_ms=round((time.perf_counter() - batch_started_at) * 1000, 2),
+            thread_ident=threading.get_ident(),
+        )
         if end < len(episodes):
             QTimer.singleShot(
                 0,
@@ -2012,6 +2784,16 @@ class WorkDetailPage(QWidget):
             return
 
         section_started_at = context["section_started_at"]
+        widget_build_started_at = time.perf_counter()
+        self._last_ui_phase = f"detail_section_widget_build:{title}"
+        outcome = "success"
+        log_event(
+            "work_detail.section_widget_build_started",
+            section=title,
+            work_ids=list(detail_ids),
+            item_count=len(items or []),
+            thread_ident=threading.get_ident(),
+        )
         try:
             if title == "Staff":
                 section_widget = self._staff_section(detail_ids, items)
@@ -2025,6 +2807,7 @@ class WorkDetailPage(QWidget):
                     empty_message=self._detail_empty_message(title, detail_ids),
                 )
         except Exception as error:
+            outcome = "error"
             content._detail_sections_success = False
             log_exception(
                 "work_detail.section_widget_build_failed",
@@ -2039,6 +2822,15 @@ class WorkDetailPage(QWidget):
             error_label.setStyleSheet(muted_label_stylesheet())
             error_layout.addWidget(error_label)
 
+        log_event(
+            "work_detail.section_widget_build_completed",
+            section=title,
+            work_ids=list(detail_ids),
+            item_count=len(items or []),
+            outcome=outcome,
+            elapsed_ms=round((time.perf_counter() - widget_build_started_at) * 1000, 2),
+            thread_ident=threading.get_ident(),
+        )
         layout.insertWidget(loading_index, section_widget)
         layout.removeWidget(loading)
         loading.deleteLater()
@@ -2047,8 +2839,10 @@ class WorkDetailPage(QWidget):
             section=title,
             work_ids=list(detail_ids),
             elapsed_ms=round((time.perf_counter() - section_started_at) * 1000, 2),
+            widget_build_elapsed_ms=round((time.perf_counter() - widget_build_started_at) * 1000, 2),
             item_count=len(items or []),
         )
+        self._last_ui_phase = "detail_page_idle"
 
         next_specs = {
             "Characters": (
@@ -2407,6 +3201,15 @@ class WorkDetailPage(QWidget):
         )
 
     def _remote_cover_finished(self, label, work_id, cover_url, reply=None):
+        callback_started_at = time.perf_counter()
+        outcome = "error"
+        self._last_ui_phase = "cover_reply_finalize"
+        log_event(
+            "work_detail.cover_reply_finished_started",
+            work_id=work_id,
+            has_reply=reply is not None,
+            thread_ident=threading.get_ident(),
+        )
         # Multiple page builds can leave more than one cover request in flight.
         # Use the reply that fired this callback rather than whichever reply was
         # most recently stored on the page.
@@ -2418,6 +3221,7 @@ class WorkDetailPage(QWidget):
         if reply is not None and reply.error() == reply.NetworkError.NoError:
             pix = QPixmap()
             if pix.loadFromData(reply.readAll()):
+                outcome = "success"
                 self._cover_cache[cover_url] = pix
 
                 # The user can navigate away before the network finishes. Qt
@@ -2439,20 +3243,76 @@ class WorkDetailPage(QWidget):
                     IMAGE_DIRECTORY.mkdir(parents=True, exist_ok=True)
                     path = IMAGE_DIRECTORY / f"{work_id}.jpg"
                     if pix.save(str(path), "JPG", 85):
-                        save_cover_path(work_id, str(path))
+                        self._queue_cover_path_save(work_id, str(path))
                 except Exception:
                     pass
             else:
+                outcome = "decode_error"
                 self._cover_failures.add(cover_url)
                 if label is not None and isValid(label):
                     self._set_cover_placeholder(label, False, "COVER UNAVAILABLE")
         else:
+            outcome = "network_error"
             self._cover_failures.add(cover_url)
             if label is not None and isValid(label):
                 self._set_cover_placeholder(label, False, "COVER UNAVAILABLE")
 
         if reply is not None:
             reply.deleteLater()
+        log_event(
+            "work_detail.cover_reply_finished_completed",
+            work_id=work_id,
+            outcome=outcome,
+            elapsed_ms=round((time.perf_counter() - callback_started_at) * 1000, 2),
+            thread_ident=threading.get_ident(),
+        )
+        self._last_ui_phase = "detail_page_idle"
+
+    def _queue_cover_path_save(self, work_id, path):
+        if self._shutdown_event.is_set():
+            return
+        thread = QThread(self)
+        thread.setProperty("cover_path_work_id", int(work_id))
+        worker = CoverPathSaveWorker(work_id, path)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.data_ready.connect(self._cover_path_save_data_ready)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._cover_path_save_thread_stopped)
+        thread.finished.connect(thread.deleteLater)
+        self._cover_path_save_jobs[thread] = {
+            "thread": thread,
+            "worker": worker,
+            "work_id": int(work_id),
+            "filename": Path(str(path)).name,
+        }
+        log_event(
+            "work_detail.cover_path_persist_scheduled",
+            work_id=int(work_id),
+            filename=Path(str(path)).name,
+        )
+        thread.start()
+
+    def _cover_path_save_data_ready(self, work_id, success, error_message):
+        log_event(
+            "work_detail.cover_path_persist_result_received",
+            work_id=work_id,
+            success=bool(success),
+            error_summary=str(error_message or "")[:300],
+        )
+
+    def _cover_path_save_thread_stopped(self):
+        thread = self.sender()
+        if thread is None:
+            return
+        job = self._cover_path_save_jobs.pop(thread, None)
+        if job is not None:
+            log_event(
+                "work_detail.cover_path_persist_thread_stopped",
+                work_id=job.get("work_id"),
+                filename=job.get("filename"),
+            )
 
     def _library_group(self):
         # Library cards already carry their complete series grouping. Reuse it
@@ -3343,25 +4203,36 @@ class WorkDetailPage(QWidget):
             })
         return normalized
 
-    def _build_episodes_section(self, defer_cards=False):
+    def _build_episodes_section(self, defer_cards=False, loaded_data=None):
         if self._is_reading_media():
             return self._reading_section()
 
-        members = self._episode_members()
-        member_ids = {int(member["id"]) for member in members}
-        if self._selected_episode_work_id not in member_ids:
-            self._selected_episode_work_id = (
-                int(members[0]["id"])
-                if members
-                else self._value("id")
+        if loaded_data is None:
+            members = self._episode_members()
+            member_ids = {int(member["id"]) for member in members}
+            if self._selected_episode_work_id not in member_ids:
+                self._selected_episode_work_id = (
+                    int(members[0]["id"]) if members else self._value("id")
+                )
+            selected_id = self._selected_episode_work_id
+            raw_episodes = get_episodes(selected_id) if selected_id is not None else []
+            episodes = self._normalize_episode_rows(selected_id, raw_episodes)
+            selected_work = None
+            catalog_version = None
+            needs_catalog_refresh = None
+        else:
+            members = list(loaded_data.get("members") or [])
+            selected_id = int(
+                loaded_data.get("work_id") or self._selected_episode_work_id or 0
             )
+            episodes = list(loaded_data.get("episodes") or [])
+            selected_work = loaded_data.get("work")
+            catalog_version = int(loaded_data.get("catalog_version") or 0)
+            needs_catalog_refresh = bool(loaded_data.get("needs_catalog_refresh"))
 
-        selected_id = self._selected_episode_work_id
-        raw_episodes = get_episodes(selected_id) if selected_id is not None else []
-        episodes = self._normalize_episode_rows(selected_id, raw_episodes)
         retry_after = (
             self._episode_image_cache_retry_after.get(int(selected_id), 0.0)
-            if selected_id is not None else 0.0
+            if selected_id else 0.0
         )
         retry_suppressed = retry_after > time.monotonic()
         if retry_suppressed:
@@ -3369,10 +4240,8 @@ class WorkDetailPage(QWidget):
                 thumbnail = str(episode.get("thumbnail_url") or "").strip()
                 if thumbnail and not Path(thumbnail).is_file():
                     episode["thumbnail_cache_failed"] = True
-        if selected_id is not None and episodes:
-            # The saved/local row schema differs from the upstream TMDB shape
-            # expected by EpisodeImageCacheWorker. Translate it explicitly so
-            # saved remote thumbnails also get cached after a restart.
+        if selected_id and episodes:
+            # Keep saved-row keys separate from the TMDB worker's image-cache schema.
             self._start_episode_image_cache(
                 selected_id,
                 [
@@ -3488,7 +4357,11 @@ class WorkDetailPage(QWidget):
 
         lay.addLayout(header)
 
-        selected_work = get_work(selected_id) if selected_id is not None else None
+        selected_work = (
+            loaded_data.get("work")
+            if loaded_data is not None
+            else (get_work(selected_id) if selected_id is not None else None)
+        )
         if selected_work is None:
             # Stale season selections can outlive the row they referenced, and
             # a freshly selected title may still be importing. Keep the page
@@ -3503,14 +4376,18 @@ class WorkDetailPage(QWidget):
         # Refresh missing data and migrate existing catalogs once when the
         # matching policy changes. Upserts keep watched flags; a verified
         # replacement catalog also prunes stale episode numbers.
-        catalog_version = (
-            self._episode_catalog_version(selected_id)
-            if selected_id is not None else TMDB_EPISODE_CATALOG_VERSION
-        )
-        needs_catalog_refresh = bool(episodes) and (
-            catalog_version < TMDB_EPISODE_CATALOG_VERSION
-            or self._episode_catalog_is_stale(selected_id)
-        )
+        if loaded_data is None:
+            catalog_version = (
+                self._episode_catalog_version(selected_id)
+                if selected_id is not None else TMDB_EPISODE_CATALOG_VERSION
+            )
+            needs_catalog_refresh = bool(episodes) and (
+                catalog_version < TMDB_EPISODE_CATALOG_VERSION
+                or self._episode_catalog_is_stale(selected_id)
+            )
+        else:
+            catalog_version = int(loaded_data.get("catalog_version") or 0)
+            needs_catalog_refresh = bool(loaded_data.get("needs_catalog_refresh"))
         if (
             selected_id is not None
             and (not episodes or needs_catalog_refresh)
@@ -3518,19 +4395,29 @@ class WorkDetailPage(QWidget):
             and selected_id not in self._episode_sync_errors
         ):
             try:
-                (
-                    title_variants,
-                    start_date,
-                    end_date,
-                    expected_episodes,
-                    tmdb_id,
-                    tmdb_season_number,
-                    media_format,
-                ) = self._episode_tmdb_context(
-                    selected_id,
-                    members,
-                    selected_work,
-                )
+                if loaded_data is not None:
+                    context = loaded_data.get("tmdb_context") or {}
+                    title_variants = list(context.get("title_variants") or [])
+                    start_date = context.get("start_date")
+                    end_date = context.get("end_date")
+                    expected_episodes = context.get("expected_episodes")
+                    tmdb_id = context.get("tmdb_id")
+                    tmdb_season_number = context.get("tmdb_season_number")
+                    media_format = context.get("media_format")
+                else:
+                    (
+                        title_variants,
+                        start_date,
+                        end_date,
+                        expected_episodes,
+                        tmdb_id,
+                        tmdb_season_number,
+                        media_format,
+                    ) = self._episode_tmdb_context(
+                        selected_id,
+                        members,
+                        selected_work,
+                    )
                 self._start_episode_sync(
                     selected_id,
                     title_variants,
@@ -4066,12 +4953,29 @@ class WorkDetailPage(QWidget):
                     break
 
     def _replace_episode_section(self):
+        """Replace the current episode panel with a skeleton, then reload it off-thread."""
         content = self.scroll_area.widget()
         if content is None:
             return
-
         root = content.layout()
         if root is None:
+            return
+
+        raw_work_id = self._selected_episode_work_id or self._value("id")
+        try:
+            selected_work_id = int(raw_work_id)
+        except (TypeError, ValueError, OverflowError):
+            selected_work_id = 0
+        active_key = (int(self._detail_build_token), selected_work_id)
+        active_job = self._episode_section_load_jobs.get(active_key)
+        if active_job is not None:
+            active_job["reload_after"] = True
+            log_event(
+                "work_detail.episode_section_reload_deferred",
+                token=self._detail_build_token,
+                work_id=selected_work_id,
+                reason="episode_reader_already_active",
+            )
             return
 
         for index in range(root.count()):
@@ -4081,53 +4985,109 @@ class WorkDetailPage(QWidget):
                 continue
 
             old_frame = widget
-            new_frame = self._episodes_section(defer_cards=True)
-            new_frame.setProperty("_episodes_section", True)
+            if self._is_reading_media():
+                new_frame = self._episodes_section(defer_cards=True)
+                new_frame.setProperty("_episodes_section", True)
+                root.replaceWidget(old_frame, new_frame)
+                old_frame.deleteLater()
+                return
+
+            new_frame = self._episode_section_loading_frame()
             root.replaceWidget(old_frame, new_frame)
             old_frame.deleteLater()
-
-            episodes = getattr(new_frame, "_pending_episode_cards", None)
-            if episodes:
-                token = self._detail_build_token
-                QTimer.singleShot(
-                    0,
-                    lambda token=token, page=content, frame=new_frame, data=episodes:
-                        self._populate_episode_cards(token, page, frame, data, 0),
-                )
+            content._episode_section_ready = False
+            content._episode_section_success = True
+            self._update_detail_cacheable(content)
+            token = self._detail_build_token
+            log_event(
+                "work_detail.episode_section_reload_requested",
+                token=token,
+                work_id=self._selected_episode_work_id,
+                reason="catalog_or_artwork_changed",
+            )
+            QTimer.singleShot(
+                0,
+                lambda token=token, page=content, frame=new_frame:
+                    self._populate_episode_section(token, page, frame, 0),
+            )
             return
 
     def _episode_toggled(self, number, checked):
-        work_id = self._selected_episode_work_id
-        if work_id is None:
-            work_id = self._value("id")
+        raw_work_id = self._selected_episode_work_id or self._value("id")
+        try:
+            work_id = int(raw_work_id)
+            episode_number = int(number)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if work_id <= 0 or episode_number <= 0 or self._shutdown_event.is_set():
+            return
 
-        set_episode_watched(work_id, number, checked)
+        thread = QThread(self)
+        thread.setProperty("episode_progress_work_id", work_id)
+        worker = EpisodeProgressWorker(work_id, episode_number, checked)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.data_ready.connect(self._episode_progress_data_ready)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._episode_progress_thread_stopped)
+        thread.finished.connect(thread.deleteLater)
+        self._episode_progress_jobs[thread] = {
+            "thread": thread,
+            "worker": worker,
+            "work_id": work_id,
+            "episode_number": episode_number,
+        }
+        log_event(
+            "episodes.progress_write_scheduled",
+            work_id=work_id,
+            episode_number=episode_number,
+            watched=bool(checked),
+            active_progress_writes=len(self._episode_progress_jobs),
+        )
+        thread.start()
 
-        episodes = get_episodes(work_id)
-        watched = sum(1 for ep in episodes if ep["watched"])
-        total = len(episodes)
-
+    def _episode_progress_data_ready(self, work_id, watched_count, total, error_message):
+        log_event(
+            "episodes.progress_ui_callback",
+            work_id=work_id,
+            watched_count=watched_count,
+            total_count=total,
+            success=not bool(error_message),
+            error_summary=str(error_message)[:300],
+        )
+        if self._shutdown_event.is_set() or self._selected_episode_work_id != int(work_id):
+            return
         content = self.scroll_area.widget()
         if content is None or content.layout() is None:
             return
-
         root = content.layout()
         for index in range(root.count()):
             item = root.itemAt(index)
             widget = item.widget() if item is not None else None
             if widget is None or not widget.property("_episodes_section"):
                 continue
-
-            labels = widget.findChildren(QLabel)
-            for label in labels:
+            for label in widget.findChildren(QLabel):
                 if label.text().endswith("watched") or label.text() == "No episode list saved":
-                    label.setText(
-                        f"{watched} / {total} watched"
-                        if total
-                        else "No episode list saved"
-                    )
-                    break
+                    if not error_message:
+                        label.setText(
+                            f"{watched_count} / {total} watched"
+                            if total
+                            else "No episode list saved"
+                        )
+                    return
+
+    def _episode_progress_thread_stopped(self):
+        thread = self.sender()
+        if thread is None:
             return
+        job = self._episode_progress_jobs.pop(thread, None)
+        if job is not None:
+            log_event(
+                "episodes.progress_thread_stopped",
+                work_id=job.get("work_id"),
+                episode_number=job.get("episode_number"),
+            )
 
     def _detail_section_frame_stylesheet(self):
         return (
