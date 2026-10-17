@@ -9,8 +9,8 @@ from PySide6.QtCore import Qt, Signal
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import (
-    QApplication, QBoxLayout, QFrame, QHBoxLayout, QLabel, QPushButton,
-    QToolButton, QVBoxLayout, QWidget, QWidgetAction,
+    QApplication, QBoxLayout, QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton,
+    QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction,
 )
 
 from api import (
@@ -506,10 +506,11 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
-    def test_episode_rows_are_compact_and_hide_empty_synopsis(self):
+    def test_episode_rows_are_large_and_have_a_clear_watch_toggle(self):
         episode = {
             "work_id": 12345,
-            "episode_number": 1,
+            "episode_number": 4,
+            "display_episode_number": 1,
             "thumbnail_url": None,
             "air_date": None,
             "title": "Episode title",
@@ -519,14 +520,80 @@ class DetailSkeletonTests(unittest.TestCase):
         card = EpisodeCard(episode)
         artwork = card.findChild(EpisodeArtwork)
         description = card.findChild(QLabel, "detailEpisodeDescription")
+        watched = card.findChild(QCheckBox, "episodeWatchedCheckbox")
+        labels = card.findChildren(QLabel)
 
-        self.assertGreaterEqual(card.minimumHeight(), 100)
-        self.assertEqual(artwork.size().width(), 148)
-        self.assertEqual(artwork.size().height(), 83)
-        # Empty synopses are omitted entirely rather than taking up row space.
+        self.assertGreaterEqual(card.minimumHeight(), 150)
+        self.assertEqual(artwork.size().width(), 224)
+        self.assertEqual(artwork.size().height(), 126)
+        self.assertIn("EP 01", [label.text() for label in labels])
+        self.assertIsNotNone(watched)
+        self.assertEqual(watched.text(), "Watched")
         self.assertIsNone(description)
 
         card.deleteLater()
+        self.app.processEvents()
+
+    def test_bundle_episode_selector_uses_real_member_titles_and_progress_control(self):
+        page = WorkDetailPage()
+        page._selected_episode_work_id = 12346
+        members = [
+            {
+                "id": 12345,
+                "title": {"english": "Re:ZERO Season One"},
+                "start_year": 2016, "start_month": 4, "start_day": 4,
+            },
+            {
+                "id": 12346,
+                "title": {"english": "Re:ZERO - The Frozen Bond"},
+                "start_year": 2019, "start_month": 11, "start_day": 8,
+            },
+        ]
+        payload = {
+            "status": "ok",
+            "work_id": 12346,
+            "members": members,
+            "episodes": [{
+                "work_id": 12346,
+                "episode_number": 4,
+                "title": "The Frozen Bond",
+                "description": "",
+                "air_date": None,
+                "thumbnail_url": None,
+                "watched": 0,
+            }],
+            "work": {
+                "id": 12346,
+                "title": "Re:ZERO - The Frozen Bond",
+                "format": "OVA",
+                "episodes": 1,
+            },
+            "catalog_version": TMDB_EPISODE_CATALOG_VERSION,
+            "needs_catalog_refresh": False,
+        }
+
+        with (
+            patch.object(page, "_is_reading_media", return_value=False),
+            patch.object(page, "_start_episode_image_cache"),
+        ):
+            frame = page._build_episodes_section(defer_cards=True, loaded_data=payload)
+
+        selector = frame.findChild(QToolButton)
+        self.assertIsNotNone(selector)
+        self.assertIn("The Frozen Bond", selector.text())
+        self.assertNotIn("Season 2", selector.text())
+        self.assertIn(
+            "Re:ZERO - The Frozen Bond",
+            [action.text() for action in selector.menu().actions()],
+        )
+        self.assertEqual(
+            frame.findChild(QSpinBox, "episodeProgressThrough").maximum(), 1
+        )
+        self.assertIsNotNone(frame.findChild(QPushButton, "episodeProgressApply"))
+        self.assertIsNotNone(frame.findChild(QPushButton, "episodeMarkAllWatched"))
+
+        frame.deleteLater()
+        page.deleteLater()
         self.app.processEvents()
 
     def test_missing_episode_art_is_recorded_as_failure_not_a_successful_batch(self):
