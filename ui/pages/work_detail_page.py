@@ -5215,10 +5215,19 @@ class WorkDetailPage(QWidget):
         ):
             return
 
-        for control in tuple(buttons) + ((progress_spin,) if progress_spin is not None else ()):
+        content = self.scroll_area.widget()
+        watched_controls = (
+            tuple(content.findChildren(QCheckBox, "episodeWatchedCheckbox"))
+            if content is not None
+            else ()
+        )
+        for control in (
+            tuple(buttons)
+            + ((progress_spin,) if progress_spin is not None else ())
+            + watched_controls
+        ):
             if control is not None and isValid(control):
                 control.setEnabled(False)
-        content = self.scroll_area.widget()
         if content is not None:
             status = content.findChild(QLabel, "episodeProgressStatus")
             if status is not None:
@@ -5229,7 +5238,13 @@ class WorkDetailPage(QWidget):
         worker = EpisodeProgressBatchWorker(work_id, watched_numbers)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.data_ready.connect(self._episode_progress_batch_data_ready)
+        worker.data_ready.connect(
+            lambda wid, watched_count, total, error_message,
+                   controls=tuple(buttons), spin=progress_spin, checks=watched_controls:
+                self._episode_progress_batch_data_ready(
+                    wid, watched_count, total, error_message, controls, spin, checks
+                )
+        )
         worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(self._episode_progress_thread_stopped)
@@ -5242,6 +5257,7 @@ class WorkDetailPage(QWidget):
             "bulk_progress": True,
             "buttons": tuple(buttons),
             "progress_spin": progress_spin,
+            "watched_controls": watched_controls,
         }
         log_event(
             "episodes.progress_range_write_scheduled",
@@ -5253,32 +5269,31 @@ class WorkDetailPage(QWidget):
         )
         thread.start()
 
-    def _episode_progress_batch_data_ready(self, work_id, watched_count, total, error_message):
+    def _episode_progress_batch_data_ready(
+        self, work_id, watched_count, total, error_message,
+        buttons=(), progress_spin=None, watched_controls=(),
+    ):
         self._episode_progress_data_ready(
             work_id, watched_count, total, error_message
         )
-        job = next(
-            (
-                item for item in self._episode_progress_jobs.values()
-                if item.get("bulk_progress") and int(item.get("work_id") or 0) == int(work_id)
-            ),
-            None,
-        )
-        if job is not None:
-            for control in tuple(job.get("buttons") or ()):
-                if control is not None and isValid(control):
-                    control.setEnabled(True)
-            spin = job.get("progress_spin")
-            if spin is not None and isValid(spin):
-                spin.setEnabled(True)
+        for control in (
+            tuple(buttons)
+            + ((progress_spin,) if progress_spin is not None else ())
+            + tuple(watched_controls)
+        ):
+            if control is not None and isValid(control):
+                control.setEnabled(True)
 
         content = self.scroll_area.widget()
-        if content is not None:
+        if (
+            content is not None
+            and self._selected_episode_work_id == int(work_id)
+        ):
             status = content.findChild(QLabel, "episodeProgressStatus")
             if status is not None:
                 if error_message:
                     status.setText("Could not save progress. Try again.")
-                elif self._selected_episode_work_id == int(work_id):
+                else:
                     status.setText("Progress saved.")
         if not error_message and not self._shutdown_event.is_set():
             if self._selected_episode_work_id == int(work_id):
