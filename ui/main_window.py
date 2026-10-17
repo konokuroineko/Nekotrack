@@ -1540,8 +1540,21 @@ class MainWindow(QMainWindow):
                 f"Episode image preload failed for work {work_id}: {error}"
             )
 
-        # Refresh an already-open detail page after background enrichment so
-        # newly imported characters/staff appear without another click.
+        self._refresh_open_detail_after_import(work_id)
+
+    def _library_import_error(self, work_id, message):
+        work_id = int(work_id)
+        self._detail_enrichment_ids.discard(work_id)
+        log_event("library.import.error_signal", work_id=work_id, error=message)
+        # The basic Library entry remains usable when optional metadata fails;
+        # still flush a deferred refresh after the last bundle import completes.
+        self._refresh_open_detail_after_import(work_id)
+
+    def _refresh_open_detail_after_import(self, work_id):
+        """Refresh an open bundle once its required member imports have settled."""
+        if self._shutdown_event.is_set():
+            return
+
         current_work = getattr(self.work_detail_page, "work", None)
         if current_work is None:
             return
@@ -1551,18 +1564,33 @@ class MainWindow(QMainWindow):
                 int(member["id"])
                 for member in self.work_detail_page._detail_work_ids()
             }
-        except Exception:
-            current_ids = set()
+        except Exception as error:
+            log_exception(
+                "library.import.detail_refresh_ids_failed",
+                error,
+                work_id=work_id,
+            )
+            return
 
-        if work_id in current_ids:
-            self.work_detail_page.set_work(current_work)
+        if int(work_id) not in current_ids:
+            return
 
-    def _library_import_error(self, work_id, message):
-        self._detail_enrichment_ids.discard(int(work_id))
-        log_event("library.import.error_signal", work_id=work_id, error=message)
-        # The basic library entry remains usable when optional full metadata
-        # enrichment fails.
-        return
+        pending_ids = current_ids.intersection(self._detail_enrichment_ids)
+        if pending_ids:
+            log_event(
+                "library.import.detail_refresh_deferred",
+                work_id=work_id,
+                pending_member_count=len(pending_ids),
+                pending_member_ids=sorted(pending_ids),
+            )
+            return
+
+        log_event(
+            "library.import.detail_refresh_after_bundle_idle",
+            work_id=work_id,
+            member_count=len(current_ids),
+        )
+        self.work_detail_page.set_work(current_work)
 
     def _queue_library_imports(self, work_ids):
         """Queue imports and reserve only a bounded number of worker threads."""
