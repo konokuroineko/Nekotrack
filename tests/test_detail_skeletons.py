@@ -1163,14 +1163,25 @@ class DetailSkeletonTests(unittest.TestCase):
         page.scroll_area.setWidget(content)
         token = page._detail_build_token
 
-        with patch.object(
-            page, "_detail_work_ids",
+        with patch(
+            "ui.pages.work_detail_page.get_work",
             side_effect=RuntimeError("simulated invalid bundle details"),
         ):
             page._populate_episode_section(token, content, host)
+            deadline = time.monotonic() + 4.0
+            while (
+                time.monotonic() < deadline
+                and content.findChild(QLabel, "detailEpisodeMessage") is None
+            ):
+                self.app.processEvents()
+                time.sleep(0.01)
+            self.app.processEvents()
 
-        self.assertIsNotNone(content.findChild(QLabel, "detailEpisodeMessage"))
+        message = content.findChild(QLabel, "detailEpisodeMessage")
+        self.assertIsNotNone(message)
+        self.assertIn("could not be loaded", message.text())
         self.assertEqual(root.indexOf(host), -1)
+        self.assertFalse(page._episode_section_load_jobs)
         page.deleteLater()
         self.app.processEvents()
 
