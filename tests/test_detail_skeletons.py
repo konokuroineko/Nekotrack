@@ -19,7 +19,7 @@ from api import (
 )
 from ui.pages.work_detail_page import (
     EpisodeArtwork, EpisodeCard,
-    EpisodeImageCacheWorker, WorkDetailPage,
+    EpisodeImageCacheWorker, EpisodeSyncWorker, WorkDetailPage,
 )
 
 
@@ -748,8 +748,7 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
-    def test_successful_episode_sync_prunes_and_records_refresh_time(self):
-        page = WorkDetailPage()
+    def test_successful_episode_sync_persists_catalog_in_worker(self):
         now = 2_000_000_000
         episodes = [{
             "episodeNumber": 1,
@@ -758,24 +757,28 @@ class DetailSkeletonTests(unittest.TestCase):
             "airdate": "2020-01-01",
             "thumbnail": None,
         }]
+        worker = EpisodeSyncWorker(
+            12345, ["Example Series"], "2020-01-01", None, 1, 99, 1, "TV"
+        )
+        results = []
+        worker.finished.connect(lambda work_id, payload: results.append((work_id, payload)))
         with (
-            patch("ui.pages.work_detail_page.save_episodes") as save_episodes,
-            patch("ui.pages.work_detail_page.save_tmdb_mapping") as save_mapping,
-            patch("ui.pages.work_detail_page.save_provider_metadata") as save_metadata,
-            patch("ui.pages.work_detail_page.prune_episode_catalog") as prune,
-            patch("ui.pages.work_detail_page.time.time", return_value=now),
-            patch.object(page, "_start_episode_image_cache"),
-            patch.object(page, "_replace_episode_section"),
-        ):
-            page._episode_sync_finished(
-                12345,
-                {
+            patch(
+                "ui.pages.work_detail_page.get_tmdb_episode_data",
+                return_value={
                     "episodes": episodes,
                     "tmdb_count": 1,
                     "tmdb_id": 99,
                     "tmdb_season_number": 1,
                 },
-            )
+            ),
+            patch("ui.pages.work_detail_page.save_episodes") as save_episodes,
+            patch("ui.pages.work_detail_page.save_tmdb_mapping") as save_mapping,
+            patch("ui.pages.work_detail_page.save_provider_metadata") as save_metadata,
+            patch("ui.pages.work_detail_page.prune_episode_catalog") as prune,
+            patch("ui.pages.work_detail_page.time.time", return_value=now),
+        ):
+            worker.run()
 
         save_episodes.assert_called_once_with(12345, episodes)
         save_mapping.assert_called_once_with(12345, 99, 1)
@@ -787,6 +790,54 @@ class DetailSkeletonTests(unittest.TestCase):
                 "version": TMDB_EPISODE_CATALOG_VERSION,
                 "fetched_at": now,
             },
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0], 12345)
+        self.assertTrue(results[0][1]["_catalog_persisted"])
+
+    def test_episode_catalog_database_writes_run_off_the_gui_thread(self):
+        page = WorkDetailPage()
+        gui_thread_id = threading.get_ident()
+        writer_thread_ids = []
+        episodes = [{
+            "episodeNumber": 1,
+            "title": "Episode One",
+            "description": None,
+            "airdate": "2020-01-01",
+            "thumbnail": None,
+        }]
+
+        def record_writer_thread(*_args, **_kwargs):
+            writer_thread_ids.append(threading.get_ident())
+
+        with (
+            patch(
+                "ui.pages.work_detail_page.get_tmdb_episode_data",
+                return_value={
+                    "episodes": episodes,
+                    "tmdb_count": 1,
+                    "tmdb_id": 99,
+                    "tmdb_season_number": 1,
+                },
+            ),
+            patch("ui.pages.work_detail_page.save_episodes", side_effect=record_writer_thread),
+            patch("ui.pages.work_detail_page.save_tmdb_mapping", side_effect=record_writer_thread),
+            patch("ui.pages.work_detail_page.prune_episode_catalog", side_effect=record_writer_thread),
+            patch("ui.pages.work_detail_page.save_provider_metadata", side_effect=record_writer_thread),
+            patch.object(page, "_start_episode_image_cache"),
+            patch.object(page, "_replace_episode_section"),
+        ):
+            page._start_episode_sync(
+                12345, ["Example Series"], "2020-01-01", None, 1, 99, 1, "TV"
+            )
+            thread = page._episode_sync_thread
+            self.assertTrue(thread.wait(2000), "Episode catalog worker did not stop.")
+            self.app.processEvents()
+
+        self.assertEqual(len(writer_thread_ids), 4)
+        self.assertTrue(
+            all(thread_id != gui_thread_id for thread_id in writer_thread_ids),
+            "Episode catalog persistence unexpectedly ran on the GUI thread.",
         )
         page.deleteLater()
         self.app.processEvents()

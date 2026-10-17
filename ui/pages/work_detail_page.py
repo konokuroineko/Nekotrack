@@ -174,6 +174,56 @@ class EpisodeSyncWorker(QObject):
         else:
             payload = payload if isinstance(payload, dict) else {}
             episodes = payload.get("episodes")
+            if isinstance(episodes, list) and episodes:
+                persist_started_at = time.perf_counter()
+                log_event(
+                    "episodes.catalog_persist_started",
+                    work_id=self.work_id,
+                    episode_count=len(episodes),
+                    provider="TMDB",
+                )
+                try:
+                    # SQLite writes can wait behind the many import transactions
+                    # used by a bundle. Keep them in this worker, never in the
+                    # GUI-thread completion callback.
+                    save_episodes(self.work_id, episodes)
+                    tmdb_id = payload.get("tmdb_id")
+                    if tmdb_id is not None:
+                        save_tmdb_mapping(
+                            self.work_id,
+                            tmdb_id,
+                            payload.get("tmdb_season_number"),
+                        )
+                    prune_episode_catalog(self.work_id, episodes)
+                    save_provider_metadata(
+                        self.work_id,
+                        "tmdb_episode_match_version",
+                        {
+                            "version": TMDB_EPISODE_CATALOG_VERSION,
+                            "fetched_at": int(time.time()),
+                        },
+                    )
+                    payload["_catalog_persisted"] = True
+                    log_event(
+                        "episodes.catalog_persist_completed",
+                        work_id=self.work_id,
+                        episode_count=len(episodes),
+                        elapsed_ms=round(
+                            (time.perf_counter() - persist_started_at) * 1000, 2
+                        ),
+                    )
+                except Exception as error:
+                    payload["_catalog_persist_error"] = str(error)[:600]
+                    log_exception(
+                        "tmdb.episode_catalog_persist_failed",
+                        error,
+                        work_id=self.work_id,
+                        episode_count=len(episodes),
+                        elapsed_ms=round(
+                            (time.perf_counter() - persist_started_at) * 1000, 2
+                        ),
+                    )
+
             log_event(
                 "episodes.sync_worker_succeeded",
                 work_id=self.work_id,
@@ -181,6 +231,8 @@ class EpisodeSyncWorker(QObject):
                 episode_count=len(episodes) if isinstance(episodes, list) else 0,
                 tmdb_id=payload.get("tmdb_id"),
                 tmdb_season_number=payload.get("tmdb_season_number"),
+                catalog_persisted=bool(payload.get("_catalog_persisted")),
+                catalog_persist_error=bool(payload.get("_catalog_persist_error")),
             )
             self.finished.emit(self.work_id, payload)
 
@@ -3949,38 +4001,22 @@ class WorkDetailPage(QWidget):
             self._episode_source_status[work_id] = {
                 "tmdb": int(payload.get("tmdb_count") or len(episodes)),
             }
-
-        tmdb_id = payload.get("tmdb_id")
-        tmdb_season_number = payload.get("tmdb_season_number")
-        if episodes:
-            try:
-                # Only a nonempty, parsed catalog can replace saved episode data
-                # or the mapping. Empty/failed refreshes preserve the last good copy.
-                save_episodes(work_id, episodes)
-                if tmdb_id is not None:
-                    save_tmdb_mapping(
-                        work_id,
-                        tmdb_id,
-                        tmdb_season_number,
-                    )
-                # The replacement is now verified. Prune stale rows on every
-                # successful refresh, not only during a matching-policy migration.
-                prune_episode_catalog(work_id, episodes)
-                save_provider_metadata(
-                    work_id,
-                    "tmdb_episode_match_version",
-                    {
-                        "version": TMDB_EPISODE_CATALOG_VERSION,
-                        "fetched_at": int(time.time()),
-                    },
-                )
-            except Exception as error:
-                log_exception(
-                    "tmdb.episode_catalog_migration_failed",
-                    error,
-                    work_id=work_id,
-                    episode_count=len(episodes),
-                )
+        persist_error = str(payload.get("_catalog_persist_error") or "").strip()
+        if persist_error:
+            self._episode_sync_errors[work_id] = persist_error
+            log_event(
+                "episodes.catalog_persist_error_received",
+                work_id=work_id,
+                error_summary=persist_error[:400],
+            )
+        elif episodes and not payload.get("_catalog_persisted"):
+            # This should only occur with an invalid/legacy worker result; make
+            # the inconsistency visible instead of silently treating it saved.
+            log_event(
+                "episodes.catalog_persist_marker_missing",
+                work_id=work_id,
+                episode_count=len(episodes),
+            )
         self._episode_sync_completed.add(work_id)
         if self._shutdown_event.is_set():
             return
