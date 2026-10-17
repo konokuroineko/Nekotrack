@@ -1438,6 +1438,8 @@ class WorkDetailPage(QWidget):
     def request_shutdown(self):
         """Cancel queued episode-image work and stop detail-page QThreads safely."""
         self._shutdown_event.set()
+        if hasattr(self, "_ui_heartbeat_timer"):
+            self._ui_heartbeat_timer.stop()
         threads = []
         if self._episode_sync_thread is not None:
             threads.append(self._episode_sync_thread)
@@ -1630,7 +1632,21 @@ class WorkDetailPage(QWidget):
         back.setCursor(Qt.PointingHandCursor)
         back.clicked.connect(self.back_requested)
         root.addWidget(back, alignment=Qt.AlignLeft)
-        root.addWidget(self._hero())
+        hero_started_at = time.perf_counter()
+        self._last_ui_phase = "hero_widget_build"
+        log_event(
+            "work_detail.hero_build_started",
+            work_ids=detail_ids,
+            member_count=len(detail_ids),
+        )
+        hero = self._hero()
+        log_event(
+            "work_detail.hero_build_completed",
+            work_ids=detail_ids,
+            member_count=len(detail_ids),
+            elapsed_ms=round((time.perf_counter() - hero_started_at) * 1000, 2),
+        )
+        root.addWidget(hero)
 
         episode_host = QFrame()
         episode_host.setObjectName("section")
@@ -1839,7 +1855,22 @@ class WorkDetailPage(QWidget):
         self._episode_sync_errors = {}
         self._detail_build_token += 1
 
+        raw_members = work.get("_series_members") if hasattr(work, "get") else None
+        self._last_ui_phase = "detail_state_prepare"
+        prepare_started_at = time.perf_counter()
+        log_event(
+            "work_detail.detail_state_prepare_started",
+            work_id=work.get("id") if hasattr(work, "get") else None,
+            member_count=len(raw_members) if raw_members else 1,
+        )
         detail_ids = self._prepare_detail_state(work)
+        log_event(
+            "work_detail.detail_state_prepare_completed",
+            work_ids=detail_ids,
+            member_count=len(detail_ids),
+            elapsed_ms=round((time.perf_counter() - prepare_started_at) * 1000, 2),
+        )
+        self._last_ui_phase = "detail_shell_build"
         log_event(
             "work_detail.open_started",
             work_ids=detail_ids,
@@ -1868,7 +1899,9 @@ class WorkDetailPage(QWidget):
                 "work_detail.open_completed",
                 work_ids=detail_ids,
                 cache_hit=True,
+                shell_elapsed_ms=round((time.perf_counter() - open_started_at) * 1000, 2),
             )
+            self._last_ui_phase = "detail_page_idle"
             return
 
         content, _ready = self._build_detail_content(
@@ -1886,6 +1919,7 @@ class WorkDetailPage(QWidget):
             phase="skeleton_attached",
             shell_elapsed_ms=round((time.perf_counter() - open_started_at) * 1000, 2),
         )
+        self._last_ui_phase = "detail_page_idle"
 
     def _apply_detail_styles(self):
         self.setStyleSheet(f"""
@@ -2420,8 +2454,17 @@ class WorkDetailPage(QWidget):
             return
 
         frame._episode_cards_rendering = True
+        batch_started_at = time.perf_counter()
         batch_size = 6
         end = min(offset + batch_size, len(episodes))
+        log_event(
+            "episodes.card_render_batch_started",
+            work_id=self._selected_episode_work_id,
+            offset=offset,
+            requested_count=end - offset,
+            total_count=len(episodes),
+            thread_ident=threading.get_ident(),
+        )
         for ep in episodes[offset:end]:
             try:
                 card = EpisodeCard(ep)
@@ -2437,6 +2480,15 @@ class WorkDetailPage(QWidget):
             layout.addWidget(card)
 
         frame._episode_cards_rendered_count = end
+        log_event(
+            "episodes.card_render_batch_completed",
+            work_id=self._selected_episode_work_id,
+            offset=offset,
+            rendered_count=end - offset,
+            total_count=len(episodes),
+            elapsed_ms=round((time.perf_counter() - batch_started_at) * 1000, 2),
+            thread_ident=threading.get_ident(),
+        )
         if end < len(episodes):
             QTimer.singleShot(
                 0,
@@ -3067,6 +3119,15 @@ class WorkDetailPage(QWidget):
         )
 
     def _remote_cover_finished(self, label, work_id, cover_url, reply=None):
+        callback_started_at = time.perf_counter()
+        outcome = "error"
+        self._last_ui_phase = "cover_reply_finalize"
+        log_event(
+            "work_detail.cover_reply_finished_started",
+            work_id=work_id,
+            has_reply=reply is not None,
+            thread_ident=threading.get_ident(),
+        )
         # Multiple page builds can leave more than one cover request in flight.
         # Use the reply that fired this callback rather than whichever reply was
         # most recently stored on the page.
@@ -3078,6 +3139,7 @@ class WorkDetailPage(QWidget):
         if reply is not None and reply.error() == reply.NetworkError.NoError:
             pix = QPixmap()
             if pix.loadFromData(reply.readAll()):
+                outcome = "success"
                 self._cover_cache[cover_url] = pix
 
                 # The user can navigate away before the network finishes. Qt
@@ -3103,16 +3165,26 @@ class WorkDetailPage(QWidget):
                 except Exception:
                     pass
             else:
+                outcome = "decode_error"
                 self._cover_failures.add(cover_url)
                 if label is not None and isValid(label):
                     self._set_cover_placeholder(label, False, "COVER UNAVAILABLE")
         else:
+            outcome = "network_error"
             self._cover_failures.add(cover_url)
             if label is not None and isValid(label):
                 self._set_cover_placeholder(label, False, "COVER UNAVAILABLE")
 
         if reply is not None:
             reply.deleteLater()
+        log_event(
+            "work_detail.cover_reply_finished_completed",
+            work_id=work_id,
+            outcome=outcome,
+            elapsed_ms=round((time.perf_counter() - callback_started_at) * 1000, 2),
+            thread_ident=threading.get_ident(),
+        )
+        self._last_ui_phase = "detail_page_idle"
 
     def _queue_cover_path_save(self, work_id, path):
         if self._shutdown_event.is_set():
