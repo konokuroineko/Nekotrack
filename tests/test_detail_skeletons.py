@@ -1081,7 +1081,7 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
-    def test_episode_synopses_wrap_to_two_lines_with_full_tooltip(self):
+    def test_episode_synopses_wrap_in_larger_row_with_full_tooltip(self):
         synopsis = "A long synopsis that should stay compact in the episode list."
         card = EpisodeCard({
             "work_id": 12345,
@@ -1096,8 +1096,8 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertIsNotNone(description)
         self.assertTrue(description.wordWrap())
         self.assertEqual(description.toolTip(), synopsis)
-        self.assertLessEqual(description.maximumHeight(), 32)
-        self.assertGreaterEqual(card.minimumHeight(), 100)
+        self.assertLessEqual(description.maximumHeight(), 50)
+        self.assertGreaterEqual(card.minimumHeight(), 150)
 
         card.deleteLater()
         self.app.processEvents()
