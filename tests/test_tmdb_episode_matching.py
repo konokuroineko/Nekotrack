@@ -4,7 +4,8 @@ import datetime
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import api
 import database
@@ -262,6 +263,26 @@ class TMDBEpisodeMatchingTests(unittest.TestCase):
         self.assertEqual(data["episodes"][0]["episodeNumber"], 7)
         self.assertIsNone(data["episodes"][0]["airdate"])
         self.assertEqual(data["episodes"][0]["title"], "Episode With Bad Date")
+
+    def test_cached_episode_artwork_paths_are_absolute_and_reused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            url = "https://image.tmdb.org/t/p/w500/example-still.jpg"
+            response = MagicMock()
+            with (
+                patch.object(api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(directory)),
+                patch("api._get_tmdb_episode_image_response", return_value=response) as download,
+                patch("api._read_bounded_tmdb_image_response", return_value=b"fake-image"),
+                patch("api._valid_image_data", return_value=True),
+            ):
+                local_path = api.cache_tmdb_episode_image(url, 99, 2)
+
+                self.assertTrue(Path(local_path).is_absolute())
+                self.assertTrue(Path(local_path).is_file())
+                second_path = api.cache_tmdb_episode_image(url, 99, 2)
+
+            self.assertEqual(second_path, local_path)
+            download.assert_called_once_with(url)
+            response.close.assert_called_once()
 
     def test_catalog_pruning_removes_stale_rows_but_preserves_watched_state(self):
         previous_cwd = os.getcwd()
