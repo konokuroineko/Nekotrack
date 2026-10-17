@@ -1004,15 +1004,27 @@ class MainWindow(QMainWindow):
         # Open the detail page immediately. Older library entries may still
         # need their full character/staff payload, so enrich them in
         # the existing background worker instead of blocking the click.
-        self.work_detail_page.set_work(work)
-        self.navigation.show("work_detail")
-
-        members = []
         raw_members = work.get("_series_members") if hasattr(work, "get") else None
-        if raw_members:
-            members.extend(raw_members)
-        else:
-            members.append(work)
+        members = list(raw_members) if raw_members else [work]
+        work_id = work.get("id") if hasattr(work, "get") else None
+        log_event(
+            "work_details.open_requested",
+            work_id=work_id,
+            member_count=len(members),
+        )
+
+        self.work_detail_page.set_work(work)
+        log_event(
+            "work_details.page_build_returned",
+            work_id=work_id,
+            member_count=len(members),
+        )
+        self.navigation.show("work_detail")
+        log_event(
+            "work_details.navigation_show_returned",
+            work_id=work_id,
+            member_count=len(members),
+        )
 
         seen = set()
         pending_imports = []
@@ -1038,6 +1050,12 @@ class MainWindow(QMainWindow):
             pending_imports.append(work_id)
 
         self._queue_library_imports(pending_imports)
+        log_event(
+            "work_details.open_flow_completed",
+            work_id=work_id,
+            member_count=len(members),
+            enrichment_count=len(pending_imports),
+        )
 
 
     def show_search_work(self, work):
