@@ -32,7 +32,7 @@ from database import (
     get_tmdb_mapping, get_work, get_provider_metadata,
     save_work_display_override, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
-    set_episode_watched, set_reading_progress_count, prune_episode_catalog,
+    set_episode_watched, set_episode_progress, set_reading_progress_count, prune_episode_catalog,
 )
 from series import auto_bundle_library_work, get_library_series
 from ui.display_identity import copy_custom_cover, get_display_override, invalidate_display_override
@@ -580,6 +580,54 @@ class EpisodeProgressWorker(QObject):
         self.finished.emit()
 
 
+class EpisodeProgressBatchWorker(QObject):
+    """Persist a watched-through range in one database transaction."""
+
+    data_ready = Signal(int, int, int, str)
+    finished = Signal()
+
+    def __init__(self, work_id, watched_episode_numbers):
+        super().__init__()
+        self.work_id = int(work_id)
+        self.watched_episode_numbers = tuple(watched_episode_numbers or [])
+
+    def run(self):
+        started_at = time.perf_counter()
+        error_message = ""
+        watched_count = 0
+        total = 0
+        log_event(
+            "episodes.progress_range_write_started",
+            work_id=self.work_id,
+            watched_episode_count=len(self.watched_episode_numbers),
+            thread_ident=threading.get_ident(),
+        )
+        try:
+            watched_count, total = set_episode_progress(
+                self.work_id, self.watched_episode_numbers
+            )
+        except Exception as error:
+            error_message = str(error)[:600]
+            log_exception(
+                "episodes.progress_range_write_failed",
+                error,
+                work_id=self.work_id,
+                watched_episode_count=len(self.watched_episode_numbers),
+                elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2),
+            )
+        else:
+            log_event(
+                "episodes.progress_range_write_completed",
+                work_id=self.work_id,
+                watched_count=watched_count,
+                total_count=total,
+                elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                thread_ident=threading.get_ident(),
+            )
+        self.data_ready.emit(self.work_id, watched_count, total, error_message)
+        self.finished.emit()
+
+
 class CoverPathSaveWorker(QObject):
     """Persist downloaded cover metadata without blocking the GUI callback."""
 
@@ -783,7 +831,7 @@ class EpisodeArtwork(QLabel):
         super().__init__(parent)
         self.work_id = int(work_id) if work_id is not None else None
         self.episode_number = int(episode_number) if episode_number is not None else None
-        self.setFixedSize(148, 83)
+        self.setFixedSize(224, 126)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
             f"background:{surface_rgba('background_alt')};border-radius:8px;"
@@ -864,13 +912,13 @@ class EpisodeCard(QFrame):
         super().__init__(parent)
         self.episode = episode
         self.setObjectName("episodeCard")
-        # A clean streaming-style row: readable synopsis, balanced artwork and a clear watch control.
-        self.setMinimumHeight(104)
+        # Larger streaming-style rows keep artwork, titles and watch controls easy to scan.
+        self.setMinimumHeight(158)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(12)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(16)
 
         artwork = EpisodeArtwork(
             episode["work_id"],
@@ -883,22 +931,23 @@ class EpisodeCard(QFrame):
 
         body = QVBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(3)
+        body.setSpacing(6)
 
         top = QHBoxLayout()
-        number = QLabel(f"EP {int(episode['episode_number']):02d}")
+        display_number = int(episode.get("display_episode_number") or episode["episode_number"])
+        number = QLabel(f"EP {display_number:02d}")
         number.setObjectName("detailEpisodeNumber")
         number.setStyleSheet(
             f"color:{COLORS['accent']};background:{surface_rgba('surface_hover')};"
             f"border:1px solid {COLORS['border']};border-radius:6px;"
-            "font-size:10px;font-weight:850;letter-spacing:0.4px;padding:3px 7px;"
+            "font-size:11px;font-weight:850;letter-spacing:0.4px;padding:4px 8px;"
         )
         top.addWidget(number)
 
         date = QLabel(self._format_date(episode["air_date"]))
         date.setObjectName("detailEpisodeDate")
         date.setStyleSheet(
-            f"color:{COLORS['muted']};font-size:10px;font-weight:650;"
+            f"color:{COLORS['muted']};font-size:11px;font-weight:650;"
         )
         top.addStretch()
         if date.text():
@@ -911,11 +960,12 @@ class EpisodeCard(QFrame):
         title = QLabel(self._episode_full_title)
         self._episode_title_label = title
         title.setObjectName("detailEpisodeTitle")
-        title.setWordWrap(False)
+        title.setWordWrap(True)
         title.setMinimumWidth(0)
-        title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        title.setMaximumHeight(46)
+        title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         title.setStyleSheet(
-            f"color:{COLORS['primary']};font-size:14px;font-weight:800;"
+            f"color:{COLORS['primary']};font-size:16px;font-weight:850;"
         )
         title.setToolTip(self._episode_full_title)
         body.addWidget(title)
@@ -928,23 +978,26 @@ class EpisodeCard(QFrame):
             description.setObjectName("detailEpisodeDescription")
             description.setWordWrap(True)
             description.setMinimumWidth(0)
-            description.setMaximumHeight(32)
-            description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            description.setMaximumHeight(50)
+            description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             description.setTextFormat(Qt.PlainText)
             description.setToolTip(self._episode_full_description)
             description.setStyleSheet(
-                f"color:{COLORS['secondary']};font-size:11px;"
+                f"color:{COLORS['secondary']};font-size:12px;"
             )
             body.addWidget(description)
 
         layout.addLayout(body, 1)
 
-        watched = QCheckBox()
+        display_number = int(
+            episode.get("display_episode_number") or episode["episode_number"]
+        )
+        watched = QCheckBox("Watched")
         watched.setChecked(bool(episode["watched"]))
         watched.setObjectName("episodeWatchedCheckbox")
-        watched.setAccessibleName(f"Mark episode {int(episode['episode_number'])} as watched")
+        watched.setAccessibleName(f"Mark episode {display_number} as watched")
         watched.setCursor(Qt.PointingHandCursor)
-        watched.setToolTip("Mark as watched")
+        watched.setToolTip(f"Mark episode {display_number} as watched")
         watched.toggled.connect(
             lambda checked, n=int(episode["episode_number"]):
                 self.watched_changed.emit(n, checked)
@@ -953,10 +1006,10 @@ class EpisodeCard(QFrame):
 
     def refresh_theme(self):
         styles = {
-            "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:9px;font-weight:850;letter-spacing:0.4px;",
-            "detailEpisodeDate": f"color:{COLORS['muted']};font-size:10px;",
-            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:14px;font-weight:800;",
-            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:11px;",
+            "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:11px;font-weight:850;letter-spacing:0.4px;",
+            "detailEpisodeDate": f"color:{COLORS['muted']};font-size:11px;",
+            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:16px;font-weight:850;",
+            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:12px;",
         }
         for label in self.findChildren(QLabel):
             stylesheet = styles.get(label.objectName())
@@ -975,13 +1028,7 @@ class EpisodeCard(QFrame):
         label = getattr(self, "_episode_title_label", None)
         if label is None or label.width() <= 0:
             return
-        label.setText(
-            label.fontMetrics().elidedText(
-                self._episode_full_title,
-                Qt.ElideRight,
-                label.contentsRect().width(),
-            )
-        )
+        label.setText(self._episode_full_title)
 
     def _update_episode_description(self):
         """Keep synopsis to one line while retaining the full text in a tooltip."""
@@ -1991,11 +2038,17 @@ class WorkDetailPage(QWidget):
                 background: {surface_rgba('surface_hover')};
                 border-color: {COLORS['border_hover']};
             }}
-            QCheckBox#episodeWatchedCheckbox {{ padding: 6px; }}
+            QCheckBox#episodeWatchedCheckbox {{
+                color: {COLORS['primary']};
+                font-size: 12px;
+                font-weight: 750;
+                spacing: 8px;
+                padding: 8px;
+            }}
             QCheckBox#episodeWatchedCheckbox::indicator {{
-                width: 19px; height: 19px;
+                width: 23px; height: 23px;
                 border: 1px solid {COLORS['border_hover']};
-                border-radius: 10px;
+                border-radius: 7px;
                 background: {surface_rgba('background_alt')};
             }}
             QCheckBox#episodeWatchedCheckbox::indicator:checked {{
@@ -4225,10 +4278,19 @@ class WorkDetailPage(QWidget):
             selected_id = int(
                 loaded_data.get("work_id") or self._selected_episode_work_id or 0
             )
-            episodes = list(loaded_data.get("episodes") or [])
+            episodes = self._normalize_episode_rows(
+                selected_id, loaded_data.get("episodes") or []
+            )
             selected_work = loaded_data.get("work")
             catalog_version = int(loaded_data.get("catalog_version") or 0)
             needs_catalog_refresh = bool(loaded_data.get("needs_catalog_refresh"))
+
+        # Display ordinals are separate from SQLite's episode IDs. Some valid
+        # cours start at episode 2, 4, etc.; progress writes and cached artwork
+        # must continue using the provider/database episode_number.
+        episodes.sort(key=lambda item: int(item.get("episode_number") or 0))
+        for display_number, episode in enumerate(episodes, start=1):
+            episode["display_episode_number"] = display_number
 
         retry_after = (
             self._episode_image_cache_retry_after.get(int(selected_id), 0.0)
@@ -4257,49 +4319,28 @@ class WorkDetailPage(QWidget):
         frame.setObjectName("episodesSection")
         frame.setProperty("_episodes_section", True)
         lay = QVBoxLayout(frame)
-        lay.setContentsMargins(12, 8, 12, 8)
-        lay.setSpacing(5)
+        lay.setContentsMargins(18, 14, 18, 14)
+        lay.setSpacing(10)
 
         header = QHBoxLayout()
-
-        if len(members) > 1:
-            selected_season = next(
-                (
-                    index
-                    for index, member in enumerate(members, start=1)
-                    if int(member["id"]) == int(selected_id)
-                ),
-                1,
-            )
-            title = QLabel(f"Season {selected_season} Episodes")
-        else:
-            title = QLabel("Episodes")
-
+        selected_member = next(
+            (
+                member for member in members
+                if int(member["id"]) == int(selected_id)
+            ),
+            members[0] if members else None,
+        )
+        selected_member_title = (
+            self._member_title(selected_member)
+            if selected_member is not None
+            else "Episodes"
+        )
+        title = QLabel(selected_member_title if len(members) > 1 else "Episodes")
+        title.setWordWrap(True)
         title.setStyleSheet(
-            f"font-size:15px;font-weight:800;color:{COLORS['primary']};"
+            f"font-size:19px;font-weight:850;color:{COLORS['primary']};"
         )
-        header.addWidget(title)
-
-        source_status = self._episode_source_status.get(int(selected_id), {}) if selected_id is not None else {}
-        source_text = "TMDB"
-        if source_status:
-            source_text = f"TMDB {source_status.get('tmdb', 0)}"
-        source = QLabel(source_text)
-        source.setStyleSheet(
-            f"""
-            QLabel {{
-                color:{COLORS['secondary']};
-                background:{surface_rgba('surface_alt')};
-                border:1px solid {COLORS['border']};
-                border-radius:6px;
-                padding:2px 6px;
-                font-size:9px;
-                font-weight:800;
-            }}
-            """
-        )
-        header.addWidget(source)
-
+        header.addWidget(title, 1)
         header.addStretch()
 
         watched = sum(1 for ep in episodes if ep["watched"])
@@ -4309,14 +4350,20 @@ class WorkDetailPage(QWidget):
             if total
             else "No episode list saved"
         )
-        count.setStyleSheet(f"color:{COLORS['accent']};font-weight:800;")
+        count.setObjectName("episodeWatchedCount")
+        count.setStyleSheet(
+            f"color:{COLORS['accent']};font-size:13px;font-weight:850;"
+        )
         header.addWidget(count)
 
         if len(members) > 1:
             season_button = QToolButton()
-            season_button.setText(f"Season {selected_season}  ▾")
+            season_button.setText(f"{selected_member_title}  ▾")
+            season_button.setToolTip("Choose a bundled title")
             season_button.setPopupMode(QToolButton.InstantPopup)
             season_button.setCursor(Qt.PointingHandCursor)
+            season_button.setMinimumWidth(0)
+            season_button.setMaximumWidth(420)
             season_button.setStyleSheet(
                 f"""
                 QToolButton {{
@@ -4343,9 +4390,12 @@ class WorkDetailPage(QWidget):
                 member_id = int(member["id"])
                 member_title = self._member_title(member)
                 release_date = self._member_release_date(member)
-                action = menu.addAction(
-                    f"Season {index}  —  {member_title}  ·  {release_date}"
+                action_label = (
+                    f"{member_title}  ·  {release_date}"
+                    if release_date
+                    else member_title
                 )
+                action = menu.addAction(action_label)
                 action.setCheckable(True)
                 action.setChecked(member_id == int(selected_id))
                 action.triggered.connect(
@@ -4388,6 +4438,25 @@ class WorkDetailPage(QWidget):
         else:
             catalog_version = int(loaded_data.get("catalog_version") or 0)
             needs_catalog_refresh = bool(loaded_data.get("needs_catalog_refresh"))
+
+        stale_image_numbers = [
+            int(episode["episode_number"])
+            for episode in episodes
+            if str(episode.get("thumbnail_url") or "").strip()
+            and not str(episode.get("thumbnail_url") or "").strip().startswith(
+                "https://image.tmdb.org/t/p/"
+            )
+            and not Path(str(episode.get("thumbnail_url") or "").strip()).is_file()
+        ]
+        if stale_image_numbers:
+            needs_catalog_refresh = True
+            log_event(
+                "episodes.catalog_refresh_due_to_missing_cached_images",
+                work_id=selected_id,
+                stale_image_count=len(stale_image_numbers),
+                stale_episode_numbers=stale_image_numbers[:40],
+            )
+
         if (
             selected_id is not None
             and (not episodes or needs_catalog_refresh)
@@ -4462,6 +4531,72 @@ class WorkDetailPage(QWidget):
             if loading_state:
                 lay.addWidget(self._episode_skeleton_strip())
             return frame
+
+        frame._episode_rows = [dict(ep) for ep in episodes]
+        frame._episode_display_numbers = tuple(
+            int(ep["episode_number"]) for ep in episodes
+        )
+
+        progress_row = QHBoxLayout()
+        progress_row.setContentsMargins(2, 6, 2, 2)
+        progress_row.setSpacing(10)
+        progress_label = QLabel("Watched through")
+        progress_label.setStyleSheet(
+            f"color:{COLORS['secondary']};font-size:13px;font-weight:750;"
+        )
+        progress_row.addWidget(progress_label)
+        progress_spin = QSpinBox()
+        progress_spin.setObjectName("episodeProgressThrough")
+        progress_spin.setRange(0, len(episodes))
+        contiguous_watched = 0
+        for episode in episodes:
+            if not episode["watched"]:
+                break
+            contiguous_watched += 1
+        progress_spin.setValue(contiguous_watched)
+        progress_spin.setSuffix(f" / {len(episodes)}")
+        progress_spin.setMinimumWidth(104)
+        progress_spin.setToolTip(
+            "Set the first N episodes in this list as watched. Use 0 to clear progress."
+        )
+        progress_row.addWidget(progress_spin)
+        progress_row.addStretch(1)
+
+        apply_progress = QPushButton("Apply progress")
+        apply_progress.setObjectName("episodeProgressApply")
+        apply_progress.setCursor(Qt.PointingHandCursor)
+        apply_progress.setToolTip(
+            "Mark the first selected number of episodes watched and clear later episodes."
+        )
+        mark_all = QPushButton("Mark all watched")
+        mark_all.setObjectName("episodeMarkAllWatched")
+        mark_all.setCursor(Qt.PointingHandCursor)
+        apply_numbers = tuple(frame._episode_display_numbers)
+        selected_work_id = int(selected_id)
+        apply_progress.clicked.connect(
+            lambda checked=False, wid=selected_work_id, numbers=apply_numbers,
+                   spin=progress_spin, controls=(apply_progress, mark_all):
+                self._start_episode_progress_batch(
+                    wid, numbers, spin.value(), controls, spin
+                )
+        )
+        mark_all.clicked.connect(
+            lambda checked=False, wid=selected_work_id, numbers=apply_numbers,
+                   spin=progress_spin, controls=(apply_progress, mark_all):
+                self._apply_all_episode_progress(
+                    wid, numbers, controls, spin
+                )
+        )
+        progress_row.addWidget(apply_progress)
+        progress_row.addWidget(mark_all)
+        lay.addLayout(progress_row)
+
+        progress_status = QLabel("")
+        progress_status.setObjectName("episodeProgressStatus")
+        progress_status.setStyleSheet(
+            f"color:{COLORS['secondary']};font-size:11px;"
+        )
+        lay.addWidget(progress_status)
 
         if defer_cards:
             frame._pending_episode_cards = [dict(ep) for ep in episodes]
@@ -4761,13 +4896,51 @@ class WorkDetailPage(QWidget):
         if retry_after:
             self._episode_image_cache_retry_after.pop(work_id, None)
 
-        cacheable = [
-            dict(episode)
-            for episode in (episodes or [])
-            if episode.get("episodeNumber") is not None
-            and str(episode.get("thumbnail") or "").strip()
-            and not Path(str(episode.get("thumbnail"))).is_file()
-        ]
+        episode_rows = [dict(episode) for episode in (episodes or []) if isinstance(episode, dict)]
+        cacheable = []
+        already_cached = []
+        missing_thumbnail_numbers = []
+        broken_local_path_numbers = []
+        unsupported_source_numbers = []
+        for episode in episode_rows:
+            number = episode.get("episodeNumber")
+            try:
+                number = int(number)
+            except (TypeError, ValueError, OverflowError):
+                number = None
+            source = str(episode.get("thumbnail") or "").strip()
+            if not source:
+                if number is not None:
+                    missing_thumbnail_numbers.append(number)
+                continue
+            if Path(source).is_file():
+                already_cached.append(number)
+                continue
+            if source.startswith("https://image.tmdb.org/t/p/"):
+                cacheable.append(episode)
+                continue
+            if number is not None:
+                broken_local_path_numbers.append(number)
+                unsupported_source_numbers.append(number)
+
+        log_event(
+            "episodes.image_cache_plan",
+            work_id=work_id,
+            catalog_episode_count=len(episode_rows),
+            remote_image_count=len(cacheable),
+            already_cached_image_count=len(already_cached),
+            missing_thumbnail_count=len(missing_thumbnail_numbers),
+            missing_thumbnail_episode_numbers=missing_thumbnail_numbers[:40],
+            broken_local_path_count=len(broken_local_path_numbers),
+            broken_local_path_episode_numbers=broken_local_path_numbers[:40],
+            unsupported_image_source_count=len(unsupported_source_numbers),
+        )
+        if broken_local_path_numbers:
+            log_event(
+                "episodes.image_cache_invalid_saved_paths",
+                work_id=work_id,
+                episode_numbers=broken_local_path_numbers[:40],
+            )
         if not cacheable:
             return
 
@@ -5012,6 +5185,105 @@ class WorkDetailPage(QWidget):
             )
             return
 
+    def _apply_all_episode_progress(self, work_id, ordered_episode_numbers, buttons, progress_spin):
+        if isValid(progress_spin):
+            progress_spin.setValue(len(ordered_episode_numbers))
+        self._start_episode_progress_batch(
+            work_id,
+            ordered_episode_numbers,
+            len(ordered_episode_numbers),
+            buttons,
+            progress_spin,
+        )
+
+    def _start_episode_progress_batch(
+        self, work_id, ordered_episode_numbers, watched_through, buttons=(), progress_spin=None
+    ):
+        try:
+            work_id = int(work_id)
+            watched_through = int(watched_through)
+            ordered_episode_numbers = tuple(int(number) for number in ordered_episode_numbers)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if work_id <= 0 or self._shutdown_event.is_set():
+            return
+        watched_through = min(max(0, watched_through), len(ordered_episode_numbers))
+        watched_numbers = ordered_episode_numbers[:watched_through]
+        if any(
+            job.get("bulk_progress") and int(job.get("work_id") or 0) == work_id
+            for job in self._episode_progress_jobs.values()
+        ):
+            return
+
+        for control in tuple(buttons) + ((progress_spin,) if progress_spin is not None else ()):
+            if control is not None and isValid(control):
+                control.setEnabled(False)
+        content = self.scroll_area.widget()
+        if content is not None:
+            status = content.findChild(QLabel, "episodeProgressStatus")
+            if status is not None:
+                status.setText("Saving watched progress…")
+
+        thread = QThread(self)
+        thread.setProperty("episode_progress_work_id", work_id)
+        worker = EpisodeProgressBatchWorker(work_id, watched_numbers)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.data_ready.connect(self._episode_progress_batch_data_ready)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._episode_progress_thread_stopped)
+        thread.finished.connect(thread.deleteLater)
+        self._episode_progress_jobs[thread] = {
+            "thread": thread,
+            "worker": worker,
+            "work_id": work_id,
+            "episode_number": None,
+            "bulk_progress": True,
+            "buttons": tuple(buttons),
+            "progress_spin": progress_spin,
+        }
+        log_event(
+            "episodes.progress_range_write_scheduled",
+            work_id=work_id,
+            watched_through=watched_through,
+            displayed_episode_count=len(ordered_episode_numbers),
+            watched_episode_numbers=list(watched_numbers[:40]),
+            active_progress_writes=len(self._episode_progress_jobs),
+        )
+        thread.start()
+
+    def _episode_progress_batch_data_ready(self, work_id, watched_count, total, error_message):
+        self._episode_progress_data_ready(
+            work_id, watched_count, total, error_message
+        )
+        job = next(
+            (
+                item for item in self._episode_progress_jobs.values()
+                if item.get("bulk_progress") and int(item.get("work_id") or 0) == int(work_id)
+            ),
+            None,
+        )
+        if job is not None:
+            for control in tuple(job.get("buttons") or ()):
+                if control is not None and isValid(control):
+                    control.setEnabled(True)
+            spin = job.get("progress_spin")
+            if spin is not None and isValid(spin):
+                spin.setEnabled(True)
+
+        content = self.scroll_area.widget()
+        if content is not None:
+            status = content.findChild(QLabel, "episodeProgressStatus")
+            if status is not None:
+                if error_message:
+                    status.setText("Could not save progress. Try again.")
+                elif self._selected_episode_work_id == int(work_id):
+                    status.setText("Progress saved.")
+        if not error_message and not self._shutdown_event.is_set():
+            if self._selected_episode_work_id == int(work_id):
+                QTimer.singleShot(0, self._replace_episode_section)
+
     def _episode_toggled(self, number, checked):
         raw_work_id = self._selected_episode_work_id or self._value("id")
         try:
@@ -5067,15 +5339,14 @@ class WorkDetailPage(QWidget):
             widget = item.widget() if item is not None else None
             if widget is None or not widget.property("_episodes_section"):
                 continue
-            for label in widget.findChildren(QLabel):
-                if label.text().endswith("watched") or label.text() == "No episode list saved":
-                    if not error_message:
-                        label.setText(
-                            f"{watched_count} / {total} watched"
-                            if total
-                            else "No episode list saved"
-                        )
-                    return
+            count_label = widget.findChild(QLabel, "episodeWatchedCount")
+            if count_label is not None and not error_message:
+                count_label.setText(
+                    f"{watched_count} / {total} watched"
+                    if total
+                    else "No episode list saved"
+                )
+                return
 
     def _episode_progress_thread_stopped(self):
         thread = self.sender()
