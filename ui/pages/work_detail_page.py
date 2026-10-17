@@ -1863,16 +1863,20 @@ class WorkDetailPage(QWidget):
         thread.started.connect(worker.run)
         worker.data_ready.connect(self._detail_section_data_ready)
         worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
+        thread.setProperty("detail_section_token", int(token))
+        thread.setProperty("detail_section_title", str(title))
         thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(
-            lambda key=key, thread=thread:
-                self._detail_section_thread_stopped(key, thread)
-        )
+        # The receiver is this page, so cleanup always runs on the GUI thread.
+        # Keep the job until both the result has been handled and the QThread
+        # has actually stopped; these two events can arrive in either order.
+        thread.finished.connect(self._detail_section_thread_stopped)
         thread.finished.connect(thread.deleteLater)
         self._detail_section_jobs[key] = {
             "thread": thread,
             "worker": worker,
             "context": context,
+            "result_handled": False,
+            "thread_stopped": False,
         }
         log_event(
             "work_detail.section_query_scheduled",
@@ -1882,15 +1886,35 @@ class WorkDetailPage(QWidget):
         )
         thread.start()
 
-    def _detail_section_thread_stopped(self, key, thread):
-        job = self._detail_section_jobs.get(key)
-        if job is not None and job.get("thread") is thread:
-            self._detail_section_jobs.pop(key, None)
-            log_event(
-                "work_detail.section_data_thread_stopped",
-                token=key[0],
-                section=key[1],
+    def _detail_section_thread_stopped(self):
+        thread = self.sender()
+        if thread is None:
+            return
+        try:
+            key = (
+                int(thread.property("detail_section_token")),
+                str(thread.property("detail_section_title")),
             )
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            return
+        job = self._detail_section_jobs.get(key)
+        if job is None or job.get("thread") is not thread:
+            return
+        job["thread_stopped"] = True
+        log_event(
+            "work_detail.section_data_thread_stopped",
+            token=key[0],
+            section=key[1],
+        )
+        if job.get("result_handled"):
+            self._detail_section_jobs.pop(key, None)
+
+    def _detail_section_result_handled(self, key, job):
+        if self._detail_section_jobs.get(key) is not job:
+            return
+        job["result_handled"] = True
+        if job.get("thread_stopped"):
+            self._detail_section_jobs.pop(key, None)
 
     def _detail_section_data_ready(self, token, title, items, error_message):
         key = (int(token), str(title))
@@ -1916,6 +1940,7 @@ class WorkDetailPage(QWidget):
                 section=title,
                 reason="detail_view_changed",
             )
+            self._detail_section_result_handled(key, job)
             return
 
         if error_message:
@@ -1931,6 +1956,7 @@ class WorkDetailPage(QWidget):
 
         loading_index = layout.indexOf(loading)
         if loading_index < 0:
+            self._detail_section_result_handled(key, job)
             return
 
         section_started_at = context["section_started_at"]
@@ -1989,6 +2015,7 @@ class WorkDetailPage(QWidget):
                 work_ids=list(detail_ids),
                 success=bool(content._detail_sections_success),
             )
+            self._detail_section_result_handled(key, job)
             return
 
         next_title, next_getter, next_class, next_signal, next_columns, variant = spec
@@ -2017,6 +2044,7 @@ class WorkDetailPage(QWidget):
                     token, page, target_layout, label, ids, next_title, getter, cls, slot, cols
                 ),
         )
+        self._detail_section_result_handled(key, job)
 
     def _mangabaka_section(self):
         """Show the preserved MangaBaka record without discarding provider-only fields."""
