@@ -19,7 +19,7 @@ from api import (
 )
 from ui.pages.work_detail_page import (
     EpisodeArtwork, EpisodeCard,
-    EpisodeImageCacheWorker, EpisodeSectionDataWorker, EpisodeSyncWorker, WorkDetailPage,
+    EpisodeImageCacheWorker, EpisodeSyncWorker, WorkDetailPage,
 )
 
 
