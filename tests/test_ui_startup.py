@@ -708,16 +708,17 @@ class UiStartupTests(unittest.TestCase):
             image_directory = Path(directory)
             with patch(
                 "ui.pages.work_detail_page.IMAGE_DIRECTORY", image_directory
-            ), patch(
-                "ui.pages.work_detail_page.save_cover_path"
-            ) as save_cover_path:
+            ), patch.object(
+                page, "_queue_cover_path_save"
+            ) as queue_cover_path_save:
                 page._remote_cover_finished(label, 42, cover_url, reply)
 
             self.assertIsNone(page._cover_reply)
             self.assertTrue(reply.deleted)
             self.assertIn(cover_url, page._cover_cache)
             self.assertTrue((image_directory / "42.jpg").is_file())
-            save_cover_path.assert_called_once_with(
+            # The network callback must enqueue persistence, not wait on SQLite.
+            queue_cover_path_save.assert_called_once_with(
                 42, str(image_directory / "42.jpg")
             )
         page.deleteLater()
