@@ -759,6 +759,9 @@ class BundleRemoveDialog(QDialog):
 
 class WorkDetailPage(QWidget):
     DETAIL_CONTENT_CACHE_LIMIT = 3
+    # Prevent giant bundles from creating hundreds of card widgets during navigation.
+    DETAIL_SECTION_INITIAL_CARD_COUNT = 12
+    DETAIL_SECTION_CARD_BATCH_SIZE = 12
 
     back_requested = Signal()
     person_selected = Signal(object)
@@ -4103,6 +4106,7 @@ class WorkDetailPage(QWidget):
                 break
 
     def _grid_section(self, title, items, cls, signal, columns, empty_message=None):
+        """Build a bounded first view and reveal the rest of large card collections on demand."""
         frame = QFrame()
         frame.setObjectName("charactersSection" if title == "Characters" else "section")
         frame.setStyleSheet(self._detail_section_frame_stylesheet())
@@ -4117,44 +4121,92 @@ class WorkDetailPage(QWidget):
         )
         lay.addWidget(header)
 
-        if title in {"Staff", "Relations"}:
-            container = QWidget()
-            flow = StaffFlowLayout(container, h_spacing=8, v_spacing=12)
-
-            if not items:
-                empty = QLabel(empty_message or "Nothing stored locally yet.")
-                empty.setWordWrap(True)
-                empty.setStyleSheet(muted_label_stylesheet())
-                flow.addWidget(empty)
-            else:
-                for item in items:
-                    card = cls(item)
-                    card.clicked.connect(signal)
-                    flow.addWidget(card)
-
-            lay.addWidget(container)
-            return frame
+        normalized_items = list(items or [])
+        paged = title in {"Characters", "Relations"}
+        batch_size = self.DETAIL_SECTION_CARD_BATCH_SIZE
+        visible_count = (
+            min(len(normalized_items), self.DETAIL_SECTION_INITIAL_CARD_COUNT)
+            if paged
+            else len(normalized_items)
+        )
 
         container = QWidget()
-        grid = QGridLayout(container)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
+        flow = None
+        grid = None
+        if title in {"Staff", "Relations"}:
+            flow = StaffFlowLayout(container, h_spacing=8, v_spacing=12)
+            cards_layout = flow
+        else:
+            grid = QGridLayout(container)
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setHorizontalSpacing(12)
+            grid.setVerticalSpacing(12)
+            cards_layout = grid
 
-        if not items:
+        if not normalized_items:
             empty = QLabel(empty_message or "Nothing stored locally yet.")
             empty.setWordWrap(True)
             empty.setStyleSheet(muted_label_stylesheet())
-            grid.addWidget(empty, 0, 0)
+            cards_layout.addWidget(empty) if flow is not None else grid.addWidget(empty, 0, 0)
         else:
-            for index, item in enumerate(items):
-                card = cls(item)
+            def add_card(index):
+                card = cls(normalized_items[index])
                 card.clicked.connect(signal)
                 if isinstance(card, CharacterCard):
                     card.voice_actor_clicked.connect(self.voice_actor_selected.emit)
-                grid.addWidget(card, index // columns, index % columns)
+                if flow is not None:
+                    flow.addWidget(card)
+                else:
+                    grid.addWidget(card, index // max(1, int(columns)), index % max(1, int(columns)))
+
+            for index in range(visible_count):
+                add_card(index)
 
         lay.addWidget(container)
+
+        if paged and len(normalized_items) > visible_count:
+            more_button = QPushButton()
+            more_button.setObjectName("staffMoreButton")
+            more_button.setCursor(Qt.PointingHandCursor)
+
+            def update_more_button():
+                remaining = len(normalized_items) - visible_count
+                if remaining <= 0:
+                    more_button.hide()
+                    more_button.setEnabled(False)
+                    return
+                batch = min(batch_size, remaining)
+                more_button.setText(
+                    f"Show {batch} more {title.casefold()} ({remaining} remaining)"
+                )
+
+            def show_next_batch():
+                nonlocal visible_count
+                start_index = visible_count
+                visible_count = min(
+                    visible_count + batch_size,
+                    len(normalized_items),
+                )
+                for index in range(start_index, visible_count):
+                    add_card(index)
+                log_event(
+                    "work_detail.section_cards_expanded",
+                    section=title,
+                    visible_count=visible_count,
+                    total_count=len(normalized_items),
+                )
+                update_more_button()
+
+            more_button.clicked.connect(show_next_batch)
+            lay.addWidget(more_button, alignment=Qt.AlignRight)
+            update_more_button()
+            log_event(
+                "work_detail.section_cards_deferred",
+                section=title,
+                total_count=len(normalized_items),
+                initial_count=visible_count,
+            )
+
         return frame
 
     @staticmethod
