@@ -1034,14 +1034,28 @@ class WorkDetailPage(QWidget):
         return detail_data_ready, episode_data_ready
 
     def _build_detail_content(self, detail_ids, defer_missing=True):
-        detail_data_ready, episode_data_ready = self._local_detail_ready(detail_ids)
+        # Active navigation must not synchronously query and construct every
+        # section on the GUI thread. The explicit preload path can still create
+        # a fully-ready view when requested.
+        if defer_missing:
+            detail_data_ready = False
+            episode_data_ready = False
+        else:
+            detail_data_ready, episode_data_ready = self._local_detail_ready(detail_ids)
+        reading_media = self._is_reading_media()
 
         content = QWidget()
         content.setProperty("_detail_cache_key", self._detail_cache_key(detail_ids))
-        content.setProperty(
-            "_detail_cacheable",
-            bool(detail_data_ready and episode_data_ready),
+        content._detail_sections_ready = bool(
+            not defer_missing and detail_data_ready
         )
+        content._detail_sections_success = True
+        content._episode_section_ready = bool(
+            reading_media or (not defer_missing and episode_data_ready)
+        )
+        content._episode_section_success = True
+        content.setProperty("_detail_cacheable", False)
+        self._update_detail_cacheable(content)
         root = QVBoxLayout(content)
         root.setContentsMargins(42, 34, 42, 50)
         root.setSpacing(22)
@@ -1064,15 +1078,13 @@ class WorkDetailPage(QWidget):
         episode_layout = QVBoxLayout(episode_host)
         episode_layout.setContentsMargins(20, 18, 20, 20)
 
-        if self._is_reading_media():
+        if reading_media:
             reading_frame = self._reading_section()
             reading_frame.setProperty("_reading_section", True)
             episode_host.deleteLater()
             episode_host = reading_frame
-        elif episode_data_ready:
-            # Reading all episode rows is cheap local I/O; building dozens of
-            # QWidget cards at once is not. Queue cards in bounded batches after
-            # the content becomes the active scroll-area widget.
+        elif episode_data_ready and not defer_missing:
+            # Keep the explicit preloading path compatible with prepared views.
             ready_episode_frame = self._episodes_section(defer_cards=True)
             ready_episode_frame.setProperty("_episodes_section", True)
             episode_host.deleteLater()
@@ -1089,7 +1101,7 @@ class WorkDetailPage(QWidget):
         if mangabaka_section is not None:
             root.addWidget(mangabaka_section)
 
-        if detail_data_ready:
+        if detail_data_ready and not defer_missing:
             detail_host = QWidget()
             detail_host.setObjectName("detailSectionsHost")
             detail_layout = QVBoxLayout(detail_host)
@@ -1117,22 +1129,25 @@ class WorkDetailPage(QWidget):
         root.addWidget(detail_host)
         root.addStretch()
 
-        if defer_missing and (not episode_data_ready or not detail_data_ready):
+        if defer_missing:
             token = self._detail_build_token
-            if not episode_data_ready:
+            # Let the shell become active and paint before database work and
+            # real card construction begin, whether local data is cached or not.
+            if not reading_media:
                 QTimer.singleShot(
                     40,
                     lambda token=token, page=content, host=episode_host:
                         self._populate_episode_section(token, page, host),
                 )
-            if not detail_data_ready:
-                QTimer.singleShot(
-                    40,
-                    lambda token=token, page=content, host=detail_host, ids=list(detail_ids):
-                        self._populate_detail_sections(token, page, host, ids),
-                )
+            QTimer.singleShot(
+                40,
+                lambda token=token, page=content, host=detail_host, ids=list(detail_ids):
+                    self._populate_detail_sections(token, page, host, ids),
+            )
 
-        return content, detail_data_ready and episode_data_ready
+        return content, bool(
+            not defer_missing and detail_data_ready and episode_data_ready
+        )
 
     def preload_work(self, work):
         """Build a fully prepared Library detail view ahead of the next click."""
@@ -1191,6 +1206,22 @@ class WorkDetailPage(QWidget):
 
         QTimer.singleShot(0, preload_next)
 
+    def _update_detail_cacheable(self, content):
+        """Cache only detail views whose episode and metadata sections finished cleanly."""
+        cacheable = bool(
+            getattr(content, "_detail_sections_ready", False)
+            and getattr(content, "_detail_sections_success", False)
+            and getattr(content, "_episode_section_ready", False)
+            and getattr(content, "_episode_section_success", False)
+        )
+        content.setProperty("_detail_cacheable", cacheable)
+        if cacheable:
+            log_event(
+                "work_detail.cacheable_content_ready",
+                work_ids=list(content.property("_detail_cache_key") or []),
+            )
+        return cacheable
+
     def _cache_detail_content(self, key, content):
         """Keep only a few inactive detail widget trees to avoid runaway memory use."""
         normalized_key = tuple(int(work_id) for work_id in key)
@@ -1246,6 +1277,7 @@ class WorkDetailPage(QWidget):
                 content.deleteLater()
 
     def set_work(self, work):
+        open_started_at = time.perf_counter()
         previous_selected_episode_id = self._selected_episode_work_id
         self._episode_sync_errors = {}
         self._detail_build_token += 1
@@ -1294,6 +1326,8 @@ class WorkDetailPage(QWidget):
             work_ids=detail_ids,
             cache_hit=False,
             cached_view_count=len(self._detail_content_cache),
+            phase="skeleton_attached",
+            shell_elapsed_ms=round((time.perf_counter() - open_started_at) * 1000, 2),
         )
 
     def _apply_detail_styles(self):
@@ -1438,10 +1472,24 @@ class WorkDetailPage(QWidget):
 
     def _populate_episode_section(self, token, content, host, attempt=0):
         """Contain failures in deferred Qt callbacks so one season cannot crash the app."""
+        started_at = time.perf_counter()
+        work_id = getattr(self, "_selected_episode_work_id", None)
+        log_event(
+            "work_detail.episode_section_build_started",
+            work_id=work_id,
+            attempt=attempt,
+        )
         try:
-            return self._populate_episode_section_impl(
+            result = self._populate_episode_section_impl(
                 token, content, host, attempt=attempt
             )
+            log_event(
+                "work_detail.episode_section_build_step_finished",
+                work_id=work_id,
+                attempt=attempt,
+                elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2),
+            )
+            return result
         except Exception as error:
             detail_ids = []
             try:
@@ -1476,6 +1524,9 @@ class WorkDetailPage(QWidget):
                 error_layout.addWidget(message)
                 root.replaceWidget(host, error_frame)
                 host.deleteLater()
+                content._episode_section_ready = True
+                content._episode_section_success = False
+                self._update_detail_cacheable(content)
             except Exception as recovery_error:
                 log_exception(
                     "episodes.deferred_section_recovery_failed",
@@ -1532,6 +1583,15 @@ class WorkDetailPage(QWidget):
                     return
                 root.replaceWidget(host, error_frame)
                 host.deleteLater()
+                content._episode_section_ready = True
+                content._episode_section_success = False
+                self._update_detail_cacheable(content)
+                log_event(
+                    "work_detail.episode_section_build_failed",
+                    work_id=getattr(self, "_selected_episode_work_id", None),
+                    reason="work_rows_missing_after_timeout",
+                    attempt=attempt,
+                )
                 return
 
         new_frame = self._episodes_section(defer_cards=True)
@@ -1547,6 +1607,17 @@ class WorkDetailPage(QWidget):
 
         root.replaceWidget(host, new_frame)
         host.deleteLater()
+        content._episode_section_ready = True
+        content._episode_section_success = (
+            new_frame.findChild(QLabel, "detailEpisodeMessage") is None
+        )
+        self._update_detail_cacheable(content)
+        log_event(
+            "work_detail.episode_section_rendered",
+            work_id=getattr(self, "_selected_episode_work_id", None),
+            episode_card_count=len(getattr(new_frame, "_pending_episode_cards", []) or []),
+            success=content._episode_section_success,
+        )
 
         episodes = getattr(new_frame, "_pending_episode_cards", None)
         if episodes:
@@ -1717,29 +1788,71 @@ class WorkDetailPage(QWidget):
         if loading_index < 0:
             return
 
+        section_started_at = time.perf_counter()
+        log_event(
+            "work_detail.section_build_started",
+            section=title,
+            work_ids=list(detail_ids),
+        )
         try:
+            data_started_at = time.perf_counter()
             items = data_getter(detail_ids)
+            log_event(
+                "work_detail.section_data_loaded",
+                section=title,
+                work_ids=list(detail_ids),
+                item_count=len(items or []),
+                elapsed_ms=round((time.perf_counter() - data_started_at) * 1000, 2),
+            )
         except Exception as error:
-            print(f"{title} section failed to load: {error}")
+            content._detail_sections_success = False
+            log_exception(
+                "work_detail.section_data_load_failed",
+                error,
+                section=title,
+                work_ids=list(detail_ids),
+            )
             items = []
 
         loading_index = layout.indexOf(loading)
         if loading_index < 0:
             return
-        if title == "Staff":
-            section_widget = self._staff_section(detail_ids, items)
-        else:
-            section_widget = self._grid_section(
-                title,
-                items,
-                card_class,
-                signal,
-                columns,
-                empty_message=self._detail_empty_message(title, detail_ids),
+        try:
+            if title == "Staff":
+                section_widget = self._staff_section(detail_ids, items)
+            else:
+                section_widget = self._grid_section(
+                    title,
+                    items,
+                    card_class,
+                    signal,
+                    columns,
+                    empty_message=self._detail_empty_message(title, detail_ids),
+                )
+        except Exception as error:
+            content._detail_sections_success = False
+            log_exception(
+                "work_detail.section_widget_build_failed",
+                error,
+                section=title,
+                work_ids=list(detail_ids),
             )
+            section_widget = QFrame()
+            error_layout = QVBoxLayout(section_widget)
+            error_label = QLabel(f"{title} could not be displayed.")
+            error_label.setWordWrap(True)
+            error_label.setStyleSheet(muted_label_stylesheet())
+            error_layout.addWidget(error_label)
+
         layout.insertWidget(loading_index, section_widget)
         layout.removeWidget(loading)
         loading.deleteLater()
+        log_event(
+            "work_detail.section_rendered",
+            section=title,
+            work_ids=list(detail_ids),
+            elapsed_ms=round((time.perf_counter() - section_started_at) * 1000, 2),
+        )
 
         next_specs = {
             "Characters": (
@@ -1761,6 +1874,13 @@ class WorkDetailPage(QWidget):
         }
         spec = next_specs.get(title)
         if spec is None:
+            content._detail_sections_ready = True
+            self._update_detail_cacheable(content)
+            log_event(
+                "work_detail.detail_sections_completed",
+                work_ids=list(detail_ids),
+                success=bool(content._detail_sections_success),
+            )
             return
 
         next_title, next_getter, next_class, next_signal, next_columns, variant = spec
