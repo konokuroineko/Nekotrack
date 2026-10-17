@@ -1384,7 +1384,23 @@ class WorkDetailPage(QWidget):
         layout.addStretch(1)
         return strip
 
-    def _set_cover_placeholder(self, label, loading, text):
+    def _episode_section_loading_frame(self, message="Loading episode data…", include_skeleton=True):
+        frame = QFrame()
+        frame.setObjectName("episodesSection")
+        frame.setProperty("_episodes_section", True)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+        label = QLabel(str(message))
+        label.setObjectName("detailEpisodeLoadingLabel")
+        label.setWordWrap(True)
+        label.setStyleSheet(muted_label_stylesheet())
+        layout.addWidget(label)
+        if include_skeleton:
+            layout.addWidget(self._episode_skeleton_strip())
+        return frame
+
+    def _set_cover_placeholder(self, label, loading, text)
         """Switch the hero cover between skeleton and honest missing-cover states."""
         if label is None or not isValid(label):
             return
@@ -1634,11 +1650,8 @@ class WorkDetailPage(QWidget):
             episode_host.deleteLater()
             episode_host = ready_episode_frame
         else:
-            loading_episodes = QLabel("Loading episode data…")
-            loading_episodes.setObjectName("detailEpisodeLoadingLabel")
-            loading_episodes.setWordWrap(True)
-            episode_layout.addWidget(loading_episodes)
-            episode_layout.addWidget(self._episode_skeleton_strip())
+            episode_host.deleteLater()
+            episode_host = self._episode_section_loading_frame()
         root.addWidget(episode_host)
 
         mangabaka_section = self._mangabaka_section()
@@ -2087,100 +2100,302 @@ class WorkDetailPage(QWidget):
                 )
 
     def _populate_episode_section_impl(self, token, content, host, attempt=0):
-        if token != self._detail_build_token:
+        """Schedule active episode catalog reads on a worker thread."""
+        if token != self._detail_build_token or self.scroll_area.widget() is not content:
             return
-        if self.scroll_area.widget() is not content:
+        root = content.layout()
+        if root is None or root.indexOf(host) < 0:
             return
 
-        # Detail selection and catalog import run in parallel. Keep the
-        # skeleton alive until every bundled row exists, rather than treating a
-        # missing SQLite row as an empty season and crashing during TMDB setup.
-        if not self._is_reading_media():
-            selected_work_id = self._selected_episode_work_id or self._value("id")
-            missing_work_ids = (
-                [selected_work_id]
-                if selected_work_id is not None and get_work(selected_work_id) is None
-                else []
-            )
-            if missing_work_ids:
-                if attempt < 120:
-                    QTimer.singleShot(
-                        250,
-                        lambda token=token, page=content, section=host,
-                               next_attempt=attempt + 1:
-                            self._populate_episode_section(
-                                token, page, section, next_attempt
-                            ),
-                    )
-                    return
-
-                error_frame = QFrame()
-                error_frame.setObjectName("section")
-                error_frame.setProperty("_episodes_section", True)
-                error_layout = QVBoxLayout(error_frame)
-                error_layout.setContentsMargins(20, 18, 20, 20)
-                message = QLabel(
-                    "Title data is taking longer than expected. "
-                    "Go back and reopen this title to try again."
-                )
-                message.setWordWrap(True)
-                message.setStyleSheet(muted_label_stylesheet())
-                error_layout.addWidget(message)
-
-                root = content.layout()
-                if root is None:
-                    error_frame.deleteLater()
-                    return
-                index = root.indexOf(host)
-                if index < 0:
-                    error_frame.deleteLater()
-                    return
-                root.replaceWidget(host, error_frame)
+        if self._is_reading_media():
+            try:
+                new_frame = self._reading_section()
+                new_frame.setProperty("_reading_section", True)
+                root.replaceWidget(host, new_frame)
                 host.deleteLater()
+                content._episode_section_ready = True
+                content._episode_section_success = True
+                self._update_detail_cacheable(content)
+            except Exception as error:
+                log_exception("reading.detail_section_build_failed", error)
+            return
+
+        raw_work_id = self._selected_episode_work_id or self._value("id")
+        try:
+            selected_work_id = int(raw_work_id)
+        except (TypeError, ValueError, OverflowError):
+            selected_work_id = 0
+        if selected_work_id <= 0:
+            self._replace_episode_load_error(
+                content, host, "A valid season ID was not available."
+            )
+            content._episode_section_ready = True
+            content._episode_section_success = False
+            self._update_detail_cacheable(content)
+            return
+
+        key = (int(token), selected_work_id)
+        if key in self._episode_section_load_jobs:
+            log_event(
+                "episodes.section_load_duplicate_suppressed",
+                token=token,
+                work_id=selected_work_id,
+                attempt=attempt,
+            )
+            return
+
+        members = self._episode_members()
+        thread = QThread(self)
+        thread.setProperty("episode_section_load_token", int(token))
+        thread.setProperty("episode_section_load_work_id", selected_work_id)
+        worker = EpisodeSectionDataWorker(
+            token, selected_work_id, members, attempt=attempt
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.data_ready.connect(self._episode_section_data_ready)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._episode_section_load_thread_stopped)
+        thread.finished.connect(thread.deleteLater)
+        self._episode_section_load_jobs[key] = {
+            "thread": thread,
+            "worker": worker,
+            "content": content,
+            "host": host,
+            "token": int(token),
+            "work_id": selected_work_id,
+            "attempt": int(attempt),
+            "started_at": time.perf_counter(),
+            "result_handled": False,
+            "thread_stopped": False,
+            "retry": False,
+        }
+        self._last_ui_phase = "episode_section_worker_scheduled"
+        log_event(
+            "episodes.section_load_scheduled",
+            token=token,
+            work_id=selected_work_id,
+            attempt=attempt,
+            member_count=len(members),
+            active_load_count=len(self._episode_section_load_jobs),
+            thread_ident=threading.get_ident(),
+        )
+        thread.start()
+
+    def _replace_episode_load_error(self, content, host, message):
+        root = content.layout() if content is not None else None
+        if root is None or host is None or root.indexOf(host) < 0:
+            return None
+        frame = self._episode_section_loading_frame(
+            message, include_skeleton=False
+        )
+        label = frame.findChild(QLabel, "detailEpisodeLoadingLabel")
+        if label is not None:
+            label.setObjectName("detailEpisodeMessage")
+        root.replaceWidget(host, frame)
+        host.deleteLater()
+        return frame
+
+    def _episode_section_data_ready(self, token, work_id, payload):
+        try:
+            key = (int(token), int(work_id))
+        except (TypeError, ValueError, OverflowError):
+            return
+        job = self._episode_section_load_jobs.get(key)
+        if job is None:
+            log_event(
+                "episodes.section_load_orphan_result",
+                token=token,
+                work_id=work_id,
+            )
+            return
+
+        content = job["content"]
+        host = job["host"]
+        attempt = job["attempt"]
+        payload = payload if isinstance(payload, dict) else {"status": "error"}
+        root = content.layout() if content is not None else None
+
+        if self._shutdown_event.is_set():
+            self._episode_section_result_handled(key, job)
+            return
+
+        if (
+            token != self._detail_build_token
+            or self.scroll_area.widget() is not content
+            or self._selected_episode_work_id != int(work_id)
+            or root is None
+            or root.indexOf(host) < 0
+        ):
+            log_event(
+                "episodes.section_load_result_discarded",
+                token=token,
+                work_id=work_id,
+                current_token=self._detail_build_token,
+                current_work_id=self._selected_episode_work_id,
+                reason="page_or_season_changed",
+                load_elapsed_ms=payload.get("load_elapsed_ms"),
+            )
+            self._episode_section_result_handled(key, job)
+            return
+
+        status = str(payload.get("status") or "error")
+        if status == "missing_work":
+            if attempt < 120:
+                job["retry"] = True
+                if attempt == 0 or (attempt + 1) % 10 == 0:
+                    log_event(
+                        "episodes.section_load_waiting_for_import",
+                        token=token,
+                        work_id=work_id,
+                        attempt=attempt,
+                        next_retry_ms=250,
+                        elapsed_ms=round(
+                            (time.perf_counter() - job["started_at"]) * 1000, 2
+                        ),
+                    )
+            else:
+                self._replace_episode_load_error(
+                    content,
+                    host,
+                    "Season data is still being imported. Go back and reopen this title to retry.",
+                )
                 content._episode_section_ready = True
                 content._episode_section_success = False
                 self._update_detail_cacheable(content)
                 log_event(
                     "work_detail.episode_section_build_failed",
-                    work_id=getattr(self, "_selected_episode_work_id", None),
-                    reason="work_rows_missing_after_timeout",
+                    token=token,
+                    work_id=work_id,
+                    reason="work_row_missing_after_timeout",
                     attempt=attempt,
+                    load_elapsed_ms=payload.get("load_elapsed_ms"),
                 )
-                return
-
-        new_frame = self._episodes_section(defer_cards=True)
-        new_frame.setProperty("_episodes_section", True)
-
-        root = content.layout()
-        if root is None:
+            self._episode_section_result_handled(key, job)
             return
 
-        index = root.indexOf(host)
-        if index < 0:
-            return
-
-        root.replaceWidget(host, new_frame)
-        host.deleteLater()
-        content._episode_section_ready = True
-        content._episode_section_success = (
-            new_frame.findChild(QLabel, "detailEpisodeMessage") is None
-        )
-        self._update_detail_cacheable(content)
-        log_event(
-            "work_detail.episode_section_rendered",
-            work_id=getattr(self, "_selected_episode_work_id", None),
-            episode_card_count=len(getattr(new_frame, "_pending_episode_cards", []) or []),
-            success=content._episode_section_success,
-        )
-
-        episodes = getattr(new_frame, "_pending_episode_cards", None)
-        if episodes:
-            QTimer.singleShot(
-                0,
-                lambda token=token, page=content, frame=new_frame, data=episodes:
-                    self._populate_episode_cards(token, page, frame, data, 0),
+        if status != "ok":
+            error_summary = str(payload.get("error_summary") or "Unknown database error")
+            self._replace_episode_load_error(
+                content,
+                host,
+                "Episode data could not be loaded. The detailed error was recorded in nekotrack.log.",
             )
+            content._episode_section_ready = True
+            content._episode_section_success = False
+            self._update_detail_cacheable(content)
+            log_event(
+                "work_detail.episode_section_load_failed",
+                token=token,
+                work_id=work_id,
+                attempt=attempt,
+                error_summary=error_summary[:400],
+                load_elapsed_ms=payload.get("load_elapsed_ms"),
+            )
+            self._episode_section_result_handled(key, job)
+            return
 
+        ui_started_at = time.perf_counter()
+        self._last_ui_phase = "episode_section_widget_construction"
+        try:
+            new_frame = self._build_episodes_section(
+                defer_cards=True, loaded_data=payload
+            )
+            new_frame.setProperty("_episodes_section", True)
+            root.replaceWidget(host, new_frame)
+            host.deleteLater()
+            content._episode_section_ready = True
+            content._episode_section_success = (
+                new_frame.findChild(QLabel, "detailEpisodeMessage") is None
+            )
+            self._update_detail_cacheable(content)
+            episodes = getattr(new_frame, "_pending_episode_cards", None)
+            log_event(
+                "work_detail.episode_section_rendered",
+                token=token,
+                work_id=work_id,
+                member_count=len(payload.get("members") or []),
+                episode_card_count=len(episodes or []),
+                success=content._episode_section_success,
+                worker_elapsed_ms=payload.get("load_elapsed_ms"),
+                widget_build_elapsed_ms=round(
+                    (time.perf_counter() - ui_started_at) * 1000, 2
+                ),
+                total_elapsed_ms=round(
+                    (time.perf_counter() - job["started_at"]) * 1000, 2
+                ),
+                thread_ident=threading.get_ident(),
+            )
+            if episodes:
+                QTimer.singleShot(
+                    0,
+                    lambda token=token, page=content, frame=new_frame, data=episodes:
+                        self._populate_episode_cards(token, page, frame, data, 0),
+                )
+        except Exception as error:
+            log_exception(
+                "work_detail.episode_section_widget_build_failed",
+                error,
+                token=token,
+                work_id=work_id,
+                worker_elapsed_ms=payload.get("load_elapsed_ms"),
+            )
+            self._replace_episode_load_error(
+                content,
+                host,
+                "Episode data could not be displayed. The error was recorded in nekotrack.log.",
+            )
+            content._episode_section_ready = True
+            content._episode_section_success = False
+            self._update_detail_cacheable(content)
+        finally:
+            self._last_ui_phase = "detail_page_idle"
+            self._episode_section_result_handled(key, job)
+
+    def _episode_section_load_thread_stopped(self):
+        thread = self.sender()
+        if thread is None:
+            return
+        try:
+            key = (
+                int(thread.property("episode_section_load_token")),
+                int(thread.property("episode_section_load_work_id")),
+            )
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            return
+        job = self._episode_section_load_jobs.get(key)
+        if job is None or job.get("thread") is not thread:
+            return
+        job["thread_stopped"] = True
+        log_event(
+            "episodes.section_load_thread_stopped",
+            token=key[0],
+            work_id=key[1],
+            attempt=job.get("attempt"),
+            elapsed_ms=round(
+                (time.perf_counter() - job["started_at"]) * 1000, 2
+            ),
+        )
+        if job.get("result_handled"):
+            self._episode_section_result_handled(key, job)
+
+    def _episode_section_result_handled(self, key, job):
+        if self._episode_section_load_jobs.get(key) is not job:
+            return
+        job["result_handled"] = True
+        if not job.get("thread_stopped"):
+            return
+        self._episode_section_load_jobs.pop(key, None)
+        if job.get("retry") and not self._shutdown_event.is_set():
+            QTimer.singleShot(
+                250,
+                lambda token=job["token"], content=job["content"], host=job["host"],
+                       next_attempt=job["attempt"] + 1:
+                    self._populate_episode_section(
+                        token, content, host, next_attempt
+                    ),
+            )
 
     def _populate_episode_cards(self, token, content, frame, episodes, offset):
         if token != self._detail_build_token or self.scroll_area.widget() is not content:
