@@ -19,7 +19,7 @@ from api import (
 )
 from ui.pages.work_detail_page import (
     EpisodeArtwork, EpisodeCard,
-    EpisodeImageCacheWorker, EpisodeSyncWorker, WorkDetailPage,
+    EpisodeImageCacheWorker, EpisodeSectionDataWorker, EpisodeSyncWorker, WorkDetailPage,
 )
 
 
@@ -120,6 +120,7 @@ class DetailSkeletonTests(unittest.TestCase):
             "format": "TV",
             "_series_members": [{"id": 12345}],
         }
+        page._selected_episode_work_id = 12345
         page._detail_build_token = 7
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -136,10 +137,16 @@ class DetailSkeletonTests(unittest.TestCase):
             ),
         ):
             page._populate_episode_section(7, content, host)
+            deadline = time.monotonic() + 4.0
+            while time.monotonic() < deadline and not callbacks:
+                self.app.processEvents()
+                time.sleep(0.01)
+            self.app.processEvents()
 
         self.assertEqual(len(callbacks), 1)
         self.assertEqual(callbacks[0][0], 250)
         self.assertGreaterEqual(layout.indexOf(host), 0)
+        self.assertFalse(page._episode_section_load_jobs)
 
         page.deleteLater()
         self.app.processEvents()
@@ -152,6 +159,7 @@ class DetailSkeletonTests(unittest.TestCase):
             "format": "TV",
             "_series_members": [{"id": 12345}],
         }
+        page._selected_episode_work_id = 12345
         page._detail_build_token = 9
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -161,13 +169,115 @@ class DetailSkeletonTests(unittest.TestCase):
 
         with patch("ui.pages.work_detail_page.get_work", return_value=None):
             page._populate_episode_section(9, content, host, attempt=120)
+            deadline = time.monotonic() + 4.0
+            while (
+                time.monotonic() < deadline
+                and content.findChild(QLabel, "detailEpisodeMessage") is None
+            ):
+                self.app.processEvents()
+                time.sleep(0.01)
+            self.app.processEvents()
 
-        replacement = content.findChild(QFrame, "section")
-        self.assertIsNotNone(replacement)
-        self.assertTrue(any(
-            "taking longer than expected" in label.text()
-            for label in replacement.findChildren(QLabel)
-        ))
+        message = content.findChild(QLabel, "detailEpisodeMessage")
+        self.assertIsNotNone(message)
+        self.assertIn("still being imported", message.text())
+        self.assertFalse(page._episode_section_load_jobs)
+
+        page.deleteLater()
+        self.app.processEvents()
+
+    def test_active_episode_catalog_reads_run_off_gui_thread(self):
+        page = WorkDetailPage()
+        work_id = 12345
+        page.work = {
+            "id": work_id,
+            "type": "ANIME",
+            "format": "TV",
+            "episodes": 1,
+            "title": {"english": "Example Series"},
+            "_series_members": [{
+                "id": work_id,
+                "title": {"english": "Example Series"},
+                "start_year": 2020,
+                "start_month": 1,
+                "start_day": 1,
+            }],
+        }
+        page._selected_episode_work_id = work_id
+        page._detail_build_token = 17
+        content = QWidget()
+        content._detail_sections_ready = False
+        content._detail_sections_success = True
+        content._episode_section_ready = False
+        content._episode_section_success = True
+        layout = QVBoxLayout(content)
+        host = page._episode_section_loading_frame()
+        layout.addWidget(host)
+        page.scroll_area.setWidget(content)
+
+        gui_thread_id = threading.get_ident()
+        database_threads = []
+        work_row = {
+            "id": work_id,
+            "title": "Example Series",
+            "type": "ANIME",
+            "format": "TV",
+            "episodes": 1,
+        }
+        episode_rows = [{
+            "work_id": work_id,
+            "episode_number": 1,
+            "title": "Episode 1",
+            "description": "An example synopsis for the first episode.",
+            "air_date": "2020-01-01",
+            "thumbnail_url": None,
+            "watched": 0,
+        }]
+
+        def read_work(_work_id):
+            database_threads.append(("work", threading.get_ident()))
+            return work_row
+
+        def read_episodes(_work_id):
+            database_threads.append(("episodes", threading.get_ident()))
+            return episode_rows
+
+        def read_metadata(_work_id, _provider):
+            database_threads.append(("metadata", threading.get_ident()))
+            return {
+                "version": TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": time.time(),
+            }
+
+        with (
+            patch("ui.pages.work_detail_page.get_work", side_effect=read_work),
+            patch("ui.pages.work_detail_page.get_episodes", side_effect=read_episodes),
+            patch("ui.pages.work_detail_page.get_provider_metadata", side_effect=read_metadata),
+            patch.object(page, "_start_episode_image_cache"),
+        ):
+            page._populate_episode_section(17, content, host)
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                self.app.processEvents()
+                if (
+                    not page._episode_section_load_jobs
+                    and len(content.findChildren(EpisodeCard)) == 1
+                ):
+                    break
+                time.sleep(0.01)
+            self.app.processEvents()
+
+        self.assertEqual(
+            {name for name, _thread_id in database_threads},
+            {"work", "episodes", "metadata"},
+        )
+        self.assertTrue(database_threads)
+        self.assertTrue(
+            all(thread_id != gui_thread_id for _name, thread_id in database_threads),
+            "Episode catalog queries were run synchronously by the GUI thread.",
+        )
+        self.assertEqual(len(content.findChildren(EpisodeCard)), 1)
+        self.assertFalse(page._episode_section_load_jobs)
 
         page.deleteLater()
         self.app.processEvents()
@@ -373,9 +483,9 @@ class DetailSkeletonTests(unittest.TestCase):
         artwork = card.findChild(EpisodeArtwork)
         description = card.findChild(QLabel, "detailEpisodeDescription")
 
-        self.assertLessEqual(card.minimumHeight(), 64)
-        self.assertEqual(artwork.size().width(), 96)
-        self.assertEqual(artwork.size().height(), 54)
+        self.assertGreaterEqual(card.minimumHeight(), 100)
+        self.assertEqual(artwork.size().width(), 148)
+        self.assertEqual(artwork.size().height(), 83)
         # Empty synopses are omitted entirely rather than taking up row space.
         self.assertIsNone(description)
 
@@ -855,9 +965,10 @@ class DetailSkeletonTests(unittest.TestCase):
         })
         description = card.findChild(QLabel, "detailEpisodeDescription")
         self.assertIsNotNone(description)
-        self.assertFalse(description.wordWrap())
+        self.assertTrue(description.wordWrap())
         self.assertEqual(description.toolTip(), synopsis)
-        self.assertLess(card.minimumHeight(), 80)
+        self.assertLessEqual(description.maximumHeight(), 32)
+        self.assertGreaterEqual(card.minimumHeight(), 100)
 
         card.deleteLater()
         self.app.processEvents()
