@@ -186,6 +186,43 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
+    def test_ui_stall_watchdog_logs_without_processing_gui_events(self):
+        page = WorkDetailPage()
+        events = []
+        page._ui_watchdog_work_id = 21355
+        page._ui_watchdog_bundle_ids = (21355, 108632)
+        page._last_ui_phase = "test_deliberate_ui_stall"
+        page._last_ui_heartbeat_at = time.monotonic() - 3.0
+
+        with patch(
+            "ui.pages.work_detail_page.log_event",
+            side_effect=lambda event, **fields: events.append((event, fields)),
+        ):
+            deadline = time.monotonic() + 2.0
+            # Intentionally do not pump QApplication events: the watchdog must
+            # still log from its separate thread while Qt's UI queue is idle.
+            while time.monotonic() < deadline and not any(
+                event == "work_detail.ui_watchdog_stall_detected"
+                for event, _fields in events
+            ):
+                time.sleep(0.02)
+
+        stall_events = [
+            fields for event, fields in events
+            if event == "work_detail.ui_watchdog_stall_detected"
+        ]
+        self.assertTrue(stall_events)
+        self.assertEqual(stall_events[0]["work_id"], 21355)
+        self.assertEqual(stall_events[0]["bundle_work_ids"], [21355, 108632])
+        self.assertEqual(stall_events[0]["last_ui_phase"], "test_deliberate_ui_stall")
+        self.assertGreaterEqual(stall_events[0]["stall_ms"], 1500)
+
+        page.request_shutdown()
+        page._ui_stall_watchdog_thread.join(timeout=1.0)
+        self.assertFalse(page._ui_stall_watchdog_thread.is_alive())
+        page.deleteLater()
+        self.app.processEvents()
+
     def test_active_episode_catalog_reads_run_off_gui_thread(self):
         page = WorkDetailPage()
         work_id = 12345
@@ -952,7 +989,7 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
-    def test_episode_synopses_are_single_line_with_full_tooltip(self):
+    def test_episode_synopses_wrap_to_two_lines_with_full_tooltip(self):
         synopsis = "A long synopsis that should stay compact in the episode list."
         card = EpisodeCard({
             "work_id": 12345,
