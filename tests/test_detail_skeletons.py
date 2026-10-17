@@ -221,6 +221,48 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
+    def test_active_detail_open_defers_all_expensive_sections_even_when_local_data_is_ready(self):
+        page = WorkDetailPage()
+        page.work = {
+            "id": 12345,
+            "type": "ANIME",
+            "format": "TV",
+            "title": {"english": "Bundled season"},
+            "_series_members": [{"id": 12345}],
+        }
+        page._selected_episode_work_id = 12345
+
+        with (
+            patch.object(page, "_local_detail_ready") as readiness,
+            patch.object(page, "_hero", return_value=QFrame()),
+            patch.object(page, "_mangabaka_section", return_value=None),
+            patch.object(page, "_is_reading_media", return_value=False),
+            patch.object(page, "_episodes_section") as episodes,
+            patch.object(page, "_build_detail_sections_local") as local_sections,
+            patch("ui.pages.work_detail_page.QTimer.singleShot") as schedule,
+        ):
+            content, ready = page._build_detail_content([12345], defer_missing=True)
+
+        self.assertFalse(ready)
+        readiness.assert_not_called()
+        episodes.assert_not_called()
+        local_sections.assert_not_called()
+        self.assertEqual(
+            {
+                frame.property("_skeleton_section_title")
+                for frame in content.findChildren(QFrame, "detailSkeletonSection")
+            },
+            {"Characters", "Staff", "Relations"},
+        )
+        self.assertIsNotNone(content.findChild(QLabel, "detailEpisodeLoadingLabel"))
+        self.assertFalse(content.property("_detail_cacheable"))
+        self.assertEqual(schedule.call_count, 2)
+        self.assertTrue(all(call.args[0] == 40 for call in schedule.call_args_list))
+
+        content.deleteLater()
+        page.deleteLater()
+        self.app.processEvents()
+
     def test_episode_rows_are_compact_and_hide_empty_synopsis(self):
         episode = {
             "work_id": 12345,
