@@ -1007,6 +1007,7 @@ class MainWindow(QMainWindow):
         raw_members = work.get("_series_members") if hasattr(work, "get") else None
         members = list(raw_members) if raw_members else [work]
         work_id = work.get("id") if hasattr(work, "get") else None
+        selected_work_id = work_id
         log_event(
             "work_details.open_requested",
             work_id=work_id,
@@ -1052,7 +1053,7 @@ class MainWindow(QMainWindow):
         self._queue_library_imports(pending_imports)
         log_event(
             "work_details.open_flow_completed",
-            work_id=work_id,
+            work_id=selected_work_id,
             member_count=len(members),
             enrichment_count=len(pending_imports),
         )
