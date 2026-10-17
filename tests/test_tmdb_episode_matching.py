@@ -4,7 +4,8 @@ import datetime
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import api
 import database
@@ -236,9 +237,52 @@ class TMDBEpisodeMatchingTests(unittest.TestCase):
             )
 
         request.assert_called_once_with("/tv/99/season/1", {"language": "en-US"})
-        self.assertEqual([item["episodeNumber"] for item in data["episodes"]], [2, 4, 5])
+        self.assertEqual([item["episodeNumber"] for item in data["episodes"]], [2, 3, 4, 5])
         self.assertIsNone(data["episodes"][0]["airdate"])
-        self.assertEqual(data["tmdb_count"], 3)
+        self.assertEqual(data["tmdb_count"], 4)
+
+    def test_malformed_episode_air_date_is_kept_as_undated(self):
+        season_payload = {
+            "episodes": [
+                {
+                    "id": 51, "episode_number": 7, "name": "Episode With Bad Date",
+                    "overview": "Keep this catalog entry", "air_date": "not-a-date",
+                    "still_path": None,
+                },
+            ]
+        }
+        with patch("api._tmdb_get", return_value=season_payload), patch(
+            "api._pick_best_episode_still", return_value=(None, 0)
+        ):
+            data = api.get_tmdb_episode_data(
+                ["Example Show"], "2020-10-01", "2021-03-01",
+                expected_episodes=1, tmdb_id=99, tmdb_season_number=1,
+            )
+
+        self.assertEqual(len(data["episodes"]), 1)
+        self.assertEqual(data["episodes"][0]["episodeNumber"], 7)
+        self.assertIsNone(data["episodes"][0]["airdate"])
+        self.assertEqual(data["episodes"][0]["title"], "Episode With Bad Date")
+
+    def test_cached_episode_artwork_paths_are_absolute_and_reused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            url = "https://image.tmdb.org/t/p/w500/example-still.jpg"
+            response = MagicMock()
+            with (
+                patch.object(api, "TMDB_EPISODE_CACHE_DIRECTORY", Path(directory)),
+                patch("api._get_tmdb_episode_image_response", return_value=response) as download,
+                patch("api._read_bounded_tmdb_image_response", return_value=b"fake-image"),
+                patch("api._valid_image_data", return_value=True),
+            ):
+                local_path = api.cache_tmdb_episode_image(url, 99, 2)
+
+                self.assertTrue(Path(local_path).is_absolute())
+                self.assertTrue(Path(local_path).is_file())
+                second_path = api.cache_tmdb_episode_image(url, 99, 2)
+
+            self.assertEqual(second_path, local_path)
+            download.assert_called_once_with(url)
+            response.close.assert_called_once()
 
     def test_catalog_pruning_removes_stale_rows_but_preserves_watched_state(self):
         previous_cwd = os.getcwd()
@@ -301,6 +345,48 @@ class TMDBEpisodeMatchingTests(unittest.TestCase):
                     connection.close()
                 self.assertEqual(progress, 2)
                 self.assertEqual(reminders, 0)
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_bulk_progress_updates_noncontiguous_episode_ids(self):
+        previous_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as directory:
+            os.chdir(directory)
+            try:
+                database.initialize_database()
+                work_id = 923
+                database.save_anime({
+                    "id": work_id,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "episodes": 3,
+                    "title": {"english": "Example Show", "romaji": "Example Show", "native": None},
+                    "coverImage": {"large": None},
+                    "startDate": {"year": 2020, "month": 1, "day": 1},
+                })
+                database.add_to_library(work_id)
+                database.save_episodes(work_id, [
+                    {"episodeNumber": 1, "title": "Episode 1"},
+                    {"episodeNumber": 3, "title": "Episode 3"},
+                    {"episodeNumber": 5, "title": "Episode 5"},
+                ])
+
+                watched_count, total = database.set_episode_progress(work_id, [1, 5])
+
+                self.assertEqual((watched_count, total), (2, 3))
+                rows = database.get_episodes(work_id)
+                self.assertEqual([row["episode_number"] for row in rows], [1, 3, 5])
+                self.assertEqual([row["watched"] for row in rows], [1, 0, 1])
+                connection = database.get_connection()
+                try:
+                    library = connection.execute(
+                        "SELECT progress_episodes, status FROM user_library WHERE work_id = ?",
+                        (work_id,),
+                    ).fetchone()
+                finally:
+                    connection.close()
+                self.assertEqual(library["progress_episodes"], 2)
+                self.assertEqual(library["status"], "Watching")
             finally:
                 os.chdir(previous_cwd)
 
