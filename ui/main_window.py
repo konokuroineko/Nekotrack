@@ -1,5 +1,6 @@
 import sys
 import threading
+import time
 from pathlib import Path
 
 from api import (
@@ -477,6 +478,51 @@ SIDEBAR_NAVIGATION = (
 )
 
 
+class BundleEnrichmentCheckWorker(QObject):
+    """Check local metadata for all bundle members without blocking Qt's GUI thread."""
+
+    finished = Signal(object, object, object)
+
+    def __init__(self, selected_work_id, work_ids):
+        super().__init__()
+        self.selected_work_id = selected_work_id
+        self.work_ids = tuple(int(work_id) for work_id in work_ids)
+
+    def run(self):
+        pending_ids = []
+        failed_checks = []
+        started_at = time.perf_counter()
+        log_event(
+            "work_details.enrichment_check_started",
+            work_id=self.selected_work_id,
+            member_count=len(self.work_ids),
+        )
+        for work_id in self.work_ids:
+            try:
+                needs_enrichment = not characters_are_loaded(work_id)
+            except Exception as error:
+                failed_checks.append(work_id)
+                log_exception(
+                    "work_details.enrichment_check_failed",
+                    error,
+                    selected_work_id=self.selected_work_id,
+                    work_id=work_id,
+                )
+                continue
+            if needs_enrichment:
+                pending_ids.append(work_id)
+
+        log_event(
+            "work_details.enrichment_check_completed",
+            work_id=self.selected_work_id,
+            member_count=len(self.work_ids),
+            pending_import_count=len(pending_ids),
+            failed_check_ids=failed_checks,
+            elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2),
+        )
+        self.finished.emit(self.selected_work_id, pending_ids, failed_checks)
+
+
 class MainWindow(QMainWindow):
     _library_import_thread_stopped = Signal(object, object, int)
 
@@ -500,6 +546,7 @@ class MainWindow(QMainWindow):
         self.navigation_buttons = {}
         self._settings_rebuild_pending = False
         self._detail_enrichment_ids = set()
+        self._detail_enrichment_check_jobs = {}
         self._entity_profile_history = []
         self._pending_character_cast_refreshes = {}
         self._completed_character_cast_refreshes = set()
@@ -1055,59 +1102,89 @@ class MainWindow(QMainWindow):
 
 
     def _queue_detail_enrichment_batch(self, member_ids, selected_work_id, offset=0):
-        """Check imported metadata in small GUI turns after the detail shell is visible."""
+        """Check bundle readiness in a worker before starting writes to the database."""
         if self._shutdown_requested or self._shutdown_event.is_set():
             return
-
-        batch_size = 3
-        batch = member_ids[offset:offset + batch_size]
-        pending_imports = []
-        for work_id in batch:
-            if work_id in self._detail_enrichment_ids:
-                continue
+        if offset:
+            # Retain the old call shape for queued callbacks from older views;
+            # one worker now checks the full list to avoid GUI-thread SQLite reads.
+            member_ids = member_ids[offset:]
+        ids = []
+        seen = set()
+        for value in member_ids or ():
             try:
-                needs_enrichment = not characters_are_loaded(work_id)
-            except Exception as error:
-                log_exception(
-                    "work_details.enrichment_check_failed",
-                    error,
-                    selected_work_id=selected_work_id,
-                    work_id=work_id,
-                )
-                needs_enrichment = False
+                work_id = int(value)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if work_id > 0 and work_id not in seen:
+                seen.add(work_id)
+                ids.append(work_id)
 
-            if needs_enrichment:
-                self._detail_enrichment_ids.add(work_id)
-                pending_imports.append(work_id)
-
-        self._queue_library_imports(pending_imports)
-        next_offset = offset + len(batch)
-        log_event(
-            "work_details.enrichment_batch_checked",
-            work_id=selected_work_id,
-            checked_count=len(batch),
-            queued_count=len(pending_imports),
-            checked_total=next_offset,
-            member_count=len(member_ids),
-        )
-
-        if next_offset < len(member_ids):
-            QTimer.singleShot(
-                0,
-                lambda ids=member_ids, selected=selected_work_id, start=next_offset:
-                    self._queue_detail_enrichment_batch(ids, selected, start),
+        if not ids:
+            log_event(
+                "work_details.open_flow_completed",
+                work_id=selected_work_id,
+                member_count=0,
+                pending_enrichment_count=0,
             )
             return
 
+        thread = QThread(self)
+        thread.setProperty("detail_enrichment_selected_work_id", str(selected_work_id))
+        worker = BundleEnrichmentCheckWorker(selected_work_id, ids)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._detail_enrichment_check_finished)
+        worker.finished.connect(
+            thread.quit,
+            Qt.ConnectionType.DirectConnection,
+        )
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._detail_enrichment_check_thread_stopped)
+        thread.finished.connect(thread.deleteLater)
+        self._detail_enrichment_check_jobs[thread] = {
+            "worker": worker,
+            "selected_work_id": selected_work_id,
+            "member_ids": tuple(ids),
+        }
+        log_event(
+            "work_details.enrichment_check_scheduled",
+            work_id=selected_work_id,
+            member_count=len(ids),
+        )
+        thread.start()
+
+    def _detail_enrichment_check_finished(self, selected_work_id, pending_ids, failed_ids):
+        """Mark required work before delaying write-heavy imports until initial reads return."""
+        if self._shutdown_requested or self._shutdown_event.is_set():
+            return
+        pending_ids = tuple(int(work_id) for work_id in (pending_ids or ()))
+        self._detail_enrichment_ids.update(pending_ids)
         log_event(
             "work_details.open_flow_completed",
             work_id=selected_work_id,
-            member_count=len(member_ids),
-            pending_enrichment_count=sum(
-                1 for work_id in member_ids
-                if work_id in self._detail_enrichment_ids
-            ),
+            pending_enrichment_count=len(pending_ids),
+            failed_check_count=len(failed_ids or ()),
         )
+        if pending_ids:
+            # Give the initial episode detail callback time to finish its short
+            # GUI-side lookups before imports begin writing to the shared SQLite DB.
+            QTimer.singleShot(
+                250,
+                lambda ids=pending_ids: self._queue_library_imports(ids),
+            )
+
+    def _detail_enrichment_check_thread_stopped(self):
+        thread = self.sender()
+        if thread is None:
+            return
+        job = self._detail_enrichment_check_jobs.pop(thread, None)
+        if job is not None:
+            log_event(
+                "work_details.enrichment_check_thread_stopped",
+                work_id=job.get("selected_work_id"),
+                member_count=len(job.get("member_ids") or ()),
+            )
 
 
     def show_search_work(self, work):
@@ -1527,21 +1604,26 @@ class MainWindow(QMainWindow):
         if self._shutdown_event.is_set():
             return
 
-        # Cache the already-saved TMDB episode artwork; no hidden detail UI
-        # should be built just because a background import finished.
-        try:
-            episodes = get_episodes(work_id)
-            self.work_detail_page._start_episode_image_cache(
-                work_id,
-                [dict(episode) for episode in episodes],
-            )
-        except Exception as error:
-            print(
-                f"Episode image preload failed for work {work_id}: {error}"
-            )
+        # Episode artwork is cached by WorkDetailPage when a season's saved
+        # catalog is displayed. Do not query SQLite here: other members of this
+        # bundle may still be writing their imports, and this row shape also
+        # differs from the TMDB episode-image cache worker's input schema.
 
-        # Refresh an already-open detail page after background enrichment so
-        # newly imported characters/staff appear without another click.
+        self._refresh_open_detail_after_import(work_id)
+
+    def _library_import_error(self, work_id, message):
+        work_id = int(work_id)
+        self._detail_enrichment_ids.discard(work_id)
+        log_event("library.import.error_signal", work_id=work_id, error=message)
+        # The basic Library entry remains usable when optional metadata fails;
+        # still flush a deferred refresh after the last bundle import completes.
+        self._refresh_open_detail_after_import(work_id)
+
+    def _refresh_open_detail_after_import(self, work_id):
+        """Refresh an open bundle once its required member imports have settled."""
+        if self._shutdown_event.is_set():
+            return
+
         current_work = getattr(self.work_detail_page, "work", None)
         if current_work is None:
             return
@@ -1551,18 +1633,33 @@ class MainWindow(QMainWindow):
                 int(member["id"])
                 for member in self.work_detail_page._detail_work_ids()
             }
-        except Exception:
-            current_ids = set()
+        except Exception as error:
+            log_exception(
+                "library.import.detail_refresh_ids_failed",
+                error,
+                work_id=work_id,
+            )
+            return
 
-        if work_id in current_ids:
-            self.work_detail_page.set_work(current_work)
+        if int(work_id) not in current_ids:
+            return
 
-    def _library_import_error(self, work_id, message):
-        self._detail_enrichment_ids.discard(int(work_id))
-        log_event("library.import.error_signal", work_id=work_id, error=message)
-        # The basic library entry remains usable when optional full metadata
-        # enrichment fails.
-        return
+        pending_ids = current_ids.intersection(self._detail_enrichment_ids)
+        if pending_ids:
+            log_event(
+                "library.import.detail_refresh_deferred",
+                work_id=work_id,
+                pending_member_count=len(pending_ids),
+                pending_member_ids=sorted(pending_ids),
+            )
+            return
+
+        log_event(
+            "library.import.detail_refresh_after_bundle_idle",
+            work_id=work_id,
+            member_count=len(current_ids),
+        )
+        self.work_detail_page.set_work(current_work)
 
     def _queue_library_imports(self, work_ids):
         """Queue imports and reserve only a bounded number of worker threads."""

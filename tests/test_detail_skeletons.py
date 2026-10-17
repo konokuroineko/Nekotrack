@@ -1,6 +1,7 @@
 import os
 import unittest
 import time
+import threading
 from unittest.mock import patch
 
 from PySide6.QtCore import Qt, Signal
@@ -16,7 +17,10 @@ from api import (
     TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS,
     TMDB_EPISODE_CATALOG_VERSION,
 )
-from ui.pages.work_detail_page import EpisodeArtwork, EpisodeCard, EpisodeImageCacheWorker, WorkDetailPage
+from ui.pages.work_detail_page import (
+    EpisodeArtwork, EpisodeCard,
+    EpisodeImageCacheWorker, WorkDetailPage,
+)
 
 
 class DetailSkeletonTests(unittest.TestCase):
@@ -260,6 +264,98 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertTrue(all(call.args[0] == 40 for call in schedule.call_args_list))
 
         content.deleteLater()
+        page.deleteLater()
+        self.app.processEvents()
+
+    def test_bundle_section_database_reads_run_off_the_gui_thread(self):
+        class DummyCard(QFrame):
+            clicked = Signal(object)
+
+            def __init__(self, item):
+                super().__init__()
+                self.item = item
+
+        page = WorkDetailPage()
+        page.work = {
+            "id": 12345,
+            "type": "ANIME",
+            "format": "TV",
+            "_series_members": [{"id": 12345}, {"id": 12346}],
+        }
+        page._detail_build_token = 1
+        content = QWidget()
+        content.setProperty("_detail_cache_key", [12345, 12346])
+        content._detail_sections_ready = False
+        content._detail_sections_success = True
+        content._episode_section_ready = True
+        content._episode_section_success = True
+        layout = QVBoxLayout(content)
+        skeleton = page._detail_section_skeleton("Relations", 6, "poster")
+        layout.addWidget(skeleton)
+        page.scroll_area.setWidget(content)
+
+        gui_thread_id = threading.get_ident()
+        query_thread_ids = []
+
+        def read_bundle_relations(work_ids):
+            query_thread_ids.append(threading.get_ident())
+            return [{"id": 9001, "title": "Example relation"}]
+
+        page._populate_detail_section(
+            1,
+            content,
+            layout,
+            skeleton,
+            [12345, 12346],
+            "Relations",
+            read_bundle_relations,
+            DummyCard,
+            page.relation_selected,
+            6,
+        )
+
+        # The function returns after scheduling its background query; the
+        # database getter must not have run in the click/GUI call stack.
+        self.assertEqual(query_thread_ids, [])
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and (
+            page._detail_section_jobs
+            or content.findChild(QFrame, "detailSkeletonSection") is not None
+        ):
+            self.app.processEvents()
+            time.sleep(0.01)
+        self.app.processEvents()
+
+        self.assertEqual(len(query_thread_ids), 1)
+        self.assertNotEqual(query_thread_ids[0], gui_thread_id)
+        self.assertEqual(
+            len(content.findChildren(DummyCard)),
+            1,
+        )
+        self.assertFalse(page._detail_section_jobs)
+
+        page.deleteLater()
+        self.app.processEvents()
+
+    def test_anime_bundle_skips_unneeded_mangabaka_database_lookups(self):
+        page = WorkDetailPage()
+        page.work = {
+            "id": 12345,
+            "type": "ANIME",
+            "format": "TV",
+            "title": {"english": "Bundle representative"},
+            "_series_members": [{"id": 12345 + index} for index in range(12)],
+        }
+
+        with patch("ui.pages.work_detail_page.get_provider_metadata") as metadata:
+            detail_ids = page._prepare_detail_state(page.work)
+
+        self.assertEqual(detail_ids, [12345 + index for index in range(12)])
+        metadata.assert_not_called()
+        self.assertIsNone(page.mangabaka_metadata)
+        self.assertEqual(page.mangabaka_volume_records, [])
+        self.assertEqual(page.mangabaka_news, [])
+
         page.deleteLater()
         self.app.processEvents()
 

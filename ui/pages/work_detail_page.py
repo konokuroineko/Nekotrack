@@ -72,6 +72,52 @@ class AutoBundleWorker(QRunnable):
             self.signals.finished.emit(self.work_id, result)
 
 
+class DetailSectionDataWorker(QObject):
+    """Fetch aggregated bundle section data without blocking the GUI thread."""
+
+    data_ready = Signal(int, str, object, object)
+    finished = Signal()
+
+    def __init__(self, token, title, detail_ids, data_getter):
+        super().__init__()
+        self.token = int(token)
+        self.title = str(title)
+        self.detail_ids = tuple(int(work_id) for work_id in detail_ids)
+        self.data_getter = data_getter
+
+    def run(self):
+        started_at = time.perf_counter()
+        log_event(
+            "work_detail.section_data_worker_started",
+            token=self.token,
+            section=self.title,
+            work_ids=list(self.detail_ids),
+        )
+        try:
+            items = self.data_getter(self.detail_ids)
+            log_event(
+                "work_detail.section_data_worker_completed",
+                token=self.token,
+                section=self.title,
+                work_ids=list(self.detail_ids),
+                item_count=len(items or []),
+                elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2),
+            )
+            self.data_ready.emit(self.token, self.title, items or [], None)
+        except Exception as error:
+            log_exception(
+                "work_detail.section_data_worker_failed",
+                error,
+                token=self.token,
+                section=self.title,
+                work_ids=list(self.detail_ids),
+                elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2),
+            )
+            self.data_ready.emit(self.token, self.title, [], str(error))
+        finally:
+            self.finished.emit()
+
+
 class EpisodeSyncWorker(QObject):
     finished = Signal(int, object)
     error = Signal(int, str)
@@ -799,6 +845,7 @@ class WorkDetailPage(QWidget):
         self.staff_thread_stopped.connect(self._staff_thread_finished)
         self._detail_build_token = 0
         self._detail_content_cache = {}
+        self._detail_section_jobs = {}
         self._episode_sync_completed = set()
         self._episode_sync_errors = {}
         self._episode_source_status = {}
@@ -908,6 +955,11 @@ class WorkDetailPage(QWidget):
         if self._staff_sync_thread is not None:
             threads.append(self._staff_sync_thread)
         threads.extend(self._episode_image_cache_threads.values())
+        threads.extend(
+            job["thread"]
+            for job in self._detail_section_jobs.values()
+            if job.get("thread") is not None
+        )
         for thread in threads:
             try:
                 thread.quit()
@@ -960,33 +1012,37 @@ class WorkDetailPage(QWidget):
             self._staff_next_pages.setdefault(work_id, 2)
         self._staff_visible_counts.setdefault(tuple(detail_ids), 12)
 
+        # Anime bundles do not display MangaBaka volume/news metadata. Avoid
+        # opening a SQLite connection for every member before the detail shell
+        # is attached; that path could wait behind other bundle imports.
         self.mangabaka_metadata = self._value("_mangabaka")
         self.mangabaka_volume_records = []
         self.mangabaka_news = []
         primary_id = self._value("id")
-        if not isinstance(self.mangabaka_metadata, dict):
-            for provider_work_id in detail_ids or ([primary_id] if primary_id is not None else []):
+        if self._is_reading_media():
+            if not isinstance(self.mangabaka_metadata, dict):
+                for provider_work_id in detail_ids or ([primary_id] if primary_id is not None else []):
+                    try:
+                        saved_metadata = get_provider_metadata(int(provider_work_id), "mangabaka")
+                    except Exception:
+                        saved_metadata = None
+                    if isinstance(saved_metadata, dict):
+                        self.mangabaka_metadata = saved_metadata
+                        primary_id = provider_work_id
+                        break
+            if primary_id is not None:
                 try:
-                    saved_metadata = get_provider_metadata(int(provider_work_id), "mangabaka")
+                    saved_volumes = get_provider_metadata(int(primary_id), "mangabaka_volumes")
+                    if isinstance(saved_volumes, list):
+                        self.mangabaka_volume_records = saved_volumes
                 except Exception:
-                    saved_metadata = None
-                if isinstance(saved_metadata, dict):
-                    self.mangabaka_metadata = saved_metadata
-                    primary_id = provider_work_id
-                    break
-        if primary_id is not None:
-            try:
-                saved_volumes = get_provider_metadata(int(primary_id), "mangabaka_volumes")
-                if isinstance(saved_volumes, list):
-                    self.mangabaka_volume_records = saved_volumes
-            except Exception:
-                self.mangabaka_volume_records = []
-            try:
-                saved_news = get_provider_metadata(int(primary_id), "mangabaka_news")
-                if isinstance(saved_news, list):
-                    self.mangabaka_news = saved_news
-            except Exception:
-                self.mangabaka_news = []
+                    self.mangabaka_volume_records = []
+                try:
+                    saved_news = get_provider_metadata(int(primary_id), "mangabaka_news")
+                    if isinstance(saved_news, list):
+                        self.mangabaka_news = saved_news
+                except Exception:
+                    self.mangabaka_news = []
 
         previous_selected = self._selected_episode_work_id
         if previous_selected in detail_ids:
@@ -1543,11 +1599,12 @@ class WorkDetailPage(QWidget):
         # skeleton alive until every bundled row exists, rather than treating a
         # missing SQLite row as an empty season and crashing during TMDB setup.
         if not self._is_reading_media():
-            missing_work_ids = [
-                work_id
-                for work_id in self._detail_work_ids()
-                if get_work(work_id) is None
-            ]
+            selected_work_id = self._selected_episode_work_id or self._value("id")
+            missing_work_ids = (
+                [selected_work_id]
+                if selected_work_id is not None and get_work(selected_work_id) is None
+                else []
+            )
             if missing_work_ids:
                 if attempt < 120:
                     QTimer.singleShot(
@@ -1779,44 +1836,130 @@ class WorkDetailPage(QWidget):
         signal,
         columns,
     ):
-        if token != self._detail_build_token:
+        """Query all bundle members off-thread, then render the section on the GUI thread."""
+        if token != self._detail_build_token or self.scroll_area.widget() is not content:
             return
-        if self.scroll_area.widget() is not content:
-            return
-
-        loading_index = layout.indexOf(loading)
-        if loading_index < 0:
+        if layout is None or layout.indexOf(loading) < 0:
             return
 
-        section_started_at = time.perf_counter()
+        key = (int(token), str(title))
+        if key in self._detail_section_jobs:
+            return
+
+        context = {
+            "content": content,
+            "layout": layout,
+            "loading": loading,
+            "detail_ids": list(detail_ids),
+            "title": title,
+            "card_class": card_class,
+            "signal": signal,
+            "columns": columns,
+            "section_started_at": time.perf_counter(),
+        }
+        thread = QThread(self)
+        worker = DetailSectionDataWorker(token, title, detail_ids, data_getter)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.data_ready.connect(self._detail_section_data_ready)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
+        thread.setProperty("detail_section_token", int(token))
+        thread.setProperty("detail_section_title", str(title))
+        thread.finished.connect(worker.deleteLater)
+        # The receiver is this page, so cleanup always runs on the GUI thread.
+        # Keep the job until both the result has been handled and the QThread
+        # has actually stopped; these two events can arrive in either order.
+        thread.finished.connect(self._detail_section_thread_stopped)
+        thread.finished.connect(thread.deleteLater)
+        self._detail_section_jobs[key] = {
+            "thread": thread,
+            "worker": worker,
+            "context": context,
+            "result_handled": False,
+            "thread_stopped": False,
+        }
         log_event(
-            "work_detail.section_build_started",
+            "work_detail.section_query_scheduled",
+            token=token,
             section=title,
             work_ids=list(detail_ids),
         )
+        thread.start()
+
+    def _detail_section_thread_stopped(self):
+        thread = self.sender()
+        if thread is None:
+            return
         try:
-            data_started_at = time.perf_counter()
-            items = data_getter(detail_ids)
-            log_event(
-                "work_detail.section_data_loaded",
-                section=title,
-                work_ids=list(detail_ids),
-                item_count=len(items or []),
-                elapsed_ms=round((time.perf_counter() - data_started_at) * 1000, 2),
+            key = (
+                int(thread.property("detail_section_token")),
+                str(thread.property("detail_section_title")),
             )
-        except Exception as error:
-            content._detail_sections_success = False
-            log_exception(
-                "work_detail.section_data_load_failed",
-                error,
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            return
+        job = self._detail_section_jobs.get(key)
+        if job is None or job.get("thread") is not thread:
+            return
+        job["thread_stopped"] = True
+        log_event(
+            "work_detail.section_data_thread_stopped",
+            token=key[0],
+            section=key[1],
+        )
+        if job.get("result_handled"):
+            self._detail_section_jobs.pop(key, None)
+
+    def _detail_section_result_handled(self, key, job):
+        if self._detail_section_jobs.get(key) is not job:
+            return
+        job["result_handled"] = True
+        if job.get("thread_stopped"):
+            self._detail_section_jobs.pop(key, None)
+
+    def _detail_section_data_ready(self, token, title, items, error_message):
+        key = (int(token), str(title))
+        job = self._detail_section_jobs.get(key)
+        if job is None:
+            return
+
+        context = job["context"]
+        content = context["content"]
+        layout = context["layout"]
+        loading = context["loading"]
+        detail_ids = context["detail_ids"]
+
+        if (
+            token != self._detail_build_token
+            or self.scroll_area.widget() is not content
+            or layout is None
+            or layout.indexOf(loading) < 0
+        ):
+            log_event(
+                "work_detail.section_result_discarded",
+                token=token,
                 section=title,
-                work_ids=list(detail_ids),
+                reason="detail_view_changed",
+            )
+            self._detail_section_result_handled(key, job)
+            return
+
+        if error_message:
+            content._detail_sections_success = False
+            log_event(
+                "work_detail.section_data_load_failed",
+                token=token,
+                section=title,
+                work_ids=detail_ids,
+                error_summary=str(error_message)[:400],
             )
             items = []
 
         loading_index = layout.indexOf(loading)
         if loading_index < 0:
+            self._detail_section_result_handled(key, job)
             return
+
+        section_started_at = context["section_started_at"]
         try:
             if title == "Staff":
                 section_widget = self._staff_section(detail_ids, items)
@@ -1824,9 +1967,9 @@ class WorkDetailPage(QWidget):
                 section_widget = self._grid_section(
                     title,
                     items,
-                    card_class,
-                    signal,
-                    columns,
+                    context["card_class"],
+                    context["signal"],
+                    context["columns"],
                     empty_message=self._detail_empty_message(title, detail_ids),
                 )
         except Exception as error:
@@ -1852,24 +1995,15 @@ class WorkDetailPage(QWidget):
             section=title,
             work_ids=list(detail_ids),
             elapsed_ms=round((time.perf_counter() - section_started_at) * 1000, 2),
+            item_count=len(items or []),
         )
 
         next_specs = {
             "Characters": (
-                "Staff",
-                get_bundle_staff,
-                PersonCard,
-                self.person_selected,
-                6,
-                "portrait",
+                "Staff", get_bundle_staff, PersonCard, self.person_selected, 6, "portrait",
             ),
             "Staff": (
-                "Relations",
-                get_bundle_relations,
-                RelationCard,
-                self.relation_selected,
-                6,
-                "poster",
+                "Relations", get_bundle_relations, RelationCard, self.relation_selected, 6, "poster",
             ),
         }
         spec = next_specs.get(title)
@@ -1881,6 +2015,7 @@ class WorkDetailPage(QWidget):
                 work_ids=list(detail_ids),
                 success=bool(content._detail_sections_success),
             )
+            self._detail_section_result_handled(key, job)
             return
 
         next_title, next_getter, next_class, next_signal, next_columns, variant = spec
@@ -1906,18 +2041,10 @@ class WorkDetailPage(QWidget):
                    ids=list(detail_ids), next_title=next_title, getter=next_getter,
                    cls=next_class, slot=next_signal, cols=next_columns:
                 self._populate_detail_section(
-                    token,
-                    page,
-                    target_layout,
-                    label,
-                    ids,
-                    next_title,
-                    getter,
-                    cls,
-                    slot,
-                    cols,
+                    token, page, target_layout, label, ids, next_title, getter, cls, slot, cols
                 ),
         )
+        self._detail_section_result_handled(key, job)
 
     def _mangabaka_section(self):
         """Show the preserved MangaBaka record without discarding provider-only fields."""
