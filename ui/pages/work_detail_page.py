@@ -1400,7 +1400,7 @@ class WorkDetailPage(QWidget):
             layout.addWidget(self._episode_skeleton_strip())
         return frame
 
-    def _set_cover_placeholder(self, label, loading, text)
+    def _set_cover_placeholder(self, label, loading, text):
         """Switch the hero cover between skeleton and honest missing-cover states."""
         if label is None or not isValid(label):
             return
