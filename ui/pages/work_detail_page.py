@@ -98,6 +98,14 @@ class EpisodeSyncWorker(QObject):
         self.media_format = media_format
 
     def run(self):
+        log_event(
+            "episodes.sync_worker_started",
+            work_id=self.work_id,
+            provider="TMDB",
+            media_format=self.media_format,
+            mapped_tmdb_id=self.tmdb_id,
+            mapped_tmdb_season_number=self.tmdb_season_number,
+        )
         try:
             payload = get_tmdb_episode_data(
                 self.title_variants,
@@ -108,9 +116,27 @@ class EpisodeSyncWorker(QObject):
                 self.tmdb_season_number,
                 self.media_format,
             )
-            self.finished.emit(self.work_id, payload)
         except Exception as error:
+            log_exception(
+                "episodes.sync_worker_failed",
+                error,
+                work_id=self.work_id,
+                provider="TMDB",
+                media_format=self.media_format,
+            )
             self.error.emit(self.work_id, str(error))
+        else:
+            payload = payload if isinstance(payload, dict) else {}
+            episodes = payload.get("episodes")
+            log_event(
+                "episodes.sync_worker_succeeded",
+                work_id=self.work_id,
+                provider="TMDB",
+                episode_count=len(episodes) if isinstance(episodes, list) else 0,
+                tmdb_id=payload.get("tmdb_id"),
+                tmdb_season_number=payload.get("tmdb_season_number"),
+            )
+            self.finished.emit(self.work_id, payload)
 
 
 class StaffPageWorker(QObject):
@@ -3465,6 +3491,7 @@ class WorkDetailPage(QWidget):
 
         self._episode_sync_work_id = work_id
         self._episode_sync_thread = QThread(self)
+        self._episode_sync_thread.setProperty("episode_sync_work_id", work_id)
         self._episode_sync_worker = EpisodeSyncWorker(
             work_id,
             title_variants,
@@ -3484,17 +3511,42 @@ class WorkDetailPage(QWidget):
         self._episode_sync_worker.error.connect(self._episode_sync_error)
         worker = self._episode_sync_worker
         thread = self._episode_sync_thread
-        worker.finished.connect(thread.quit)
-        worker.error.connect(thread.quit)
+        # Like image caching, metadata sync must not wait for a queued GUI
+        # callback to request QThread shutdown after a blocking provider call.
+        worker.finished.connect(
+            thread.quit,
+            Qt.ConnectionType.DirectConnection,
+        )
+        worker.error.connect(
+            thread.quit,
+            Qt.ConnectionType.DirectConnection,
+        )
         thread.finished.connect(worker.deleteLater)
         # Clear Python references before Qt destroys the C++ QThread object.
         thread.finished.connect(
             lambda t=thread: self._episode_sync_thread_finished(t)
         )
         thread.finished.connect(thread.deleteLater)
+        log_event(
+            "episodes.sync_thread_started",
+            work_id=work_id,
+            provider="TMDB",
+            media_format=media_format,
+            has_tmdb_mapping=tmdb_id is not None and tmdb_season_number is not None,
+        )
         thread.start()
 
     def _episode_sync_thread_finished(self, thread):
+        raw_work_id = thread.property("episode_sync_work_id")
+        try:
+            work_id = int(raw_work_id)
+        except (TypeError, ValueError, OverflowError):
+            work_id = None
+        log_event(
+            "episodes.sync_thread_stopped",
+            work_id=work_id,
+            still_current=self._episode_sync_thread is thread,
+        )
         if self._episode_sync_thread is thread:
             self._episode_sync_thread = None
             self._episode_sync_worker = None
@@ -3634,8 +3686,14 @@ class WorkDetailPage(QWidget):
 
     def _episode_sync_finished(self, work_id, payload):
         work_id = int(work_id)
-        payload = payload or {}
+        payload = payload if isinstance(payload, dict) else {}
         episodes = payload.get("episodes") or []
+        log_event(
+            "episodes.sync_completion_received",
+            work_id=work_id,
+            outcome="success",
+            episode_count=len(episodes) if isinstance(episodes, list) else 0,
+        )
         self._episode_sync_errors.pop(work_id, None)
         if episodes:
             self._episode_source_status[work_id] = {
@@ -3683,6 +3741,12 @@ class WorkDetailPage(QWidget):
 
     def _episode_sync_error(self, work_id, error):
         work_id = int(work_id)
+        log_event(
+            "episodes.sync_completion_received",
+            work_id=work_id,
+            outcome="error",
+            error_summary=str(error)[:400],
+        )
         self._episode_sync_errors[work_id] = str(error)
         if self._shutdown_event.is_set():
             return

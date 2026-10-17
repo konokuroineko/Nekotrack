@@ -280,6 +280,110 @@ class DetailSkeletonTests(unittest.TestCase):
             for call in log_event.call_args_list
         ))
 
+    def test_episode_sync_thread_quits_without_gui_event_pump(self):
+        page = WorkDetailPage()
+        page.work = {"id": 12345, "type": "ANIME", "format": "TV"}
+        events = []
+        work_id = 12345
+
+        with (
+            patch(
+                "ui.pages.work_detail_page.get_tmdb_episode_data",
+                return_value={
+                    "episodes": [],
+                    "tmdb_count": 0,
+                    "tmdb_id": 999,
+                    "tmdb_season_number": 1,
+                },
+            ),
+            patch(
+                "ui.pages.work_detail_page.log_event",
+                side_effect=lambda event, **fields: events.append((event, fields)),
+            ),
+            patch("ui.pages.work_detail_page.log_exception"),
+        ):
+            page._start_episode_sync(
+                work_id,
+                ["Example Series"],
+                "2020-01-01",
+                None,
+                12,
+                999,
+                1,
+                "TV",
+            )
+            thread = page._episode_sync_thread
+            stopped_before_gui_pump = thread.wait(2000)
+            self.app.processEvents()
+
+        self.assertTrue(
+            stopped_before_gui_pump,
+            "Episode metadata QThread did not stop until GUI events were processed.",
+        )
+        event_names = [event for event, _fields in events]
+        self.assertIn("episodes.sync_thread_started", event_names)
+        self.assertIn("episodes.sync_worker_started", event_names)
+        self.assertIn("episodes.sync_worker_succeeded", event_names)
+        self.assertIn("episodes.sync_completion_received", event_names)
+        self.assertIn("episodes.sync_thread_stopped", event_names)
+        self.assertIsNone(page._episode_sync_thread)
+        self.assertIsNone(page._episode_sync_worker)
+
+        page.deleteLater()
+        self.app.processEvents()
+
+    def test_episode_sync_error_thread_quits_without_gui_event_pump(self):
+        page = WorkDetailPage()
+        page.work = {"id": 12346, "type": "ANIME", "format": "TV"}
+        events = []
+        work_id = 12346
+
+        with (
+            patch(
+                "ui.pages.work_detail_page.get_tmdb_episode_data",
+                side_effect=RuntimeError("simulated TMDB lookup failure"),
+            ),
+            patch(
+                "ui.pages.work_detail_page.log_event",
+                side_effect=lambda event, **fields: events.append((event, fields)),
+            ),
+            patch(
+                "ui.pages.work_detail_page.log_exception",
+                side_effect=lambda event, error, **fields: events.append((event, fields)),
+            ),
+        ):
+            page._start_episode_sync(
+                work_id,
+                ["Example Series"],
+                "2020-01-01",
+                None,
+                12,
+                None,
+                None,
+                "TV",
+            )
+            thread = page._episode_sync_thread
+            stopped_before_gui_pump = thread.wait(2000)
+            self.app.processEvents()
+
+        self.assertTrue(
+            stopped_before_gui_pump,
+            "Failed episode metadata QThread did not stop without GUI events.",
+        )
+        event_rows = dict((event, fields) for event, fields in events)
+        self.assertIn("episodes.sync_worker_started", event_rows)
+        self.assertIn("episodes.sync_worker_failed", event_rows)
+        self.assertEqual(
+            event_rows["episodes.sync_completion_received"]["outcome"],
+            "error",
+        )
+        self.assertIn("episodes.sync_thread_stopped", event_rows)
+        self.assertIsNone(page._episode_sync_thread)
+        self.assertIsNone(page._episode_sync_worker)
+
+        page.deleteLater()
+        self.app.processEvents()
+
     def test_episode_image_cache_thread_quits_without_gui_event_pump(self):
         page = WorkDetailPage()
         events = []
