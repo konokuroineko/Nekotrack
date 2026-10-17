@@ -347,7 +347,10 @@ class DetailSkeletonTests(unittest.TestCase):
                 "ui.pages.work_detail_page.log_event",
                 side_effect=lambda event, **fields: events.append((event, fields)),
             ),
-            patch("ui.pages.work_detail_page.log_exception"),
+            patch(
+                "ui.pages.work_detail_page.log_exception",
+                side_effect=lambda event, error, **fields: events.append((event, fields)),
+            ),
         ):
             page._start_episode_sync(
                 work_id,
