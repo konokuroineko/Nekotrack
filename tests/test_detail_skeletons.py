@@ -3,7 +3,7 @@ import unittest
 import time
 from unittest.mock import patch
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -855,6 +855,59 @@ class DetailSkeletonTests(unittest.TestCase):
         page._set_cover_placeholder(label, False, "NO COVER")
         self.assertFalse(label.property("coverLoading"))
         self.assertEqual(label.text(), "NO COVER")
+        page.deleteLater()
+        self.app.processEvents()
+
+
+    def test_large_character_and_relation_sections_render_cards_incrementally(self):
+        class DummyCard(QFrame):
+            clicked = Signal(object)
+
+            def __init__(self, item):
+                super().__init__()
+                self.item = item
+                self.setObjectName("paginationTestCard")
+
+        page = WorkDetailPage()
+        items = [{"id": index} for index in range(30)]
+
+        for title, clicked_signal in (
+            ("Characters", page.character_selected),
+            ("Relations", page.relation_selected),
+        ):
+            with self.subTest(section=title):
+                section = page._grid_section(
+                    title,
+                    items,
+                    DummyCard,
+                    clicked_signal,
+                    4,
+                )
+                self.assertEqual(
+                    len(section.findChildren(DummyCard, "paginationTestCard")),
+                    12,
+                )
+                more_button = section.findChild(QPushButton, "staffMoreButton")
+                self.assertIsNotNone(more_button)
+                self.assertIn("18 remaining", more_button.text())
+
+                more_button.click()
+                self.assertEqual(
+                    len(section.findChildren(DummyCard, "paginationTestCard")),
+                    24,
+                )
+                self.assertIn("6 remaining", more_button.text())
+
+                more_button.click()
+                self.assertEqual(
+                    len(section.findChildren(DummyCard, "paginationTestCard")),
+                    30,
+                )
+                self.assertTrue(more_button.isHidden())
+
+                section.deleteLater()
+                self.app.processEvents()
+
         page.deleteLater()
         self.app.processEvents()
 
