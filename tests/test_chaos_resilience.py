@@ -925,7 +925,7 @@ class TMDBPayloadChaosTests(unittest.TestCase):
         selected = nt_api._find_tmdb_season(details, date(2019, 1, 4))
         self.assertEqual(selected["season_number"], 0)
 
-    def test_episode_fetch_skips_malformed_rows_and_avoids_extra_mapping_request(self):
+    def test_episode_fetch_keeps_bad_date_rows_and_avoids_extra_mapping_request(self):
         season = {
             "episodes": [
                 None,
@@ -946,9 +946,10 @@ class TMDBPayloadChaosTests(unittest.TestCase):
                 tmdb_season_number=1,
             )
         self.assertEqual(request.call_count, 1)
-        self.assertEqual([episode["episodeNumber"] for episode in result["episodes"]], [1, 2, 4])
-        self.assertEqual(result["episodes"][2]["title"], "Episode 4")
-        self.assertEqual(result["tmdb_count"], 3)
+        self.assertEqual([episode["episodeNumber"] for episode in result["episodes"]], [1, 2, 3, 4])
+        self.assertEqual(result["episodes"][2]["title"], "Episode 3")
+        self.assertIsNone(result["episodes"][2]["airdate"])
+        self.assertEqual(result["tmdb_count"], 4)
 
     def test_episode_still_ranking_survives_corrupted_image_metadata(self):
         with patch.object(nt_api, "_tmdb_get", return_value={
