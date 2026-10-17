@@ -331,6 +331,62 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
+    def test_episode_image_cache_error_thread_quits_without_gui_event_pump(self):
+        page = WorkDetailPage()
+        events = []
+        work_id = 12346
+
+        with (
+            patch(
+                "ui.pages.work_detail_page.cache_tmdb_episode_image",
+                return_value=None,
+            ),
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_path") as save_path,
+            patch(
+                "ui.pages.work_detail_page.log_event",
+                side_effect=lambda event, **fields: events.append((event, fields)),
+            ),
+            patch("ui.pages.work_detail_page.log_exception"),
+        ):
+            page._start_episode_image_cache(
+                work_id,
+                [{
+                    "episodeNumber": 1,
+                    "thumbnail": "https://image.tmdb.org/t/p/w500/missing.jpg",
+                }],
+            )
+            thread = page._episode_image_cache_threads[work_id]
+
+            # The error path must shut down the worker thread without relying
+            # on the GUI queue to deliver the error callback.
+            stopped_before_gui_pump = thread.wait(2000)
+            self.app.processEvents()
+
+        self.assertTrue(
+            stopped_before_gui_pump,
+            "Failed episode image cache QThread did not stop without GUI events.",
+        )
+        event_rows = dict((event, fields) for event, fields in events)
+        self.assertIn("episodes.image_cache_worker_finished", event_rows)
+        self.assertIn("episodes.image_cache_completion_signal_emitting", event_rows)
+        self.assertEqual(
+            event_rows["episodes.image_cache_completion_signal_emitting"]["outcome"],
+            "error",
+        )
+        self.assertEqual(
+            event_rows["episodes.image_cache_completion_received"]["outcome"],
+            "error",
+        )
+        self.assertIn("episodes.image_cache_batch_failed", event_rows)
+        self.assertIn("episodes.image_cache_thread_stopped", event_rows)
+        self.assertGreater(page._episode_image_cache_retry_after[work_id], time.monotonic())
+        self.assertNotIn(work_id, page._episode_image_cache_threads)
+        self.assertNotIn(work_id, page._episode_image_cache_workers)
+        save_path.assert_not_called()
+
+        page.deleteLater()
+        self.app.processEvents()
+
     def test_episode_image_cache_failure_keeps_thread_reference_and_throttles_retry(self):
         page = WorkDetailPage()
         page.work = {"id": 12345, "type": "ANIME", "format": "TV"}
