@@ -194,13 +194,71 @@ class EpisodeSyncWorker(QObject):
                             tmdb_id,
                             payload.get("tmdb_season_number"),
                         )
-                    prune_episode_catalog(self.work_id, episodes)
+                    # A non-empty provider response is not necessarily a complete
+                    # replacement catalog. TMDB can omit entries temporarily or return
+                    # a season/date match with fewer rows than AniList expects. Do not
+                    # delete previously saved episodes (and their watched state) unless
+                    # this response meets the known episode-count expectation.
+                    try:
+                        expected_count = max(0, int(self.expected_episodes or 0))
+                    except (TypeError, ValueError, OverflowError):
+                        expected_count = 0
+
+                    catalog_numbers = set()
+                    for item in episodes:
+                        if not isinstance(item, dict):
+                            continue
+                        raw_number = item.get("episodeNumber")
+                        if isinstance(raw_number, bool):
+                            continue
+                        try:
+                            episode_number = int(raw_number)
+                        except (TypeError, ValueError, OverflowError):
+                            continue
+                        if episode_number > 0:
+                            catalog_numbers.add(episode_number)
+
+                    catalog_expectation_known = expected_count > 0
+                    catalog_complete = (
+                        catalog_expectation_known
+                        and len(catalog_numbers) >= expected_count
+                    )
+                    if catalog_complete:
+                        removed_count = prune_episode_catalog(self.work_id, episodes)
+                        log_event(
+                            "episodes.catalog_prune_completed",
+                            work_id=self.work_id,
+                            expected_episode_count=expected_count,
+                            catalog_episode_count=len(catalog_numbers),
+                            removed_count=removed_count,
+                        )
+                    else:
+                        reason = (
+                            "expected_episode_count_unknown"
+                            if expected_count <= 0
+                            else "catalog_shorter_than_expected"
+                        )
+                        log_event(
+                            "episodes.catalog_prune_skipped",
+                            work_id=self.work_id,
+                            reason=reason,
+                            expected_episode_count=expected_count,
+                            catalog_episode_count=len(catalog_numbers),
+                            preserved_existing_rows=True,
+                        )
+
                     save_provider_metadata(
                         self.work_id,
                         "tmdb_episode_match_version",
                         {
                             "version": TMDB_EPISODE_CATALOG_VERSION,
                             "fetched_at": int(time.time()),
+                            # Unknown expectations remain weekly-refreshable; a known
+                            # incomplete catalog is retried when the app is reopened.
+                            "complete": (
+                                bool(catalog_complete)
+                                if catalog_expectation_known else None
+                            ),
                         },
                     )
                     payload["_catalog_persisted"] = True
@@ -404,7 +462,8 @@ class EpisodeSectionDataWorker(QObject):
                 except (TypeError, ValueError, OverflowError):
                     fetched_at = 0.0
                 catalog_stale = (
-                    not math.isfinite(fetched_at)
+                    metadata.get("complete") is False
+                    or not math.isfinite(fetched_at)
                     or fetched_at <= 0
                     or time.time() - fetched_at >= TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS
                 )
@@ -4785,6 +4844,10 @@ class WorkDetailPage(QWidget):
         except Exception:
             return True
         if not isinstance(metadata, dict):
+            return True
+        if metadata.get("complete") is False:
+            # A partial provider result should be retried in a later app session,
+            # instead of being treated as a complete catalog for the full refresh interval.
             return True
         try:
             fetched_at = float(metadata.get("fetched_at") or 0)
