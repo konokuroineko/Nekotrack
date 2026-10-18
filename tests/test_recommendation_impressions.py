@@ -217,7 +217,7 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.tile.move(300, 0)
         self.app.processEvents()
         with (
-            patch("ui.pages.recommendations_page.time.monotonic", return_value=10.0),
+            patch("ui.pages.recommendations_page.monotonic", return_value=10.0),
             patch("ui.pages.recommendations_page.record_recommendation_impressions") as record,
         ):
             self.page._track_visible_impressions()
@@ -225,8 +225,10 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.assertNotIn(9876, self.page._exposure_visible_since)
 
     def test_impression_requires_dwell_and_repainting_does_not_inflate_count(self):
-        # Prevent the live Qt timer from consuming the mocked clock sequence.
+        # Use a local fake clock; never patch the shared time module used by
+        # Qt, unittest, and unrelated code.
         self.page._impression_timer.stop()
+        fake_now = [10.0]
         with (
             patch("ui.pages.recommendations_page.record_recommendation_impressions") as record,
             patch(
@@ -234,24 +236,28 @@ class RecommendationImpressionTests(unittest.TestCase):
                 return_value={9876: {"impressions": 1}},
             ),
             patch(
-                "ui.pages.recommendations_page.time.monotonic",
-                side_effect=[10.0, 10.5, 11.3, 15.0],
+                "ui.pages.recommendations_page.monotonic",
+                side_effect=lambda: fake_now[0],
             ),
         ):
             self.page._track_visible_impressions()
             record.assert_not_called()
+            fake_now[0] = 10.5
             self.page._track_visible_impressions()
             record.assert_not_called()
+            fake_now[0] = 11.3
             self.page._track_visible_impressions()
             record.assert_called_once_with([self.work])
+            fake_now[0] = 15.0
             self.page._track_visible_impressions()
             record.assert_called_once_with([self.work])
         self.assertTrue(self.page._exposure_counted[9876])
 
     def test_scrolling_away_and_returning_allows_a_distinct_later_impression(self):
-        # The test controls the monotonic clock manually; stop the production
-        # timer so it cannot consume a side_effect clock value during Qt events.
+        # Control the page's clock directly and stop its timer for deterministic
+        # dwell-time assertions without touching the process-wide time module.
         self.page._impression_timer.stop()
+        fake_now = [1.0]
         with (
             patch("ui.pages.recommendations_page.record_recommendation_impressions") as record,
             patch(
@@ -259,20 +265,24 @@ class RecommendationImpressionTests(unittest.TestCase):
                 return_value={9876: {"impressions": 1}},
             ),
             patch(
-                "ui.pages.recommendations_page.time.monotonic",
-                side_effect=[1.0, 2.4, 3.0, 4.0, 5.5],
+                "ui.pages.recommendations_page.monotonic",
+                side_effect=lambda: fake_now[0],
             ),
         ):
             self.page._track_visible_impressions()
+            fake_now[0] = 2.4
             self.page._track_visible_impressions()
             record.assert_called_once_with([self.work])
 
             self.tile.move(300, 0)
+            fake_now[0] = 3.0
             self.page._track_visible_impressions()
             self.assertFalse(self.page._exposure_counted[9876])
 
             self.tile.move(0, 0)
+            fake_now[0] = 4.0
             self.page._track_visible_impressions()
+            fake_now[0] = 5.5
             self.page._track_visible_impressions()
             self.assertEqual(record.call_count, 2)
             self.assertEqual(record.call_args_list[-1].args, ([self.work],))
