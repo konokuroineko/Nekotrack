@@ -525,9 +525,9 @@ class DetailSkeletonTests(unittest.TestCase):
         number = card.findChild(QLabel, "detailEpisodeNumber")
         labels = card.findChildren(QLabel)
 
-        self.assertGreaterEqual(card.minimumHeight(), 150)
-        self.assertEqual(artwork.size().width(), 224)
-        self.assertEqual(artwork.size().height(), 126)
+        self.assertGreaterEqual(card.minimumHeight(), 120)
+        self.assertEqual(artwork.size().width(), 180)
+        self.assertEqual(artwork.size().height(), 101)
         self.assertIn("EP 01", [label.text() for label in labels])
         self.assertIsNotNone(title)
         self.assertIsNotNone(number)
@@ -1092,8 +1092,10 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
-    def test_episode_synopses_wrap_in_larger_row_with_full_tooltip(self):
-        synopsis = "A long synopsis that should stay compact in the episode list."
+    def test_episode_synopsis_is_clamped_to_two_compact_lines_with_full_tooltip(self):
+        synopsis = " ".join(
+            ["A long synopsis with enough words to overflow the compact preview."] * 8
+        )
         card = EpisodeCard({
             "work_id": 12345,
             "episode_number": 12,
@@ -1103,12 +1105,19 @@ class DetailSkeletonTests(unittest.TestCase):
             "description": synopsis,
             "watched": 0,
         })
+        card.resize(760, 124)
+        card.layout().activate()
+        self.app.processEvents()
         description = card.findChild(QLabel, "detailEpisodeDescription")
         self.assertIsNotNone(description)
         self.assertTrue(description.wordWrap())
         self.assertEqual(description.toolTip(), synopsis)
-        self.assertLessEqual(description.maximumHeight(), 50)
-        self.assertGreaterEqual(card.minimumHeight(), 150)
+        self.assertNotEqual(description.text(), synopsis)
+        self.assertTrue(description.text().endswith("…"))
+        self.assertLessEqual(description.text().count("\n"), 1)
+        self.assertIn("font-size:10px", description.styleSheet())
+        self.assertLessEqual(description.maximumHeight(), 30)
+        self.assertLessEqual(card.minimumHeight(), 122)
 
         card.deleteLater()
         self.app.processEvents()
