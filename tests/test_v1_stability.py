@@ -1,5 +1,4 @@
 """Regression tests for V1 update safety and recommendation feed stability."""
-import datetime
 import json
 import os
 import sqlite3
@@ -12,7 +11,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QFrame, QGridLayout, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QFrame
 
 import ui.preferences as preferences
 import updater
@@ -93,7 +92,6 @@ class V1StabilityTests(unittest.TestCase):
                 rolled_back = []
                 page.update_check_requested.connect(lambda: requested.append(True))
                 page.rollback_requested.connect(lambda: rolled_back.append(True))
-                page.findChild(QWidget, "checkUpdatesButton").findChild(QWidget)
                 from PySide6.QtWidgets import QPushButton
                 page.findChild(QPushButton, "checkUpdatesButton").click()
                 page.findChild(QPushButton, "rollbackUpdateButton").click()
