@@ -905,6 +905,32 @@ class EpisodeArtwork(QLabel):
 
 
 
+class EpisodeSynopsisLabel(QLabel):
+    """A single-line synopsis preview that always ellides to its current width."""
+
+    def __init__(self, full_text, parent=None):
+        super().__init__(parent)
+        self._full_text = str(full_text or "")
+        self.setWordWrap(False)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setToolTip(self._full_text)
+        self.update_preview()
+
+    def update_preview(self):
+        width = max(1, self.contentsRect().width())
+        metrics = QFontMetrics(self.font())
+        preview = metrics.elidedText(
+            self._full_text,
+            Qt.TextElideMode.ElideRight,
+            width,
+        )
+        self.setText(preview)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_preview()
+
+
 class EpisodeCard(QFrame):
     watched_changed = Signal(int, bool)
 
@@ -975,16 +1001,12 @@ class EpisodeCard(QFrame):
         self._episode_full_description = str(episode["description"] or "").strip()
         self._episode_description_label = None
         if self._episode_full_description:
-            description = QLabel(self._episode_full_description)
+            description = EpisodeSynopsisLabel(self._episode_full_description)
             self._episode_description_label = description
             description.setObjectName("detailEpisodeDescription")
-            description.setWordWrap(True)
             description.setMinimumWidth(0)
-            # Keep the synopsis to roughly two lines; the tooltip keeps it complete.
-            description.setMaximumHeight(30)
-            description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-            description.setTextFormat(Qt.PlainText)
-            description.setToolTip(self._episode_full_description)
+            description.setMaximumHeight(18)
+            description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             description.setStyleSheet(
                 f"color:{COLORS['secondary']};font-size:10px;"
             )
@@ -1032,52 +1054,10 @@ class EpisodeCard(QFrame):
         label.setToolTip(self._episode_full_title)
 
     def _update_episode_description(self):
-        """Render at most two small preview lines; the tooltip keeps the full synopsis."""
+        """Refresh the clipped preview; the full text stays in the tooltip."""
         label = self._episode_description_label
-        if label is None:
-            return
-
-        full_text = self._episode_full_description
-        label.setToolTip(full_text)
-        width = max(1, label.contentsRect().width())
-        metrics = QFontMetrics(label.font())
-        words = full_text.split()
-        lines = []
-        word_index = 0
-        truncated = False
-
-        # Wrap against the actual widget width rather than letting a full,
-        # long description determine row height or expand the episode panel.
-        while word_index < len(words) and len(lines) < 2:
-            line = ""
-            while word_index < len(words):
-                word = words[word_index]
-                candidate = f"{line} {word}".strip()
-                if metrics.horizontalAdvance(candidate) <= width:
-                    line = candidate
-                    word_index += 1
-                    continue
-                if line:
-                    break
-                # A single unusually long word must still stay inside the row.
-                line = word
-                word_index += 1
-                truncated = True
-                break
-            if line:
-                lines.append(line)
-            else:
-                break
-
-        if word_index < len(words):
-            truncated = True
-        if truncated and lines:
-            last_line = lines[-1].rstrip()
-            while last_line and metrics.horizontalAdvance(last_line + "…") > width:
-                last_line = last_line[:-1].rstrip()
-            lines[-1] = last_line + "…"
-
-        label.setText("\n".join(lines))
+        if label is not None:
+            label.update_preview()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

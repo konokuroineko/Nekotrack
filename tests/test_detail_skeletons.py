@@ -940,7 +940,7 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertIsNotNone(artwork)
         self.assertEqual(artwork.text(), "UNAVAILABLE")
         self.assertLess(labels.index(title), labels.index(number))
-        self.assertIn("font-size:11px", description.styleSheet())
+        self.assertIn("font-size:10px", description.styleSheet())
         self.assertEqual(
             description.toolTip(),
             "Description is still available.",
@@ -1092,7 +1092,7 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
-    def test_episode_synopsis_is_clamped_to_two_compact_lines_with_full_tooltip(self):
+    def test_episode_synopsis_is_one_compact_elided_line_with_full_tooltip(self):
         synopsis = " ".join(
             ["A long synopsis with enough words to overflow the compact preview."] * 8
         )
@@ -1106,18 +1106,24 @@ class DetailSkeletonTests(unittest.TestCase):
             "watched": 0,
         })
         card.resize(760, 124)
+        card.show()
         card.layout().activate()
         self.app.processEvents()
         description = card.findChild(QLabel, "detailEpisodeDescription")
         self.assertIsNotNone(description)
-        self.assertTrue(description.wordWrap())
+        self.assertFalse(description.wordWrap())
         self.assertEqual(description.toolTip(), synopsis)
         self.assertNotEqual(description.text(), synopsis)
         self.assertTrue(description.text().endswith("…"))
-        self.assertLessEqual(description.text().count("\n"), 1)
+        self.assertNotIn("\n", description.text())
         self.assertIn("font-size:10px", description.styleSheet())
-        self.assertLessEqual(description.maximumHeight(), 30)
+        self.assertLessEqual(description.maximumHeight(), 18)
         self.assertLessEqual(card.minimumHeight(), 122)
+
+        wide_preview = description.text()
+        card.resize(420, 124)
+        self.app.processEvents()
+        self.assertLess(len(description.text()), len(wide_preview))
 
         card.deleteLater()
         self.app.processEvents()
