@@ -527,7 +527,7 @@ class HomePage(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         cover_height = round(home_card_size * 284 / 210)
-        scroll.setFixedHeight(cover_height + 82)
+        scroll.setFixedHeight(cover_height + 122)
         scroll.setWidget(strip)
         layout.addWidget(scroll)
         return section
