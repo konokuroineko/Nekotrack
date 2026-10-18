@@ -283,6 +283,7 @@ class V1StabilityTests(unittest.TestCase):
         self.assertIn("Preview data must be separate from the live", launcher)
         self.assertIn("Refusing to overwrite it", launcher)
         self.assertIn("Copy-Item", launcher)
+        self.assertIn("Close NekoTrack before copying", launcher)
 
     def test_installer_build_includes_recovery_helper_and_rollback_shortcut(self):
         root = Path(__file__).resolve().parents[1]
@@ -293,6 +294,9 @@ class V1StabilityTests(unittest.TestCase):
         self.assertIn("safe_update.ps1", installer)
         self.assertIn("RollbackLatest", installer)
         self.assertIn("installer\\safe_update.ps1;installer", build)
+        self.assertIn("[string]$VersionOverride", build)
+        self.assertIn('--add-data "$versionSource;."', build)
+        self.assertIn("UTF8Encoding($false)", build)
         script_text = helper.read_text(encoding="utf-8")
         self.assertIn("The previous executable was restored from backup.", script_text)
         self.assertIn("if (-not (Start-CandidateAndWaitForHealth $ExpectedVersion $AttemptId))", script_text)

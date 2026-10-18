@@ -26,6 +26,9 @@ if ($previewPath -eq $normalPath -or
 }
 
 if ($CopyCurrentData) {
+    if (Get-Process -Name "NekoTrack" -ErrorAction SilentlyContinue) {
+        throw "Close NekoTrack before copying its data so the preview gets a consistent database snapshot."
+    }
     if (-not (Test-Path -LiteralPath $NormalDataDirectory -PathType Container)) {
         throw "The live NekoTrack data folder was not found to copy."
     }

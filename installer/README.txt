@@ -35,6 +35,10 @@ The NEKOTRACK_DATA_DIR override is process-local. Normal launches without it con
 Isolated preview testing
 The bundled updater recognizes NEKOTRACK_DATA_DIR as an optional full path override; normal launches still use %APPDATA%\NekoTrack.
 
+To build an updater-enabled prerelease executable without editing VERSION, run PowerShell from the repo:
+  .\installer\build-installer.ps1 -VersionOverride 1.0.1-beta.1
+This puts the portable build at dist\NekoTrack.exe with its embedded version set to 1.0.1-beta.1. The normal VERSION file is not changed. Copy that EXE to a separate folder such as C:\NekoTrack-Preview, then publish it as the NekoTrack.exe asset on a GitHub prerelease tagged v1.0.1-beta.1. Do not publish a prerelease tag lower than your installed app's version.
+
 1. Copy the updater-enabled NekoTrack.exe to a separate folder such as C:\NekoTrack-Preview. The first copy must be placed manually because an older app build cannot contain the new updater.
 2. To start with a blank preview database, run:
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "installer\run-preview.ps1" -ExePath "C:\NekoTrack-Preview\NekoTrack.exe"
