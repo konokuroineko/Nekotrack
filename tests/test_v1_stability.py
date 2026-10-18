@@ -308,12 +308,15 @@ class V1StabilityTests(unittest.TestCase):
         self.assertIn("The previous executable was restored from backup.", script_text)
         self.assertIn("if (-not (Start-CandidateAndWaitForHealth $ExpectedVersion $AttemptId))", script_text)
 
-    def test_recommendation_page_renders_loading_skeleton_cards(self):
+    def test_recommendation_page_reuses_search_loading_skeleton_cards(self):
+        from ui.widgets.skeleton_card import SkeletonCard
+
         page = RecommendationsPage(embedded=True)
         try:
             page._render_loading_skeletons(8)
-            cards = page.findChildren(QFrame, "recommendationSkeletonCard")
+            cards = page.findChildren(QFrame, "skeleton")
             self.assertEqual(len(cards), 8)
+            self.assertTrue(all(isinstance(card, SkeletonCard) for card in cards))
             self.assertTrue(all(card.width() > 0 and card.height() > 0 for card in cards))
         finally:
             page.request_shutdown()
@@ -363,15 +366,16 @@ class V1StabilityTests(unittest.TestCase):
             page.deleteLater()
             self.app.processEvents()
 
-    def test_home_uses_compact_cards_so_recommendations_start_higher(self):
+    def test_home_uses_normal_size_continue_cards_and_removes_recent_section(self):
         from unittest.mock import patch
         library = [
-            {"id": 1, "type": "ANIME", "title": {"english": "Example One"}, "status": "CURRENT", "progress": 2, "episodes": 12},
-            {"id": 2, "type": "ANIME", "title": {"english": "Example Two"}, "status": "CURRENT", "progress": 4, "episodes": 24},
-            {"id": 3, "type": "ANIME", "title": {"english": "Example Three"}, "status": "PLANNING", "progress": 0, "episodes": 12},
+            {"id": 1, "type": "ANIME", "title": {"english": "Example One"}, "status": "Watching", "progress_episodes": 2, "episodes": 12},
+            {"id": 2, "type": "ANIME", "title": {"english": "Example Two"}, "status": "Rewatching", "progress_episodes": 4, "episodes": 24},
+            {"id": 3, "type": "ANIME", "title": {"english": "Example Three"}, "status": "Planning", "progress_episodes": 0, "episodes": 12},
         ]
         with (
             patch.object(HomePage, "_read_library", return_value=library),
+            patch("ui.pages.home_page.get_library_series", side_effect=lambda rows: rows),
             patch.object(RecommendationsPage, "refresh", autospec=True),
             patch("ui.pages.home_page.get_release_reminders", return_value=[]),
             patch("ui.pages.home_page.get_episodes", return_value=[]),
@@ -381,9 +385,15 @@ class V1StabilityTests(unittest.TestCase):
             page.show()
             self.app.processEvents()
             cards = page.findChildren(WorkCard)
-            self.assertTrue(cards)
-            self.assertLessEqual(max(card.card_size for card in cards), 112)
-            self.assertEqual(page.content_layout.indexOf(page.recommendations_page), 3)
+            self.assertEqual(len(cards), 2)
+            self.assertGreater(min(card.card_size for card in cards), 112)
+            section_titles = [
+                label.text() for label in page.findChildren(QLabel, "homeSectionTitle")
+            ]
+            self.assertNotIn("Recently added", section_titles)
+            captions = page.findChildren(QLabel, "homeTrackProgress")
+            self.assertTrue(all(caption.maximumHeight() > 16 for caption in captions))
+            self.assertEqual(page.content_layout.indexOf(page.recommendations_page), 2)
         finally:
             page.close()
             page.deleteLater()
