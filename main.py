@@ -9,6 +9,27 @@ from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen, QPolygonF
 
 
 APP_NAME = "NekoTrack"
+WINDOWS_APP_USER_MODEL_ID = "konokuroineko.NekoTrack"
+
+
+def _set_windows_app_user_model_id():
+    """Keep NekoTrack windows grouped under its own identity, not Python's."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            WINDOWS_APP_USER_MODEL_ID
+        )
+    except (AttributeError, OSError):
+        # The explicit taskbar ID is a Windows shell enhancement, not a startup
+        # requirement; unsupported environments must still launch normally.
+        pass
+
+
+# Windows reads this identity when it first creates taskbar buttons. Set it
+# before importing/constructing QApplication or any other visible Qt widgets.
+_set_windows_app_user_model_id()
 
 
 def _load_app_version():
