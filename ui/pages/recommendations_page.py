@@ -1,7 +1,7 @@
 """Recommendations grounded in titles already saved in the local library."""
 
 import threading
-import time
+from time import monotonic
 
 from PySide6.QtCore import QEasingCurve, QObject, QPoint, QRect, QPropertyAnimation, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
@@ -508,7 +508,7 @@ class RecommendationsPage(QWidget):
         viewport = self._visibility_viewport
         if viewport is None or not viewport.isVisible() or self._shutting_down:
             return
-        now = time.monotonic()
+        now = monotonic()
         pending_impressions = []
         for tile, work in list(self._tiles):
             work_id = RecommendationWorker._work_id(work)
