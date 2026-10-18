@@ -276,6 +276,14 @@ class V1StabilityTests(unittest.TestCase):
 
             self.assertEqual(updater.find_previous_update_backup(data_dir), backup)
 
+    def test_preview_launcher_guards_live_data_and_never_overwrites_preview_data(self):
+        root = Path(__file__).resolve().parents[1]
+        launcher = (root / "installer" / "run-preview.ps1").read_text(encoding="utf-8")
+        self.assertIn("NEKOTRACK_DATA_DIR", launcher)
+        self.assertIn("Preview data must be separate from the live", launcher)
+        self.assertIn("Refusing to overwrite it", launcher)
+        self.assertIn("Copy-Item", launcher)
+
     def test_installer_build_includes_recovery_helper_and_rollback_shortcut(self):
         root = Path(__file__).resolve().parents[1]
         helper = root / "installer" / "safe_update.ps1"
