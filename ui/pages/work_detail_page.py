@@ -39,7 +39,7 @@ from ui.display_identity import copy_custom_cover, get_display_override, invalid
 from ui.branding import navigation_icon
 from ui.preferences import get
 from ui.pages.search_page import SearchPage
-from ui.theme import COLORS, muted_label_stylesheet, surface_rgba
+from ui.theme import COLORS, _CHECKBOX_CHECKMARK, muted_label_stylesheet, surface_rgba
 from ui.widgets.character_card import CharacterCard
 from ui.widgets.person_card import PersonCard
 from ui.widgets.relation_card import RelationCard
@@ -2078,6 +2078,7 @@ class WorkDetailPage(QWidget):
         self._last_ui_phase = "detail_page_idle"
 
     def _apply_detail_styles(self):
+        checkbox_checkmark = _CHECKBOX_CHECKMARK.replace('"', '\\"')
         self.setStyleSheet(f"""
             QPushButton#back {{ background: transparent; border: 0; color: {COLORS['secondary']}; padding: 5px 0; font-weight: 750; }}
             QPushButton#back:hover {{ color: {COLORS['primary']}; }}
@@ -2109,6 +2110,7 @@ class WorkDetailPage(QWidget):
             QCheckBox#episodeWatchedCheckbox::indicator:checked {{
                 background: {COLORS['accent']};
                 border-color: {COLORS['accent']};
+                image: url("{checkbox_checkmark}");
             }}
             QFrame#detailSkeletonSection {{
                 background:{surface_rgba('surface')};
@@ -2182,7 +2184,7 @@ class WorkDetailPage(QWidget):
             QPushButton#deleteBundle {{ background:{COLORS['danger']}; color:{COLORS['primary']}; border:0; border-radius:9px; padding:9px 14px; font-weight:850; }}
             QPushButton#deleteBundle:hover {{ background:{COLORS['danger']}; }}
             QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {COLORS['border_hover']}; background: {surface_rgba('background_alt')}; }}
-            QCheckBox::indicator:checked {{ background: {COLORS['accent']}; border-color: {COLORS['accent']}; }}
+            QCheckBox::indicator:checked {{ background: {COLORS['accent']}; border-color: {COLORS['accent']}; image: url("{checkbox_checkmark}"); }}
         """)
 
     def refresh_theme(self):
