@@ -1116,15 +1116,27 @@ class RecommendationsPage(QWidget):
         elif self._catalog_has_next:
             button.setEnabled(True)
             button.setText("Load more")
-            # Scrolling already triggers pagination. The instructional footer
-            # was visually clipped at the bottom of Home and added little value.
-            status.clear()
-            status.hide()
+            if self.embedded:
+                # Scrolling already triggers pagination. The instructional footer
+                # was visually clipped at the bottom of Home and added little value.
+                status.clear()
+                status.hide()
+            else:
+                status.setText(
+                    "Scroll near the end of the feed to discover more titles, or load more now."
+                )
+                status.show()
         else:
             button.setEnabled(False)
             button.setText("Catalog exhausted")
-            status.clear()
-            status.hide()
+            if self.embedded:
+                status.clear()
+                status.hide()
+            else:
+                status.setText(
+                    "You've reached the end of the currently available AniList catalog pages."
+                )
+                status.show()
 
 
     def _clear_content(self):
