@@ -33,6 +33,7 @@ from recommendation_engine import (
     work_title as recommendation_work_title,
 )
 from ui.widgets.work_card import WorkCard
+from ui.widgets.skeleton_card import SkeletonCard
 from series import group_media_results
 
 
@@ -931,33 +932,8 @@ class RecommendationsPage(QWidget):
             QTimer.singleShot(0, self.load_more)
 
     def _make_skeleton_card(self):
-        card_size = min(270, max(80, int(get("card_size") or 210)))
-        cover_height = round(card_size * 284 / 210)
-        card = QFrame()
-        card.setObjectName("recommendationSkeletonCard")
-        card.setFixedSize(card_size + 8, cover_height + 145)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(8)
-        cover = QFrame()
-        cover.setObjectName("recommendationSkeletonCover")
-        cover.setFixedSize(card_size, cover_height)
-        layout.addWidget(cover, 0, Qt.AlignmentFlag.AlignHCenter)
-        for width in (card_size - 12, card_size - 34):
-            bar = QFrame()
-            bar.setObjectName("recommendationSkeletonBar")
-            bar.setFixedSize(max(24, width), 10)
-            layout.addWidget(bar, 0, Qt.AlignmentFlag.AlignLeft)
-        description = QFrame()
-        description.setObjectName("recommendationSkeletonBar")
-        description.setFixedSize(max(30, card_size - 50), 8)
-        layout.addWidget(description, 0, Qt.AlignmentFlag.AlignLeft)
-        layout.addStretch(1)
-        button = QFrame()
-        button.setObjectName("recommendationSkeletonButton")
-        button.setFixedHeight(28)
-        layout.addWidget(button)
-        return card
+        """Reuse the exact same loading card component as Search."""
+        return SkeletonCard()
 
     def _render_loading_skeletons(self, count=8):
         grid_host = QWidget()
@@ -1128,21 +1104,27 @@ class RecommendationsPage(QWidget):
             return
         if self._loading_more:
             button.setEnabled(False)
-            status.setText("Finding more anime from AniList…")
+            status.setText("Finding more titles…")
+            status.show()
         elif self._load_more_failed:
             button.setEnabled(True)
             button.setText("Retry loading more")
             status.setText(
                 "More titles could not be loaded. Your current feed is still available."
             )
+            status.show()
         elif self._catalog_has_next:
             button.setEnabled(True)
             button.setText("Load more")
-            status.setText("Scroll near the end of the feed to discover more titles, or load more now.")
+            # Scrolling already triggers pagination. The instructional footer
+            # was visually clipped at the bottom of Home and added little value.
+            status.clear()
+            status.hide()
         else:
             button.setEnabled(False)
             button.setText("Catalog exhausted")
-            status.setText("You've reached the end of the currently available AniList catalog pages.")
+            status.clear()
+            status.hide()
 
 
     def _clear_content(self):
@@ -1187,17 +1169,6 @@ class RecommendationsPage(QWidget):
             }}
             QLabel#recommendationsSubtitle, QLabel#recommendationsStatus {{
                 color:{COLORS['secondary']}; background:transparent; font-size:12px;
-            }}
-            QFrame#recommendationSkeletonCard {{
-                background:{surface_rgba('surface')}; border:1px solid {COLORS['border']};
-                border-radius:10px;
-            }}
-            QFrame#recommendationSkeletonCover, QFrame#recommendationSkeletonBar {{
-                background:{surface_rgba('surface_hover')}; border:none; border-radius:5px;
-            }}
-            QFrame#recommendationSkeletonButton {{
-                background:{surface_rgba('surface_alt')}; border:1px solid {COLORS['border']};
-                border-radius:8px;
             }}
             QPushButton#recommendationsRefresh {{
                 background:{COLORS['accent']}; color:{COLORS['accent_text']}; border:1px solid {COLORS['accent']};
