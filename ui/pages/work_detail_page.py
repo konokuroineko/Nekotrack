@@ -194,7 +194,58 @@ class EpisodeSyncWorker(QObject):
                             tmdb_id,
                             payload.get("tmdb_season_number"),
                         )
-                    prune_episode_catalog(self.work_id, episodes)
+                    # A non-empty provider response is not necessarily a complete
+                    # replacement catalog. TMDB can omit entries temporarily or return
+                    # a season/date match with fewer rows than AniList expects. Do not
+                    # delete previously saved episodes (and their watched state) unless
+                    # this response meets the known episode-count expectation.
+                    try:
+                        expected_count = max(0, int(self.expected_episodes or 0))
+                    except (TypeError, ValueError, OverflowError):
+                        expected_count = 0
+
+                    catalog_numbers = set()
+                    for item in episodes:
+                        if not isinstance(item, dict):
+                            continue
+                        raw_number = item.get("episodeNumber")
+                        if isinstance(raw_number, bool):
+                            continue
+                        try:
+                            episode_number = int(raw_number)
+                        except (TypeError, ValueError, OverflowError):
+                            continue
+                        if episode_number > 0:
+                            catalog_numbers.add(episode_number)
+
+                    catalog_complete = (
+                        expected_count > 0
+                        and len(catalog_numbers) >= expected_count
+                    )
+                    if catalog_complete:
+                        removed_count = prune_episode_catalog(self.work_id, episodes)
+                        log_event(
+                            "episodes.catalog_prune_completed",
+                            work_id=self.work_id,
+                            expected_episode_count=expected_count,
+                            catalog_episode_count=len(catalog_numbers),
+                            removed_count=removed_count,
+                        )
+                    else:
+                        reason = (
+                            "expected_episode_count_unknown"
+                            if expected_count <= 0
+                            else "catalog_shorter_than_expected"
+                        )
+                        log_event(
+                            "episodes.catalog_prune_skipped",
+                            work_id=self.work_id,
+                            reason=reason,
+                            expected_episode_count=expected_count,
+                            catalog_episode_count=len(catalog_numbers),
+                            preserved_existing_rows=True,
+                        )
+
                     save_provider_metadata(
                         self.work_id,
                         "tmdb_episode_match_version",
