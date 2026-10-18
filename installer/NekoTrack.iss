@@ -3,7 +3,9 @@
 ; the shared application icon, builds the executable, and optionally compiles this installer.
 
 #define MyAppName "NekoTrack"
-#define MyAppVersion "0.1.0-beta.2"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
 #define MyAppPublisher "konokuroineko"
 #define MyAppExeName "NekoTrack.exe"
 

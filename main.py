@@ -3,12 +3,24 @@ import shutil
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
+from PySide6.QtCore import QPointF, QUrl, Qt
+from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen, QPolygonF
 
 
 APP_NAME = "NekoTrack"
-APP_VERSION = "0.1.0-beta.2"
+
+
+def _load_app_version():
+    """Read the canonical version from the source tree or PyInstaller bundle."""
+    bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    try:
+        version = (bundle_root / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        version = ""
+    return version or "1.0.0"
+
+
+APP_VERSION = _load_app_version()
 APP_DATA_DIR = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")) / APP_NAME
 
 from diagnostics import (
@@ -71,7 +83,7 @@ from ui.preferences import get
 from ui.scale import configure_ui_scale
 from ui.theme import COLORS
 from ui.setup_wizard import SetupWizard
-from updater import InstallerDownloader, UpdateChecker
+from updater import InstallerDownloader, UpdateChecker, _is_trusted_release_page_url
 
 
 class NekoProxyStyle(QProxyStyle):
@@ -103,6 +115,25 @@ class NekoProxyStyle(QProxyStyle):
 
 
 def _offer_update(window, update_info):
+    if not update_info.asset_url or not update_info.asset_name:
+        if not _is_trusted_release_page_url(update_info.release_url):
+            return
+        answer = QMessageBox.question(
+            window,
+            "NekoTrack update available",
+            (
+                f"NekoTrack {update_info.version} is available.\n\n"
+                "This release does not include a compatible Setup installer, so NekoTrack "
+                "cannot install it automatically yet.\n\n"
+                "Open the official release page to download it manually?"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Yes:
+            QDesktopServices.openUrl(QUrl(update_info.release_url))
+        return
+
     answer = QMessageBox.question(
         window,
         "NekoTrack update available",
@@ -133,6 +164,7 @@ def _offer_update(window, update_info):
 def _check_for_updates(window):
     checker = UpdateChecker(APP_VERSION, window)
     checker.update_available.connect(lambda info: _offer_update(window, info))
+    checker.check_failed.connect(lambda message: log_event("updater.check_failed", error=message))
     window._update_checker = checker
     checker.start()
 
