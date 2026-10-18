@@ -418,7 +418,16 @@ class UiStartupTests(unittest.TestCase):
                 {"all": 3, "in_progress": 2, "completed": 1, "planned": 0},
             )
             self.assertEqual(page._continue_ids, {101, -103})
-            self.assertEqual(page._recent_ids, [101, 102, -103])
+            self.assertNotIn(
+                "Recently added",
+                [label.text() for label in page.findChildren(QLabel, "homeSectionTitle")],
+            )
+            self.assertTrue(
+                all(
+                    label.maximumHeight() > 16
+                    for label in page.findChildren(QLabel, "homeTrackProgress")
+                )
+            )
             captions = [
                 label.text()
                 for label in page.findChildren(QLabel, "homeTrackProgress")

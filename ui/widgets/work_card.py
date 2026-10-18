@@ -198,13 +198,20 @@ class WorkCard(QFrame):
             content.addWidget(reason_label)
 
         if has_bundle:
-            series_info = QLabel(str(summary or f"{int(series_count)} entries"))
+            full_summary = str(summary or f"{int(series_count)} entries")
+            visible_summary = QFontMetrics(series_font).elidedText(
+                full_summary, Qt.TextElideMode.ElideRight, max(1, card_width - 12)
+            )
+            series_info = QLabel(visible_summary)
             series_info.setObjectName("seriesInfo")
             series_info.setFont(series_font)
+            series_info.setFixedWidth(max(1, card_width - 12))
             series_info.setFixedHeight(series_height)
             series_info.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             series_info.setMargin(0)
-            series_info.setToolTip(str(summary or ""))
+            # Keep the full label available even when the visible one-line
+            # indicator needs an ellipsis to fit the card.
+            series_info.setToolTip(full_summary)
             self.series_info_label = series_info
             series_info.setStyleSheet(
                 f"color:{COLORS['primary']};background:transparent;"

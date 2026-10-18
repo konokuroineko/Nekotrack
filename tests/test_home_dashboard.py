@@ -47,7 +47,7 @@ class HomeDashboardTests(unittest.TestCase):
             page.show()
             self.app.processEvents()
             self.assertTrue(page.recommendations_page.embedded)
-            self.assertEqual(page.content_layout.indexOf(page.recommendations_page), 3)
+            self.assertEqual(page.content_layout.indexOf(page.recommendations_page), 2)
             refresh_mock.assert_called_once_with(
                 page.recommendations_page, force=True, library_rows=[]
             )
