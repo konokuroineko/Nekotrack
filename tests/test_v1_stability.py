@@ -206,6 +206,36 @@ class V1StabilityTests(unittest.TestCase):
             page.deleteLater()
             self.app.processEvents()
 
+    def test_update_checker_prefers_portable_asset_for_isolated_preview_install(self):
+        releases = [{
+            "tag_name": "v1.0.1-beta.2",
+            "html_url": "https://github.com/konokuroineko/Nekotrack/releases/tag/v1.0.1-beta.2",
+            "prerelease": True,
+            "draft": False,
+            "assets": [
+                {
+                    "name": "NekoTrack-Setup-1.0.1.exe",
+                    "browser_download_url": "https://github.com/konokuroineko/Nekotrack/releases/download/v1.0.1-beta.2/NekoTrack-Setup-1.0.1.exe",
+                },
+                {
+                    "name": "NekoTrack.exe",
+                    "browser_download_url": "https://github.com/konokuroineko/Nekotrack/releases/download/v1.0.1-beta.2/NekoTrack.exe",
+                },
+            ],
+        }]
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = releases
+        updates = []
+        checker = updater.UpdateChecker(
+            "1.0.0", include_prereleases=True, preferred_asset="portable"
+        )
+        checker.update_available.connect(updates.append)
+        with patch.object(updater.requests, "get", return_value=response):
+            checker.run()
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].asset_name, "NekoTrack.exe")
+
     def test_update_backup_preserves_executable_and_consistent_database_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

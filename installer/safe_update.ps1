@@ -113,11 +113,20 @@ function Restore-DatabaseSnapshot([string]$Folder) {
     }
     # Automatic restore occurs only before the health marker, before the user
     # can interact with the updated app.
-    $temporary = Join-Path $DataDirectory ("anime_tracker.rollback-" + [guid]::NewGuid().ToString("N") + ".db")
+    $rollbackId = [guid]::NewGuid().ToString("N")
+    $temporary = Join-Path $DataDirectory ("anime_tracker.rollback-" + $rollbackId + ".db")
     Copy-Item -LiteralPath $databaseBackup -Destination $temporary
     if (Test-Path -LiteralPath $databaseTarget) {
-        $databaseFailed = Join-Path $DataDirectory ("anime_tracker.failed-" + [guid]::NewGuid().ToString("N") + ".db")
+        $databaseFailed = Join-Path $DataDirectory ("anime_tracker.failed-" + $rollbackId + ".db")
         Move-Item -LiteralPath $databaseTarget -Destination $databaseFailed
+    }
+    # Preserve SQLite WAL/SHM sidecars with the failed database instead of
+    # letting them interfere with the restored snapshot or deleting them.
+    foreach ($suffix in @("-wal", "-shm")) {
+        $sidecar = $databaseTarget + $suffix
+        if (Test-Path -LiteralPath $sidecar) {
+            Move-Item -LiteralPath $sidecar -Destination ($DataDirectory + "\anime_tracker.failed-" + $rollbackId + ".db" + $suffix)
+        }
     }
     Move-Item -LiteralPath $temporary -Destination $databaseTarget
 }

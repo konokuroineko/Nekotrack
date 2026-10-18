@@ -227,6 +227,23 @@ def _offer_update(window, update_info):
     downloader.start()
 
 
+def _preferred_update_asset():
+    """Avoid running Setup against an unrelated portable/preview install."""
+    if not getattr(sys, "frozen", False):
+        return "setup"
+    local_app_data = Path(
+        os.environ.get("LOCALAPPDATA")
+        or (Path.home() / "AppData" / "Local")
+    )
+    setup_directory = (local_app_data / "Programs" / APP_NAME).resolve()
+    current_directory = Path(sys.executable).resolve().parent
+    return (
+        "setup"
+        if os.path.normcase(str(current_directory)) == os.path.normcase(str(setup_directory))
+        else "portable"
+    )
+
+
 def _check_for_updates(window, manual=False):
     existing = getattr(window, "_update_checker", None)
     if existing is not None:
@@ -242,6 +259,7 @@ def _check_for_updates(window, manual=False):
         APP_VERSION,
         window,
         include_prereleases=(get("update_channel") == "preview"),
+        preferred_asset=_preferred_update_asset(),
     )
 
     def update_available(info):
@@ -373,6 +391,20 @@ def main():
 
     with log_operation("app.event_loop"):
         exit_code = app.exec()
+
+    # A user may close NekoTrack while the background release check is in
+    # flight. Let those bounded-timeout QThreads finish before their parent
+    # window is destroyed; otherwise Qt can abort during shutdown.
+    for worker_name in ("_update_checker", "_update_downloader"):
+        worker = getattr(window, worker_name, None)
+        if worker is None:
+            continue
+        try:
+            if worker.isRunning():
+                worker.wait(16000)
+        except RuntimeError:
+            pass
+
     log_event("app.exit", exit_code=exit_code)
     sys.exit(exit_code)
 

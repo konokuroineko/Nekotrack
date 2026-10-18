@@ -248,10 +248,11 @@ class UpdateChecker(QThread):
     no_update_available = Signal()
     check_failed = Signal(str)
 
-    def __init__(self, current_version, parent=None, include_prereleases=False):
+    def __init__(self, current_version, parent=None, include_prereleases=False, preferred_asset="setup"):
         super().__init__(parent)
         self.current_version = current_version
         self.include_prereleases = bool(include_prereleases)
+        self.preferred_asset = "portable" if str(preferred_asset).casefold() == "portable" else "setup"
 
     def run(self):
         try:
@@ -297,9 +298,15 @@ class UpdateChecker(QThread):
                         if not _is_trusted_release_asset_url(url, expected_name=name):
                             continue
 
-                        # Prefer a real Setup package when present. This repo
-                        # also publishes a single-file portable NekoTrack.exe.
-                        priority = 0 if _is_setup_asset_name(name) else 1
+                        # An installed Setup build prefers Setup; a portable
+                        # or isolated preview install prefers the portable EXE
+                        # so an update never targets a different install folder.
+                        is_portable_exe = name.casefold() == "nekotrack.exe"
+                        priority = (
+                            0 if is_portable_exe else 1
+                        ) if self.preferred_asset == "portable" else (
+                            0 if _is_setup_asset_name(name) else 1
+                        )
                         digest = asset.get("digest")
                         if not isinstance(digest, str) or not re.fullmatch(
                             r"sha256:[0-9a-fA-F]{64}", digest
@@ -356,7 +363,7 @@ def find_previous_update_backup(data_directory):
         if not _is_windows_pe_installer(folder / "NekoTrack.exe"):
             continue
         candidates.append((str(manifest.get("created_at") or folder.name), folder))
-    return max(candidates, key=lambda pair: pair[0])[1] if candidates else None
+    return max(candidates, key=lambda pair: pair[0])[1].resolve() if candidates else None
 
 
 def create_update_backup(
