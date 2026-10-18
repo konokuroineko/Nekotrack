@@ -587,6 +587,7 @@ class InstallerDownloader(QThread):
                 staged_executable=staged_path if action == "UpdatePortable" else None,
                 installer_path=staged_path if action == "InstallSetup" else None,
                 attempt_id=attempt_id,
+                restore_database=True,
             )
             self.finished.emit(str(backup_directory))
         except Exception as exc:

@@ -1,6 +1,7 @@
 import os
 import shutil
 import sys
+import uuid
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QUrl, Qt
