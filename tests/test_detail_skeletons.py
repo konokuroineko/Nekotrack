@@ -1123,6 +1123,73 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertEqual(results[0][0], 12345)
         self.assertTrue(results[0][1]["_catalog_persisted"])
 
+    def test_partial_episode_sync_does_not_prune_previous_catalog_rows(self):
+        episodes = [
+            {"episodeNumber": 1, "title": "Episode One"},
+            {"episodeNumber": 2, "title": "Episode Two"},
+        ]
+        worker = EpisodeSyncWorker(
+            12345, ["Example Series"], "2020-01-01", None, 3, 99, 1, "TV"
+        )
+        with (
+            patch(
+                "ui.pages.work_detail_page.get_tmdb_episode_data",
+                return_value={
+                    "episodes": episodes,
+                    "tmdb_count": len(episodes),
+                    "tmdb_id": 99,
+                    "tmdb_season_number": 1,
+                },
+            ),
+            patch("ui.pages.work_detail_page.save_episodes"),
+            patch("ui.pages.work_detail_page.save_tmdb_mapping"),
+            patch("ui.pages.work_detail_page.save_provider_metadata"),
+            patch("ui.pages.work_detail_page.prune_episode_catalog") as prune,
+            patch("ui.pages.work_detail_page.log_event") as event,
+        ):
+            worker.run()
+
+        prune.assert_not_called()
+        self.assertTrue(any(
+            call.args[0] == "episodes.catalog_prune_skipped"
+            and call.kwargs.get("reason") == "catalog_shorter_than_expected"
+            and call.kwargs.get("preserved_existing_rows") is True
+            for call in event.call_args_list
+        ))
+
+    def test_unknown_episode_count_does_not_authorize_catalog_pruning(self):
+        episodes = [
+            {"episodeNumber": 1, "title": "Episode One"},
+        ]
+        worker = EpisodeSyncWorker(
+            12345, ["Example Series"], "2020-01-01", None, None, 99, 1, "TV"
+        )
+        with (
+            patch(
+                "ui.pages.work_detail_page.get_tmdb_episode_data",
+                return_value={
+                    "episodes": episodes,
+                    "tmdb_count": len(episodes),
+                    "tmdb_id": 99,
+                    "tmdb_season_number": 1,
+                },
+            ),
+            patch("ui.pages.work_detail_page.save_episodes"),
+            patch("ui.pages.work_detail_page.save_tmdb_mapping"),
+            patch("ui.pages.work_detail_page.save_provider_metadata"),
+            patch("ui.pages.work_detail_page.prune_episode_catalog") as prune,
+            patch("ui.pages.work_detail_page.log_event") as event,
+        ):
+            worker.run()
+
+        prune.assert_not_called()
+        self.assertTrue(any(
+            call.args[0] == "episodes.catalog_prune_skipped"
+            and call.kwargs.get("reason") == "expected_episode_count_unknown"
+            and call.kwargs.get("preserved_existing_rows") is True
+            for call in event.call_args_list
+        ))
+
     def test_episode_catalog_database_writes_run_off_the_gui_thread(self):
         page = WorkDetailPage()
         gui_thread_id = threading.get_ident()
