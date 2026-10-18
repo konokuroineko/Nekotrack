@@ -1120,10 +1120,14 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertLessEqual(description.maximumHeight(), 18)
         self.assertLessEqual(card.minimumHeight(), 122)
 
+        description.setFixedWidth(500)
+        self.app.processEvents()
         wide_preview = description.text()
-        card.resize(420, 124)
+        description.setFixedWidth(200)
         self.app.processEvents()
         self.assertLess(len(description.text()), len(wide_preview))
+        self.assertTrue(description.text().endswith("…"))
+        self.assertEqual(description.toolTip(), synopsis)
 
         card.deleteLater()
         self.app.processEvents()
