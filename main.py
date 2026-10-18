@@ -293,8 +293,8 @@ def _rollback_previous_version(window):
     if backup is None:
         QMessageBox.information(
             window, "NekoTrack rollback",
-            "No complete previous-version backup was found. Update backups are stored under "
-            "%APPDATA%\\NekoTrack\\update_backups.",
+            "No complete previous-version backup was found in this app's data directory "
+            "(update_backups).",
         )
         return
 
@@ -369,8 +369,6 @@ def main():
         window.show()
 
     log_event("app.ready", maximized=bool(get("maximized")))
-    # Update checks run in the background so startup is not blocked by network/VPN latency.
-    _check_for_updates(window)
 
     window.check_updates_requested.connect(lambda: _check_for_updates(window, manual=True))
     window.rollback_requested.connect(lambda: _rollback_previous_version(window))
