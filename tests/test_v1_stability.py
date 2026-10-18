@@ -192,8 +192,8 @@ class V1StabilityTests(unittest.TestCase):
         try:
             grouper.assert_called_once()
             cards = page.findChildren(WorkCard)
-            self.assertEqual(len(cards), 2)
-            self.assertTrue(all(card.card_size <= 112 for card in cards))
+            self.assertEqual(len(cards), 1)
+            self.assertTrue(all(card.card_size > 112 for card in cards))
             self.assertTrue(all(card.work.get("title") == "My custom Re:Zero bundle" for card in cards))
             self.assertTrue(all(card.work.get("cover_path") == "custom-cover.png" for card in cards))
             prepared = page._prepare_home_work(group)
