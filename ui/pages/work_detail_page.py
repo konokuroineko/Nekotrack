@@ -218,8 +218,9 @@ class EpisodeSyncWorker(QObject):
                         if episode_number > 0:
                             catalog_numbers.add(episode_number)
 
+                    catalog_expectation_known = expected_count > 0
                     catalog_complete = (
-                        expected_count > 0
+                        catalog_expectation_known
                         and len(catalog_numbers) >= expected_count
                     )
                     if catalog_complete:
@@ -252,6 +253,12 @@ class EpisodeSyncWorker(QObject):
                         {
                             "version": TMDB_EPISODE_CATALOG_VERSION,
                             "fetched_at": int(time.time()),
+                            # Unknown expectations remain weekly-refreshable; a known
+                            # incomplete catalog is retried when the app is reopened.
+                            "complete": (
+                                bool(catalog_complete)
+                                if catalog_expectation_known else None
+                            ),
                         },
                     )
                     payload["_catalog_persisted"] = True
@@ -455,7 +462,8 @@ class EpisodeSectionDataWorker(QObject):
                 except (TypeError, ValueError, OverflowError):
                     fetched_at = 0.0
                 catalog_stale = (
-                    not math.isfinite(fetched_at)
+                    metadata.get("complete") is False
+                    or not math.isfinite(fetched_at)
                     or fetched_at <= 0
                     or time.time() - fetched_at >= TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS
                 )
@@ -4836,6 +4844,10 @@ class WorkDetailPage(QWidget):
         except Exception:
             return True
         if not isinstance(metadata, dict):
+            return True
+        if metadata.get("complete") is False:
+            # A partial provider result should be retried in a later app session,
+            # instead of being treated as a complete catalog for the full refresh interval.
             return True
         try:
             fetched_at = float(metadata.get("fetched_at") or 0)
