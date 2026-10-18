@@ -1032,6 +1032,9 @@ class SettingsPage(QWidget):
             combo.addItem(label, value)
 
         current = get(key)
+        if key == "update_channel":
+            combo.setObjectName("updateChannelCombo")
+            combo.setAccessibleName("Update channel")
         for index in range(combo.count()):
             if combo.itemData(index) == current:
                 combo.setCurrentIndex(index)
