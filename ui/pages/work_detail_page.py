@@ -1493,7 +1493,7 @@ class WorkDetailPage(QWidget):
             card_layout.addWidget(self._skeleton_block(8, 198))
             card_layout.addStretch(1)
             card_layout.addWidget(self._skeleton_block(8, 74))
-            layout.addWidget(card, 0, Qt.AlignTop)
+            layout.addWidget(card)
         return strip
     def _episode_section_loading_frame(self, message="Loading episode data…", include_skeleton=True):
         frame = QFrame()

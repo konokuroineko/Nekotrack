@@ -330,7 +330,12 @@ class DetailSkeletonTests(unittest.TestCase):
         }
         page._selected_episode_work_id = 12345
         episode_frame = QFrame()
-        QVBoxLayout(episode_frame)
+        episode_frame_layout = QVBoxLayout(episode_frame)
+        episode_cards_host = QWidget(episode_frame)
+        episode_frame._episode_cards_layout = StaffFlowLayout(
+            episode_cards_host, h_spacing=12, v_spacing=14
+        )
+        episode_frame_layout.addWidget(episode_cards_host)
         episode_frame.setProperty("_episodes_section", True)
         episode_frame._pending_episode_cards = [
             {
@@ -600,7 +605,7 @@ class DetailSkeletonTests(unittest.TestCase):
         for card in cards:
             layout.addWidget(card)
 
-        host.resize(500, 560)
+        host.setFixedSize(500, 560)
         host.show()
         self.app.processEvents()
 
@@ -1164,7 +1169,7 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
-    def test_episode_synopsis_is_one_compact_elided_line_with_full_tooltip(self):
+    def test_episode_synopsis_is_compact_two_line_preview_with_full_tooltip(self):
         synopsis = " ".join(
             ["A long synopsis with enough words to overflow the compact preview."] * 8
         )
@@ -1177,20 +1182,20 @@ class DetailSkeletonTests(unittest.TestCase):
             "description": synopsis,
             "watched": 0,
         })
-        card.resize(760, 124)
         card.show()
         card.layout().activate()
         self.app.processEvents()
         description = card.findChild(QLabel, "detailEpisodeDescription")
         self.assertIsNotNone(description)
-        self.assertFalse(description.wordWrap())
+        self.assertTrue(description.wordWrap())
         self.assertEqual(description.toolTip(), synopsis)
         self.assertNotEqual(description.text(), synopsis)
         self.assertTrue(description.text().endswith("…"))
-        self.assertNotIn("\n", description.text())
+        self.assertLessEqual(description.text().count("\\n"), 1)
         self.assertIn("font-size:10px", description.styleSheet())
-        self.assertLessEqual(description.maximumHeight(), 18)
-        self.assertLessEqual(card.minimumHeight(), 122)
+        self.assertLessEqual(description.maximumHeight(), 32)
+        self.assertEqual(card.width(), EpisodeCard.CARD_WIDTH)
+        self.assertEqual(card.height(), EpisodeCard.CARD_HEIGHT)
 
         description.setFixedWidth(500)
         self.app.processEvents()
