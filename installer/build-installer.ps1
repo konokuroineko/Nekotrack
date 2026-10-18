@@ -13,7 +13,7 @@ try {
         throw "Could not generate the NekoTrack Windows icon."
     }
 
-    python -m PyInstaller --onefile --windowed --name NekoTrack --icon "assets\NekoTrack.ico" --add-data "assets;assets" --add-data "VERSION;." main.py
+    python -m PyInstaller --onefile --windowed --name NekoTrack --icon "assets\NekoTrack.ico" --add-data "assets;assets" --add-data "VERSION;." --add-data "installer\safe_update.ps1;installer" main.py
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed to build NekoTrack."
     }
