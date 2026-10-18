@@ -1,9 +1,15 @@
 import re
+import sys
+from pathlib import Path
 
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication, QDialog, QWidget
 
 from ui.preferences import THEME_PRESETS, get, palette_for_mode
+
+
+_BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+_CHECKBOX_CHECKMARK = (_BUNDLE_ROOT / "assets" / "checkbox-check.svg").as_posix()
 
 
 COLOR_KEYS = (
@@ -272,11 +278,44 @@ def retint_widget_styles(
 
 def application_stylesheet():
     radius = get("corner_radius")
+    checkbox_checkmark = _CHECKBOX_CHECKMARK.replace('"', '\\"')
     return f"""
         * {{ outline: none; }}
         QMainWindow {{ background: {COLORS['background']}; color: {COLORS['primary']}; }}
         QWidget {{ background: transparent; color: {COLORS['primary']}; font-family: "Segoe UI"; font-size: {FONT_SIZES['body']}px; }}
         QLabel, QCheckBox, QRadioButton {{ background: transparent; }}
+        QCheckBox {{ spacing: 8px; }}
+        QCheckBox::indicator {{
+            width: 18px; height: 18px;
+            background: {surface_rgba('surface_alt')};
+            border: 1px solid {COLORS['border']};
+            border-radius: 5px;
+        }}
+        QCheckBox::indicator:hover {{
+            background: {surface_rgba('surface_hover')};
+            border-color: {COLORS['accent']};
+        }}
+        QCheckBox::indicator:pressed {{
+            background: {surface_rgba('accent_soft')};
+            border-color: {COLORS['accent']};
+        }}
+        QCheckBox::indicator:checked {{
+            background: {COLORS['accent']};
+            border: 1px solid {COLORS['accent']};
+            image: url("${checkbox_checkmark}");
+        }}
+        QCheckBox::indicator:checked:hover {{
+            background: {COLORS['accent_hover']};
+            border-color: {COLORS['accent_hover']};
+        }}
+        QCheckBox::indicator:disabled {{
+            background: {surface_rgba('background_alt')};
+            border-color: {COLORS['border']};
+        }}
+        QCheckBox::indicator:checked:disabled {{
+            background: {COLORS['muted']};
+            border-color: {COLORS['muted']};
+        }}
         QToolTip {{ background: {surface_rgba('surface_alt')}; color: {COLORS['primary']}; border: 1px solid {COLORS['border']}; padding: 7px 9px; }}
         QLineEdit, QComboBox, QSpinBox {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['border']}; border-radius: {radius}px; color: {COLORS['primary']}; padding: 10px 12px; selection-background-color: {COLORS['accent']}; }}
         QComboBox {{ padding-right: 34px; }}
