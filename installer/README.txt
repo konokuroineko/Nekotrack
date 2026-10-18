@@ -7,7 +7,7 @@ NekoTrack installer build
 
 2. If Inno Setup was not detected, install it and compile installer\NekoTrack.iss.
 
-3. The installer is written to dist-installer\NekoTrack-Setup-0.1.0-beta.2.exe.
+3. The installer is written to dist-installer\NekoTrack-Setup-<VERSION>.exe, using the version in the repository root VERSION file.
 
 The installer uses a per-user installation under %LOCALAPPDATA%\Programs\NekoTrack.
 NekoTrack user data is kept separately under %APPDATA%\NekoTrack and is not bundled into the installer.

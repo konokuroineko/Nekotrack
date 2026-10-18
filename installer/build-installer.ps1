@@ -1,6 +1,10 @@
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$appVersion = (Get-Content -Raw (Join-Path $repoRoot "VERSION")).Trim()
+if (-not $appVersion) {
+    throw "VERSION is empty; cannot build a versioned NekoTrack installer."
+}
 Push-Location $repoRoot
 
 try {
@@ -9,7 +13,7 @@ try {
         throw "Could not generate the NekoTrack Windows icon."
     }
 
-    python -m PyInstaller --onefile --windowed --name NekoTrack --icon "assets\NekoTrack.ico" --add-data "assets;assets" main.py
+    python -m PyInstaller --onefile --windowed --name NekoTrack --icon "assets\NekoTrack.ico" --add-data "assets;assets" --add-data "VERSION;." main.py
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed to build NekoTrack."
     }
@@ -22,7 +26,7 @@ try {
         exit 0
     }
 
-    & $iscc.Source $iss
+    & $iscc.Source "/DMyAppVersion=$appVersion" $iss
     if ($LASTEXITCODE -ne 0) {
         throw "Inno Setup failed to compile the installer."
     }

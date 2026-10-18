@@ -101,6 +101,122 @@ class UpdateUrlValidationTests(unittest.TestCase):
         self.assertTrue(updater.is_newer("v2.0.0-beta.10", "2.0.0-beta.9"))
         self.assertTrue(updater.is_newer("2.0.0", "2.0.0-rc.3"))
         self.assertFalse(updater.is_newer("2.0.0-beta.1", "2.0.0"))
+        legacy_tag = "v0.1.0-beta.3-ultra-mega-hyper-experimental-final-edition"
+        self.assertTrue(updater.is_newer(legacy_tag, "0.1.0-beta.2"))
+        self.assertEqual(updater._display_release_version(legacy_tag), "0.1.0-beta.3")
+        self.assertTrue(
+            updater._is_trusted_release_page_url(
+                "https://github.com/konokuroineko/Nekotrack/releases/tag/v1.0.1"
+            )
+        )
+        self.assertFalse(
+            updater._is_trusted_release_page_url(
+                "https://github.com.evil.invalid/konokuroineko/Nekotrack/releases/tag/v1.0.1"
+            )
+        )
+
+
+class UpdateCheckerTests(unittest.TestCase):
+    def run_checker(self, releases, current_version="1.0.0"):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = releases
+        checker = updater.UpdateChecker(current_version)
+        updates = []
+        failures = []
+        checker.update_available.connect(updates.append)
+        checker.check_failed.connect(failures.append)
+        with patch.object(updater.requests, "get", return_value=response) as request:
+            checker.run()
+        request.assert_called_once()
+        return updates, failures
+
+    def test_new_release_without_setup_installer_is_still_reported(self):
+        release_url = "https://github.com/konokuroineko/Nekotrack/releases/tag/v1.0.1"
+        releases = [{
+            "tag_name": "v1.0.1",
+            "html_url": release_url,
+            "draft": False,
+            "assets": [{
+                "name": "NekoTrack.exe",
+                "browser_download_url": (
+                    "https://github.com/konokuroineko/Nekotrack/releases/download/"
+                    "v1.0.1/NekoTrack.exe"
+                ),
+            }],
+        }]
+
+        updates, failures = self.run_checker(releases)
+
+        self.assertEqual(failures, [])
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].version, "1.0.1")
+        self.assertIsNone(updates[0].asset_url)
+        self.assertIsNone(updates[0].asset_name)
+        self.assertEqual(updates[0].release_url, release_url)
+
+    def test_valid_setup_installer_is_preferred_for_automatic_install(self):
+        release_url = "https://github.com/konokuroineko/Nekotrack/releases/tag/v1.0.1"
+        installer_url = (
+            "https://github.com/konokuroineko/Nekotrack/releases/download/"
+            "v1.0.1/NekoTrack-Setup-1.0.1.exe"
+        )
+        releases = [{
+            "tag_name": "v1.0.1",
+            "html_url": release_url,
+            "draft": False,
+            "assets": [{
+                "name": "NekoTrack-Setup-1.0.1.exe",
+                "browser_download_url": installer_url,
+            }],
+        }]
+
+        updates, failures = self.run_checker(releases)
+
+        self.assertEqual(failures, [])
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].asset_url, installer_url)
+        self.assertEqual(updates[0].asset_name, "NekoTrack-Setup-1.0.1.exe")
+        self.assertEqual(updates[0].release_url, release_url)
+
+    def test_highest_version_is_reported_even_if_only_an_older_release_has_setup(self):
+        releases = [
+            {
+                "tag_name": "v1.0.2",
+                "html_url": "https://github.com/konokuroineko/Nekotrack/releases/tag/v1.0.2",
+                "assets": [{"name": "NekoTrack.exe", "browser_download_url": "https://example.invalid/NekoTrack.exe"}],
+            },
+            {
+                "tag_name": "v1.0.1",
+                "html_url": "https://github.com/konokuroineko/Nekotrack/releases/tag/v1.0.1",
+                "assets": [{
+                    "name": "NekoTrack-Setup-1.0.1.exe",
+                    "browser_download_url": (
+                        "https://github.com/konokuroineko/Nekotrack/releases/download/"
+                        "v1.0.1/NekoTrack-Setup-1.0.1.exe"
+                    ),
+                }],
+            },
+        ]
+
+        updates, failures = self.run_checker(releases)
+
+        self.assertEqual(failures, [])
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0].version, "1.0.2")
+        self.assertIsNone(updates[0].asset_url)
+
+    def test_untrusted_release_page_is_not_opened_as_an_update(self):
+        releases = [{
+            "tag_name": "v1.0.1",
+            "html_url": "https://attacker.invalid/fake-release",
+            "assets": [],
+        }]
+
+        updates, failures = self.run_checker(releases)
+
+        self.assertEqual(failures, [])
+        self.assertEqual(updates, [])
 
 
 class InstallerDownloaderSafetyTests(unittest.TestCase):

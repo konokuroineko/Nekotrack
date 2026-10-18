@@ -61,6 +61,24 @@ def _is_trusted_release_asset_url(value):
     )
 
 
+
+def _is_trusted_release_page_url(value):
+    """Accept only release pages on the official NekoTrack GitHub repository."""
+    parsed = _https_url_parts(value)
+    if parsed is None or parsed.hostname.casefold() != "github.com" or parsed.fragment:
+        return False
+
+    parts = parsed.path.split("/")
+    return (
+        len(parts) == 6
+        and parts[0] == ""
+        and parts[1].casefold() == RELEASE_OWNER.casefold()
+        and parts[2].casefold() == RELEASE_REPO.casefold()
+        and parts[3:5] == ["releases", "tag"]
+        and bool(parts[5])
+    )
+
+
 def _is_trusted_download_location(value):
     """Validate the final URL after GitHub redirects a release asset download."""
     parsed = _https_url_parts(value)
@@ -141,11 +159,22 @@ def _is_windows_pe_installer(path):
         return False
 
 
-def _version_key(value):
+_VERSION_PATTERN = re.compile(
+    r"^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z]+)(?:\.(\d+))?(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?)?$"
+)
+
+
+def _version_match(value):
     if not isinstance(value, str):
-        return (0, 0, 0, -1, 0)
-    value = value.strip().lstrip("v")
-    match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z]+)(?:\.(\d+))?)?$", value)
+        return None
+    value = value.strip()
+    if value[:1].casefold() == "v":
+        value = value[1:]
+    return _VERSION_PATTERN.fullmatch(value)
+
+
+def _version_key(value):
+    match = _version_match(value)
     if not match:
         return (0, 0, 0, -1, 0)
 
@@ -162,15 +191,30 @@ def _version_key(value):
     return (major, minor, patch, stage_rank, stage_number)
 
 
+def _display_release_version(value):
+    """Normalize a release tag to the version portion understood by the updater."""
+    match = _version_match(value)
+    if not match:
+        return None
+    version = ".".join(match.group(index) for index in (1, 2, 3))
+    stage = match.group(4)
+    stage_number = match.group(5)
+    if stage:
+        version += f"-{stage.lower()}"
+        if stage_number:
+            version += f".{stage_number}"
+    return version
+
 def is_newer(remote_version, current_version):
     return _version_key(remote_version) > _version_key(current_version)
 
 
 class UpdateInfo:
-    def __init__(self, version, asset_url, asset_name):
+    def __init__(self, version, asset_url=None, asset_name=None, release_url=None):
         self.version = version
         self.asset_url = asset_url
         self.asset_name = asset_name
+        self.release_url = release_url
 
 
 class UpdateChecker(QThread):
@@ -194,49 +238,56 @@ class UpdateChecker(QThread):
             if not isinstance(releases, list):
                 raise ValueError("GitHub returned an unexpected release-list response.")
 
+            candidates = []
             for release in releases:
                 # A single malformed release or asset should not hide later
                 # valid releases from the update feed.
-                if not isinstance(release, dict):
-                    continue
-                if release.get("draft") is True:
+                if not isinstance(release, dict) or release.get("draft") is True:
                     continue
 
                 tag = release.get("tag_name")
-                if not isinstance(tag, str):
+                version = _display_release_version(tag)
+                if not version or not is_newer(tag, self.current_version):
                     continue
-                version = tag.strip().lstrip("v")
-                if not version or not is_newer(version, self.current_version):
+
+                release_url = release.get("html_url")
+                if not _is_trusted_release_page_url(release_url):
+                    # Never send a user to a link supplied by an unexpected host.
                     continue
 
                 assets = release.get("assets")
-                if not isinstance(assets, list):
-                    continue
                 installer = None
-                for asset in assets:
-                    if not isinstance(asset, dict):
-                        continue
-                    name = asset.get("name")
-                    url = asset.get("browser_download_url")
-                    if not isinstance(name, str) or not isinstance(url, str) or not url.strip():
-                        continue
-                    if _is_setup_asset_name(name) and _is_trusted_release_asset_url(url):
-                        installer = asset
-                        break
+                if isinstance(assets, list):
+                    for asset in assets:
+                        if not isinstance(asset, dict):
+                            continue
+                        name = asset.get("name")
+                        url = asset.get("browser_download_url")
+                        if not isinstance(name, str) or not isinstance(url, str) or not url.strip():
+                            continue
+                        if _is_setup_asset_name(name) and _is_trusted_release_asset_url(url):
+                            installer = asset
+                            break
 
-                if installer:
-                    self.update_available.emit(
-                        UpdateInfo(
-                            version,
-                            installer["browser_download_url"],
-                            installer["name"],
-                        )
-                    )
-                    return
+                # Report the release even without a compatible installer. The UI
+                # can then open the official release page instead of silently
+                # pretending that no update exists.
+                candidates.append((
+                    _version_key(tag),
+                    UpdateInfo(
+                        version,
+                        installer["browser_download_url"] if installer else None,
+                        installer["name"] if installer else None,
+                        release_url,
+                    ),
+                ))
+
+            if candidates:
+                candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+                self.update_available.emit(candidates[0][1])
 
         except Exception as exc:
             self.check_failed.emit(str(exc))
-
 
 class InstallerDownloader(QThread):
     finished = Signal(str)
