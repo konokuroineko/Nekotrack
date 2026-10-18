@@ -15,7 +15,6 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QFrame
 
 import ui.preferences as preferences
 import updater
-import series
 from ui.pages.home_page import HomePage
 from ui.pages.recommendations_page import RecommendationsPage
 from ui.pages.settings_page import SettingsPage
