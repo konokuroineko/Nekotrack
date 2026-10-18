@@ -213,6 +213,8 @@ _DEFAULTS = {
     "background_slideshow_interval": 0,
     "background_overlay_opacity": 62,
     "bundle_mode": "main",
+    "auto_check_updates": True,
+    "update_channel": "stable",
     "recommendation_voice_language": "ALL",
     **{key: False for key in BUNDLE_OPTION_KEYS},
     "setup_complete": False,
@@ -408,6 +410,9 @@ def get(key):
         if key == "recommendation_voice_language":
             normalized = value.strip().upper()
             return normalized if normalized in {"JA", "EN", "ALL"} else default
+        if key == "update_channel":
+            normalized = value.strip().casefold()
+            return normalized if normalized in {"stable", "preview"} else default
         return value
 
     return value
@@ -427,6 +432,9 @@ def set_value(key, value):
         elif key == "recommendation_voice_language":
             normalized = value.strip().upper()
             value = normalized if normalized in {"JA", "EN", "ALL"} else default
+        elif key == "update_channel":
+            normalized = value.strip().casefold()
+            value = normalized if normalized in {"stable", "preview"} else default
     qsettings = settings()
     qsettings.setValue(key, value)
     qsettings.sync()

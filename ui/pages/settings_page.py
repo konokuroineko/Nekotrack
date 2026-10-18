@@ -152,6 +152,8 @@ class SettingsPage(QWidget):
     settings_changed = Signal(str)
     setup_requested = Signal()
     restart_requested = Signal()
+    update_check_requested = Signal()
+    rollback_requested = Signal()
 
     def __init__(self, background_manager=None):
         super().__init__()
@@ -237,6 +239,35 @@ class SettingsPage(QWidget):
                     "Start NekoTrack maximized.",
                     "maximized",
                 ),
+                self._check_row(
+                    "Check for updates at startup",
+                    "Check GitHub in the background when NekoTrack opens. Updates always ask before installing.",
+                    "auto_check_updates",
+                ),
+            ],
+        ))
+
+        update_channel = self._combo_row(
+            "Update channel",
+            "Stable ignores prereleases. Preview includes beta releases so you can test updates before they become normal releases.",
+            "update_channel",
+            [("Stable releases only", "stable"), ("Preview releases (testing)", "preview")],
+        )
+        check_updates_button = QPushButton("Check for updates now")
+        check_updates_button.setObjectName("checkUpdatesButton")
+        check_updates_button.setAccessibleName("Check for updates now")
+        check_updates_button.clicked.connect(self.update_check_requested.emit)
+        rollback_button = QPushButton("Restore previous version")
+        rollback_button.setObjectName("rollbackUpdateButton")
+        rollback_button.setAccessibleName("Restore previous NekoTrack version")
+        rollback_button.setToolTip("Restore a saved application executable. Your current library and artwork are kept.")
+        rollback_button.clicked.connect(self.rollback_requested.emit)
+        general.addWidget(self._section(
+            "Updates",
+            [
+                update_channel,
+                self._row("Check now", "Check the selected channel even when startup checks are turned off.", check_updates_button),
+                self._row("Rollback", "Restore the previous app executable from its pre-update backup. This does not overwrite your current library.", rollback_button),
             ],
         ))
 

@@ -83,7 +83,13 @@ from ui.preferences import get
 from ui.scale import configure_ui_scale
 from ui.theme import COLORS
 from ui.setup_wizard import SetupWizard
-from updater import InstallerDownloader, UpdateChecker, _is_trusted_release_page_url
+from updater import (
+    InstallerDownloader,
+    UpdateChecker,
+    _is_trusted_release_page_url,
+    find_previous_update_backup,
+    launch_update_helper,
+)
 
 
 class NekoProxyStyle(QProxyStyle):
@@ -114,45 +120,101 @@ class NekoProxyStyle(QProxyStyle):
         super().drawPrimitive(element, option, painter, widget)
 
 
-def _offer_update(window, update_info):
-    if not update_info.asset_url or not update_info.asset_name:
-        if not _is_trusted_release_page_url(update_info.release_url):
-            return
+def _release_page_url(update_info):
+    url = getattr(update_info, "release_url", None)
+    return url if _is_trusted_release_page_url(url) else None
+
+
+def _open_manual_release_page(window, update_info, message=None):
+    release_url = _release_page_url(update_info)
+    if not release_url:
+        if message:
+            QMessageBox.warning(window, "NekoTrack update", message)
+        return
+    if message:
         answer = QMessageBox.question(
             window,
             "NekoTrack update available",
-            (
-                f"NekoTrack {update_info.version} is available.\n\n"
-                "This release does not include a compatible Setup installer, so NekoTrack "
-                "cannot install it automatically yet.\n\n"
-                "Open the official release page to download it manually?"
-            ),
+            message + "\n\nOpen the official GitHub release page?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes,
         )
-        if answer == QMessageBox.Yes:
-            QDesktopServices.openUrl(QUrl(update_info.release_url))
+        if answer != QMessageBox.Yes:
+            return
+    QDesktopServices.openUrl(QUrl(release_url))
+
+
+def _offer_update(window, update_info):
+    if not update_info.asset_url or not update_info.asset_name:
+        _open_manual_release_page(
+            window,
+            update_info,
+            f"NekoTrack {update_info.version} is available, but this release has no supported executable asset.",
+        )
+        return
+
+    # Source runs must never try to overwrite Python files or run a portable EXE
+    # in place of their interpreter. Let the user download/install it manually.
+    if not getattr(sys, "frozen", False):
+        _open_manual_release_page(
+            window,
+            update_info,
+            f"NekoTrack {update_info.version} is available. This copy is running from source, so it cannot update itself safely.",
+        )
         return
 
     answer = QMessageBox.question(
         window,
         "NekoTrack update available",
-        f"NekoTrack {update_info.version} is available.\n\nYou are using {APP_VERSION}.\n\nDownload and install the update now?",
+        (
+            f"NekoTrack {update_info.version} is available.\n\n"
+            f"You are using {APP_VERSION}.\n\n"
+            "NekoTrack will keep a verified copy of the current app and a consistent "
+            "SQLite backup before replacing anything. If the updated app fails its "
+            "first startup check, the previous version is restored automatically.\n\n"
+            "Download and install this update now?"
+        ),
         QMessageBox.Yes | QMessageBox.No,
-        QMessageBox.Yes,
+        QMessageBox.No,
     )
     if answer != QMessageBox.Yes:
         return
 
-    downloader = InstallerDownloader(update_info.asset_url, update_info.asset_name, window)
+    install_directory = Path(sys.executable).resolve().parent
+    bundled_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    helper_script = bundled_root / "installer" / "safe_update.ps1"
+    downloader = InstallerDownloader(
+        update_info.asset_url,
+        update_info.asset_name,
+        window,
+        digest=getattr(update_info, "digest", None),
+        current_version=APP_VERSION,
+        target_version=update_info.version,
+        data_directory=APP_DATA_DIR,
+        database_path=APP_DATA_DIR / "anime_tracker.db",
+        install_directory=install_directory,
+        current_executable=Path(sys.executable),
+        helper_script=helper_script,
+        process_id=os.getpid(),
+    )
 
     def failed(message):
-        QMessageBox.warning(window, "Update failed", f"NekoTrack could not download the update.\n\n{message}")
+        QMessageBox.warning(
+            window,
+            "NekoTrack update failed",
+            "The update could not be staged. Your installed executable was not replaced.\n\n"
+            + str(message),
+        )
         downloader.deleteLater()
 
-    def finished(_path):
+    def finished(backup_path):
         downloader.deleteLater()
-        QMessageBox.information(window, "Update downloaded", "The installer has been opened. NekoTrack will now close so the update can be installed.")
+        QMessageBox.information(
+            window,
+            "NekoTrack update is starting",
+            "The update helper has been launched. The previous app and a database snapshot "
+            "were saved before replacement. NekoTrack will close now.",
+        )
         QApplication.quit()
 
     downloader.failed.connect(failed)
@@ -161,13 +223,89 @@ def _offer_update(window, update_info):
     downloader.start()
 
 
-def _check_for_updates(window):
-    checker = UpdateChecker(APP_VERSION, window)
-    checker.update_available.connect(lambda info: _offer_update(window, info))
-    checker.check_failed.connect(lambda message: log_event("updater.check_failed", error=message))
+def _check_for_updates(window, manual=False):
+    existing = getattr(window, "_update_checker", None)
+    if existing is not None:
+        try:
+            if existing.isRunning():
+                if manual:
+                    QMessageBox.information(window, "NekoTrack updates", "An update check is already running.")
+                return
+        except RuntimeError:
+            pass
+
+    checker = UpdateChecker(
+        APP_VERSION,
+        window,
+        include_prereleases=(get("update_channel") == "preview"),
+    )
+
+    def update_available(info):
+        _offer_update(window, info)
+
+    def no_update():
+        if manual:
+            QMessageBox.information(window, "NekoTrack updates", f"NekoTrack {APP_VERSION} is up to date on the {get('update_channel')} channel.")
+
+    def check_failed(message):
+        log_event("updater.check_failed", error=message, manual=bool(manual))
+        if manual:
+            QMessageBox.warning(window, "NekoTrack update check failed", str(message))
+
+    checker.update_available.connect(update_available)
+    checker.no_update_available.connect(no_update)
+    checker.check_failed.connect(check_failed)
     window._update_checker = checker
     checker.start()
 
+
+def _rollback_previous_version(window):
+    if not getattr(sys, "frozen", False):
+        QMessageBox.information(
+            window, "NekoTrack rollback",
+            "Rollback is available in an installed Windows build, not when running python main.py.",
+        )
+        return
+
+    backup = find_previous_update_backup(APP_DATA_DIR)
+    if backup is None:
+        QMessageBox.information(
+            window, "NekoTrack rollback",
+            "No complete previous-version backup was found. Update backups are stored under "
+            "%APPDATA%\\NekoTrack\\update_backups.",
+        )
+        return
+
+    answer = QMessageBox.question(
+        window,
+        "Restore previous NekoTrack version?",
+        (
+            "NekoTrack will restore the saved application executable and restart.\n\n"
+            "Your current library, watch/read progress, preferences, and artwork will be left alone. "
+            "The matching database snapshot will remain in the backup folder in case it is needed."
+        ),
+        QMessageBox.Yes | QMessageBox.No,
+        QMessageBox.No,
+    )
+    if answer != QMessageBox.Yes:
+        return
+
+    install_directory = Path(sys.executable).resolve().parent
+    bundled_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    helper_script = bundled_root / "installer" / "safe_update.ps1"
+    try:
+        launch_update_helper(
+            helper_script, "RollbackOnly", install_directory, APP_DATA_DIR, backup,
+            os.getpid(), attempt_id=uuid.uuid4().hex,
+        )
+    except Exception as error:
+        QMessageBox.warning(window, "NekoTrack rollback failed", str(error))
+        return
+    QMessageBox.information(
+        window, "NekoTrack rollback",
+        "The recovery helper has started. NekoTrack will close and restore the previous executable.",
+    )
+    QApplication.quit()
 
 def main():
     log_event(
@@ -211,6 +349,23 @@ def main():
     log_event("app.ready", maximized=bool(get("maximized")))
     # Update checks run in the background so startup is not blocked by network/VPN latency.
     _check_for_updates(window)
+
+    window.check_updates_requested.connect(lambda: _check_for_updates(window, manual=True))
+    window.rollback_requested.connect(lambda: _rollback_previous_version(window))
+
+    health_file = os.environ.get("NEKOTRACK_UPDATE_HEALTH_FILE")
+    if health_file:
+        try:
+            health_path = Path(health_file)
+            health_path.parent.mkdir(parents=True, exist_ok=True)
+            health_path.write_text(APP_VERSION, encoding="utf-8")
+            log_event("updater.startup_health_written", version=APP_VERSION)
+        except OSError as health_error:
+            log_event("updater.startup_health_write_failed", error=str(health_error))
+
+    if get("auto_check_updates"):
+        # Network checks are off the UI thread and never delay first paint.
+        _check_for_updates(window, manual=False)
 
     with log_operation("app.event_loop"):
         exit_code = app.exec()
