@@ -15,7 +15,7 @@ from pathlib import Path
 from shiboken6 import isValid
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, QUrl, QSize, QPoint, QRect, QThread, QTimer
-from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor
+from PySide6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QFontMetrics
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QBoxLayout, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout,
@@ -831,7 +831,7 @@ class EpisodeArtwork(QLabel):
         super().__init__(parent)
         self.work_id = int(work_id) if work_id is not None else None
         self.episode_number = int(episode_number) if episode_number is not None else None
-        self.setFixedSize(224, 126)
+        self.setFixedSize(180, 101)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
             f"background:{surface_rgba('background_alt')};border-radius:8px;"
@@ -905,6 +905,32 @@ class EpisodeArtwork(QLabel):
 
 
 
+class EpisodeSynopsisLabel(QLabel):
+    """A single-line synopsis preview that always ellides to its current width."""
+
+    def __init__(self, full_text, parent=None):
+        super().__init__(parent)
+        self._full_text = str(full_text or "")
+        self.setWordWrap(False)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setToolTip(self._full_text)
+        self.update_preview()
+
+    def update_preview(self):
+        width = max(1, self.contentsRect().width())
+        metrics = QFontMetrics(self.font())
+        preview = metrics.elidedText(
+            self._full_text,
+            Qt.TextElideMode.ElideRight,
+            width,
+        )
+        self.setText(preview)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_preview()
+
+
 class EpisodeCard(QFrame):
     watched_changed = Signal(int, bool)
 
@@ -912,14 +938,13 @@ class EpisodeCard(QFrame):
         super().__init__(parent)
         self.episode = episode
         self.setObjectName("episodeCard")
-        # A familiar streaming row: wide thumbnail, title first, then quiet metadata
-        # and a short synopsis. Keep the watch action separate on the right.
-        self.setMinimumHeight(150)
+        # Compact streaming-service row: keep the whole episode preview scan-friendly.
+        self.setMinimumHeight(120)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(14)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(12)
 
         artwork = EpisodeArtwork(
             episode["work_id"],
@@ -942,10 +967,10 @@ class EpisodeCard(QFrame):
         title.setObjectName("detailEpisodeTitle")
         title.setWordWrap(True)
         title.setMinimumWidth(0)
-        title.setMaximumHeight(44)
+        title.setMaximumHeight(38)
         title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         title.setStyleSheet(
-            f"color:{COLORS['primary']};font-size:16px;font-weight:800;"
+            f"color:{COLORS['primary']};font-size:14px;font-weight:750;"
         )
         title.setToolTip(self._episode_full_title)
         body.addWidget(title)
@@ -959,14 +984,14 @@ class EpisodeCard(QFrame):
         number = QLabel(f"EP {display_number:02d}")
         number.setObjectName("detailEpisodeNumber")
         number.setStyleSheet(
-            f"color:{COLORS['accent']};font-size:10px;font-weight:750;"
+            f"color:{COLORS['accent']};font-size:9px;font-weight:700;"
         )
         metadata.addWidget(number)
 
         date = QLabel(self._format_date(episode["air_date"]))
         date.setObjectName("detailEpisodeDate")
         date.setStyleSheet(
-            f"color:{COLORS['muted']};font-size:10px;font-weight:500;"
+            f"color:{COLORS['muted']};font-size:9px;font-weight:500;"
         )
         if date.text():
             metadata.addWidget(date)
@@ -976,18 +1001,14 @@ class EpisodeCard(QFrame):
         self._episode_full_description = str(episode["description"] or "").strip()
         self._episode_description_label = None
         if self._episode_full_description:
-            description = QLabel(self._episode_full_description)
+            description = EpisodeSynopsisLabel(self._episode_full_description)
             self._episode_description_label = description
             description.setObjectName("detailEpisodeDescription")
-            description.setWordWrap(True)
             description.setMinimumWidth(0)
-            # Keep the synopsis to roughly two lines; the tooltip keeps it complete.
-            description.setMaximumHeight(36)
-            description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-            description.setTextFormat(Qt.PlainText)
-            description.setToolTip(self._episode_full_description)
+            description.setMaximumHeight(18)
+            description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             description.setStyleSheet(
-                f"color:{COLORS['secondary']};font-size:11px;"
+                f"color:{COLORS['secondary']};font-size:10px;"
             )
             body.addWidget(description)
 
@@ -1007,10 +1028,10 @@ class EpisodeCard(QFrame):
 
     def refresh_theme(self):
         styles = {
-            "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:10px;font-weight:750;",
-            "detailEpisodeDate": f"color:{COLORS['muted']};font-size:10px;",
-            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:16px;font-weight:800;",
-            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:11px;",
+            "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:9px;font-weight:700;",
+            "detailEpisodeDate": f"color:{COLORS['muted']};font-size:9px;",
+            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:14px;font-weight:750;",
+            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:10px;",
         }
         for label in self.findChildren(QLabel):
             stylesheet = styles.get(label.objectName())
@@ -1033,12 +1054,10 @@ class EpisodeCard(QFrame):
         label.setToolTip(self._episode_full_title)
 
     def _update_episode_description(self):
-        """Keep the synopsis compact while retaining its complete tooltip."""
+        """Refresh the clipped preview; the full text stays in the tooltip."""
         label = self._episode_description_label
-        if label is None:
-            return
-        label.setText(self._episode_full_description)
-        label.setToolTip(self._episode_full_description)
+        if label is not None:
+            label.update_preview()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -2041,15 +2060,15 @@ class WorkDetailPage(QWidget):
             }}
             QCheckBox#episodeWatchedCheckbox {{
                 color: {COLORS['primary']};
-                font-size: 11px;
+                font-size: 10px;
                 font-weight: 600;
-                spacing: 6px;
-                padding: 4px;
+                spacing: 5px;
+                padding: 3px;
             }}
             QCheckBox#episodeWatchedCheckbox::indicator {{
-                width: 21px; height: 21px;
+                width: 18px; height: 18px;
                 border: 1px solid {COLORS['border_hover']};
-                border-radius: 6px;
+                border-radius: 5px;
                 background: {surface_rgba('background_alt')};
             }}
             QCheckBox#episodeWatchedCheckbox::indicator:checked {{

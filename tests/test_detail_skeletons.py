@@ -525,9 +525,9 @@ class DetailSkeletonTests(unittest.TestCase):
         number = card.findChild(QLabel, "detailEpisodeNumber")
         labels = card.findChildren(QLabel)
 
-        self.assertGreaterEqual(card.minimumHeight(), 150)
-        self.assertEqual(artwork.size().width(), 224)
-        self.assertEqual(artwork.size().height(), 126)
+        self.assertGreaterEqual(card.minimumHeight(), 120)
+        self.assertEqual(artwork.size().width(), 180)
+        self.assertEqual(artwork.size().height(), 101)
         self.assertIn("EP 01", [label.text() for label in labels])
         self.assertIsNotNone(title)
         self.assertIsNotNone(number)
@@ -940,7 +940,7 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertIsNotNone(artwork)
         self.assertEqual(artwork.text(), "UNAVAILABLE")
         self.assertLess(labels.index(title), labels.index(number))
-        self.assertIn("font-size:11px", description.styleSheet())
+        self.assertIn("font-size:10px", description.styleSheet())
         self.assertEqual(
             description.toolTip(),
             "Description is still available.",
@@ -1092,8 +1092,10 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
-    def test_episode_synopses_wrap_in_larger_row_with_full_tooltip(self):
-        synopsis = "A long synopsis that should stay compact in the episode list."
+    def test_episode_synopsis_is_one_compact_elided_line_with_full_tooltip(self):
+        synopsis = " ".join(
+            ["A long synopsis with enough words to overflow the compact preview."] * 8
+        )
         card = EpisodeCard({
             "work_id": 12345,
             "episode_number": 12,
@@ -1103,12 +1105,29 @@ class DetailSkeletonTests(unittest.TestCase):
             "description": synopsis,
             "watched": 0,
         })
+        card.resize(760, 124)
+        card.show()
+        card.layout().activate()
+        self.app.processEvents()
         description = card.findChild(QLabel, "detailEpisodeDescription")
         self.assertIsNotNone(description)
-        self.assertTrue(description.wordWrap())
+        self.assertFalse(description.wordWrap())
         self.assertEqual(description.toolTip(), synopsis)
-        self.assertLessEqual(description.maximumHeight(), 50)
-        self.assertGreaterEqual(card.minimumHeight(), 150)
+        self.assertNotEqual(description.text(), synopsis)
+        self.assertTrue(description.text().endswith("…"))
+        self.assertNotIn("\n", description.text())
+        self.assertIn("font-size:10px", description.styleSheet())
+        self.assertLessEqual(description.maximumHeight(), 18)
+        self.assertLessEqual(card.minimumHeight(), 122)
+
+        description.setFixedWidth(500)
+        self.app.processEvents()
+        wide_preview = description.text()
+        description.setFixedWidth(200)
+        self.app.processEvents()
+        self.assertLess(len(description.text()), len(wide_preview))
+        self.assertTrue(description.text().endswith("…"))
+        self.assertEqual(description.toolTip(), synopsis)
 
         card.deleteLater()
         self.app.processEvents()
