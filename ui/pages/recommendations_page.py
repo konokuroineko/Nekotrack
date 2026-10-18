@@ -348,7 +348,7 @@ class RecommendationWorker(QObject):
             # second provider traversal. Related details already present on
             # this result batch are enough to group what the catalog provides.
             ranked = group_media_results(
-                ranked, enrich=False, max_requests=0, delay=0, stop_event=self.stop_event
+                ranked, enrich=True, max_requests=3, delay=0, stop_event=self.stop_event
             )
         except Exception as error:
             log_exception("recommendations.bundle_grouping_failed", error)

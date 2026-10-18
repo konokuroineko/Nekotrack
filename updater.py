@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
@@ -492,7 +493,7 @@ def launch_update_helper(
 class InstallerDownloader(QThread):
     """Download and validate an update, then stage it for a rollback-aware helper."""
 
-    finished = Signal(str)
+    download_staged = Signal(str)
     failed = Signal(str)
 
     def __init__(
@@ -513,10 +514,21 @@ class InstallerDownloader(QThread):
         self.current_executable = Path(current_executable) if current_executable else None
         self.helper_script = Path(helper_script) if helper_script else None
         self.process_id = int(process_id or os.getpid())
+        self._cancel_event = threading.Event()
+
+    def cancel(self):
+        """Ask the worker to stop before modifying any installed files."""
+        self._cancel_event.set()
+        self.requestInterruption()
+
+    def _raise_if_cancelled(self):
+        if self._cancel_event.is_set() or self.isInterruptionRequested():
+            raise RuntimeError("The update was cancelled. The installed application was not changed.")
 
     def run(self):
         temp_path = None
         try:
+            self._raise_if_cancelled()
             if not _is_trusted_release_asset_url(
                 self.asset_url, expected_name=self.asset_name
             ):
@@ -546,6 +558,7 @@ class InstallerDownloader(QThread):
                 ) as handle:
                     temp_path = Path(handle.name)
                     for chunk in response.iter_content(chunk_size=1024 * 256):
+                        self._raise_if_cancelled()
                         if not chunk:
                             continue
                         byte_count += len(chunk)
@@ -553,6 +566,7 @@ class InstallerDownloader(QThread):
                             raise ValueError("The update exceeded the allowed 512 MiB download limit.")
                         handle.write(chunk)
 
+            self._raise_if_cancelled()
             if byte_count == 0:
                 raise ValueError("The update download was empty.")
             if not _is_windows_pe_installer(temp_path):
@@ -578,7 +592,7 @@ class InstallerDownloader(QThread):
             if not configured:
                 if _is_setup_asset_name(self.asset_name):
                     subprocess.Popen([str(temp_path)], close_fds=True)
-                    self.finished.emit(str(temp_path))
+                    self.download_staged.emit(str(temp_path))
                     # A started installer can still be reading this file.
                     # The standalone caller owns this legacy download artifact.
                     temp_path = None
@@ -617,7 +631,7 @@ class InstallerDownloader(QThread):
                 attempt_id=attempt_id,
                 restore_database=True,
             )
-            self.finished.emit(str(backup_directory))
+            self.download_staged.emit(str(backup_directory))
         except Exception as exc:
             self.failed.emit(str(exc))
         finally:

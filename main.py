@@ -4,7 +4,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QUrl, Qt
+from PySide6.QtCore import QObject, QPointF, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen, QPolygonF
 
 
@@ -94,6 +94,38 @@ from updater import (
     find_previous_update_backup,
     launch_update_helper,
 )
+
+
+class _UpdateUiBridge(QObject):
+    update_available = Signal(object)
+    no_update_available = Signal(bool)
+    check_failed = Signal(str, bool)
+    download_staged = Signal(str)
+    download_failed = Signal(str)
+
+    def __init__(self, parent=None, *, manual=False):
+        super().__init__(parent)
+        self.manual = bool(manual)
+
+    @Slot(object)
+    def relay_update_available(self, info):
+        self.update_available.emit(info)
+
+    @Slot()
+    def relay_no_update_available(self):
+        self.no_update_available.emit(self.manual)
+
+    @Slot(str)
+    def relay_check_failed(self, message):
+        self.check_failed.emit(str(message), self.manual)
+
+    @Slot(str)
+    def relay_download_staged(self, backup_path):
+        self.download_staged.emit(str(backup_path))
+
+    @Slot(str)
+    def relay_download_failed(self, message):
+        self.download_failed.emit(str(message))
 
 
 class NekoProxyStyle(QProxyStyle):
@@ -202,6 +234,8 @@ def _offer_update(window, update_info):
         process_id=os.getpid(),
     )
 
+    bridge = _UpdateUiBridge(window)
+
     def failed(message):
         QMessageBox.warning(
             window,
@@ -209,10 +243,8 @@ def _offer_update(window, update_info):
             "The update could not be staged. Your installed executable was not replaced.\n\n"
             + str(message),
         )
-        downloader.deleteLater()
 
     def finished(backup_path):
-        downloader.deleteLater()
         QMessageBox.information(
             window,
             "NekoTrack update is starting",
@@ -221,9 +253,12 @@ def _offer_update(window, update_info):
         )
         QApplication.quit()
 
-    downloader.failed.connect(failed)
-    downloader.finished.connect(finished)
+    downloader.failed.connect(bridge.relay_download_failed)
+    downloader.download_staged.connect(bridge.relay_download_staged)
+    bridge.download_failed.connect(failed)
+    bridge.download_staged.connect(finished)
     window._update_downloader = downloader
+    window._update_download_bridge = bridge
     downloader.start()
 
 
@@ -266,18 +301,26 @@ def _check_for_updates(window, manual=False):
         _offer_update(window, info)
 
     def no_update():
-        if manual:
-            QMessageBox.information(window, "NekoTrack updates", f"NekoTrack {APP_VERSION} is up to date on the {get('update_channel')} channel.")
+        QMessageBox.information(window, "NekoTrack updates", f"NekoTrack {APP_VERSION} is up to date on the {get('update_channel')} channel.")
 
     def check_failed(message):
         log_event("updater.check_failed", error=message, manual=bool(manual))
-        if manual:
-            QMessageBox.warning(window, "NekoTrack update check failed", str(message))
+        QMessageBox.warning(window, "NekoTrack update check failed", str(message))
 
-    checker.update_available.connect(update_available)
-    checker.no_update_available.connect(no_update)
-    checker.check_failed.connect(check_failed)
+    bridge = _UpdateUiBridge(window, manual=manual)
+    checker.update_available.connect(bridge.relay_update_available)
+    checker.no_update_available.connect(bridge.relay_no_update_available)
+    checker.check_failed.connect(bridge.relay_check_failed)
+    bridge.update_available.connect(update_available)
+    bridge.no_update_available.connect(
+        lambda manual_check: no_update() if manual_check else None
+    )
+    bridge.check_failed.connect(
+        lambda message, manual_check: check_failed(message)
+        if manual_check else log_event("updater.check_failed", error=message, manual=False)
+    )
     window._update_checker = checker
+    window._update_check_bridge = bridge
     checker.start()
 
 
@@ -399,7 +442,16 @@ def main():
             continue
         try:
             if worker.isRunning():
-                worker.wait(16000)
+                cancel = getattr(worker, "cancel", None)
+                if callable(cancel):
+                    cancel()
+                else:
+                    worker.requestInterruption()
+                # Do not destroy a still-running QThread during app shutdown.
+                # The downloader checks cancellation between chunks; checker
+                # requests use a bounded network timeout.
+                while worker.isRunning():
+                    worker.wait(500)
         except RuntimeError:
             pass
 

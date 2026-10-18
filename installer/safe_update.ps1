@@ -200,16 +200,27 @@ try {
             throw
         }
     } elseif ($Action -eq "InstallSetup") {
-        $stagingRoot = [System.IO.Path]::GetFullPath((Join-Path $DataDirectory "update_staging"))
-        $providedInstaller = [System.IO.Path]::GetFullPath($InstallerPath)
-        if (-not (Test-WindowsPE $providedInstaller) -or
-            -not $providedInstaller.StartsWith($stagingRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "The downloaded Setup package failed path or executable validation."
+        try {
+            $stagingRoot = [System.IO.Path]::GetFullPath((Join-Path $DataDirectory "update_staging"))
+            $providedInstaller = [System.IO.Path]::GetFullPath($InstallerPath)
+            if (-not (Test-WindowsPE $providedInstaller) -or
+                -not $providedInstaller.StartsWith($stagingRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "The downloaded Setup package failed path or executable validation."
+            }
+            $setup = Start-Process -FilePath $providedInstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
+            if ($setup.ExitCode -ne 0) { throw "NekoTrack Setup returned exit code $($setup.ExitCode)." }
+            if (-not (Test-WindowsPE $ExecutablePath)) { throw "Setup completed but the installed executable was not found." }
+        } catch {
+            $setupFailure = $_.Exception.Message
+            try {
+                Set-ExecutableFromBackup $BackupDirectory
+                Start-RestoredApplication
+                $setupFailure += " The previous executable was restored from backup."
+            } catch {
+                $setupFailure += " Automatic executable recovery also failed: " + $_.Exception.Message
+            }
+            throw $setupFailure
         }
-        $setup = Start-Process -FilePath $providedInstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
-        if ($setup.ExitCode -ne 0) { throw "NekoTrack Setup returned exit code $($setup.ExitCode)." }
-        if (-not (Test-WindowsPE $ExecutablePath)) { throw "Setup completed but the installed executable was not found." }
-    }
 
     if (-not (Start-CandidateAndWaitForHealth $ExpectedVersion $AttemptId)) {
         Set-ExecutableFromBackup $BackupDirectory
