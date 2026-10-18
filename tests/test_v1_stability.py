@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QFrame
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QFrame, QLabel
 
 import ui.preferences as preferences
 import updater
@@ -322,6 +322,27 @@ class V1StabilityTests(unittest.TestCase):
             page.request_shutdown()
             page.close()
             page.deleteLater()
+            self.app.processEvents()
+
+    def test_long_bundle_indicator_is_elided_instead_of_cut_off(self):
+        summary = "Season 1 · Season 2 · OVAs · Specials · Bonus episodes"
+        with patch.object(WorkCard, "_load_cover"):
+            card = WorkCard(
+                {
+                    "id": 987654,
+                    "title": "Re:Zero",
+                    "type": "ANIME",
+                    "_series_count": 5,
+                    "_bundle_summary": summary,
+                },
+                mode="library",
+            )
+        try:
+            self.assertNotEqual(card.series_info_label.text(), summary)
+            self.assertTrue(card.series_info_label.text().endswith("…"))
+            self.assertEqual(card.series_info_label.toolTip(), summary)
+        finally:
+            card.deleteLater()
             self.app.processEvents()
 
     def test_pagination_appends_new_items_without_reranking_old_items(self):
