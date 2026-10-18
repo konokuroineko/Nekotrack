@@ -247,6 +247,9 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.assertTrue(self.page._exposure_counted[9876])
 
     def test_scrolling_away_and_returning_allows_a_distinct_later_impression(self):
+        # The test controls the monotonic clock manually; stop the production
+        # timer so it cannot consume a side_effect clock value during Qt events.
+        self.page._impression_timer.stop()
         with (
             patch("ui.pages.recommendations_page.record_recommendation_impressions") as record,
             patch(

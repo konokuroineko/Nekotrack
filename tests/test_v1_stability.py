@@ -158,7 +158,7 @@ class V1StabilityTests(unittest.TestCase):
             persistent = updater.persist_update_helper(source, data_dir)
             self.assertTrue(persistent.is_file())
             self.assertEqual(persistent.read_text(encoding="utf-8"), "Write-Output 'safe'")
-            self.assertEqual(persistent.parent, data_dir / "update_helpers")
+            self.assertEqual(persistent.parent, (data_dir / "update_helpers").resolve())
             source.unlink()
             self.assertTrue(persistent.is_file())
             self.assertEqual(updater.persist_update_helper(persistent, data_dir), persistent)

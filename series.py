@@ -758,13 +758,14 @@ def _apply_bundle_override(group, members):
         override = get_bundle_override(member_ids)
     except Exception as error:
         # Early migrations and minimal test/recovery databases may not have
-        # the optional presentation table yet. A missing decoration must never
-        # break otherwise-valid relation grouping.
-        log_exception(
-            "bundling.presentation_override_unavailable",
-            error,
-            work_ids=member_ids,
-        )
+        # the optional presentation table yet. Keep that expected case quiet;
+        # a missing decoration must never break otherwise-valid grouping.
+        if "no such table: bundle_overrides" not in str(error).casefold():
+            log_exception(
+                "bundling.presentation_override_unavailable",
+                error,
+                work_ids=member_ids,
+            )
         return group
     if not override:
         return group
