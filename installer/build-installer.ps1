@@ -45,14 +45,37 @@ try {
 
     $iss = Join-Path $PSScriptRoot "NekoTrack.iss"
     $iscc = Get-Command iscc.exe -ErrorAction SilentlyContinue
+    $isccPath = if ($iscc) { $iscc.Source } else { $null }
 
-    if ($iscc) {
-        & $iscc.Source "/DMyAppVersion=$appVersion" $iss
+    # Per-user installs of Inno Setup (including the default winget install)
+    # are often not added to PATH. Detect the compiler without requiring users
+    # to configure environment variables manually.
+    if (-not $isccPath) {
+        $candidatePaths = @()
+        if ($env:LOCALAPPDATA) {
+            $candidatePaths += Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 7\ISCC.exe"
+            $candidatePaths += Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"
+        }
+        if ($env:ProgramFiles) {
+            $candidatePaths += Join-Path $env:ProgramFiles "Inno Setup 7\ISCC.exe"
+            $candidatePaths += Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"
+        }
+        if (${env:ProgramFiles(x86)}) {
+            $candidatePaths += Join-Path ${env:ProgramFiles(x86)} "Inno Setup 7\ISCC.exe"
+            $candidatePaths += Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+        }
+        $isccPath = $candidatePaths |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            Select-Object -First 1
+    }
+
+    if ($isccPath) {
+        & $isccPath "/DMyAppVersion=$appVersion" $iss
         if ($LASTEXITCODE -ne 0) {
             throw "Inno Setup failed to compile the installer."
         }
     } else {
-        Write-Host "PyInstaller build complete. Install Inno Setup, then compile installer\NekoTrack.iss."
+        Write-Host "PyInstaller build complete. Install Inno Setup or compile installer\NekoTrack.iss manually."
     }
 }
 finally {
