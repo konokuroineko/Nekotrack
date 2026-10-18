@@ -25,6 +25,7 @@ from ui.preferences import get
 from ui.theme import COLORS, surface_rgba
 from ui.widgets.work_card import WorkCard
 from ui.pages.recommendations_page import RecommendationsPage
+from series import get_library_series
 
 
 class HomePage(QWidget):
@@ -61,6 +62,40 @@ class HomePage(QWidget):
         )
         self._apply_theme_styles()
         self.refresh()
+
+    def _prepare_home_work(self, group):
+        """Copy a library bundle while preserving its user-selected presentation."""
+        work = dict(group)
+        members = work.get("_series_members")
+        members = members if isinstance(members, list) and members else [group]
+        work["_series_members"] = members
+        if len(members) > 1:
+            for target, source in (
+                ("progress_episodes", "progress_episodes"),
+                ("episodes", "episodes"),
+                ("progress_chapters", "progress_chapters"),
+                ("chapters", "chapters"),
+                ("progress_volumes", "progress_volumes"),
+                ("volumes", "volumes"),
+            ):
+                work[target] = sum(
+                    max(0, self._integer(member.get(source)))
+                    for member in members
+                    if isinstance(member, dict)
+                )
+        statuses = [
+            self._status(member) for member in members
+            if isinstance(member, dict)
+        ]
+        if any(status in {"watching", "rewatching"} for status in statuses):
+            work["_home_status"] = (
+                "rewatching" if "rewatching" in statuses else "watching"
+            )
+        elif "reading" in statuses:
+            work["_home_status"] = "reading"
+        else:
+            work["_home_status"] = self._status(work)
+        return work
 
     @staticmethod
     def _integer(value, default=0):
@@ -145,12 +180,31 @@ class HomePage(QWidget):
                 for status in statuses
             ),
         }
-        continue_items = [
-            work for work in library
-            if self._status(work) in {"watching", "rewatching", "reading", "in progress"}
+        try:
+            # Use exactly the Library's saved automatic/manual bundles,
+            # exclusions, custom titles, and cover choices for Home too.
+            display_library = get_library_series(library)
+        except Exception as error:
+            log_exception("home.bundle_grouping_failed", error)
+            display_library = library
+
+        continue_items = []
+        recent_items = []
+        in_progress_statuses = {"watching", "rewatching", "reading", "in progress"}
+        for group in display_library:
+            work = self._prepare_home_work(group)
+            recent_items.append(work)
+            members = group.get("_series_members") if isinstance(group, dict) else None
+            members = members if isinstance(members, list) and members else [group]
+            if any(self._status(member) in in_progress_statuses for member in members):
+                continue_items.append(work)
+
+        self._continue_ids = {
+            self._integer(work.get("id")) for work in continue_items
+        }
+        self._recent_ids = [
+            self._integer(work.get("id")) for work in recent_items[:4]
         ]
-        self._continue_ids = {self._integer(work.get("id")) for work in continue_items}
-        self._recent_ids = [self._integer(work.get("id")) for work in library[:4]]
 
         self.content_layout.addWidget(
             self._work_section(
@@ -164,7 +218,7 @@ class HomePage(QWidget):
             self._work_section(
                 "Recently added",
                 "Your latest additions, in the order recorded by your library.",
-                library[:4],
+                recent_items[:4],
                 kind="recent",
             )
         )
@@ -444,7 +498,7 @@ class HomePage(QWidget):
             tile_layout.addWidget(card, 0, Qt.AlignmentFlag.AlignHCenter)
 
             status_text = (
-                self._status(work).replace("_", " ").upper()
+                str(work.get("_home_status") or self._status(work)).replace("_", " ").upper()
                 if kind == "continue" else "IN YOUR LIBRARY"
             )
             status = QLabel(status_text)

@@ -423,30 +423,36 @@ def create_update_backup(
         raise
 
 
+def persist_update_helper(helper_script, data_directory):
+    """Copy the helper to durable app data before a one-file app exits."""
+    source = Path(helper_script)
+    if not source.is_file():
+        raise ValueError("The safe update helper is missing from this NekoTrack build.")
+    data_root = Path(data_directory).resolve()
+    helper_directory = data_root / "update_helpers"
+    helper_directory.mkdir(parents=True, exist_ok=True)
+    expected_digest = _sha256_file(source)
+    persistent = helper_directory / f"safe_update_{expected_digest[:16]}.ps1"
+    if persistent.is_file() and _sha256_file(persistent) == expected_digest:
+        return persistent
+    temporary = helper_directory / (persistent.name + ".tmp")
+    shutil.copy2(source, temporary)
+    if _sha256_file(temporary) != expected_digest:
+        temporary.unlink(missing_ok=True)
+        raise OSError("The recovery helper failed its copy-integrity check.")
+    temporary.replace(persistent)
+    return persistent
+
+
 def launch_update_helper(
     helper_script, action, install_directory, data_directory, backup_directory,
     wait_for_pid, expected_version=None, staged_executable=None, installer_path=None,
     attempt_id=None, restore_database=False,
 ):
     """Use a separate PowerShell process; Windows cannot replace its running exe."""
-    helper = Path(helper_script)
-    if not helper.is_file():
-        raise ValueError("The safe update helper is missing from this NekoTrack build.")
     if os.name != "nt":
         raise ValueError("In-place updating is available only on Windows.")
-
-    data_root = Path(data_directory).resolve()
-    helper_directory = data_root / "update_helpers"
-    helper_directory.mkdir(parents=True, exist_ok=True)
-    helper_digest = _sha256_file(helper)
-    persistent_helper = helper_directory / f"safe_update_{helper_digest[:16]}.ps1"
-    if not persistent_helper.is_file():
-        temporary_helper = helper_directory / (persistent_helper.name + ".tmp")
-        shutil.copy2(helper, temporary_helper)
-        if _sha256_file(temporary_helper) != helper_digest:
-            temporary_helper.unlink(missing_ok=True)
-            raise OSError("The recovery helper failed its copy-integrity check.")
-        temporary_helper.replace(persistent_helper)
+    persistent_helper = persist_update_helper(helper_script, data_directory)
 
     command = [
         "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QFrame
 
 import ui.preferences as preferences
 import updater
+import series
 from ui.pages.home_page import HomePage
 from ui.pages.recommendations_page import RecommendationsPage
 from ui.pages.settings_page import SettingsPage
@@ -147,6 +148,63 @@ class V1StabilityTests(unittest.TestCase):
         self.assertEqual(preview_updates[0].digest, "sha256:" + "a" * 64)
         self.assertTrue(updater._is_trusted_release_asset_url(asset_url, expected_name="NekoTrack.exe"))
         self.assertFalse(updater._is_trusted_release_asset_url(asset_url, expected_name="wrong.exe"))
+
+    def test_update_helper_is_copied_to_durable_app_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "_MEI12345" / "safe_update.ps1"
+            source.parent.mkdir()
+            source.write_text("Write-Output 'safe'", encoding="utf-8")
+            data_dir = root / "isolated-preview-data"
+            persistent = updater.persist_update_helper(source, data_dir)
+            self.assertTrue(persistent.is_file())
+            self.assertEqual(persistent.read_text(encoding="utf-8"), "Write-Output 'safe'")
+            self.assertEqual(persistent.parent, data_dir / "update_helpers")
+            source.unlink()
+            self.assertTrue(persistent.is_file())
+            self.assertEqual(updater.persist_update_helper(persistent, data_dir), persistent)
+
+    def test_home_uses_library_bundle_and_preserves_custom_appearance(self):
+        member_a = {
+            "id": 501, "title": "Original Series", "type": "ANIME",
+            "status": "Watching", "episodes": 12, "progress_episodes": 6,
+            "start_year": 2018, "cover_path": "custom-cover.png",
+        }
+        member_b = {
+            "id": 502, "title": "Second Season", "type": "ANIME",
+            "status": "Watching", "episodes": 12, "progress_episodes": 3,
+            "start_year": 2020, "cover_path": "season-cover.png",
+        }
+        group = {
+            "id": 501, "title": "My custom Re:Zero bundle", "type": "ANIME",
+            "status": "Watching", "episodes": 24, "progress_episodes": 9,
+            "cover_path": "custom-cover.png", "_series_count": 2,
+            "_series_members": [member_a, member_b],
+            "_bundle_summary": "2 seasons",
+        }
+        with (
+            patch.object(HomePage, "_read_library", return_value=[member_a, member_b]),
+            patch("ui.pages.home_page.get_library_series", return_value=[group]) as grouper,
+            patch.object(RecommendationsPage, "refresh", autospec=True),
+            patch("ui.pages.home_page.get_release_reminders", return_value=[]),
+            patch("ui.pages.home_page.get_episodes", return_value=[]),
+        ):
+            page = HomePage()
+        try:
+            grouper.assert_called_once()
+            cards = page.findChildren(WorkCard)
+            self.assertEqual(len(cards), 2)
+            self.assertTrue(all(card.card_size <= 112 for card in cards))
+            self.assertTrue(all(card.work.get("title") == "My custom Re:Zero bundle" for card in cards))
+            self.assertTrue(all(card.work.get("cover_path") == "custom-cover.png" for card in cards))
+            prepared = page._prepare_home_work(group)
+            self.assertEqual(prepared["progress_episodes"], 9)
+            self.assertEqual(prepared["episodes"], 24)
+            self.assertEqual(prepared["_home_status"], "watching")
+        finally:
+            page.close()
+            page.deleteLater()
+            self.app.processEvents()
 
     def test_update_backup_preserves_executable_and_consistent_database_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -31,3 +31,11 @@ Isolated preview testing on Windows
 4. In Preview Settings, select Preview releases (testing), then Check for updates now. Preview releases should publish NekoTrack.exe built from the updater-enabled branch. To keep the preview install isolated, publish the portable EXE as the preview asset rather than the Setup installer.
 5. Test the candidate. The updater stores an EXE backup and a consistent SQLite snapshot under the preview data directory before replacement. Settings > Updates > Restore previous version restores the previous EXE; normal NekoTrack's data is separate.
 The NEKOTRACK_DATA_DIR override is process-local. Normal launches without it continue using %APPDATA%\NekoTrack.
+
+Isolated preview testing
+A new build recognizes NEKOTRACK_DATA_DIR as an optional full path override for its data directory. Normal launches still use %APPDATA%\NekoTrack.
+To test a preview without touching your real library, copy the current app executable to a separate folder (for example C:\NekoTrack-Preview) and copy %APPDATA%\NekoTrack to %LOCALAPPDATA%\NekoTrack-PreviewData. Put a run-preview.ps1 file beside the copied executable with:
+  $env:NEKOTRACK_DATA_DIR = "$env:LOCALAPPDATA\NekoTrack-PreviewData"
+  Set-Location -LiteralPath $env:NEKOTRACK_DATA_DIR
+  & "C:\NekoTrack-Preview\NekoTrack.exe"
+Run that script through a shortcut to powershell.exe. In Preview Settings, choose Preview releases and manually check for updates. Publish a prerelease containing the updater-enabled portable NekoTrack.exe asset (not Setup, which targets the standard installation directory). This preview copy uses a separate database, artwork, logs, and update backups. Settings > Updates > Restore previous version restores the previous preview executable without touching the regular installation.

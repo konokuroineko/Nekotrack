@@ -1320,8 +1320,9 @@ def auto_bundle_library_work(work_id):
     }
 
 
-def get_library_series():
-    rows = list(get_all_library())
+def get_library_series(rows=None):
+    """Return the Library's canonical grouped rows, optionally from a snapshot."""
+    rows = list(get_all_library()) if rows is None else [dict(row) for row in rows]
     if not rows:
         return []
 
