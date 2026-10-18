@@ -30,6 +30,11 @@ class InstallerConfigurationTests(unittest.TestCase):
         self.assertIn(f'WINDOWS_APP_USER_MODEL_ID = "{app_id}"', entrypoint)
         self.assertIn("_set_windows_app_user_model_id()", entrypoint)
 
+    def test_build_script_detects_per_user_inno_setup(self):
+        script = (ROOT / "installer" / "build-installer.ps1").read_text(encoding="utf-8")
+        self.assertIn('Programs\\Inno Setup 7\\ISCC.exe', script)
+        self.assertIn('$isccPath = $candidatePaths |', script)
+
     def test_installer_keeps_the_custom_executable_icon(self):
         script = (ROOT / "installer" / "build-installer.ps1").read_text(encoding="utf-8")
         self.assertIn('--icon "assets\\NekoTrack.ico"', script)
