@@ -345,6 +345,23 @@ class V1StabilityTests(unittest.TestCase):
             card.deleteLater()
             self.app.processEvents()
 
+    def test_embedded_feed_hides_idle_pagination_hint_but_keeps_load_more(self):
+        for embedded in (True, False):
+            page = RecommendationsPage(embedded=embedded)
+            try:
+                page._render_empty("Use Search to discover more titles.")
+                if embedded:
+                    self.assertTrue(page.more_status.isHidden())
+                else:
+                    self.assertFalse(page.more_status.isHidden())
+                    self.assertIn("Scroll near the end", page.more_status.text())
+                self.assertEqual(page.load_more_button.text(), "Load more")
+            finally:
+                page.request_shutdown()
+                page.close()
+                page.deleteLater()
+                self.app.processEvents()
+
     def test_pagination_appends_new_items_without_reranking_old_items(self):
         page = RecommendationsPage(embedded=True)
         try:
