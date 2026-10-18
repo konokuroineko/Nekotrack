@@ -76,7 +76,10 @@ class V1StabilityTests(unittest.TestCase):
             self.assertEqual(preferences.get("update_channel"), "stable")
 
     def test_settings_page_exposes_manual_update_and_rollback_actions(self):
-        with patch.object(preferences, "QSettings", MemorySettings):
+        with (
+            patch.object(preferences, "QSettings", MemorySettings),
+            patch("ui.pages.settings_page.get_all_library", return_value=[]),
+        ):
             page = SettingsPage()
             try:
                 channel = page.findChild(QComboBox, "updateChannelCombo")

@@ -443,18 +443,24 @@ class HomePage(QWidget):
             card.clicked.connect(self.work_selected.emit)
             tile_layout.addWidget(card, 0, Qt.AlignmentFlag.AlignHCenter)
 
+            status_text = (
+                self._status(work).replace("_", " ").upper()
+                if kind == "continue" else "IN YOUR LIBRARY"
+            )
+            status = QLabel(status_text)
+            status.setObjectName("homeTrackStatus")
+            status.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            status.setFixedHeight(12)
             if kind == "continue":
-                caption_text = (
-                    f"{self._status(work).replace('_', ' ').upper()} · "
-                    f"{self._progress_caption(work)}"
-                )
+                caption_text = self._progress_caption(work)
             else:
-                caption_text = f"IN YOUR LIBRARY · Status: {work.get('status') or 'Unknown'}"
+                caption_text = f"Status: {work.get('status') or 'Unknown'}"
             caption = QLabel(caption_text)
             caption.setObjectName("homeTrackProgress")
             caption.setWordWrap(True)
-            caption.setFixedHeight(30)
+            caption.setFixedHeight(16)
             caption.setToolTip(caption_text)
+            tile_layout.addWidget(status)
             tile_layout.addWidget(caption)
             strip_layout.addWidget(tile, 0, Qt.AlignmentFlag.AlignTop)
 

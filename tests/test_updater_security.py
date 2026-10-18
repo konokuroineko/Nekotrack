@@ -131,7 +131,7 @@ class UpdateCheckerTests(unittest.TestCase):
         request.assert_called_once()
         return updates, failures
 
-    def test_new_release_without_setup_installer_is_still_reported(self):
+    def test_new_release_with_portable_executable_is_reported(self):
         release_url = "https://github.com/konokuroineko/Nekotrack/releases/tag/v1.0.1"
         releases = [{
             "tag_name": "v1.0.1",
@@ -151,8 +151,11 @@ class UpdateCheckerTests(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertEqual(len(updates), 1)
         self.assertEqual(updates[0].version, "1.0.1")
-        self.assertIsNone(updates[0].asset_url)
-        self.assertIsNone(updates[0].asset_name)
+        self.assertEqual(
+            updates[0].asset_url,
+            "https://github.com/konokuroineko/Nekotrack/releases/download/v1.0.1/NekoTrack.exe",
+        )
+        self.assertEqual(updates[0].asset_name, "NekoTrack.exe")
         self.assertEqual(updates[0].release_url, release_url)
 
     def test_valid_setup_installer_is_preferred_for_automatic_install(self):

@@ -530,7 +530,7 @@ class InstallerDownloader(QThread):
             if byte_count == 0:
                 raise ValueError("The update download was empty.")
             if not _is_windows_pe_installer(temp_path):
-                raise ValueError("The downloaded file is not a valid Windows executable.")
+                raise ValueError("The downloaded file does not have a valid Windows executable header.")
 
             if self.digest:
                 algorithm, separator, expected = self.digest.partition(":")
@@ -553,6 +553,9 @@ class InstallerDownloader(QThread):
                 if _is_setup_asset_name(self.asset_name):
                     subprocess.Popen([str(temp_path)], close_fds=True)
                     self.finished.emit(str(temp_path))
+                    # A started installer can still be reading this file.
+                    # The standalone caller owns this legacy download artifact.
+                    temp_path = None
                     return
                 raise ValueError("Safe updating requires an installed NekoTrack build and recovery helper.")
 

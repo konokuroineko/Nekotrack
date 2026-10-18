@@ -754,7 +754,18 @@ def _apply_bundle_override(group, members):
     if len(safe_members) <= 1:
         return group
     member_ids = [int(_get(member, "id")) for member in safe_members]
-    override = get_bundle_override(member_ids)
+    try:
+        override = get_bundle_override(member_ids)
+    except Exception as error:
+        # Early migrations and minimal test/recovery databases may not have
+        # the optional presentation table yet. A missing decoration must never
+        # break otherwise-valid relation grouping.
+        log_exception(
+            "bundling.presentation_override_unavailable",
+            error,
+            work_ids=member_ids,
+        )
+        return group
     if not override:
         return group
 
