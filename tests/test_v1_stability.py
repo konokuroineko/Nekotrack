@@ -390,12 +390,6 @@ class V1StabilityTests(unittest.TestCase):
             self.app.processEvents()
 
 
-if __name__ == "__main__":
-    unittest.main()
-        self.assertNotIn('--add-data "VERSION;."', build)
-        script_text = helper.read_text(encoding="utf-8")
-        self.assertIn("The previous executable was restored from backup.", script_text)
-        self.assertIn("if (-not (Start-CandidateAndWaitForHealth $ExpectedVersion $AttemptId))", script_text)
 
     def test_recommendation_page_renders_loading_skeleton_cards(self):
         page = RecommendationsPage(embedded=True)
