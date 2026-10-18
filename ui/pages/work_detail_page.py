@@ -912,13 +912,14 @@ class EpisodeCard(QFrame):
         super().__init__(parent)
         self.episode = episode
         self.setObjectName("episodeCard")
-        # Larger streaming-style rows keep artwork, titles and watch controls easy to scan.
-        self.setMinimumHeight(158)
+        # A familiar streaming row: wide thumbnail, title first, then quiet metadata
+        # and a short synopsis. Keep the watch action separate on the right.
+        self.setMinimumHeight(150)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(16)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(14)
 
         artwork = EpisodeArtwork(
             episode["work_id"],
@@ -931,28 +932,7 @@ class EpisodeCard(QFrame):
 
         body = QVBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(6)
-
-        top = QHBoxLayout()
-        display_number = int(episode.get("display_episode_number") or episode["episode_number"])
-        number = QLabel(f"EP {display_number:02d}")
-        number.setObjectName("detailEpisodeNumber")
-        number.setStyleSheet(
-            f"color:{COLORS['accent']};background:{surface_rgba('surface_hover')};"
-            f"border:1px solid {COLORS['border']};border-radius:6px;"
-            "font-size:11px;font-weight:850;letter-spacing:0.4px;padding:4px 8px;"
-        )
-        top.addWidget(number)
-
-        date = QLabel(self._format_date(episode["air_date"]))
-        date.setObjectName("detailEpisodeDate")
-        date.setStyleSheet(
-            f"color:{COLORS['muted']};font-size:11px;font-weight:650;"
-        )
-        top.addStretch()
-        if date.text():
-            top.addWidget(date)
-        body.addLayout(top)
+        body.setSpacing(4)
 
         self._episode_full_title = str(
             episode["title"] or f"Episode {episode['episode_number']}"
@@ -962,13 +942,36 @@ class EpisodeCard(QFrame):
         title.setObjectName("detailEpisodeTitle")
         title.setWordWrap(True)
         title.setMinimumWidth(0)
-        title.setMaximumHeight(46)
+        title.setMaximumHeight(44)
         title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         title.setStyleSheet(
-            f"color:{COLORS['primary']};font-size:16px;font-weight:850;"
+            f"color:{COLORS['primary']};font-size:16px;font-weight:800;"
         )
         title.setToolTip(self._episode_full_title)
         body.addWidget(title)
+
+        metadata = QHBoxLayout()
+        metadata.setContentsMargins(0, 0, 0, 0)
+        metadata.setSpacing(8)
+        display_number = int(
+            episode.get("display_episode_number") or episode["episode_number"]
+        )
+        number = QLabel(f"EP {display_number:02d}")
+        number.setObjectName("detailEpisodeNumber")
+        number.setStyleSheet(
+            f"color:{COLORS['accent']};font-size:10px;font-weight:750;"
+        )
+        metadata.addWidget(number)
+
+        date = QLabel(self._format_date(episode["air_date"]))
+        date.setObjectName("detailEpisodeDate")
+        date.setStyleSheet(
+            f"color:{COLORS['muted']};font-size:10px;font-weight:500;"
+        )
+        if date.text():
+            metadata.addWidget(date)
+        metadata.addStretch(1)
+        body.addLayout(metadata)
 
         self._episode_full_description = str(episode["description"] or "").strip()
         self._episode_description_label = None
@@ -978,20 +981,18 @@ class EpisodeCard(QFrame):
             description.setObjectName("detailEpisodeDescription")
             description.setWordWrap(True)
             description.setMinimumWidth(0)
-            description.setMaximumHeight(50)
+            # Keep the synopsis to roughly two lines; the tooltip keeps it complete.
+            description.setMaximumHeight(36)
             description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             description.setTextFormat(Qt.PlainText)
             description.setToolTip(self._episode_full_description)
             description.setStyleSheet(
-                f"color:{COLORS['secondary']};font-size:12px;"
+                f"color:{COLORS['secondary']};font-size:11px;"
             )
             body.addWidget(description)
 
         layout.addLayout(body, 1)
 
-        display_number = int(
-            episode.get("display_episode_number") or episode["episode_number"]
-        )
         watched = QCheckBox("Watched")
         watched.setChecked(bool(episode["watched"]))
         watched.setObjectName("episodeWatchedCheckbox")
@@ -1006,10 +1007,10 @@ class EpisodeCard(QFrame):
 
     def refresh_theme(self):
         styles = {
-            "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:11px;font-weight:850;letter-spacing:0.4px;",
-            "detailEpisodeDate": f"color:{COLORS['muted']};font-size:11px;",
-            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:16px;font-weight:850;",
-            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:12px;",
+            "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:10px;font-weight:750;",
+            "detailEpisodeDate": f"color:{COLORS['muted']};font-size:10px;",
+            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:16px;font-weight:800;",
+            "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:11px;",
         }
         for label in self.findChildren(QLabel):
             stylesheet = styles.get(label.objectName())
@@ -1024,18 +1025,18 @@ class EpisodeCard(QFrame):
         self.update()
 
     def _update_episode_title(self):
-        """Ellide long episode titles to keep the compact row height stable."""
+        """Refresh the visible title while retaining its full tooltip."""
         label = getattr(self, "_episode_title_label", None)
-        if label is None or label.width() <= 0:
+        if label is None:
             return
         label.setText(self._episode_full_title)
+        label.setToolTip(self._episode_full_title)
 
     def _update_episode_description(self):
-        """Keep synopsis to one line while retaining the full text in a tooltip."""
+        """Keep the synopsis compact while retaining its complete tooltip."""
         label = self._episode_description_label
         if label is None:
             return
-        # Keep up to two readable lines; the tooltip retains the complete synopsis.
         label.setText(self._episode_full_description)
         label.setToolTip(self._episode_full_description)
 
