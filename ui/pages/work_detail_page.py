@@ -2041,15 +2041,15 @@ class WorkDetailPage(QWidget):
             }}
             QCheckBox#episodeWatchedCheckbox {{
                 color: {COLORS['primary']};
-                font-size: 12px;
-                font-weight: 750;
-                spacing: 8px;
-                padding: 8px;
+                font-size: 11px;
+                font-weight: 600;
+                spacing: 6px;
+                padding: 4px;
             }}
             QCheckBox#episodeWatchedCheckbox::indicator {{
-                width: 23px; height: 23px;
+                width: 21px; height: 21px;
                 border: 1px solid {COLORS['border_hover']};
-                border-radius: 7px;
+                border-radius: 6px;
                 background: {surface_rgba('background_alt')};
             }}
             QCheckBox#episodeWatchedCheckbox::indicator:checked {{
