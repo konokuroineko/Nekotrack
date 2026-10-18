@@ -589,6 +589,7 @@ class DetailSkeletonTests(unittest.TestCase):
     def test_episode_card_flow_layout_wraps_to_multiple_columns(self):
         host = QWidget()
         layout = StaffFlowLayout(host, h_spacing=12, v_spacing=14)
+        layout.setContentsMargins(0, 0, 0, 0)
         cards = [
             EpisodeCard({
                 "work_id": 12345,
