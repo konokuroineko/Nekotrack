@@ -21,7 +21,6 @@ from database import (
     set_release_reminder,
 )
 from diagnostics import log_exception
-from ui.preferences import get
 from ui.theme import COLORS, surface_rgba
 from ui.widgets.work_card import WorkCard
 from ui.pages.recommendations_page import RecommendationsPage
@@ -189,11 +188,9 @@ class HomePage(QWidget):
             display_library = library
 
         continue_items = []
-        recent_items = []
         in_progress_statuses = {"watching", "rewatching", "reading", "in progress"}
         for group in display_library:
             work = self._prepare_home_work(group)
-            recent_items.append(work)
             members = group.get("_series_members") if isinstance(group, dict) else None
             members = members if isinstance(members, list) and members else [group]
             if any(self._status(member) in in_progress_statuses for member in members):
@@ -202,26 +199,7 @@ class HomePage(QWidget):
         self._continue_ids = {
             self._integer(work.get("id")) for work in continue_items
         }
-        self._recent_ids = [
-            self._integer(work.get("id")) for work in recent_items[:4]
-        ]
-
-        self.content_layout.addWidget(
-            self._work_section(
-                "Continue watching or reading",
-                "Pick up from your locally saved progress.",
-                continue_items[:4],
-                kind="continue",
-            )
-        )
-        self.content_layout.addWidget(
-            self._work_section(
-                "Recently added",
-                "Your latest additions, in the order recorded by your library.",
-                recent_items[:4],
-                kind="recent",
-            )
-        )
+        self.content_layout.addWidget(self._continue_section(continue_items[:4]))
         self.content_layout.addWidget(
             self._release_section(self._upcoming_release_rows(library))
         )
@@ -437,7 +415,7 @@ class HomePage(QWidget):
             return
         self.refresh()
 
-    def _work_section(self, title, description, works, kind):
+    def _continue_section(self, works):
         section = QFrame()
         section.setObjectName("homeSection")
         layout = QVBoxLayout(section)
@@ -446,9 +424,9 @@ class HomePage(QWidget):
 
         header = QVBoxLayout()
         header.setSpacing(4)
-        heading = QLabel(title)
+        heading = QLabel("Continue watching or reading")
         heading.setObjectName("homeSectionTitle")
-        detail = QLabel(description)
+        detail = QLabel("Pick up from your locally saved progress.")
         detail.setObjectName("homeSectionSubtitle")
         detail.setWordWrap(True)
         header.addWidget(heading)
@@ -462,15 +440,10 @@ class HomePage(QWidget):
             empty_layout = QVBoxLayout(empty)
             empty_layout.setContentsMargins(11, 10, 11, 10)
             empty_layout.setSpacing(5)
-            message = QLabel(
-                "Nothing in progress yet"
-                if kind == "continue" else "Nothing has been added yet"
-            )
+            message = QLabel("Nothing in progress yet")
             message.setObjectName("homeEmptyState")
             hint = QLabel(
                 "Add a title to your library, then your saved progress will appear here."
-                if kind == "continue" else
-                "Use Search to find a title and add it to your collection."
             )
             hint.setObjectName("homeEmptyHint")
             hint.setWordWrap(True)
@@ -491,28 +464,29 @@ class HomePage(QWidget):
             tile_layout = QVBoxLayout(tile)
             tile_layout.setContentsMargins(0, 0, 0, 0)
             tile_layout.setSpacing(3)
-            home_card_size = min(112, max(88, round(self._integer(get("card_size"), 210) * 0.45)))
-            card = WorkCard(work, mode="library", parent=tile, card_size_override=home_card_size)
+
+            # Use the normal user-configured card size so bundle labels and
+            # long titles are not squeezed into the old thumbnail-sized cards.
+            card = WorkCard(work, mode="library", parent=tile)
             card.setToolTip("Open details to update your progress")
             card.clicked.connect(self.work_selected.emit)
             tile_layout.addWidget(card, 0, Qt.AlignmentFlag.AlignHCenter)
 
-            status_text = (
-                str(work.get("_home_status") or self._status(work)).replace("_", " ").upper()
-                if kind == "continue" else "IN YOUR LIBRARY"
-            )
+            status_text = str(
+                work.get("_home_status") or self._status(work)
+            ).replace("_", " ").upper()
             status = QLabel(status_text)
             status.setObjectName("homeTrackStatus")
             status.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            status.setFixedWidth(card.width())
             status.setFixedHeight(12)
-            if kind == "continue":
-                caption_text = self._progress_caption(work)
-            else:
-                caption_text = f"Status: {work.get('status') or 'Unknown'}"
+
+            caption_text = self._progress_caption(work)
             caption = QLabel(caption_text)
             caption.setObjectName("homeTrackProgress")
             caption.setWordWrap(True)
-            caption.setFixedHeight(16)
+            caption.setFixedWidth(card.width())
+            caption.setMinimumWidth(0)
             caption.setToolTip(caption_text)
             tile_layout.addWidget(status)
             tile_layout.addWidget(caption)
@@ -526,9 +500,12 @@ class HomePage(QWidget):
         scroll.setWidgetResizable(False)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        cover_height = round(home_card_size * 284 / 210)
-        scroll.setFixedHeight(cover_height + 122)
         scroll.setWidget(strip)
+        # Include the horizontal scrollbar in the viewport height so wrapped
+        # progress captions never disappear behind it.
+        scroll.setFixedHeight(
+            strip.height() + scroll.horizontalScrollBar().sizeHint().height() + 8
+        )
         layout.addWidget(scroll)
         return section
 
@@ -586,7 +563,7 @@ class HomePage(QWidget):
                 background: transparent;
                 font-size: 10px;
                 min-height: 28px;
-                max-width: 218px;
+                max-width: 278px;
             }}
             QFrame#homeReleaseEvent {{
                 background: {surface_rgba('surface_alt')};
