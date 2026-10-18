@@ -435,9 +435,22 @@ def launch_update_helper(
     if os.name != "nt":
         raise ValueError("In-place updating is available only on Windows.")
 
+    data_root = Path(data_directory).resolve()
+    helper_directory = data_root / "update_helpers"
+    helper_directory.mkdir(parents=True, exist_ok=True)
+    helper_digest = _sha256_file(helper)
+    persistent_helper = helper_directory / f"safe_update_{helper_digest[:16]}.ps1"
+    if not persistent_helper.is_file():
+        temporary_helper = helper_directory / (persistent_helper.name + ".tmp")
+        shutil.copy2(helper, temporary_helper)
+        if _sha256_file(temporary_helper) != helper_digest:
+            temporary_helper.unlink(missing_ok=True)
+            raise OSError("The recovery helper failed its copy-integrity check.")
+        temporary_helper.replace(persistent_helper)
+
     command = [
         "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-        "-WindowStyle", "Hidden", "-File", str(helper),
+        "-WindowStyle", "Hidden", "-File", str(persistent_helper),
         "-Action", str(action),
         "-InstallDirectory", str(Path(install_directory).resolve()),
         "-DataDirectory", str(Path(data_directory).resolve()),

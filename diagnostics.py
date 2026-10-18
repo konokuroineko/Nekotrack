@@ -67,6 +67,9 @@ _OMIT_KEYS = {
 
 def default_app_data_dir() -> Path:
     """Match the application data directory selected by main.py."""
+    isolated = os.environ.get("NEKOTRACK_DATA_DIR")
+    if isolated:
+        return Path(isolated).expanduser().resolve()
     base = os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")
     return Path(base) / APP_NAME
 

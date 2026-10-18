@@ -22,7 +22,10 @@ def _load_app_version():
 
 
 APP_VERSION = _load_app_version()
-APP_DATA_DIR = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")) / APP_NAME
+APP_DATA_DIR = Path(
+    os.environ.get("NEKOTRACK_DATA_DIR")
+    or (Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")) / APP_NAME)
+).expanduser().resolve()
 
 from diagnostics import (
     configure_logging,
