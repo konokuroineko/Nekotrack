@@ -629,7 +629,9 @@ class InstallerDownloader(QThread):
                 staged_executable=staged_path if action == "UpdatePortable" else None,
                 installer_path=staged_path if action == "InstallSetup" else None,
                 attempt_id=attempt_id,
-                restore_database=True,
+                # Restore only when a consistent DB snapshot was actually
+                # created; first-run installs may not have a database yet.
+                restore_database=(backup_directory / "anime_tracker.db").is_file(),
             )
             self.download_staged.emit(str(backup_directory))
         except Exception as exc:
