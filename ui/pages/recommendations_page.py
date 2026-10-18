@@ -33,6 +33,7 @@ from recommendation_engine import (
     work_title as recommendation_work_title,
 )
 from ui.widgets.work_card import WorkCard
+from series import group_media_results
 
 
 class RecommendationWorker(QObject):
@@ -339,6 +340,18 @@ class RecommendationWorker(QObject):
             exclude_seen=True,
         )
         ranked = inject_rare_exploration(ranked, rotation=self.refresh_cycle, fraction=0.04)
+        if self.stop_event.is_set():
+            self.finished.emit([])
+            return
+        try:
+            # Use the same bundling policy as Search/Library without starting a
+            # second provider traversal. Related details already present on
+            # this result batch are enough to group what the catalog provides.
+            ranked = group_media_results(
+                ranked, enrich=False, max_requests=0, delay=0, stop_event=self.stop_event
+            )
+        except Exception as error:
+            log_exception("recommendations.bundle_grouping_failed", error)
         self.finished.emit(ranked)
 
 

@@ -745,6 +745,45 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
     return discovered, requests_used
 
 
+def _apply_bundle_override(group, members):
+    """Apply the persisted title and cover choice shared by all bundle cards."""
+    safe_members = [
+        member for member in (members or [])
+        if _valid_relation_id(_get(member, "id")) is not None
+    ]
+    if len(safe_members) <= 1:
+        return group
+    member_ids = [int(_get(member, "id")) for member in safe_members]
+    override = get_bundle_override(member_ids)
+    if not override:
+        return group
+
+    custom_title = _get(override, "custom_title")
+    if isinstance(custom_title, str) and custom_title.strip():
+        group["title"] = custom_title.strip()
+
+    custom_cover_path = _get(override, "custom_cover_path")
+    cover_work_id = _get(override, "cover_work_id")
+    if custom_cover_path:
+        group["cover_path"] = custom_cover_path
+        group["cover_url"] = None
+        group.pop("_bundle_cover_work_id", None)
+    elif cover_work_id is not None:
+        try:
+            selected_id = int(cover_work_id)
+        except (TypeError, ValueError, OverflowError):
+            selected_id = None
+        cover_member = next(
+            (member for member in safe_members if int(_get(member, "id")) == selected_id),
+            None,
+        )
+        if cover_member is not None:
+            group["cover_path"] = _get(cover_member, "cover_path")
+            group["cover_url"] = _get(cover_member, "cover_url")
+            group["_bundle_cover_work_id"] = selected_id
+    return group
+
+
 def _group_discovered(results, discovered):
     original_ids = {int(item["id"]) for item in results}
     ids = {int(item["id"]) for item in discovered}
@@ -916,6 +955,7 @@ def _group_discovered(results, discovered):
             representative["_series_members"] = bundle_members
             representative["_bundle_summary"] = _bundle_summary(bundle_members)
             representative["_bundle_default_member_id"] = int(_get(default_member, "id"))
+            _apply_bundle_override(representative, bundle_members)
             grouped.append(
                 (
                     min(
@@ -1426,27 +1466,7 @@ def get_library_series():
         group["_bundle_summary"] = _bundle_summary(members)
 
         if len(members) > 1:
-            member_ids = [int(row["id"]) for row in members]
-            override = get_bundle_override(member_ids)
-            if override:
-                custom_title = override["custom_title"]
-                if custom_title:
-                    group["title"] = custom_title
-
-                custom_cover_path = override["custom_cover_path"]
-                cover_work_id = override["cover_work_id"]
-                if custom_cover_path:
-                    group["cover_path"] = custom_cover_path
-                    group["cover_url"] = None
-                elif cover_work_id is not None:
-                    cover_member = next(
-                        (row for row in members if int(row["id"]) == int(cover_work_id)),
-                        None,
-                    )
-                    if cover_member is not None:
-                        group["cover_path"] = cover_member["cover_path"]
-                        group["cover_url"] = cover_member["cover_url"]
-                        group["_bundle_cover_work_id"] = int(cover_work_id)
+            _apply_bundle_override(group, members)
 
         group["_bundle_default_member_id"] = int(members[0]["id"])
         result.append(group)
