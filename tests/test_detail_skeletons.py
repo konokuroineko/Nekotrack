@@ -1042,6 +1042,11 @@ class DetailSkeletonTests(unittest.TestCase):
             "ui.pages.work_detail_page.time.time", return_value=now
         ):
             self.assertFalse(page._episode_catalog_is_stale(12345))
+        partial_recent = {**recent, "complete": False}
+        with patch("ui.pages.work_detail_page.get_provider_metadata", return_value=partial_recent), patch(
+            "ui.pages.work_detail_page.time.time", return_value=now
+        ):
+            self.assertTrue(page._episode_catalog_is_stale(12345))
         with patch("ui.pages.work_detail_page.get_provider_metadata", return_value=stale), patch(
             "ui.pages.work_detail_page.time.time", return_value=now
         ):
@@ -1117,6 +1122,7 @@ class DetailSkeletonTests(unittest.TestCase):
             {
                 "version": TMDB_EPISODE_CATALOG_VERSION,
                 "fetched_at": now,
+                "complete": True,
             },
         )
         self.assertEqual(len(results), 1)
@@ -1143,13 +1149,17 @@ class DetailSkeletonTests(unittest.TestCase):
             ),
             patch("ui.pages.work_detail_page.save_episodes"),
             patch("ui.pages.work_detail_page.save_tmdb_mapping"),
-            patch("ui.pages.work_detail_page.save_provider_metadata"),
+            patch("ui.pages.work_detail_page.save_provider_metadata") as save_metadata,
             patch("ui.pages.work_detail_page.prune_episode_catalog") as prune,
             patch("ui.pages.work_detail_page.log_event") as event,
         ):
             worker.run()
 
         prune.assert_not_called()
+        self.assertEqual(
+            save_metadata.call_args.args[2]["complete"],
+            False,
+        )
         self.assertTrue(any(
             call.args[0] == "episodes.catalog_prune_skipped"
             and call.kwargs.get("reason") == "catalog_shorter_than_expected"
@@ -1176,13 +1186,14 @@ class DetailSkeletonTests(unittest.TestCase):
             ),
             patch("ui.pages.work_detail_page.save_episodes"),
             patch("ui.pages.work_detail_page.save_tmdb_mapping"),
-            patch("ui.pages.work_detail_page.save_provider_metadata"),
+            patch("ui.pages.work_detail_page.save_provider_metadata") as save_metadata,
             patch("ui.pages.work_detail_page.prune_episode_catalog") as prune,
             patch("ui.pages.work_detail_page.log_event") as event,
         ):
             worker.run()
 
         prune.assert_not_called()
+        self.assertIsNone(save_metadata.call_args.args[2]["complete"])
         self.assertTrue(any(
             call.args[0] == "episodes.catalog_prune_skipped"
             and call.kwargs.get("reason") == "expected_episode_count_unknown"
