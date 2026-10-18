@@ -365,7 +365,7 @@ class InstallerDownloaderSafetyTests(unittest.TestCase):
             finished = []
             failures = []
             downloader = updater.InstallerDownloader(VALID_URL, "NekoTrack-Setup.exe")
-            downloader.finished.connect(finished.append)
+            downloader.download_staged.connect(finished.append)
             downloader.failed.connect(failures.append)
 
             with patch.object(updater.tempfile, "gettempdir", return_value=directory), patch.object(

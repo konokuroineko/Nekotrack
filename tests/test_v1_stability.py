@@ -301,7 +301,7 @@ class V1StabilityTests(unittest.TestCase):
         self.assertIn("throw \"VersionOverride must be a NekoTrack version", build)
         self.assertIn("finally {", build)
         self.assertIn("Pop-Location", build)
-        self.assertNotIn('if ($VersionOverride -notmatch \'^\\d+\\.\\d+', build)
+        self.assertEqual(build.count("if ($VersionOverride -notmatch"), 1)
         self.assertNotIn('--add-data "VERSION;."', build)
         script_text = helper.read_text(encoding="utf-8")
         self.assertIn("The previous executable was restored from backup.", script_text)
