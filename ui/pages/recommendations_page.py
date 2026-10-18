@@ -3,7 +3,7 @@
 import threading
 import time
 
-from PySide6.QtCore import QObject, QPoint, QRect, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QObject, QPoint, QRect, QPropertyAnimation, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
@@ -33,6 +33,7 @@ from recommendation_engine import (
     work_title as recommendation_work_title,
 )
 from ui.widgets.work_card import WorkCard
+from series import group_media_results
 
 
 class RecommendationWorker(QObject):
@@ -339,6 +340,18 @@ class RecommendationWorker(QObject):
             exclude_seen=True,
         )
         ranked = inject_rare_exploration(ranked, rotation=self.refresh_cycle, fraction=0.04)
+        if self.stop_event.is_set():
+            self.finished.emit([])
+            return
+        try:
+            # Reuse Search/Library's full grouping policy and saved appearance.
+            # The graph traversal is bounded to three relation batches per
+            # recommendation page so the feed stays responsive.
+            ranked = group_media_results(
+                ranked, enrich=True, max_requests=3, delay=0, stop_event=self.stop_event
+            )
+        except Exception as error:
+            log_exception("recommendations.bundle_grouping_failed", error)
         self.finished.emit(ranked)
 
 
@@ -371,6 +384,10 @@ class RecommendationsPage(QWidget):
         self._tiles = []
         self._rendered_columns = 0
         self._layout_refresh_pending = False
+        self._grid_layout = None
+        self._grid_host = None
+        self._more_skeletons = []
+        self._card_animations = []
         self._exposure_visible_since = {}
         self._exposure_counted = {}
         self._history = {}
@@ -452,7 +469,7 @@ class RecommendationsPage(QWidget):
         if self._shutting_down or not self._results:
             return
         if self._columns_for_width(self._available_feed_width(), len(self._results)) != self._rendered_columns:
-            self._render_results(preserve_scroll=True)
+            self._render_results(preserve_scroll=True, animate_reflow=True)
 
     def set_visibility_viewport(self, viewport, scroll_bar=None):
         """Use the actual Home or Recommendations viewport for pagination and impressions."""
@@ -546,6 +563,7 @@ class RecommendationsPage(QWidget):
             self.more_status.setText("Finding more anime from AniList…")
         if hasattr(self, "load_more_button"):
             self.load_more_button.setEnabled(False)
+        self._append_more_skeletons(4)
         worker = RecommendationWorker(
             self._library_snapshot,
             self._stop_event,
@@ -669,6 +687,7 @@ class RecommendationsPage(QWidget):
         self.status.setObjectName("recommendationsStatus")
         self.status.setWordWrap(True)
         self.content_layout.addWidget(self.status)
+        self._render_loading_skeletons(8)
         self._library_signature = signature
 
         worker = RecommendationWorker(
@@ -696,11 +715,33 @@ class RecommendationsPage(QWidget):
         if self.refresh_button is not None:
             self.refresh_button.setEnabled(False)
 
+    @staticmethod
+    def _result_identity_ids(work):
+        ids = set()
+        work_id = RecommendationWorker._work_id(work)
+        if work_id is not None:
+            ids.add(work_id)
+        members = work.get("_series_members") if isinstance(work, dict) else None
+        if isinstance(members, list):
+            for member in members:
+                member_id = RecommendationWorker._work_id(member)
+                if member_id is not None:
+                    ids.add(member_id)
+        return ids
+
+    @classmethod
+    def _results_identity_ids(cls, results):
+        all_ids = set()
+        for item in results or []:
+            all_ids.update(cls._result_identity_ids(item))
+        return all_ids
+
     def _recommendations_ready(self, results):
         if self._stop_event.is_set():
             return
         worker = self._worker
         incoming = [dict(item) for item in (results or []) if isinstance(item, dict)]
+        catalog_only = bool(worker is not None and worker.catalog_only)
         if worker is not None:
             self._catalog_page = max(1, worker.catalog_next_page)
             self._catalog_has_next = bool(worker.catalog_has_next)
@@ -711,42 +752,54 @@ class RecommendationsPage(QWidget):
             self._source_weights = dict(worker.source_weights or {})
             self._voice_language = str(worker.voice_language or "ALL")
             self._loading_more = False
-        if worker is not None and worker.catalog_only:
-            existing = {
-                RecommendationWorker._work_id(item) for item in self._results
-            }
-            self._results.extend(
-                item for item in incoming
-                if RecommendationWorker._work_id(item) not in existing
-            )
-        else:
-            self._results = incoming
-        self._results = inject_rare_exploration(
-            rank_candidates(
-                self._results,
-                history=self._history,
-                favorite_works=self._favorite_works,
-                rotation=self._refresh_cycle,
-                credit_profile=self._credit_profile,
-                favorite_entities=self._favorite_entities,
-                voice_language=self._voice_language,
-            ),
+
+        ranking_options = dict(
+            history=self._history,
+            favorite_works=self._favorite_works,
             rotation=self._refresh_cycle,
-            fraction=0.04,
+            credit_profile=self._credit_profile,
+            favorite_entities=self._favorite_entities,
+            voice_language=self._voice_language,
         )
-        self._candidate_ids = {
-            work_id for item in self._results
-            if (work_id := RecommendationWorker._work_id(item)) is not None
-        }
+        if catalog_only:
+            # Keep the already-visible feed in its existing order. Rank only the
+            # incoming page, then append it; reranking the combined list moved
+            # older items around and made pagination look like it loaded at top.
+            existing_ids = self._results_identity_ids(self._results)
+            new_batch = []
+            for item in incoming:
+                identity_ids = self._result_identity_ids(item)
+                if identity_ids.intersection(existing_ids):
+                    continue
+                new_batch.append(item)
+                existing_ids.update(identity_ids)
+            ranked_new = rank_candidates(new_batch, **ranking_options)
+            ranked_new = inject_rare_exploration(
+                ranked_new, rotation=self._refresh_cycle, fraction=0.04
+            )
+            self._results.extend(ranked_new)
+        else:
+            ranked = rank_candidates(incoming, **ranking_options)
+            self._results = inject_rare_exploration(
+                ranked, rotation=self._refresh_cycle, fraction=0.04
+            )
+
+        self._candidate_ids = self._results_identity_ids(self._results)
         self._loaded = True
         self._load_more_failed = False
-        self._render_results(preserve_scroll=bool(worker is not None and worker.catalog_only))
+        self._remove_more_skeletons()
+        self._render_results(
+            preserve_scroll=catalog_only,
+            animate_reflow=False,
+        )
+
     def _recommendations_failed(self, message):
         if self._stop_event.is_set():
             return
         worker = self._worker
         if worker is not None and worker.catalog_only and self._results:
             self._loading_more = False
+            self._remove_more_skeletons()
             self._load_more_failed = True
             self.more_status.setText(
                 "More titles could not be loaded. Your current feed is still available; retry below."
@@ -877,9 +930,118 @@ class RecommendationsPage(QWidget):
         if not self._results and self._catalog_has_next and not self._loading_more:
             QTimer.singleShot(0, self.load_more)
 
-    def _render_results(self, preserve_scroll=True):
+    def _make_skeleton_card(self):
+        card_size = min(270, max(80, int(get("card_size") or 210)))
+        cover_height = round(card_size * 284 / 210)
+        card = QFrame()
+        card.setObjectName("recommendationSkeletonCard")
+        card.setFixedSize(card_size + 8, cover_height + 145)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(8)
+        cover = QFrame()
+        cover.setObjectName("recommendationSkeletonCover")
+        cover.setFixedSize(card_size, cover_height)
+        layout.addWidget(cover, 0, Qt.AlignmentFlag.AlignHCenter)
+        for width in (card_size - 12, card_size - 34):
+            bar = QFrame()
+            bar.setObjectName("recommendationSkeletonBar")
+            bar.setFixedSize(max(24, width), 10)
+            layout.addWidget(bar, 0, Qt.AlignmentFlag.AlignLeft)
+        description = QFrame()
+        description.setObjectName("recommendationSkeletonBar")
+        description.setFixedSize(max(30, card_size - 50), 8)
+        layout.addWidget(description, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addStretch(1)
+        button = QFrame()
+        button.setObjectName("recommendationSkeletonButton")
+        button.setFixedHeight(28)
+        layout.addWidget(button)
+        return card
+
+    def _render_loading_skeletons(self, count=8):
+        grid_host = QWidget()
+        grid_host.setObjectName("recommendationLoadingGridHost")
+        grid_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        grid = QGridLayout(grid_host)
+        grid.setContentsMargins(0, 0, 0, 0)
+        gap = self._grid_gap()
+        grid.setHorizontalSpacing(gap)
+        grid.setVerticalSpacing(gap)
+        columns = self._columns_for_width(self._available_feed_width(), count)
+        for column in range(columns):
+            grid.setColumnStretch(column, 1)
+        for index in range(max(1, int(count))):
+            card = self._make_skeleton_card()
+            row, column = divmod(index, columns)
+            grid.addWidget(card, row, column, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        self.content_layout.addWidget(grid_host)
+
+    def _append_more_skeletons(self, count=4):
+        grid = self._grid_layout
+        if grid is None or not self._results:
+            return
+        columns = max(1, self._rendered_columns)
+        start_row = (len(self._results) + columns - 1) // columns
+        self._more_skeletons = []
+        for index in range(max(1, int(count))):
+            card = self._make_skeleton_card()
+            row, column = divmod(index, columns)
+            grid.addWidget(card, start_row + row, column, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+            self._more_skeletons.append(card)
+        if self._grid_host is not None:
+            self._grid_host.updateGeometry()
+
+    def _remove_more_skeletons(self):
+        cards = list(getattr(self, "_more_skeletons", []))
+        self._more_skeletons = []
+        grid = getattr(self, "_grid_layout", None)
+        for card in cards:
+            if grid is not None:
+                grid.removeWidget(card)
+            card.setParent(None)
+            card.deleteLater()
+
+    def _animate_card_reflow(self, old_positions):
+        if not old_positions or not get("resize_animation"):
+            return
+        try:
+            duration = max(0, min(1000, int(get("animation_speed") or 0)))
+        except (TypeError, ValueError, OverflowError):
+            duration = 260
+        if duration <= 0:
+            return
+        for card, work in list(self._tiles):
+            identity = RecommendationWorker._work_id(work)
+            old_pos = old_positions.get(identity)
+            if identity is None or old_pos is None:
+                continue
+            target_pos = card.pos()
+            if old_pos == target_pos:
+                continue
+            card.move(old_pos)
+            animation = QPropertyAnimation(card, b"pos", card)
+            animation.setDuration(duration)
+            animation.setStartValue(old_pos)
+            animation.setEndValue(target_pos)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            animation.finished.connect(
+                lambda current=animation: self._card_animations.remove(current)
+                if current in self._card_animations else None
+            )
+            self._card_animations.append(animation)
+            animation.start()
+
+    def _render_results(self, preserve_scroll=True, animate_reflow=False):
         old_bar = self._active_scrollbar()
         old_value = old_bar.value() if preserve_scroll and old_bar is not None else 0
+        old_positions = {}
+        if animate_reflow:
+            for card, work in list(self._tiles):
+                identity = RecommendationWorker._work_id(work)
+                if identity is not None:
+                    old_positions[identity] = card.pos()
+
         self._clear_content()
         self._tiles = []
         self.content_layout.addWidget(self._header())
@@ -919,15 +1081,12 @@ class RecommendationsPage(QWidget):
                 recommendation_reason=reason,
                 show_recommendation_feedback=True,
             )
-            card.recommendation_feedback_requested.connect(
-                self._record_recommendation_feedback
-            )
+            card.recommendation_feedback_requested.connect(self._record_recommendation_feedback)
             card.clicked.connect(self.work_selected.emit)
             row = index // columns
             row_start = row * columns
             row_count = min(columns, len(self._results) - row_start)
             if row_count == 1 and columns > 1:
-                # Center a lone card on the final row across the whole feed.
                 grid.addWidget(
                     card, row, 0, 1, columns,
                     Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter,
@@ -941,6 +1100,8 @@ class RecommendationsPage(QWidget):
                 )
             self._tiles.append((card, dict(work)))
 
+        self._grid_host = grid_host
+        self._grid_layout = grid
         self.content_layout.addWidget(grid_host)
         self.more_status = QLabel()
         self.more_status.setObjectName("recommendationsStatus")
@@ -954,7 +1115,11 @@ class RecommendationsPage(QWidget):
         self._update_load_more_ui()
         self._apply_theme()
         if preserve_scroll and old_bar is not None:
-            QTimer.singleShot(0, lambda bar=old_bar, value=old_value: bar.setValue(min(value, bar.maximum())))
+            QTimer.singleShot(
+                0, lambda bar=old_bar, value=old_value: bar.setValue(min(value, bar.maximum()))
+            )
+        if animate_reflow and old_positions:
+            QTimer.singleShot(0, lambda positions=old_positions: self._animate_card_reflow(positions))
 
     def _update_load_more_ui(self):
         button = getattr(self, "load_more_button", None)
@@ -981,6 +1146,15 @@ class RecommendationsPage(QWidget):
 
 
     def _clear_content(self):
+        for animation in list(getattr(self, "_card_animations", [])):
+            try:
+                animation.stop()
+            except RuntimeError:
+                pass
+        self._card_animations = []
+        self._grid_layout = None
+        self._grid_host = None
+        self._more_skeletons = []
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             widget = item.widget()
@@ -1013,6 +1187,17 @@ class RecommendationsPage(QWidget):
             }}
             QLabel#recommendationsSubtitle, QLabel#recommendationsStatus {{
                 color:{COLORS['secondary']}; background:transparent; font-size:12px;
+            }}
+            QFrame#recommendationSkeletonCard {{
+                background:{surface_rgba('surface')}; border:1px solid {COLORS['border']};
+                border-radius:10px;
+            }}
+            QFrame#recommendationSkeletonCover, QFrame#recommendationSkeletonBar {{
+                background:{surface_rgba('surface_hover')}; border:none; border-radius:5px;
+            }}
+            QFrame#recommendationSkeletonButton {{
+                background:{surface_rgba('surface_alt')}; border:1px solid {COLORS['border']};
+                border-radius:8px;
             }}
             QPushButton#recommendationsRefresh {{
                 background:{COLORS['accent']}; color:{COLORS['accent_text']}; border:1px solid {COLORS['accent']};

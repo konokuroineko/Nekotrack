@@ -11,3 +11,37 @@ NekoTrack installer build
 
 The installer uses a per-user installation under %LOCALAPPDATA%\Programs\NekoTrack.
 NekoTrack user data is kept separately under %APPDATA%\NekoTrack and is not bundled into the installer.
+
+
+Rollback-aware updates
+- Before changing an installed executable, NekoTrack verifies the downloaded EXE, records its SHA-256 when the release provides one, and saves a copy of the previous executable.
+- A consistent SQLite snapshot and an update manifest are stored under %APPDATA%\NekoTrack\update_backups. Existing database and artwork files are not removed.
+- The separate updater waits for NekoTrack to close, replaces the executable only after staging and backup, then requires the candidate to reach its startup health marker. If the first launch fails, it restores the previous executable and its pre-update database snapshot.
+- Manual rollback from Settings or the Start Menu restores the previous executable but deliberately leaves the current database and artwork alone. The database snapshot stays available in that backup folder.
+- To test releases on an installed app, choose Preview in Settings, publish a higher vX.Y.Z-beta.N prerelease with a NekoTrack.exe asset built from the updater-enabled branch, and keep Stable selected for normal use.
+- Running the source with python main.py does not attempt to overwrite source files; it opens the official release page instead.
+
+Isolated preview testing on Windows
+1. Create a separate folder such as C:\NekoTrack-Preview and copy NekoTrack.exe there. Do not point the preview shortcut at the normal installed executable.
+2. Copy the current %APPDATA%\NekoTrack user-data folder to a separate folder such as %LOCALAPPDATA%\NekoTrack-PreviewData. This copy is the preview library; normal NekoTrack data remains untouched.
+3. Make a shortcut to powershell.exe with arguments -NoProfile -ExecutionPolicy Bypass -File "C:\NekoTrack-Preview\run-preview.ps1". Create run-preview.ps1 beside the copied exe with:
+   $env:NEKOTRACK_DATA_DIR = "$env:LOCALAPPDATA\NekoTrack-PreviewData"
+   Set-Location -LiteralPath $env:NEKOTRACK_DATA_DIR
+   & "C:\NekoTrack-Preview\NekoTrack.exe"
+4. In Preview Settings, select Preview releases (testing), then Check for updates now. Preview releases should publish NekoTrack.exe built from the updater-enabled branch. To keep the preview install isolated, publish the portable EXE as the preview asset rather than the Setup installer.
+5. Test the candidate. The updater stores an EXE backup and a consistent SQLite snapshot under the preview data directory before replacement. Settings > Updates > Restore previous version restores the previous EXE; normal NekoTrack's data is separate.
+The NEKOTRACK_DATA_DIR override is process-local. Normal launches without it continue using %APPDATA%\NekoTrack.
+
+Isolated preview testing
+The bundled updater recognizes NEKOTRACK_DATA_DIR as an optional full path override; normal launches still use %APPDATA%\NekoTrack.
+
+To build an updater-enabled prerelease executable without editing VERSION, run PowerShell from the repo:
+  .\installer\build-installer.ps1 -VersionOverride 1.0.1-beta.1
+This puts the portable build at dist\NekoTrack.exe with its embedded version set to 1.0.1-beta.1. The normal VERSION file is not changed. Copy that EXE to a separate folder such as C:\NekoTrack-Preview, then publish it as the NekoTrack.exe asset on a GitHub prerelease tagged v1.0.1-beta.1. Do not publish a prerelease tag lower than your installed app's version.
+
+1. Copy the updater-enabled NekoTrack.exe to a separate folder such as C:\NekoTrack-Preview. The first copy must be placed manually because an older app build cannot contain the new updater.
+2. To start with a blank preview database, run:
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "installer\run-preview.ps1" -ExePath "C:\NekoTrack-Preview\NekoTrack.exe"
+3. To test against a COPY of your current library and preferences, add -CopyCurrentData. The script copies %APPDATA%\NekoTrack to %LOCALAPPDATA%\NekoTrack-PreviewData only if the target is absent or empty, and refuses to use the live data path or overwrite a non-empty preview directory.
+4. In the preview app, select Settings > Updates > Preview releases (testing), then Check for updates now. Publish a higher-version prerelease (for example v1.0.1-beta.1 with VERSION set to 1.0.1-beta.1) containing the updater-enabled portable NekoTrack.exe asset. Stable-channel users will not be offered prereleases.
+5. Test the candidate. The preview uses its own database, artwork, logs, helper files, and update backups. Settings > Updates > Restore previous version restores the preview executable while leaving the normal installation and its data alone.

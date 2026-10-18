@@ -25,6 +25,7 @@ from ui.preferences import get
 from ui.theme import COLORS, surface_rgba
 from ui.widgets.work_card import WorkCard
 from ui.pages.recommendations_page import RecommendationsPage
+from series import get_library_series
 
 
 class HomePage(QWidget):
@@ -50,8 +51,8 @@ class HomePage(QWidget):
         self.content = QWidget()
         self.content.setObjectName("homeContent")
         self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(34, 30, 34, 34)
-        self.content_layout.setSpacing(22)
+        self.content_layout.setContentsMargins(18, 18, 18, 20)
+        self.content_layout.setSpacing(12)
         self.scroll_area.setWidget(self.content)
         outer.addWidget(self.scroll_area)
 
@@ -61,6 +62,40 @@ class HomePage(QWidget):
         )
         self._apply_theme_styles()
         self.refresh()
+
+    def _prepare_home_work(self, group):
+        """Copy a library bundle while preserving its user-selected presentation."""
+        work = dict(group)
+        members = work.get("_series_members")
+        members = members if isinstance(members, list) and members else [group]
+        work["_series_members"] = members
+        if len(members) > 1:
+            for target, source in (
+                ("progress_episodes", "progress_episodes"),
+                ("episodes", "episodes"),
+                ("progress_chapters", "progress_chapters"),
+                ("chapters", "chapters"),
+                ("progress_volumes", "progress_volumes"),
+                ("volumes", "volumes"),
+            ):
+                work[target] = sum(
+                    max(0, self._integer(member.get(source)))
+                    for member in members
+                    if isinstance(member, dict)
+                )
+        statuses = [
+            self._status(member) for member in members
+            if isinstance(member, dict)
+        ]
+        if any(status in {"watching", "rewatching"} for status in statuses):
+            work["_home_status"] = (
+                "rewatching" if "rewatching" in statuses else "watching"
+            )
+        elif "reading" in statuses:
+            work["_home_status"] = "reading"
+        else:
+            work["_home_status"] = self._status(work)
+        return work
 
     @staticmethod
     def _integer(value, default=0):
@@ -145,18 +180,37 @@ class HomePage(QWidget):
                 for status in statuses
             ),
         }
-        continue_items = [
-            work for work in library
-            if self._status(work) in {"watching", "rewatching", "reading", "in progress"}
+        try:
+            # Use exactly the Library's saved automatic/manual bundles,
+            # exclusions, custom titles, and cover choices for Home too.
+            display_library = get_library_series(library)
+        except Exception as error:
+            log_exception("home.bundle_grouping_failed", error)
+            display_library = library
+
+        continue_items = []
+        recent_items = []
+        in_progress_statuses = {"watching", "rewatching", "reading", "in progress"}
+        for group in display_library:
+            work = self._prepare_home_work(group)
+            recent_items.append(work)
+            members = group.get("_series_members") if isinstance(group, dict) else None
+            members = members if isinstance(members, list) and members else [group]
+            if any(self._status(member) in in_progress_statuses for member in members):
+                continue_items.append(work)
+
+        self._continue_ids = {
+            self._integer(work.get("id")) for work in continue_items
+        }
+        self._recent_ids = [
+            self._integer(work.get("id")) for work in recent_items[:4]
         ]
-        self._continue_ids = {self._integer(work.get("id")) for work in continue_items}
-        self._recent_ids = [self._integer(work.get("id")) for work in library[:5]]
 
         self.content_layout.addWidget(
             self._work_section(
                 "Continue watching or reading",
                 "Pick up from your locally saved progress.",
-                continue_items[:8],
+                continue_items[:4],
                 kind="continue",
             )
         )
@@ -164,7 +218,7 @@ class HomePage(QWidget):
             self._work_section(
                 "Recently added",
                 "Your latest additions, in the order recorded by your library.",
-                library[:5],
+                recent_items[:4],
                 kind="recent",
             )
         )
@@ -255,8 +309,8 @@ class HomePage(QWidget):
         section = QFrame()
         section.setObjectName("homeSection")
         layout = QVBoxLayout(section)
-        layout.setContentsMargins(18, 16, 18, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(7)
 
         header = QHBoxLayout()
         text_column = QVBoxLayout()
@@ -304,10 +358,10 @@ class HomePage(QWidget):
         count.setObjectName("homeReleaseCount")
         layout.addWidget(count)
 
-        for row in events[:5]:
+        for row in events[:3]:
             layout.addWidget(self._release_event_card(row))
-        if len(events) > 5:
-            more = QLabel(f"{len(events) - 5} more release dates in Calendar")
+        if len(events) > 3:
+            more = QLabel(f"{len(events) - 3} more release dates in Calendar")
             more.setObjectName("homeReleaseMore")
             layout.addWidget(more)
         return section
@@ -316,14 +370,14 @@ class HomePage(QWidget):
         card = QFrame()
         card.setObjectName("homeReleaseEvent")
         layout = QHBoxLayout(card)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(12)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(8)
 
         release_date = row["_release_date"]
         date_badge = QFrame()
         date_badge.setObjectName("homeReleaseDateBadge")
         badge_layout = QVBoxLayout(date_badge)
-        badge_layout.setContentsMargins(9, 5, 9, 5)
+        badge_layout.setContentsMargins(6, 2, 6, 2)
         badge_layout.setSpacing(0)
         month = QLabel(release_date.strftime("%b").upper())
         month.setObjectName("homeReleaseMonth")
@@ -334,29 +388,34 @@ class HomePage(QWidget):
         layout.addWidget(date_badge)
 
         description = QVBoxLayout()
-        description.setSpacing(3)
-        work_title = QLabel(str(row.get("work_title") or "Untitled"))
-        work_title.setObjectName("homeReleaseWorkTitle")
-        work_title.setWordWrap(True)
-        episode_title = QLabel(str(row.get("episode_title") or f"Episode {row.get('episode_number', 0)}"))
-        episode_title.setObjectName("homeReleaseEpisodeTitle")
-        episode_date = QLabel(release_date.strftime("%A, %B %d"))
+        description.setSpacing(1)
+        work_title = str(row.get("work_title") or "Untitled")
+        episode_title = str(row.get("episode_title") or f"Episode {row.get('episode_number', 0)}")
+        label = QLabel(f"{work_title} · {episode_title}")
+        label.setObjectName("homeReleaseWorkTitle")
+        label.setWordWrap(False)
+        label.setMinimumWidth(0)
+        label.setMaximumHeight(22)
+        label.setToolTip(f"{work_title} · {episode_title}")
+        episode_date = QLabel(release_date.strftime("%a, %b %d"))
         episode_date.setObjectName("homeReleaseDate")
-        description.addWidget(work_title)
-        description.addWidget(episode_title)
+        description.addWidget(label)
         description.addWidget(episode_date)
         layout.addLayout(description, 1)
 
         work_id = int(row["work_id"])
         episode_number = int(row["episode_number"])
         reminder_enabled = bool(row.get("_reminder_enabled"))
-        reminder = QPushButton("Reminder on" if reminder_enabled else "Remind me")
+        reminder = QPushButton("On" if reminder_enabled else "Remind")
         reminder.setObjectName(
             "homeReminderActive" if reminder_enabled else "homeReminderToggle"
         )
         reminder.setCursor(Qt.CursorShape.PointingHandCursor)
         reminder.setAccessibleName(
             "Disable episode reminder" if reminder_enabled else "Enable episode reminder"
+        )
+        reminder.setToolTip(
+            "Disable this episode reminder" if reminder_enabled else "Remind me about this episode"
         )
         reminder.clicked.connect(
             lambda _=False, wid=work_id, number=episode_number, current=reminder_enabled:
@@ -382,8 +441,8 @@ class HomePage(QWidget):
         section = QFrame()
         section.setObjectName("homeSection")
         layout = QVBoxLayout(section)
-        layout.setContentsMargins(18, 16, 18, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(7)
 
         header = QVBoxLayout()
         header.setSpacing(4)
@@ -399,9 +458,9 @@ class HomePage(QWidget):
         if not works:
             empty = QFrame()
             empty.setObjectName("homeSectionEmpty")
-            empty.setMinimumHeight(92)
+            empty.setMinimumHeight(64)
             empty_layout = QVBoxLayout(empty)
-            empty_layout.setContentsMargins(16, 16, 16, 16)
+            empty_layout.setContentsMargins(11, 10, 11, 10)
             empty_layout.setSpacing(5)
             message = QLabel(
                 "Nothing in progress yet"
@@ -424,25 +483,28 @@ class HomePage(QWidget):
         strip.setObjectName("homeTrackStrip")
         strip.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         strip_layout = QHBoxLayout(strip)
-        strip_layout.setContentsMargins(4, 3, 8, 3)
-        strip_layout.setSpacing(15)
+        strip_layout.setContentsMargins(3, 2, 6, 2)
+        strip_layout.setSpacing(10)
         for work in works:
             tile = QWidget(strip)
             tile.setObjectName("homeTrackTile")
             tile_layout = QVBoxLayout(tile)
             tile_layout.setContentsMargins(0, 0, 0, 0)
-            tile_layout.setSpacing(7)
-            card = WorkCard(work, mode="library", parent=tile)
+            tile_layout.setSpacing(3)
+            home_card_size = min(112, max(88, round(self._integer(get("card_size"), 210) * 0.45)))
+            card = WorkCard(work, mode="library", parent=tile, card_size_override=home_card_size)
             card.setToolTip("Open details to update your progress")
             card.clicked.connect(self.work_selected.emit)
             tile_layout.addWidget(card, 0, Qt.AlignmentFlag.AlignHCenter)
 
-            status = QLabel(
-                self._status(work).replace("_", " ").upper()
+            status_text = (
+                str(work.get("_home_status") or self._status(work)).replace("_", " ").upper()
                 if kind == "continue" else "IN YOUR LIBRARY"
             )
+            status = QLabel(status_text)
             status.setObjectName("homeTrackStatus")
             status.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            status.setFixedHeight(12)
             if kind == "continue":
                 caption_text = self._progress_caption(work)
             else:
@@ -450,6 +512,8 @@ class HomePage(QWidget):
             caption = QLabel(caption_text)
             caption.setObjectName("homeTrackProgress")
             caption.setWordWrap(True)
+            caption.setFixedHeight(16)
+            caption.setToolTip(caption_text)
             tile_layout.addWidget(status)
             tile_layout.addWidget(caption)
             strip_layout.addWidget(tile, 0, Qt.AlignmentFlag.AlignTop)
@@ -462,8 +526,8 @@ class HomePage(QWidget):
         scroll.setWidgetResizable(False)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        cover_height = round(self._integer(get("card_size"), 210) * 284 / 210)
-        scroll.setFixedHeight(cover_height + 172)
+        cover_height = round(home_card_size * 284 / 210)
+        scroll.setFixedHeight(cover_height + 122)
         scroll.setWidget(strip)
         layout.addWidget(scroll)
         return section

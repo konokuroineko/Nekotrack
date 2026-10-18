@@ -525,6 +525,8 @@ class BundleEnrichmentCheckWorker(QObject):
 
 class MainWindow(QMainWindow):
     _library_import_thread_stopped = Signal(object, object, int)
+    check_updates_requested = Signal()
+    rollback_requested = Signal()
 
     def __init__(self):
         super().__init__()
@@ -684,6 +686,8 @@ class MainWindow(QMainWindow):
         self.settings_page.settings_changed.connect(self.apply_settings)
         self.settings_page.setup_requested.connect(self.open_setup_wizard)
         self.settings_page.restart_requested.connect(self._restart_application)
+        self.settings_page.update_check_requested.connect(self.check_updates_requested.emit)
+        self.settings_page.rollback_requested.connect(self.rollback_requested.emit)
 
         root_layout.addWidget(sidebar)
         root_layout.addWidget(self.stack, 1)
