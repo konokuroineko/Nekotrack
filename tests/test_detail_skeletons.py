@@ -506,7 +506,7 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
-    def test_episode_rows_are_large_and_have_a_clear_watch_toggle(self):
+    def test_episode_rows_use_streaming_layout_and_clear_watch_toggle(self):
         episode = {
             "work_id": 12345,
             "episode_number": 4,
@@ -521,12 +521,17 @@ class DetailSkeletonTests(unittest.TestCase):
         artwork = card.findChild(EpisodeArtwork)
         description = card.findChild(QLabel, "detailEpisodeDescription")
         watched = card.findChild(QCheckBox, "episodeWatchedCheckbox")
+        title = card.findChild(QLabel, "detailEpisodeTitle")
+        number = card.findChild(QLabel, "detailEpisodeNumber")
         labels = card.findChildren(QLabel)
 
         self.assertGreaterEqual(card.minimumHeight(), 150)
         self.assertEqual(artwork.size().width(), 224)
         self.assertEqual(artwork.size().height(), 126)
         self.assertIn("EP 01", [label.text() for label in labels])
+        self.assertIsNotNone(title)
+        self.assertIsNotNone(number)
+        self.assertLess(labels.index(title), labels.index(number))
         self.assertIsNotNone(watched)
         self.assertEqual(watched.text(), "Watched")
         self.assertIsNone(description)
@@ -928,10 +933,16 @@ class DetailSkeletonTests(unittest.TestCase):
             "thumbnail_cache_failed": True,
         })
         artwork = card.findChild(EpisodeArtwork)
+        title = card.findChild(QLabel, "detailEpisodeTitle")
+        number = card.findChild(QLabel, "detailEpisodeNumber")
+        description = card.findChild(QLabel, "detailEpisodeDescription")
+        labels = card.findChildren(QLabel)
         self.assertIsNotNone(artwork)
         self.assertEqual(artwork.text(), "UNAVAILABLE")
+        self.assertLess(labels.index(title), labels.index(number))
+        self.assertIn("font-size:11px", description.styleSheet())
         self.assertEqual(
-            card.findChild(QLabel, "detailEpisodeDescription").toolTip(),
+            description.toolTip(),
             "Description is still available.",
         )
         card.deleteLater()
