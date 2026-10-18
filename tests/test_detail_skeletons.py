@@ -18,7 +18,7 @@ from api import (
     TMDB_EPISODE_CATALOG_VERSION,
 )
 from ui.pages.work_detail_page import (
-    EpisodeArtwork, EpisodeCard,
+    EpisodeArtwork, EpisodeCard, StaffFlowLayout,
     EpisodeImageCacheWorker, EpisodeSyncWorker, WorkDetailPage,
 )
 
@@ -506,7 +506,7 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
-    def test_episode_rows_use_streaming_layout_and_clear_watch_toggle(self):
+    def test_episode_cards_use_thumbnail_first_layout_and_clear_watch_toggle(self):
         episode = {
             "work_id": 12345,
             "episode_number": 4,
@@ -525,9 +525,11 @@ class DetailSkeletonTests(unittest.TestCase):
         number = card.findChild(QLabel, "detailEpisodeNumber")
         labels = card.findChildren(QLabel)
 
-        self.assertGreaterEqual(card.minimumHeight(), 120)
-        self.assertEqual(artwork.size().width(), 180)
-        self.assertEqual(artwork.size().height(), 101)
+        self.assertEqual(card.size().width(), EpisodeCard.CARD_WIDTH)
+        self.assertEqual(card.size().height(), EpisodeCard.CARD_HEIGHT)
+        self.assertIsInstance(card.layout(), QVBoxLayout)
+        self.assertEqual(artwork.size().width(), 220)
+        self.assertEqual(artwork.size().height(), 124)
         self.assertIn("EP 01", [label.text() for label in labels])
         self.assertIsNotNone(title)
         self.assertIsNotNone(number)
@@ -536,7 +538,77 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertEqual(watched.text(), "Watched")
         self.assertIsNone(description)
 
+        card.show()
+        self.app.processEvents()
+        self.assertLess(artwork.geometry().bottom(), title.geometry().top())
+
         card.deleteLater()
+        self.app.processEvents()
+
+    def test_episode_cards_stack_thumbnail_title_and_compact_synopsis(self):
+        full_description = (
+            "A surprisingly long episode synopsis follows the characters through "
+            "an unexpected journey before revealing the secret behind the mystery."
+        )
+        card = EpisodeCard({
+            "work_id": 12345,
+            "episode_number": 1,
+            "display_episode_number": 1,
+            "thumbnail_url": None,
+            "air_date": "2026-10-01",
+            "title": "The Unexpected Turn",
+            "description": full_description,
+            "watched": 0,
+        })
+        artwork = card.findChild(EpisodeArtwork)
+        title = card.findChild(QLabel, "detailEpisodeTitle")
+        description = card.findChild(QLabel, "detailEpisodeDescription")
+        number = card.findChild(QLabel, "detailEpisodeNumber")
+        self.assertIsNotNone(artwork)
+        self.assertIsNotNone(title)
+        self.assertIsNotNone(description)
+        self.assertIsNotNone(number)
+        self.assertEqual(description.toolTip(), full_description)
+        self.assertLessEqual(description.maximumHeight(), 32)
+
+        card.show()
+        self.app.processEvents()
+        self.assertLess(artwork.geometry().bottom(), title.geometry().top())
+        self.assertLess(title.geometry().bottom(), description.geometry().top())
+        self.assertTrue(description.text().endswith("…"))
+        self.assertEqual(number.text(), "EP 01")
+
+        card.deleteLater()
+        self.app.processEvents()
+
+    def test_episode_card_flow_layout_wraps_to_multiple_columns(self):
+        host = QWidget()
+        layout = StaffFlowLayout(host, h_spacing=12, v_spacing=14)
+        cards = [
+            EpisodeCard({
+                "work_id": 12345,
+                "episode_number": index,
+                "display_episode_number": index,
+                "thumbnail_url": None,
+                "air_date": None,
+                "title": f"Episode {index}",
+                "description": "",
+                "watched": 0,
+            })
+            for index in range(1, 4)
+        ]
+        for card in cards:
+            layout.addWidget(card)
+
+        host.resize(500, 560)
+        host.show()
+        self.app.processEvents()
+
+        self.assertEqual(cards[0].geometry().y(), cards[1].geometry().y())
+        self.assertGreater(cards[2].geometry().y(), cards[0].geometry().y())
+        self.assertGreater(cards[1].geometry().x(), cards[0].geometry().x())
+
+        host.deleteLater()
         self.app.processEvents()
 
     def test_bundle_episode_selector_uses_real_member_titles_and_progress_control(self):
