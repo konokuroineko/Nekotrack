@@ -831,7 +831,7 @@ class EpisodeArtwork(QLabel):
         super().__init__(parent)
         self.work_id = int(work_id) if work_id is not None else None
         self.episode_number = int(episode_number) if episode_number is not None else None
-        self.setFixedSize(180, 101)
+        self.setFixedSize(220, 124)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
             f"background:{surface_rgba('background_alt')};border-radius:8px;"
@@ -906,25 +906,64 @@ class EpisodeArtwork(QLabel):
 
 
 class EpisodeSynopsisLabel(QLabel):
-    """A single-line synopsis preview that always ellides to its current width."""
+    """A compact two-line synopsis preview with the full text available on hover."""
 
     def __init__(self, full_text, parent=None):
         super().__init__(parent)
-        self._full_text = str(full_text or "")
-        self.setWordWrap(False)
+        self._full_text = str(full_text or "").strip()
+        self.setWordWrap(True)
         self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setToolTip(self._full_text)
         self.update_preview()
 
     def update_preview(self):
         width = max(1, self.contentsRect().width())
         metrics = QFontMetrics(self.font())
-        preview = metrics.elidedText(
-            self._full_text,
-            Qt.TextElideMode.ElideRight,
-            width,
-        )
-        self.setText(preview)
+        words = self._full_text.split()
+        if not words:
+            self.setText("")
+            return
+
+        lines = []
+        current = ""
+        truncated = False
+        index = 0
+        while index < len(words):
+            word = words[index]
+            candidate = f"{current} {word}".strip()
+            if metrics.horizontalAdvance(candidate) <= width:
+                current = candidate
+                index += 1
+                continue
+
+            if current:
+                lines.append(current)
+                current = ""
+                if len(lines) >= 2:
+                    truncated = True
+                    break
+                current = word
+                index += 1
+            else:
+                # A single unusually long word should not widen the card.
+                lines.append(metrics.elidedText(
+                    word, Qt.TextElideMode.ElideRight, width
+                ))
+                index += 1
+                truncated = index < len(words) or len(word) > 0
+                break
+
+        if current and len(lines) < 2:
+            lines.append(current)
+        if index < len(words):
+            truncated = True
+        if truncated and lines:
+            last = lines[-1].rstrip("…")
+            lines[-1] = metrics.elidedText(
+                f"{last} …", Qt.TextElideMode.ElideRight, width
+            )
+        self.setText("\n".join(lines[:2]))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -934,17 +973,20 @@ class EpisodeSynopsisLabel(QLabel):
 class EpisodeCard(QFrame):
     watched_changed = Signal(int, bool)
 
+    CARD_WIDTH = 240
+    CARD_HEIGHT = 260
+
     def __init__(self, episode, parent=None):
         super().__init__(parent)
         self.episode = episode
         self.setObjectName("episodeCard")
-        # Compact streaming-service row: keep the whole episode preview scan-friendly.
-        self.setMinimumHeight(120)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # YouTube-style tile: thumbnail on top, episode text directly below.
+        self.setFixedSize(self.CARD_WIDTH, self.CARD_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(12)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
         artwork = EpisodeArtwork(
             episode["work_id"],
@@ -953,50 +995,23 @@ class EpisodeCard(QFrame):
         artwork.load(episode["thumbnail_url"])
         if episode.get("thumbnail_cache_failed"):
             artwork._show_fallback("UNAVAILABLE")
-        layout.addWidget(artwork, 0, Qt.AlignVCenter)
-
-        body = QVBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(4)
+        layout.addWidget(artwork, 0, Qt.AlignHCenter)
 
         self._episode_full_title = str(
             episode["title"] or f"Episode {episode['episode_number']}"
-        )
+        ).strip()
         title = QLabel(self._episode_full_title)
         self._episode_title_label = title
         title.setObjectName("detailEpisodeTitle")
         title.setWordWrap(True)
         title.setMinimumWidth(0)
-        title.setMaximumHeight(38)
-        title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        title.setMaximumHeight(36)
+        title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         title.setStyleSheet(
-            f"color:{COLORS['primary']};font-size:14px;font-weight:750;"
+            f"color:{COLORS['primary']};font-size:13px;font-weight:750;"
         )
         title.setToolTip(self._episode_full_title)
-        body.addWidget(title)
-
-        metadata = QHBoxLayout()
-        metadata.setContentsMargins(0, 0, 0, 0)
-        metadata.setSpacing(8)
-        display_number = int(
-            episode.get("display_episode_number") or episode["episode_number"]
-        )
-        number = QLabel(f"EP {display_number:02d}")
-        number.setObjectName("detailEpisodeNumber")
-        number.setStyleSheet(
-            f"color:{COLORS['accent']};font-size:9px;font-weight:700;"
-        )
-        metadata.addWidget(number)
-
-        date = QLabel(self._format_date(episode["air_date"]))
-        date.setObjectName("detailEpisodeDate")
-        date.setStyleSheet(
-            f"color:{COLORS['muted']};font-size:9px;font-weight:500;"
-        )
-        if date.text():
-            metadata.addWidget(date)
-        metadata.addStretch(1)
-        body.addLayout(metadata)
+        layout.addWidget(title)
 
         self._episode_full_description = str(episode["description"] or "").strip()
         self._episode_description_label = None
@@ -1005,14 +1020,36 @@ class EpisodeCard(QFrame):
             self._episode_description_label = description
             description.setObjectName("detailEpisodeDescription")
             description.setMinimumWidth(0)
-            description.setMaximumHeight(18)
-            description.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            description.setMaximumHeight(32)
             description.setStyleSheet(
                 f"color:{COLORS['secondary']};font-size:10px;"
             )
-            body.addWidget(description)
+            layout.addWidget(description)
 
-        layout.addLayout(body, 1)
+        # Keep the footer aligned even when a provider has no synopsis.
+        layout.addStretch(1)
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(5)
+
+        display_number = int(
+            episode.get("display_episode_number") or episode["episode_number"]
+        )
+        number = QLabel(f"EP {display_number:02d}")
+        number.setObjectName("detailEpisodeNumber")
+        number.setStyleSheet(
+            f"color:{COLORS['accent']};font-size:9px;font-weight:700;"
+        )
+        footer.addWidget(number)
+
+        date = QLabel(self._format_date(episode["air_date"]))
+        date.setObjectName("detailEpisodeDate")
+        date.setStyleSheet(
+            f"color:{COLORS['muted']};font-size:9px;font-weight:500;"
+        )
+        if date.text():
+            footer.addWidget(date)
+        footer.addStretch(1)
 
         watched = QCheckBox("Watched")
         watched.setChecked(bool(episode["watched"]))
@@ -1024,13 +1061,14 @@ class EpisodeCard(QFrame):
             lambda checked, n=int(episode["episode_number"]):
                 self.watched_changed.emit(n, checked)
         )
-        layout.addWidget(watched, 0, Qt.AlignVCenter)
+        footer.addWidget(watched)
+        layout.addLayout(footer)
 
     def refresh_theme(self):
         styles = {
             "detailEpisodeNumber": f"color:{COLORS['accent']};font-size:9px;font-weight:700;",
             "detailEpisodeDate": f"color:{COLORS['muted']};font-size:9px;",
-            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:14px;font-weight:750;",
+            "detailEpisodeTitle": f"color:{COLORS['primary']};font-size:13px;font-weight:750;",
             "detailEpisodeDescription": f"color:{COLORS['secondary']};font-size:10px;",
         }
         for label in self.findChildren(QLabel):
@@ -1054,7 +1092,7 @@ class EpisodeCard(QFrame):
         label.setToolTip(self._episode_full_title)
 
     def _update_episode_description(self):
-        """Refresh the clipped preview; the full text stays in the tooltip."""
+        """Recompute the compact synopsis preview while preserving the full tooltip."""
         label = self._episode_description_label
         if label is not None:
             label.update_preview()
@@ -1078,9 +1116,6 @@ class EpisodeCard(QFrame):
             except (ValueError, IndexError):
                 pass
         return text
-
-
-
 
 class StaffFlowLayout(QLayout):
     """Tightly pack fixed-width staff cards and center each row."""
@@ -1438,28 +1473,28 @@ class WorkDetailPage(QWidget):
         return frame
 
     def _episode_skeleton_strip(self):
-        """Build horizontal episode placeholders without starting network work."""
+        """Show thumbnail-first episode placeholders matching the real card grid."""
         strip = QWidget()
         strip.setObjectName("detailSkeletonEpisodeStrip")
-        layout = QHBoxLayout(strip)
+        layout = StaffFlowLayout(strip, h_spacing=12, v_spacing=14)
         layout.setContentsMargins(0, 3, 0, 3)
-        layout.setSpacing(10)
         for _index in range(4):
             card = QFrame()
             card.setObjectName("detailSkeletonEpisodeCard")
-            card.setFixedWidth(136)
+            card.setFixedSize(EpisodeCard.CARD_WIDTH, EpisodeCard.CARD_HEIGHT)
             card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(6, 6, 6, 8)
+            card_layout.setContentsMargins(8, 8, 8, 8)
             card_layout.setSpacing(6)
             card_layout.addWidget(
-                self._skeleton_block(64, None, "detailSkeletonCover")
+                self._skeleton_block(124, None, "detailSkeletonCover")
             )
-            card_layout.addWidget(self._skeleton_block(9, 96))
-            card_layout.addWidget(self._skeleton_block(7, 66))
-            layout.addWidget(card, 0, Qt.AlignTop)
-        layout.addStretch(1)
+            card_layout.addWidget(self._skeleton_block(10, 192))
+            card_layout.addWidget(self._skeleton_block(8, 156))
+            card_layout.addWidget(self._skeleton_block(8, 198))
+            card_layout.addStretch(1)
+            card_layout.addWidget(self._skeleton_block(8, 74))
+            layout.addWidget(card)
         return strip
-
     def _episode_section_loading_frame(self, message="Loading episode data…", include_skeleton=True):
         frame = QFrame()
         frame.setObjectName("episodesSection")
@@ -2581,9 +2616,13 @@ class WorkDetailPage(QWidget):
             frame._episode_cards_rendering = False
             return
 
-        layout = frame.layout()
+        layout = getattr(frame, "_episode_cards_layout", None)
         if layout is None:
             frame._episode_cards_rendering = False
+            log_event(
+                "episodes.card_render_grid_missing",
+                work_id=self._selected_episode_work_id,
+            )
             return
 
         frame._episode_cards_rendering = True
@@ -4618,6 +4657,13 @@ class WorkDetailPage(QWidget):
         )
         lay.addWidget(progress_status)
 
+        cards_host = QWidget(frame)
+        cards_host.setObjectName("episodeCardsHost")
+        cards_layout = StaffFlowLayout(cards_host, h_spacing=12, v_spacing=14)
+        cards_layout.setContentsMargins(0, 0, 0, 0)
+        frame._episode_cards_layout = cards_layout
+        lay.addWidget(cards_host)
+
         if defer_cards:
             frame._pending_episode_cards = [dict(ep) for ep in episodes]
         else:
@@ -4633,7 +4679,7 @@ class WorkDetailPage(QWidget):
                     )
                     continue
                 card.watched_changed.connect(self._episode_toggled)
-                lay.addWidget(card)
+                frame._episode_cards_layout.addWidget(card)
 
         return frame
 
