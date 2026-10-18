@@ -1,0 +1,41 @@
+from pathlib import Path
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class InstallerConfigurationTests(unittest.TestCase):
+    def test_old_rollback_shortcut_is_removed_on_upgrade_not_recreated(self):
+        script = (ROOT / "installer" / "NekoTrack.iss").read_text(encoding="utf-8")
+        self.assertNotIn(
+            'Name: "{group}\\Restore Previous NekoTrack Version"',
+            script,
+        )
+        self.assertIn(
+            'Type: files; Name: "{group}\\Restore Previous NekoTrack Version.lnk"',
+            script,
+        )
+
+    def test_installer_uses_current_x64_architecture_identifier(self):
+        script = (ROOT / "installer" / "NekoTrack.iss").read_text(encoding="utf-8")
+        self.assertIn("ArchitecturesInstallIn64BitMode=x64compatible", script)
+        self.assertNotIn("ArchitecturesInstallIn64BitMode=x64\n", script)
+
+    def test_windows_app_identity_matches_the_installed_shortcuts(self):
+        installer = (ROOT / "installer" / "NekoTrack.iss").read_text(encoding="utf-8")
+        entrypoint = (ROOT / "main.py").read_text(encoding="utf-8")
+        app_id = "konokuroineko.NekoTrack"
+        self.assertIn(f'AppUserModelID: "{app_id}"', installer)
+        self.assertIn(f'WINDOWS_APP_USER_MODEL_ID = "{app_id}"', entrypoint)
+        self.assertIn("_set_windows_app_user_model_id()", entrypoint)
+
+    def test_installer_keeps_the_custom_executable_icon(self):
+        script = (ROOT / "installer" / "build-installer.ps1").read_text(encoding="utf-8")
+        self.assertIn('--icon "assets\\NekoTrack.ico"', script)
+        installer = (ROOT / "installer" / "NekoTrack.iss").read_text(encoding="utf-8")
+        self.assertIn("SetupIconFile=..\\assets\\NekoTrack.ico", installer)
+
+
+if __name__ == "__main__":
+    unittest.main()
