@@ -50,8 +50,8 @@ class HomePage(QWidget):
         self.content = QWidget()
         self.content.setObjectName("homeContent")
         self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(34, 30, 34, 34)
-        self.content_layout.setSpacing(22)
+        self.content_layout.setContentsMargins(18, 18, 18, 20)
+        self.content_layout.setSpacing(12)
         self.scroll_area.setWidget(self.content)
         outer.addWidget(self.scroll_area)
 
@@ -150,13 +150,13 @@ class HomePage(QWidget):
             if self._status(work) in {"watching", "rewatching", "reading", "in progress"}
         ]
         self._continue_ids = {self._integer(work.get("id")) for work in continue_items}
-        self._recent_ids = [self._integer(work.get("id")) for work in library[:5]]
+        self._recent_ids = [self._integer(work.get("id")) for work in library[:4]]
 
         self.content_layout.addWidget(
             self._work_section(
                 "Continue watching or reading",
                 "Pick up from your locally saved progress.",
-                continue_items[:8],
+                continue_items[:4],
                 kind="continue",
             )
         )
@@ -164,7 +164,7 @@ class HomePage(QWidget):
             self._work_section(
                 "Recently added",
                 "Your latest additions, in the order recorded by your library.",
-                library[:5],
+                library[:4],
                 kind="recent",
             )
         )
@@ -255,8 +255,8 @@ class HomePage(QWidget):
         section = QFrame()
         section.setObjectName("homeSection")
         layout = QVBoxLayout(section)
-        layout.setContentsMargins(18, 16, 18, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(7)
 
         header = QHBoxLayout()
         text_column = QVBoxLayout()
@@ -304,10 +304,10 @@ class HomePage(QWidget):
         count.setObjectName("homeReleaseCount")
         layout.addWidget(count)
 
-        for row in events[:5]:
+        for row in events[:3]:
             layout.addWidget(self._release_event_card(row))
-        if len(events) > 5:
-            more = QLabel(f"{len(events) - 5} more release dates in Calendar")
+        if len(events) > 3:
+            more = QLabel(f"{len(events) - 3} more release dates in Calendar")
             more.setObjectName("homeReleaseMore")
             layout.addWidget(more)
         return section
@@ -382,8 +382,8 @@ class HomePage(QWidget):
         section = QFrame()
         section.setObjectName("homeSection")
         layout = QVBoxLayout(section)
-        layout.setContentsMargins(18, 16, 18, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(7)
 
         header = QVBoxLayout()
         header.setSpacing(4)
@@ -399,9 +399,9 @@ class HomePage(QWidget):
         if not works:
             empty = QFrame()
             empty.setObjectName("homeSectionEmpty")
-            empty.setMinimumHeight(92)
+            empty.setMinimumHeight(64)
             empty_layout = QVBoxLayout(empty)
-            empty_layout.setContentsMargins(16, 16, 16, 16)
+            empty_layout.setContentsMargins(11, 10, 11, 10)
             empty_layout.setSpacing(5)
             message = QLabel(
                 "Nothing in progress yet"
@@ -424,33 +424,32 @@ class HomePage(QWidget):
         strip.setObjectName("homeTrackStrip")
         strip.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         strip_layout = QHBoxLayout(strip)
-        strip_layout.setContentsMargins(4, 3, 8, 3)
-        strip_layout.setSpacing(15)
+        strip_layout.setContentsMargins(3, 2, 6, 2)
+        strip_layout.setSpacing(10)
         for work in works:
             tile = QWidget(strip)
             tile.setObjectName("homeTrackTile")
             tile_layout = QVBoxLayout(tile)
             tile_layout.setContentsMargins(0, 0, 0, 0)
-            tile_layout.setSpacing(7)
-            card = WorkCard(work, mode="library", parent=tile)
+            tile_layout.setSpacing(3)
+            home_card_size = min(112, max(88, round(self._integer(get("card_size"), 210) * 0.45)))
+            card = WorkCard(work, mode="library", parent=tile, card_size_override=home_card_size)
             card.setToolTip("Open details to update your progress")
             card.clicked.connect(self.work_selected.emit)
             tile_layout.addWidget(card, 0, Qt.AlignmentFlag.AlignHCenter)
 
-            status = QLabel(
-                self._status(work).replace("_", " ").upper()
-                if kind == "continue" else "IN YOUR LIBRARY"
-            )
-            status.setObjectName("homeTrackStatus")
-            status.setAlignment(Qt.AlignmentFlag.AlignLeft)
             if kind == "continue":
-                caption_text = self._progress_caption(work)
+                caption_text = (
+                    f"{self._status(work).replace('_', ' ').upper()} · "
+                    f"{self._progress_caption(work)}"
+                )
             else:
-                caption_text = f"Status: {work.get('status') or 'Unknown'}"
+                caption_text = f"IN YOUR LIBRARY · Status: {work.get('status') or 'Unknown'}"
             caption = QLabel(caption_text)
             caption.setObjectName("homeTrackProgress")
             caption.setWordWrap(True)
-            tile_layout.addWidget(status)
+            caption.setFixedHeight(30)
+            caption.setToolTip(caption_text)
             tile_layout.addWidget(caption)
             strip_layout.addWidget(tile, 0, Qt.AlignmentFlag.AlignTop)
 
@@ -462,8 +461,8 @@ class HomePage(QWidget):
         scroll.setWidgetResizable(False)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        cover_height = round(self._integer(get("card_size"), 210) * 284 / 210)
-        scroll.setFixedHeight(cover_height + 172)
+        cover_height = round(home_card_size * 284 / 210)
+        scroll.setFixedHeight(cover_height + 82)
         scroll.setWidget(strip)
         layout.addWidget(scroll)
         return section

@@ -66,7 +66,7 @@ class WorkCard(QFrame):
     def __init__(
         self, work, progress_editable=False, mode="library", add_callback=None,
         show_add_button=True, parent=None, recommendation_reason=None,
-        show_recommendation_feedback=False,
+        show_recommendation_feedback=False, card_size_override=None,
     ):
         super().__init__(parent)
         self.work = work
@@ -80,14 +80,19 @@ class WorkCard(QFrame):
         self._cover_reply = None
         self.setObjectName("posterCard")
         self.setCursor(Qt.PointingHandCursor)
-        card_width = get("card_size") + 8
+        try:
+            card_size = int(card_size_override) if card_size_override is not None else int(get("card_size"))
+        except (TypeError, ValueError, OverflowError):
+            card_size = int(get("card_size") or 210)
+        self.card_size = min(270, max(80, card_size))
+        card_width = self.card_size + 8
         self.setFixedWidth(card_width)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.refresh_theme()
         root = QVBoxLayout(self)
         root.setContentsMargins(2, 2, 2, 2)
         root.setSpacing(8)
-        self.cover = CoverFrame(get("card_size"))
+        self.cover = CoverFrame(self.card_size)
         root.addWidget(self.cover, 0, Qt.AlignHCenter)
         self._load_cover()
 
