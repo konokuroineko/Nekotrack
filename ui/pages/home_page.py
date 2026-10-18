@@ -316,14 +316,14 @@ class HomePage(QWidget):
         card = QFrame()
         card.setObjectName("homeReleaseEvent")
         layout = QHBoxLayout(card)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(12)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(8)
 
         release_date = row["_release_date"]
         date_badge = QFrame()
         date_badge.setObjectName("homeReleaseDateBadge")
         badge_layout = QVBoxLayout(date_badge)
-        badge_layout.setContentsMargins(9, 5, 9, 5)
+        badge_layout.setContentsMargins(6, 2, 6, 2)
         badge_layout.setSpacing(0)
         month = QLabel(release_date.strftime("%b").upper())
         month.setObjectName("homeReleaseMonth")
@@ -334,29 +334,34 @@ class HomePage(QWidget):
         layout.addWidget(date_badge)
 
         description = QVBoxLayout()
-        description.setSpacing(3)
-        work_title = QLabel(str(row.get("work_title") or "Untitled"))
-        work_title.setObjectName("homeReleaseWorkTitle")
-        work_title.setWordWrap(True)
-        episode_title = QLabel(str(row.get("episode_title") or f"Episode {row.get('episode_number', 0)}"))
-        episode_title.setObjectName("homeReleaseEpisodeTitle")
-        episode_date = QLabel(release_date.strftime("%A, %B %d"))
+        description.setSpacing(1)
+        work_title = str(row.get("work_title") or "Untitled")
+        episode_title = str(row.get("episode_title") or f"Episode {row.get('episode_number', 0)}")
+        label = QLabel(f"{work_title} · {episode_title}")
+        label.setObjectName("homeReleaseWorkTitle")
+        label.setWordWrap(False)
+        label.setMinimumWidth(0)
+        label.setMaximumHeight(22)
+        label.setToolTip(f"{work_title} · {episode_title}")
+        episode_date = QLabel(release_date.strftime("%a, %b %d"))
         episode_date.setObjectName("homeReleaseDate")
-        description.addWidget(work_title)
-        description.addWidget(episode_title)
+        description.addWidget(label)
         description.addWidget(episode_date)
         layout.addLayout(description, 1)
 
         work_id = int(row["work_id"])
         episode_number = int(row["episode_number"])
         reminder_enabled = bool(row.get("_reminder_enabled"))
-        reminder = QPushButton("Reminder on" if reminder_enabled else "Remind me")
+        reminder = QPushButton("On" if reminder_enabled else "Remind")
         reminder.setObjectName(
             "homeReminderActive" if reminder_enabled else "homeReminderToggle"
         )
         reminder.setCursor(Qt.CursorShape.PointingHandCursor)
         reminder.setAccessibleName(
             "Disable episode reminder" if reminder_enabled else "Enable episode reminder"
+        )
+        reminder.setToolTip(
+            "Disable this episode reminder" if reminder_enabled else "Remind me about this episode"
         )
         reminder.clicked.connect(
             lambda _=False, wid=work_id, number=episode_number, current=reminder_enabled:

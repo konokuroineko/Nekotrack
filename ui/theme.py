@@ -302,7 +302,7 @@ def application_stylesheet():
         QCheckBox::indicator:checked {{
             background: {COLORS['accent']};
             border: 1px solid {COLORS['accent']};
-            image: url("${checkbox_checkmark}");
+            image: url("{checkbox_checkmark}");
         }}
         QCheckBox::indicator:checked:hover {{
             background: {COLORS['accent_hover']};
