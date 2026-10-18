@@ -61,7 +61,6 @@ def _is_trusted_release_asset_url(value):
     )
 
 
-
 def _is_trusted_release_page_url(value):
     """Accept only release pages on the official NekoTrack GitHub repository."""
     parsed = _https_url_parts(value)
@@ -205,6 +204,7 @@ def _display_release_version(value):
             version += f".{stage_number}"
     return version
 
+
 def is_newer(remote_version, current_version):
     return _version_key(remote_version) > _version_key(current_version)
 
@@ -288,6 +288,7 @@ class UpdateChecker(QThread):
 
         except Exception as exc:
             self.check_failed.emit(str(exc))
+
 
 class InstallerDownloader(QThread):
     finished = Signal(str)

@@ -1541,6 +1541,7 @@ class UpdateFeedChaosTests(unittest.TestCase):
             {
                 "draft": False,
                 "tag_name": "v2.0.0",
+                "html_url": "https://github.com/konokuroineko/Nekotrack/releases/tag/v2.0.0",
                 "assets": [
                     None,
                     {"name": 42, "browser_download_url": None},
