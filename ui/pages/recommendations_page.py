@@ -344,9 +344,9 @@ class RecommendationWorker(QObject):
             self.finished.emit([])
             return
         try:
-            # Use the same bundling policy as Search/Library without starting a
-            # second provider traversal. Related details already present on
-            # this result batch are enough to group what the catalog provides.
+            # Reuse Search/Library's full grouping policy and saved appearance.
+            # The graph traversal is bounded to three relation batches per
+            # recommendation page so the feed stays responsive.
             ranked = group_media_results(
                 ranked, enrich=True, max_requests=3, delay=0, stop_event=self.stop_event
             )

@@ -221,6 +221,7 @@ try {
             }
             throw $setupFailure
         }
+    }
 
     if (-not (Start-CandidateAndWaitForHealth $ExpectedVersion $AttemptId)) {
         Set-ExecutableFromBackup $BackupDirectory
