@@ -11,12 +11,14 @@ Rust build must never prevent NekoTrack from starting.
 
 ## Build and test on Windows
 
-Run these from the repository root in the same Python environment used for
-NekoTrack and its PyInstaller build:
+Run this from the repository root in the same Python environment used for
+NekoTrack and its PyInstaller build. It builds, installs, parity-tests and benchmarks the native extension:
 
 ```powershell
 python -m pip install --upgrade maturin
-maturin build --release --manifest-path rust/nekotrack_core/Cargo.toml --out target/wheels
+Push-Location rust\nekotrack_core
+maturin build --release --out ..\..\target\wheels
+Pop-Location
 $wheel = Get-ChildItem target/wheels/nekotrack_core-*.whl | Select-Object -First 1
 if (-not $wheel) { throw "Native wheel was not produced." }
 python -m pip install $wheel.FullName
@@ -25,7 +27,7 @@ python experiments/benchmark_native_similarity.py --pairs 5000 --iterations 9 --
 ```
 
 Building a wheel requires a working Rust stable toolchain. The workflow in
-.python-checks.yml also builds and tests this extension on Windows and Linux
+.github/workflows/python-checks.yml also builds and tests this extension on Windows and Linux
 with Python 3.11 and 3.14, then uploads benchmark JSON for each environment.
 
 ## What the benchmark proves
