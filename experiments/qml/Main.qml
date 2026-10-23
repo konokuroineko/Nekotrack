@@ -246,22 +246,11 @@ ApplicationWindow {
             Accessible.description: qsTr("Filtered sample media results. Tab to a card and press Enter or Space to select it.")
 
             delegate: NekoResultCard {
-                required property string title
-                required property string mediaFormat
-                required property string descriptionText
-                required property string progressText
-                required property string accentGlyph
-
                 width: ListView.view.width
-                titleText: title
-                mediaFormat: mediaFormat
-                descriptionText: descriptionText
-                progressText: progressText
-                accentGlyph: accentGlyph
 
                 onClicked: {
                     root.statusMessage = qsTr("%1 selected — prototype only; no library changes were made.")
-                        .arg(titleText)
+                        .arg(title)
                 }
             }
         }
