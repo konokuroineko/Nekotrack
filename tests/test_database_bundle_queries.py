@@ -173,6 +173,18 @@ class BundleDetailBatchingTests(unittest.TestCase):
                     cover_work_id INTEGER,
                     custom_cover_path TEXT
                 );
+                CREATE TABLE manual_bundle_links (
+                    work_a INTEGER NOT NULL, work_b INTEGER NOT NULL,
+                    PRIMARY KEY (work_a, work_b)
+                );
+                CREATE TABLE bundle_exclusions (
+                    work_a INTEGER NOT NULL, work_b INTEGER NOT NULL,
+                    PRIMARY KEY (work_a, work_b)
+                );
+                CREATE TABLE automatic_bundle_memberships (
+                    bundle_id INTEGER NOT NULL, work_id INTEGER NOT NULL,
+                    PRIMARY KEY (bundle_id, work_id)
+                );
                 CREATE TABLE episodes (
                     id INTEGER PRIMARY KEY,
                     work_id INTEGER NOT NULL,
@@ -301,6 +313,60 @@ class BundleDetailBatchingTests(unittest.TestCase):
         )
         chosen = database.get_bundle_override([1200, 500, 10])
         self.assertEqual(chosen["bundle_anchor_id"], 10)
+
+    def test_large_library_link_exclusion_and_membership_queries_chunk_and_deduplicate(self):
+        con = database.get_connection()
+        try:
+            con.executemany(
+                "INSERT INTO manual_bundle_links VALUES (?, ?)",
+                [(10, 900), (400, 401), (1200, 1201)],
+            )
+            con.executemany(
+                "INSERT INTO bundle_exclusions VALUES (?, ?)",
+                [(10, 900), (400, 401), (1200, 1201)],
+            )
+            con.executemany(
+                "INSERT INTO automatic_bundle_memberships VALUES (?, ?)",
+                [(9001, 10), (9001, 900), (9002, 1200), (9002, 1300)],
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        ids = list(range(1, 1201))
+        cases = (
+            (database.get_manual_bundle_links, [(10, 900), (400, 401), (1200, 1201)]),
+            (database.get_bundle_exclusions, [(10, 900), (400, 401), (1200, 1201)]),
+            (database.get_automatic_bundle_memberships, [
+                (9001, 10), (9001, 900), (9002, 1200), (9002, 1300),
+            ]),
+        )
+        for function, expected in cases:
+            with self.subTest(function=function.__name__):
+                with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+                    rows = function(ids)
+                self.assertEqual(
+                    [(int(row[0]), int(row[1])) for row in rows],
+                    expected,
+                )
+                self.assertEqual(factory.call_count, 1)
+
+    def test_large_recommendation_credit_and_voice_actor_queries_stay_batched(self):
+        ids = list(range(1, 1201))
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            profile = database.get_recommendation_credit_profile(ids)
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(len(profile), 1200)
+        self.assertTrue(profile[1]["characters"])
+        self.assertTrue(profile[1]["staff"])
+
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            actors = database.get_bundle_character_voice_actors(ids, 10)
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(
+            {actor["person_id"] for actor in actors},
+            {100, 101, 102},
+        )
 
     def test_empty_and_invalid_relation_inputs_keep_existing_contract(self):
         self.assertEqual(database.get_bundle_characters(None), [])

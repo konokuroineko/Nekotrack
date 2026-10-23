@@ -1256,20 +1256,54 @@ def _relation_data_for(ids):
     if not ids:
         return []
 
-    placeholders = ",".join("?" for _ in ids)
+    member_ids = sorted({int(work_id) for work_id in ids})
+    if not member_ids:
+        return []
     relation_types = ",".join(repr(value) for value in SERIES_RELATIONS)
     connection = get_connection()
+    try:
+        # Keep the single-query path unchanged for typical library sizes. Large
+        # libraries are chunked because this predicate binds every ID twice.
+        if len(member_ids) <= 400:
+            placeholders = ",".join("?" for _ in member_ids)
+            return connection.execute(
+                f"SELECT source_id, target_id, relation_type "
+                f"FROM work_relations "
+                f"WHERE relation_type IN ({relation_types}) "
+                f"AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
+                [*member_ids, *member_ids],
+            ).fetchall()
 
-    rows = connection.execute(
-        f"SELECT source_id, target_id, relation_type "
-        f"FROM work_relations "
-        f"WHERE relation_type IN ({relation_types}) "
-        f"AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
-        [*ids, *ids],
-    ).fetchall()
-
-    connection.close()
-    return rows
+        rows_by_identity = {}
+        for start in range(0, len(member_ids), 400):
+            chunk = member_ids[start:start + 400]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"SELECT rowid AS _relation_rowid, source_id, target_id, relation_type "
+                f"FROM work_relations "
+                f"WHERE relation_type IN ({relation_types}) "
+                f"AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
+                [*chunk, *chunk],
+            ).fetchall()
+            for row in rows:
+                identity = (
+                    int(row["source_id"]), int(row["target_id"]), str(row["relation_type"])
+                )
+                rows_by_identity[identity] = (
+                    int(row["_relation_rowid"]),
+                    {
+                        "source_id": identity[0],
+                        "target_id": identity[1],
+                        "relation_type": identity[2],
+                    },
+                )
+        return [
+            row for _rowid, row in sorted(
+                rows_by_identity.values(), key=lambda item: item[0]
+            )
+        ]
+    finally:
+        connection.close()
 
 
 def sync_library_relations(force_ids=None):

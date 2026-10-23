@@ -1,7 +1,10 @@
 import random
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+import database
 import series
 
 
@@ -140,6 +143,51 @@ class BundleOverrideBatchingTests(unittest.TestCase):
         self.assertEqual(groups[0]["_bundle_cover_work_id"], 2)
         bulk.assert_called_once_with([1, 2])
         single.assert_not_called()
+
+
+
+class LargeLibraryRelationQueryTests(unittest.TestCase):
+    def test_relation_lookup_chunks_large_id_sets_and_deduplicates_cross_chunk_edges(self):
+        with tempfile.TemporaryDirectory(prefix="nekotrack-relations-") as temporary:
+            with patch.object(database, "DATABASE_NAME", str(Path(temporary) / "relations.sqlite3")):
+                connection = database.get_connection()
+                try:
+                    connection.execute("""
+                        CREATE TABLE work_relations (
+                            source_id INTEGER NOT NULL,
+                            target_id INTEGER NOT NULL,
+                            relation_type TEXT NOT NULL,
+                            PRIMARY KEY (source_id, target_id, relation_type)
+                        )
+                    """)
+                    connection.executemany(
+                        "INSERT INTO work_relations VALUES (?, ?, ?)",
+                        [
+                            (10, 900, "SEQUEL"),
+                            (1200, 1100, "PREQUEL"),
+                            (1500, 10, "SIDE_STORY"),
+                            (10, 1500, "SPIN_OFF"),
+                            (5, 6, "OTHER"),
+                        ],
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+
+                rows = series._relation_data_for(set(range(1, 1201)))
+
+        actual = [
+            (int(row["source_id"]), int(row["target_id"]), str(row["relation_type"]))
+            for row in rows
+        ]
+        self.assertEqual(len(actual), 4)
+        self.assertCountEqual(actual, [
+            (10, 900, "SEQUEL"),
+            (1200, 1100, "PREQUEL"),
+            (1500, 10, "SIDE_STORY"),
+            (10, 1500, "SPIN_OFF"),
+        ])
+
 
 
 

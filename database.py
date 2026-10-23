@@ -1137,32 +1137,34 @@ def get_bundle_character_voice_actors(work_ids, character_id):
     safe_character_id = _cast_provider_id(character_id)
     if safe_character_id is None:
         return []
-    placeholders = ",".join("?" for _ in ids)
+    rows = []
     connection = get_connection()
     try:
-        rows = connection.execute(
-            f"""
-            SELECT
-                people.id AS person_id,
-                people.name AS name,
-                people.image_path AS image_path,
-                people.image_url AS image_url,
-                work_character_voice_actors.language AS source_language,
-                work_character_voice_actors.work_id AS work_id,
-                COALESCE(
-                    NULLIF(TRIM(works.title), ''),
-                    'Work ' || CAST(work_character_voice_actors.work_id AS TEXT)
-                ) AS work_title
-            FROM work_character_voice_actors
-            JOIN people ON people.id = work_character_voice_actors.person_id
-            LEFT JOIN works ON works.id = work_character_voice_actors.work_id
-            WHERE work_character_voice_actors.work_id IN ({placeholders})
-              AND work_character_voice_actors.character_id = ?
-            ORDER BY people.id, work_character_voice_actors.work_id,
-                     work_character_voice_actors.language
-            """,
-            [*ids, safe_character_id],
-        ).fetchall()
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows.extend(connection.execute(
+                f"""
+                SELECT
+                    people.id AS person_id,
+                    people.name AS name,
+                    people.image_path AS image_path,
+                    people.image_url AS image_url,
+                    work_character_voice_actors.language AS source_language,
+                    work_character_voice_actors.work_id AS work_id,
+                    COALESCE(
+                        NULLIF(TRIM(works.title), ''),
+                        'Work ' || CAST(work_character_voice_actors.work_id AS TEXT)
+                    ) AS work_title
+                FROM work_character_voice_actors
+                JOIN people ON people.id = work_character_voice_actors.person_id
+                LEFT JOIN works ON works.id = work_character_voice_actors.work_id
+                WHERE work_character_voice_actors.work_id IN ({placeholders})
+                  AND work_character_voice_actors.character_id = ?
+                ORDER BY people.id, work_character_voice_actors.work_id,
+                         work_character_voice_actors.language
+                """,
+                [*chunk, safe_character_id],
+            ).fetchall())
     finally:
         connection.close()
 
@@ -2951,19 +2953,24 @@ def get_manual_bundle_links(work_ids=None):
                 "SELECT work_a, work_b FROM manual_bundle_links ORDER BY work_a, work_b"
             ).fetchall()
 
-        placeholders = ",".join("?" for _ in ids)
-        return connection.execute(
-            f"""
-            SELECT work_a, work_b
-            FROM manual_bundle_links
-            WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
-            ORDER BY work_a, work_b
-            """,
-            [*ids, *ids],
-        ).fetchall()
+        rows_by_pair = {}
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT work_a, work_b
+                FROM manual_bundle_links
+                WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
+                ORDER BY work_a, work_b
+                """,
+                [*chunk, *chunk],
+            ).fetchall()
+            for row in rows:
+                key = (int(row["work_a"]), int(row["work_b"]))
+                rows_by_pair[key] = row
+        return [rows_by_pair[key] for key in sorted(rows_by_pair)]
     finally:
         connection.close()
-
 
 def save_automatic_bundle_membership(bundle_id, work_ids):
     """Replace the saved member snapshot for an automatically grouped Search result."""
@@ -3030,10 +3037,10 @@ def get_automatic_bundle_memberships(work_ids=None):
                 """
             ).fetchall()
 
-        placeholders = ",".join("?" for _ in ids)
-        bundle_ids = [
-            int(row["bundle_id"])
-            for row in connection.execute(
+        bundle_ids = set()
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
                 f"""
                 SELECT DISTINCT bundle_id
                 FROM automatic_bundle_memberships
@@ -3041,24 +3048,31 @@ def get_automatic_bundle_memberships(work_ids=None):
                    OR work_id IN ({placeholders})
                 ORDER BY bundle_id
                 """,
-                [*ids, *ids],
+                [*chunk, *chunk],
             ).fetchall()
-        ]
+            bundle_ids.update(int(row["bundle_id"]) for row in rows)
+
         if not bundle_ids:
             return []
-        group_placeholders = ",".join("?" for _ in bundle_ids)
-        return connection.execute(
-            f"""
-            SELECT bundle_id, work_id
-            FROM automatic_bundle_memberships
-            WHERE bundle_id IN ({group_placeholders})
-            ORDER BY bundle_id, work_id
-            """,
-            bundle_ids,
-        ).fetchall()
+
+        memberships_by_pair = {}
+        for chunk in _bundle_id_chunks(sorted(bundle_ids)):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT bundle_id, work_id
+                FROM automatic_bundle_memberships
+                WHERE bundle_id IN ({placeholders})
+                ORDER BY bundle_id, work_id
+                """,
+                chunk,
+            ).fetchall()
+            for row in rows:
+                key = (int(row["bundle_id"]), int(row["work_id"]))
+                memberships_by_pair[key] = row
+        return [memberships_by_pair[key] for key in sorted(memberships_by_pair)]
     finally:
         connection.close()
-
 
 def add_bundle_exclusion(work_a, work_b):
     """Prevent two works from being automatically grouped together."""
@@ -3158,19 +3172,25 @@ def get_bundle_exclusions(work_ids=None):
             return connection.execute(
                 "SELECT work_a, work_b FROM bundle_exclusions ORDER BY work_a, work_b"
             ).fetchall()
-        placeholders = ",".join("?" for _ in ids)
-        return connection.execute(
-            f"""
-            SELECT work_a, work_b
-            FROM bundle_exclusions
-            WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
-            ORDER BY work_a, work_b
-            """,
-            [*ids, *ids],
-        ).fetchall()
+
+        rows_by_pair = {}
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT work_a, work_b
+                FROM bundle_exclusions
+                WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
+                ORDER BY work_a, work_b
+                """,
+                [*chunk, *chunk],
+            ).fetchall()
+            for row in rows:
+                key = (int(row["work_a"]), int(row["work_b"]))
+                rows_by_pair[key] = row
+        return [rows_by_pair[key] for key in sorted(rows_by_pair)]
     finally:
         connection.close()
-
 
 def get_manual_bundle_partners(work_id):
     """Return the works explicitly manually linked to one work."""
@@ -4362,38 +4382,40 @@ def get_recommendation_credit_profile(work_ids):
         work_id: {"characters": [], "voice_actors": [], "staff": []}
         for work_id in ids
     }
-    placeholders = ",".join("?" for _ in ids)
+    character_rows, actor_rows, staff_rows = [], [], []
     connection = get_connection()
     try:
-        character_rows = connection.execute(
-            f"""
-            SELECT wc.work_id, c.id AS entity_id, wc.role
-            FROM work_characters AS wc
-            JOIN characters AS c ON c.id = wc.character_id
-            WHERE wc.work_id IN ({placeholders})
-            ORDER BY wc.work_id, wc.character_id
-            """, ids
-        ).fetchall()
-        actor_rows = connection.execute(
-            f"""
-            SELECT wcv.work_id, wcv.person_id AS entity_id, wcv.language,
-                   wc.role AS character_role, wcv.character_id
-            FROM work_character_voice_actors AS wcv
-            JOIN work_characters AS wc
-              ON wc.work_id = wcv.work_id
-             AND wc.character_id = wcv.character_id
-            WHERE wcv.work_id IN ({placeholders})
-            ORDER BY wcv.work_id, wcv.character_id, wcv.person_id, wcv.language
-            """, ids
-        ).fetchall()
-        staff_rows = connection.execute(
-            f"""
-            SELECT ws.work_id, ws.person_id AS entity_id, ws.role
-            FROM work_staff AS ws
-            WHERE ws.work_id IN ({placeholders})
-            ORDER BY ws.work_id, ws.person_id, ws.role
-            """, ids
-        ).fetchall()
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            character_rows.extend(connection.execute(
+                f"""
+                SELECT wc.work_id, c.id AS entity_id, wc.role
+                FROM work_characters AS wc
+                JOIN characters AS c ON c.id = wc.character_id
+                WHERE wc.work_id IN ({placeholders})
+                ORDER BY wc.work_id, wc.character_id
+                """, chunk
+            ).fetchall())
+            actor_rows.extend(connection.execute(
+                f"""
+                SELECT wcv.work_id, wcv.person_id AS entity_id, wcv.language,
+                       wc.role AS character_role, wcv.character_id
+                FROM work_character_voice_actors AS wcv
+                JOIN work_characters AS wc
+                  ON wc.work_id = wcv.work_id
+                 AND wc.character_id = wcv.character_id
+                WHERE wcv.work_id IN ({placeholders})
+                ORDER BY wcv.work_id, wcv.character_id, wcv.person_id, wcv.language
+                """, chunk
+            ).fetchall())
+            staff_rows.extend(connection.execute(
+                f"""
+                SELECT ws.work_id, ws.person_id AS entity_id, ws.role
+                FROM work_staff AS ws
+                WHERE ws.work_id IN ({placeholders})
+                ORDER BY ws.work_id, ws.person_id, ws.role
+                """, chunk
+            ).fetchall())
     finally:
         connection.close()
 
@@ -4412,3 +4434,4 @@ def get_recommendation_credit_profile(work_ids):
             "id": int(row["entity_id"]), "role": str(row["role"] or ""),
         })
     return profile
+
