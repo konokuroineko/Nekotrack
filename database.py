@@ -2854,7 +2854,10 @@ def get_bundle_staff_page_state(work_ids):
                 SELECT work_id, provider, payload_json
                 FROM work_provider_metadata
                 WHERE work_id IN ({placeholders})
-                  AND provider IN ('anilist_media_id', 'anilist_staff_page_info')
+                  AND (
+                      provider = 'anilist_staff_page_info'
+                      OR (provider = 'anilist_media_id' AND work_id < 0)
+                  )
                 """,
                 chunk,
             ).fetchall()

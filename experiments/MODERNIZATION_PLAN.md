@@ -307,3 +307,12 @@ as the existing negative-ID link resolution and legacy no-page-info rule.
 
 Parity tests and the synthetic bundle-details benchmark now include this path, using
 work/credit fixtures only and no external APIs.
+
+
+## Work Details staff-state parity follow-up
+
+The batched reader fetches linked AniList IDs only for negative local IDs, matching
+how the former UI path used that metadata. Positive AniList work IDs skip that extra
+payload, while all members still share the same page-info/staff-count queries. An
+integration test now confirms one batch call, preserves the "has next page" and
+legacy saved-count rules, and verifies next-page counters only move forward.

@@ -138,7 +138,10 @@ def reference_bundle_staff_page_state(work_ids):
     for work_id in ids:
         result[work_id] = {
             "saved_staff_count": len(database.get_staff(work_id)),
-            "anilist_media_id": database.get_provider_metadata(work_id, "anilist_media_id"),
+            "anilist_media_id": (
+                database.get_provider_metadata(work_id, "anilist_media_id")
+                if work_id < 0 else None
+            ),
             "page_info": database.get_provider_metadata(work_id, "anilist_staff_page_info"),
         }
     return result

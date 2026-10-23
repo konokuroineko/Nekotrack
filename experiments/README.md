@@ -215,3 +215,8 @@ The "load more staff credits" decision now batch-reads per-work saved staff coun
 persisted AniList link/page metadata rather than opening multiple connections per
 bundle member. The existing per-work fallback remains available on read failure.
 Parity and synthetic benchmark coverage compare the old and batched output.
+
+
+The staff-pagination batching keeps linked AniList ID lookups limited to negative
+local IDs, as the former UI path did, and has an integration test for load-more
+decisions and resume-page handling.

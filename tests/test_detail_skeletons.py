@@ -83,6 +83,35 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
+    def test_staff_page_requests_use_one_batched_read_and_preserve_pagination_rules(self):
+        page = WorkDetailPage()
+        page._staff_next_pages[123] = 4
+        page._staff_next_pages[-123] = 5
+        states = {
+            123: {"saved_staff_count": 20, "anilist_media_id": None, "page_info": None},
+            456: {"saved_staff_count": 14, "anilist_media_id": None, "page_info": None},
+            789: {"saved_staff_count": 30, "anilist_media_id": None,
+                  "page_info": {"hasNextPage": False, "currentPage": 4}},
+            -123: {"saved_staff_count": 1, "anilist_media_id": {"id": 9910},
+                   "page_info": {"hasNextPage": True, "currentPage": 2}},
+        }
+
+        with (
+            patch("ui.pages.work_detail_page.get_bundle_staff_page_state", return_value=states) as batch,
+            patch("ui.pages.work_detail_page.get_staff") as per_work_staff,
+            patch("ui.pages.work_detail_page.get_provider_metadata") as per_work_metadata,
+        ):
+            requests = page._staff_page_requests([123, 456, 789, -123, 123])
+
+        self.assertEqual(requests, [(123, 123, 4), (-123, 9910, 5)])
+        batch.assert_called_once_with([123, 456, 789, -123])
+        per_work_staff.assert_not_called()
+        per_work_metadata.assert_not_called()
+        self.assertIn(789, page._staff_exhausted_ids)
+
+        page.deleteLater()
+        self.app.processEvents()
+
     def test_episode_section_waits_when_selected_season_row_is_missing(self):
         page = WorkDetailPage()
         page.work = {
