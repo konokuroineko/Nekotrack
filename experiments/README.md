@@ -290,3 +290,11 @@ Replacing a staff snapshot now checks old person candidates with a bounded set-b
 delete, retaining anyone still referenced by any work's staff credits or the global
 voice-actor association table. A regression test verifies orphan deletion and shared
 staff/cast retention.
+
+
+## Batched work-import persistence
+
+`save_anime` now uses `executemany` for alternate titles, studio records/work links,
+related-work metadata and outgoing relations. Input-order conflict behavior and the
+existing validation gates are retained. A focused test covers duplicate records and
+the `COALESCE` preservation rules for fields omitted by a later relation edge.

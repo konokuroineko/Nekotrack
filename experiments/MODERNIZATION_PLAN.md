@@ -422,3 +422,14 @@ another title's staff or voice-actor credits while removing people no longer ref
 The regression test replaces a work's full staff snapshot and checks three cases:
 a truly orphaned person is removed, a staff member in another work is retained, and
 a cast-only person is retained.
+
+
+## Twenty-third-pass `save_anime` persistence batches
+
+The work-import path now batches alternate-title inserts, studio upserts/links, related
+work metadata upserts and outgoing relation rows. The original field/edge validation
+stays in its existing order; batches execute rows in their input order so a repeated
+relation target still ends with the same latest non-null metadata, while prior values
+survive missing provider fields. A regression fixture exercises duplicate aliases and
+studio IDs, repeated target IDs, multiple relation types and preservation of absent
+cover/date/MAL values.
