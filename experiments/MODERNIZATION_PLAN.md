@@ -1,89 +1,100 @@
-# NekoTrack performance and accessibility modernization
+# NekoTrack performance modernization — Phase A
 
-**Product requirement: preserve the NekoTrack that exists today.** Its current Qt Widgets pages, visual styling, navigation, saved data, settings, and existing backend behavior are the reference implementation. This work must not invent a new UI or replace real behavior with sample cards. Any change that visibly alters the current design requires a separate explicit decision.
+## Scope
 
-## Architecture decision
+Phase A improves the existing Python backend and measures an optional Rust/PyO3
+acceleration pilot. The current shipped Qt Widgets UI remains unchanged. The goal is
+to demonstrate useful performance gains while preserving existing API behavior,
+recommendation results, local data, saved progress, themes, bundles, settings and
+release safety.
 
-Keep the working stack and add only language/runtime complexity that earns its place:
+Phase B — the QML/JavaScript UI modernization — is explicitly deferred until we
+have comparable Phase A measurements. This PR does not add a replacement UI,
+sample-only screen, or alternate production frontend.
 
-| Area | Decision | Reason |
-| --- | --- | --- |
-| Complete desktop UI | **Keep PySide6 + Qt Widgets and the existing theme/branding/navigation.** | It is the only approach that guarantees the current look and workflows remain the source of truth. A QML rewrite would require rebuilding every page and backend/UI integration, and does not automatically improve speed. |
-| Existing backend | **Keep Python services, `api.py`, SQLite functions in `database.py`, bundling logic, background workers, diagnostics, update and rollback behavior.** | They already implement the app's actual behavior. Optimize in place rather than substituting a mock or rewriting providers. |
-| Performance extension | **Rust via PyO3 + maturin only for a demonstrated CPU-bound hotspot.** | Rust must improve the actual workload enough to justify native-build, CI, Windows packaging, and support costs. No port is approved based on language reputation alone. |
-| Persistence | **Keep SQLite and SQL.** | Measure queries and batch/index work before changing storage. Network waits and GUI painting are not fixed by replacing SQL. |
-| Installer/release | **Keep PyInstaller + Inno Setup.** | Extend packaging only if a tested native module becomes worthwhile; verify install, update, rollback, and fresh-install paths before release. |
+## Architecture for Phase A
 
-QML/JavaScript was reconsidered and is **not the chosen replacement UI** for this requirement. A separate sample-only QML shell was removed from this PR because it looked different from the real app and did not use the complete backend. We should not ship a parallel mock UI merely to add another language.
-
-## Non-negotiable parity checklist
-
-- Preserve the current Neko theme, purple accent, wordmark/logo, wallpaper/background transparency, spacing, typography, card style, icons, hover and selection states, navigation order, and existing page layouts.
-- Preserve the current behavior across Home/recommendations, Library/bundles/progress, Search/providers/filters/pagination, Calendar/reminders, Favorites/profiles, Work Details/episodes/volumes/chapters/relations, Settings, setup, updates, and rollback.
-- Keep one source of truth for each API and persistence operation. API integration stays in `api.py`; database access stays in the existing database layer.
-- Preserve the user's database, preferences, image cache, saved bundles, custom appearance overrides, reading/watching progress, and update safety.
-- Accessibility improvements should work within the existing design: keyboard operation, meaningful accessible names/roles, visible focus where needed, scaling, correct light-mode surfaces, screen-reader behavior, and non-color cues. Do not restyle the app just to make this branch look new.
-
-## Performance work
-
-### 1. Establish comparable measurements
-
-The app already logs structured diagnostic operations. Use those timestamps to separate time spent in network calls, SQLite, bundling/data transformation, artwork, widget creation, and GUI-thread work. Keep cold and warm runs separate and report median/p95 from repeated trials on the same machine/build.
-
-Priority workloads:
-
-| Workload | Measure |
+| Area | Decision |
 | --- | --- |
-| Startup | launch to first usable window; first useful page content |
-| Home | local library snapshot, first interactive recommendations, full feed |
-| Search | local input/filter handling, AniList/MangaBaka request, artwork separately |
-| Library | SQL retrieval, grouping/bundles, card creation, first interactive content |
-| Work Details | initial open, large bundle sections, episode/chapter lists and artwork |
-| Recommendation ranking | pure CPU scoring time, separate from network/API wait |
-| Scrolling/memory | long-list scrolling responsiveness, number of live widgets/cards, peak working set |
+| Existing desktop UI | Keep the current PySide6/Qt Widgets screens and theme intact during Phase A. |
+| Backend and domain behavior | Keep Python as the source of truth for APIs, SQLite operations, bundles, progress, recommendations, caching, settings and updates. Improve measured hot paths in place. |
+| Native acceleration | Add an optional Rust extension using PyO3/maturin with an exact Python fallback. Enable only the operation with parity tests and benchmark its result. |
+| Database | Keep SQLite and SQL. Add or change query/index behavior only with evidence and regression coverage. |
+| Release packaging | Keep PyInstaller and Inno Setup. A build must explicitly build/install the native wheel before packaging to use Rust; the Python fallback must remain available. |
 
-Do not treat synthetic CPU benchmarks as whole-app performance data. Do not put invented numbers in the README or PR.
+Rust is not a rewrite of the backend. QML is a later UI layer connected to Python
+services, not part of the current implementation phase.
 
-### 2. Optimize the whole app in place
+## Work already included
 
-Fix the measured causes rather than performing a broad rewrite. Likely areas to examine are repeated database/provider calls, duplicate work during grouping, unnecessary complete rerenders, image decode/cache churn, large widget construction on the GUI thread, and callbacks left attached during view replacement. Preserve output/ordering and UI behavior with regression tests.
+- Python recommendation ranking precomputes source-contributor weights once per
+  ranking pass instead of rebuilding the same index for every candidate.
+- A regression test checks that the optimized and reference paths return identical
+  ranking outputs while the reference repeats index construction and the optimized
+  path constructs the index once.
+- A deterministic recommendation benchmark compares the reference and optimized
+  Python paths using synthetic data, with no API calls or personal database access.
+- Recommendation scrollbar rebinding disconnects the previous scrollbar and avoids
+  redundant connections; a regression test covers stale scrollbar callbacks and
+  disconnect warnings.
+- An optional Rust/PyO3 module implements the matching-block algorithm used by
+  difflib.SequenceMatcher with autojunk disabled. The API uses this helper only after
+  the existing Python title normalization and exact/containment checks.
+- native_acceleration.py uses the Rust module when available and falls back to the
+  standard-library Python implementation when it is absent or cannot be loaded.
+- Startup diagnostics record whether the Python or Rust path was loaded.
+- Native parity tests compare results against Python over exhaustive short strings,
+  deterministic random inputs and Unicode examples. The same test checks that API
+  title-matching scores remain identical.
+- CI builds the native wheel on Windows and Linux with Python 3.11 and 3.14, runs
+  parity tests, and uploads benchmark JSON for native title matching and Python
+  recommendation ranking.
 
-Current changes in this PR:
-- Reuse a precomputed recommendation source-credit index during one ranking pass instead of rebuilding the same weights for every candidate. A regression test checks that the index is created once and the tested ranking output stays consistent. This is an algorithmic optimization hypothesis until before/after benchmark measurements quantify the benefit.
-- Fix recommendation scrollbar rebinding by disconnecting the previously tracked bar and avoiding redundant reconnects. A regression test checks old-bar callbacks and failed-disconnect warnings.
-- Add a deterministic CPU-only benchmark for `recommendation_engine.rank_candidates`. It uses synthetic data only and does not access the live database or network.
+## Measurement plan
 
-Run from the repository root:
-```powershell
-python experiments/benchmark_recommendations.py --candidate-sizes 50 250 500 --sources 50 --iterations 7 --json-out "$env:TEMP\nekotrack-ranking-baseline.json"
-```
+Run comparisons on the same machine and Python version, alternate which path runs
+first, keep warm-up runs separate, and record median and p95.
 
-Record Python version, machine, branch/commit, candidate/source counts, median, and p95. Run the same workload before and after the optimization. For real NekoTrack scenarios, use the same installed app/library and export diagnostics. Do not compare measurements taken from different machines or unrelated versions.
+| Workload | Current evidence |
+| --- | --- |
+| Python recommendation ranking | A synthetic before/after benchmark exists; capture actual results from the benchmark output or CI artifact. |
+| Native title similarity | Exact parity is required; capture Python/Rust median, p95 and ratio from CI artifacts. |
+| Full application startup | Not yet measured. |
+| API and TMDB lookup end-to-end latency | Not yet measured. |
+| Library first-content time and widget count | Not yet measured. |
+| Work-detail first-content time and image work | Not yet measured. |
+| Scroll responsiveness and memory | Not yet measured. |
 
-### 3. Rust gate
+An isolated microbenchmark is useful but is not an end-to-end performance claim. In
+particular, title matching occurs after provider requests and may represent only a
+small fraction of wall-clock time. Keep the Rust pilot only if its benefit justifies
+the extra native build and packaging complexity and real usage shows an improvement.
 
-The first Rust candidate should be selected from measured CPU profiling, with recommendation contributor matching/ranking investigated first because it is isolated and can be benchmarked. That is a candidate—not an assumption that it is currently the bottleneck.
+## Rust acceptance criteria
 
-Only add a Rust extension when:
-- profiling proves the path is materially CPU-bound rather than waiting on API/SQLite or GUI work;
-- Rust yields a substantial improvement in that isolated function and a measurable end-to-end benefit;
-- output, scoring, ordering, exclusion rules, and recommendation explanations match the Python reference under deterministic and randomized/adversarial tests;
-- a Python fallback remains until the native module is built and tested on Windows with every supported Python build;
-- the frozen PyInstaller app and installer/update/rollback paths pass.
+- Exact equivalence with Python title-similarity ratios; no change to provider match
+  selection, ordering, or visible behavior.
+- The extension is optional at import/runtime and absence never prevents startup.
+- Supported Windows and Linux CI builds succeed; Python 3.11 and 3.14 parity tests pass.
+- Record native-versus-Python benchmark output. Do not claim a speedup until numbers
+  have actually been recorded.
+- Before a public release uses Rust, build/install the native wheel in the PyInstaller
+  environment, verify the frozen executable loads it, and test installation, upgrade,
+  rollback and fallback behavior.
+- If the native microbenchmark does not translate into an end-to-end benefit, revert
+  or replace the Rust target rather than preserving it just to add a language.
 
-If the gain is small or native-boundary conversion dominates, keep the optimized Python code. Do not port the whole backend to Rust.
+## Phase B entry gate
 
-## Merge and release gates
+Only after reviewing Phase A results should we begin QML/JavaScript UI work. That
+future phase should connect to the existing Python services and reproduce the real
+NekoTrack screens and behavior—not use mock cards or a separate demonstration app.
+The interface change needs its own parity, accessibility, scrolling, memory and
+packaging evaluation, and must preserve all existing workflows and local data.
 
-- One ongoing modernization PR; add related fixes here rather than creating more PRs.
-- CI must pass on all supported Python/OS combinations and the adversarial stress workflow.
-- Test the affected current UI pages against existing visual/behavioral regression tests; test a real local library rather than only sample data.
-- Record before/after performance evidence for each claimed speed improvement.
-- No loss of existing screens, backend functions, user data, progress, bundles, settings, or update/rollback safety.
-- Do not merge or publish a release until the user-facing checks and combined test suite are clean.
+## Merge and release gate
 
-## References
-
-- [Qt for Python performance guidance](https://doc.qt.io/qtforpython-6/overviews/qtquick-performance.html): profile actual bottlenecks and avoid spending GUI-frame time on blocking work.
-- [Qt Quick accessibility documentation](https://doc.qt.io/qt-6/accessible-qtquick.html): relevant if a future explicit decision reopens QML, but not a reason to replace the current UI by default.
-- [PyO3 user guide](https://pyo3.rs/main/) and [maturin guide](https://www.maturin.rs/tutorial.html): official methods for a measured Rust extension if the benchmark warrants it.
+Keep one ongoing modernization PR. Do not merge or release until all relevant CI
+checks pass, benchmark data is reviewed, real-app behavior has been tested, and the
+native/fallback packaging path is understood. No performance figure may be invented
+or inferred from language reputation.
