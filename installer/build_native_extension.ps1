@@ -17,6 +17,9 @@ python -c "import sys; print(sys.executable)"
 
 Write-Host "Installing maturin into the active Python environment..."
 python -m pip install --upgrade maturin
+if ($LASTEXITCODE -ne 0) {
+    throw "Installing maturin failed."
+}
 
 New-Item -ItemType Directory -Force -Path $WheelDirectory | Out-Null
 Push-Location $CrateRoot
