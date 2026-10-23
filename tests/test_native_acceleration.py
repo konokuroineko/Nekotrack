@@ -113,6 +113,82 @@ class NativeAccelerationTests(unittest.TestCase):
                     reference_title_similarity(left, right),
                 )
 
+    def test_default_autojunk_compatible_matcher_matches_python_reference(self):
+        short_cases = [
+            ("", ""),
+            ("My Hero Academia", "My Hero Academi"),
+            ("東京物語", "東京物語"),
+            ("進撃の巨人", "進撃の巨人 season two"),
+            ("aaaaaaaaab", "baaaaaaaa"),
+        ]
+        for left, right in short_cases:
+            with self.subTest(left=left, right=right):
+                self.assertEqual(
+                    native_acceleration.sequence_match_ratio_default(left, right),
+                    SequenceMatcher(None, left, right).ratio(),
+                )
+
+        # difflib's default autojunk changes behavior when the right-hand
+        # sequence reaches 200 characters and has popular repeated elements.
+        left = "x" * 210 + "y"
+        right = "y" + "x" * 210
+        expected = SequenceMatcher(None, left, right).ratio()
+        without_autojunk = SequenceMatcher(None, left, right, autojunk=False).ratio()
+        self.assertNotEqual(expected, without_autojunk)
+        self.assertEqual(
+            native_acceleration.sequence_match_ratio_default(left, right),
+            expected,
+        )
+
+    def test_rust_default_compatible_matcher_matches_mangabaka_short_titles(self):
+        if not native_acceleration.RUST_AVAILABLE:
+            self.skipTest("Optional Rust extension is not built in this environment")
+        rng = random.Random(20261024)
+        alphabet = "abcdef0123456789日本語かなカナ -"
+        cases = [
+            ("My Hero Academia", "My Hero Academi"),
+            ("Re Zero Kara Hajimeru Isekai Seikatsu", "Re Zero Kara Hajimeru Isekai Seikatsu"),
+            ("進撃の巨人", "進撃の巨人 season two"),
+        ]
+        for _ in range(1000):
+            left = "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 100)))
+            right = "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 100)))
+            cases.append((left, right))
+        for left, right in cases:
+            with self.subTest(left=left, right=right):
+                self.assertEqual(
+                    native_acceleration.sequence_match_ratio_default(left, right),
+                    SequenceMatcher(None, left, right).ratio(),
+                )
+
+    def test_mangabaka_series_matching_uses_compatible_fuzzy_matcher(self):
+        candidate = {"id": 99, "english_title": "My Hero Academi"}
+        media = {
+            "id": 1,
+            "title": {"english": "My Hero Academia", "romaji": None, "native": None},
+            "synonyms": [],
+        }
+        with unittest.mock.patch(
+            "api.sequence_match_ratio_default",
+            wraps=native_acceleration.sequence_match_ratio_default,
+        ) as matcher:
+            result = api.match_series_for_anilist(media, [candidate])
+        self.assertIs(result, candidate)
+        matcher.assert_called()
+
+    def test_repeated_title_normalization_uses_bounded_caches(self):
+        api._normalize_title_text.cache_clear()
+        api._normalize_title("NekoTrack: 東京物語")
+        api._normalize_title("NekoTrack: 東京物語")
+        self.assertGreaterEqual(api._normalize_title_text.cache_info().hits, 1)
+        self.assertEqual(api._normalize_title_text.cache_info().maxsize, 8192)
+
+        api._normalize_mangabaka_title_text.cache_clear()
+        api._mangabaka_normalize_title("Re:Zero Kara Hajimeru")
+        api._mangabaka_normalize_title("Re:Zero Kara Hajimeru")
+        self.assertGreaterEqual(api._normalize_mangabaka_title_text.cache_info().hits, 1)
+        self.assertEqual(api._normalize_mangabaka_title_text.cache_info().maxsize, 8192)
+
     def test_backend_indicator_matches_loaded_extension(self):
         self.assertEqual(
             native_acceleration.BACKEND_NAME,
