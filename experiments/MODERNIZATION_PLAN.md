@@ -378,3 +378,18 @@ marks only that persistence batch failed so the existing retry mechanism can rec
 Tests cover multi-batch completion, cancellation flush, missing episode rows and final
 path values. A synthetic benchmark compares old per-episode writes with batched writes,
 reporting connection reduction and median/p95 timing while excluding network time.
+
+
+## Seventeenth-pass series component union cost
+
+Both Search grouping and Library grouping used union-find, but always attached the
+right root to the left root. The larger component could therefore be copied repeatedly
+into a singleton component when relations arrived in an adverse order. Added a shared
+small-to-large root merge helper; it preserves component membership, exclusions and
+saved Search-snapshot rules while bounding set-copy work. The library variant moves
+the snapshot-ID set together with its component root.
+
+A deterministic 4,096-member regression compares final component membership with the
+old merge rule and checks that the stress case no longer repeatedly copies the growing
+component. CI also benchmarks merge overhead and counts members moved between sets.
+The benchmark isolates this DSU operation; it is not a whole-library speedup claim.

@@ -97,6 +97,8 @@ jobs:
         run: python experiments/benchmark_series_prefix.py --candidate-sizes 100 500 1000 2000 --iterations 5 --json-out "${{ runner.temp }}/nekotrack-series-prefix.json"
       - name: Benchmark indexed bundle exclusion checks
         run: python experiments/benchmark_series_exclusions.py --component-sizes 100 250 500 1000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-series-exclusions.json"
+      - name: Benchmark small-to-large component merges
+        run: python experiments/benchmark_series_union_by_size.py --member-counts 500 1000 2000 --iterations 5 --json-out "${{ runner.temp }}/nekotrack-series-union-by-size.json"
       - name: Benchmark Search relation readiness queue
         run: python experiments/benchmark_relation_pending_queue.py --sizes 1000 5000 10000 20000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-relation-pending-queue.json"
       - name: Benchmark batched bundle Work Details reads

@@ -264,3 +264,12 @@ already-downloaded images when cancellation stops the queue. Regression tests co
 normal batches, partial cancellation, invalid/missing episode rows and completion
 signals. Run `experiments/benchmark_episode_thumbnail_writes.py` to compare legacy
 per-image writes with batched SQLite-only persistence on synthetic data.
+
+
+## Small-to-large series component merges
+
+Search and Library grouping now keep the larger union-find component as the root,
+avoiding repeated copies of large member sets on adverse merge orderings. Library
+snapshot IDs follow the selected root. A deterministic stress test checks identical
+component partitions, and `experiments/benchmark_series_union_by_size.py` measures
+the isolated union/set-merge cost.
