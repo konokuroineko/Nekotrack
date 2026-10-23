@@ -32,7 +32,7 @@ from database import (
     get_episode_section_snapshot, get_reading_progress, get_staff, get_bundle_staff_page_state, is_work_in_library,
     get_tmdb_mapping, get_work, get_provider_metadata,
     save_work_display_override, save_anime, save_characters, save_cover_path,
-    save_episode_thumbnail_path, save_episode_thumbnail_paths, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
+    save_episode_thumbnail_paths, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
     set_episode_watched, set_episode_progress, set_reading_progress_count, prune_episode_catalog,
 )
 from series import auto_bundle_library_work, get_library_series
