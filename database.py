@@ -2151,7 +2151,7 @@ def save_reading_item_metadata(work_id, item_type, items):
             if not isinstance(raw_number, str):
                 return None
             raw_text = raw_number.strip()
-            if re.fullmatch(r"[0-9]+(?:\\.[0-9]+)?", raw_text):
+            if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", raw_text):
                 try:
                     numeric = float(raw_text)
                     if not math.isfinite(numeric) or not numeric.is_integer() or numeric < 1:
@@ -2160,7 +2160,7 @@ def save_reading_item_metadata(work_id, item_type, items):
                 except (TypeError, ValueError, OverflowError):
                     return None
             else:
-                match = re.search(r"(?<![-0-9])\\d+", raw_text)
+                match = re.search(r"(?<![-0-9])\d+", raw_text)
                 if not match:
                     return None
                 try:
@@ -2169,47 +2169,49 @@ def save_reading_item_metadata(work_id, item_type, items):
                     return None
         return number if 1 <= number <= _MAX_TRACKED_EPISODE_NUMBER else None
 
+    prepared_rows = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_number = None
+        has_explicit_number = False
+        for key in ("number", "item_number", "volume_number", "chapter_number"):
+            candidate = item.get(key)
+            if candidate not in (None, ""):
+                raw_number = candidate
+                has_explicit_number = True
+                break
+
+        number = index if not has_explicit_number else parse_item_number(raw_number)
+        if number is None or not 1 <= number <= _MAX_TRACKED_EPISODE_NUMBER:
+            continue
+
+        title_value = item.get("title")
+        if not isinstance(title_value, str) or not title_value.strip():
+            title_value = item.get("name")
+        title = title_value.strip() if isinstance(title_value, str) else None
+        prepared_rows.append((safe_work_id, kind, number, title or None))
+
     connection = get_connection()
-    saved = 0
     try:
-        for index, item in enumerate(items, start=1):
-            if not isinstance(item, dict):
-                continue
-            raw_number = None
-            has_explicit_number = False
-            for key in ("number", "item_number", "volume_number", "chapter_number"):
-                candidate = item.get(key)
-                if candidate not in (None, ""):
-                    raw_number = candidate
-                    has_explicit_number = True
-                    break
-
-            number = index if not has_explicit_number else parse_item_number(raw_number)
-            if number is None or not 1 <= number <= _MAX_TRACKED_EPISODE_NUMBER:
-                continue
-
-            title_value = item.get("title")
-            if not isinstance(title_value, str) or not title_value.strip():
-                title_value = item.get("name")
-            title = title_value.strip() if isinstance(title_value, str) else None
-            connection.execute("""
-                INSERT INTO reading_items (work_id, item_type, item_number, title, is_read)
-                VALUES (?, ?, ?, ?, 0)
-                ON CONFLICT(work_id, item_type, item_number) DO UPDATE SET
-                    title = CASE
-                        WHEN excluded.title IS NOT NULL AND TRIM(excluded.title) != ''
-                        THEN excluded.title ELSE reading_items.title END
-            """, (safe_work_id, kind, number, title or None))
-            saved += 1
+        connection.executemany(
+            """
+            INSERT INTO reading_items (work_id, item_type, item_number, title, is_read)
+            VALUES (?, ?, ?, ?, 0)
+            ON CONFLICT(work_id, item_type, item_number) DO UPDATE SET
+                title = CASE
+                    WHEN excluded.title IS NOT NULL AND TRIM(excluded.title) != ''
+                    THEN excluded.title ELSE reading_items.title END
+            """,
+            prepared_rows,
+        )
         connection.commit()
     except Exception:
         connection.rollback()
         raise
     finally:
         connection.close()
-    return saved
-
-
+    return len(prepared_rows)
 
 def save_anime(anime):
     work_id = _validated_work_id(anime.get("id") if isinstance(anime, dict) else None)

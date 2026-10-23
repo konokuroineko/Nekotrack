@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import database
 from ui.pages.work_detail_page import WorkDetailPage
@@ -137,6 +138,53 @@ class ReadingProgressTests(unittest.TestCase):
         stored_work = database.get_work(work_id)
         self.assertEqual(WorkDetailPage._work_count(object(), stored_work, "chapters"), 73)
         self.assertEqual(WorkDetailPage._work_count(object(), stored_work, "volumes"), 12)
+
+    def test_reading_item_metadata_batches_upserts_and_preserves_read_state(self):
+        work_id = 401
+        database.save_anime(self._work(work_id, "MANGA", "NOVEL", chapters=100, volumes=10))
+        con = database.get_connection()
+        try:
+            con.execute(
+                """
+                INSERT INTO reading_items (work_id, item_type, item_number, title, is_read)
+                VALUES (?, 'chapter', 2, 'Old Chapter 2', 1)
+                """,
+                (work_id,),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        items = [
+            {"number": "1", "title": "Chapter One"},
+            {"number": "Chapter 2", "title": "Chapter Two"},
+            {"number": "invalid", "title": "Skip"},
+            {"title": "Fallback Index"},
+            {"number": "2", "title": "Updated Chapter Two"},
+            {"number": True, "title": "Skip Boolean"},
+        ]
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            saved_count = database.save_reading_item_metadata(work_id, "chapter", items)
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(saved_count, 4)
+
+        con = database.get_connection()
+        try:
+            rows = con.execute(
+                """
+                SELECT item_number, title, is_read
+                FROM reading_items
+                WHERE work_id = ? AND item_type = 'chapter'
+                ORDER BY item_number
+                """,
+                (work_id,),
+            ).fetchall()
+        finally:
+            con.close()
+        self.assertEqual(
+            [(int(row["item_number"]), row["title"], int(row["is_read"])) for row in rows],
+            [(1, "Chapter One", 0), (2, "Updated Chapter Two", 1), (4, "Fallback Index", 0)],
+        )
 
     def test_older_manga_episode_imports_are_removed_but_anime_episodes_remain(self):
         anime_id = 201
