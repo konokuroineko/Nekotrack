@@ -5,6 +5,7 @@ from difflib import SequenceMatcher
 import itertools
 import random
 import unittest
+from unittest.mock import patch
 
 import api
 import native_acceleration
@@ -168,7 +169,7 @@ class NativeAccelerationTests(unittest.TestCase):
             "title": {"english": "My Hero Academia", "romaji": None, "native": None},
             "synonyms": [],
         }
-        with unittest.mock.patch(
+        with patch(
             "api.sequence_match_ratio_default",
             wraps=native_acceleration.sequence_match_ratio_default,
         ) as matcher:
