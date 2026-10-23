@@ -67,6 +67,17 @@ class RecommendationScoringTests(unittest.TestCase):
             "_build_credit_signal_index",
             wraps=recommendation_engine._build_credit_signal_index,
         ) as build_index:
+            reference = rank_candidates(
+                candidates, _precompute_credit_index=False, **kwargs
+            )
+        self.assertEqual(reference, expected)
+        self.assertEqual(build_index.call_count, len(candidates))
+
+        with patch.object(
+            recommendation_engine,
+            "_build_credit_signal_index",
+            wraps=recommendation_engine._build_credit_signal_index,
+        ) as build_index:
             actual = rank_candidates(candidates, **kwargs)
 
         self.assertEqual(actual, expected)
