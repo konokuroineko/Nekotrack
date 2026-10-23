@@ -109,6 +109,8 @@ jobs:
         run: python experiments/benchmark_episode_thumbnail_writes.py --episode-counts 12 50 100 500 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-episode-thumbnail-writes.json"
       - name: Benchmark batched episode catalog upserts
         run: python experiments/benchmark_episode_catalog_upserts.py --episode-counts 12 100 500 1500 --iterations 5 --json-out "${{ runner.temp }}/nekotrack-episode-catalog-upserts.json"
+      - name: Benchmark batched character snapshot cleanup
+        run: python experiments/benchmark_character_snapshot_cleanup.py --character-counts 25 100 250 --iterations 3 --json-out "${{ runner.temp }}/nekotrack-character-snapshot-cleanup.json"
       - name: Upload comparable backend benchmark results
         uses: actions/upload-artifact@v4
         with:

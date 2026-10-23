@@ -315,3 +315,14 @@ temporary SQLite tables and set-based DELETE/NOT EXISTS statements rather than
 per-character/per-actor SELECT/DELETE calls. Shared cast entities survive while orphan
 characters and people are removed. `tests/test_character_voice_actors.py` covers a
 41-character cleanup, cross-adaptation references and the SQL call-count reduction.
+
+
+## Character snapshot cleanup benchmark
+
+Run:
+
+    python experiments/benchmark_character_snapshot_cleanup.py --character-counts 25 100 250 --iterations 3 --json-out "$env:TEMP\nekotrack-character-snapshot-cleanup.json"
+
+This compares the former per-character cleanup with the set-based cleanup against
+disposable SQLite databases, verifies exact final-state parity, and records latency
+plus SQL-call counts. It makes no API calls and does not access the user's database.

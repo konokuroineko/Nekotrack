@@ -457,3 +457,13 @@ Regression coverage refreshes a 41-character cast to an empty complete snapshot,
 checks direct SQL execute calls remain bounded, and verifies that shared adaptation
 credits survive while truly stale characters/actors are removed and staff-referenced
 people are retained.
+
+
+## Twenty-sixth-pass cleanup benchmark
+
+Added `experiments/benchmark_character_snapshot_cleanup.py` to compare the prior
+per-character SQL cleanup with the set-based implementation over 25, 100 and 250
+synthetic cast entries. It compares final rows exactly, records median/p95 time and
+counts direct `execute`/ `executemany` calls. The benchmark only uses temporary
+databases and is attached to the Rust/backend benchmark matrix. Results measure local
+snapshot cleanup only, not network/API time or whole-app performance.
