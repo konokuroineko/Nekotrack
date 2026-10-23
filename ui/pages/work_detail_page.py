@@ -28,7 +28,7 @@ from diagnostics import log_event, log_exception
 from database import (
     add_manual_bundle_link, add_to_library, delete_work_data, get_bundle_characters, get_bundle_detail_readiness,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
-    get_reading_progress, get_staff, get_bundle_staff_page_state, is_work_in_library,
+    get_episode_section_snapshot, get_reading_progress, get_staff, get_bundle_staff_page_state, is_work_in_library,
     get_tmdb_mapping, get_work, get_provider_metadata,
     save_work_display_override, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
@@ -416,38 +416,29 @@ class EpisodeSectionDataWorker(QObject):
             "attempt": self.attempt,
         }
         try:
-            work_row = self._phase(
-                "work_row_read",
-                lambda: get_work(self.work_id),
+            snapshot = self._phase(
+                "episode_section_snapshot_read",
+                lambda: get_episode_section_snapshot(self.work_id),
             )
+            work_row = snapshot.get("work") if isinstance(snapshot, dict) else None
             if work_row is None:
                 payload["status"] = "missing_work"
             else:
                 work = dict(work_row)
-                raw_rows = self._phase(
-                    "episode_rows_read",
-                    lambda: get_episodes(self.work_id),
-                )
                 episodes = WorkDetailPage._normalize_episode_rows(
-                    self.work_id, raw_rows
+                    self.work_id, snapshot.get("episodes") or []
                 )
                 payload.update({
                     "status": "ok",
                     "work": work,
                     "episodes": episodes,
                 })
-                try:
-                    metadata = self._phase(
-                        "catalog_metadata_read",
-                        lambda: get_provider_metadata(
-                            self.work_id, "tmdb_episode_match_version"
-                        ),
-                    )
-                except Exception as error:
-                    metadata = None
+                metadata = snapshot.get("catalog_metadata")
+                metadata_error = snapshot.get("catalog_metadata_error")
+                if metadata_error is not None:
                     log_exception(
                         "episodes.section_catalog_metadata_read_failed",
-                        error,
+                        metadata_error,
                         work_id=self.work_id,
                         attempt=self.attempt,
                     )
@@ -526,19 +517,11 @@ class EpisodeSectionDataWorker(QObject):
                     if catalog_version < TMDB_EPISODE_CATALOG_VERSION:
                         tmdb_id, tmdb_season_number = None, None
                     else:
-                        try:
-                            tmdb_id, tmdb_season_number = self._phase(
-                                "tmdb_mapping_read",
-                                lambda: get_tmdb_mapping(self.work_id),
-                            )
-                        except Exception as error:
-                            tmdb_id, tmdb_season_number = None, None
-                            log_exception(
-                                "episodes.section_tmdb_mapping_read_failed",
-                                error,
-                                work_id=self.work_id,
-                                attempt=self.attempt,
-                            )
+                        # get_work() returns works.*, so the mapping is already
+                        # in this snapshot; opening another connection cannot add
+                        # information for this same selected work.
+                        tmdb_id = work.get("tmdb_id")
+                        tmdb_season_number = work.get("tmdb_season_number")
                     payload["tmdb_context"] = {
                         "title_variants": title_variants,
                         "start_date": start_date,

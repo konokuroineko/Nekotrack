@@ -19,7 +19,7 @@ from api import (
 )
 from ui.pages.work_detail_page import (
     EpisodeArtwork, EpisodeCard, StaffFlowLayout,
-    EpisodeImageCacheWorker, EpisodeSyncWorker, WorkDetailPage,
+    EpisodeImageCacheWorker, EpisodeSyncWorker, EpisodeSectionDataWorker, WorkDetailPage,
 )
 
 
@@ -111,6 +111,73 @@ class DetailSkeletonTests(unittest.TestCase):
 
         page.deleteLater()
         self.app.processEvents()
+
+    def test_episode_section_worker_consumes_one_database_snapshot(self):
+        worker = EpisodeSectionDataWorker(
+            token=41,
+            work_id=12345,
+            members=[{
+                "id": 12345,
+                "title": {"english": "Example Series", "romaji": "Example Series"},
+                "startDate": {"year": 2020, "month": 1, "day": 1},
+            }],
+            attempt=0,
+        )
+        saved_work = {
+            "id": 12345,
+            "title": "Example Series",
+            "type": "ANIME",
+            "format": "TV",
+            "episodes": 1,
+            "tmdb_id": 77,
+            "tmdb_season_number": 2,
+        }
+        saved_episodes = [{
+            "work_id": 12345,
+            "episode_number": 1,
+            "title": "Episode 1",
+            "description": "Example description",
+            "air_date": "2020-01-01",
+            "thumbnail_url": None,
+            "watched": 0,
+        }]
+        snapshot = {
+            "work": saved_work,
+            "episodes": saved_episodes,
+            "catalog_metadata": {
+                "version": TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": time.time(),
+                "complete": True,
+            },
+            "catalog_metadata_error": None,
+        }
+        emitted = []
+        worker.data_ready.connect(
+            lambda token, work_id, payload: emitted.append((token, work_id, payload))
+        )
+
+        with (
+            patch("ui.pages.work_detail_page.get_episode_section_snapshot", return_value=snapshot) as read_snapshot,
+            patch("ui.pages.work_detail_page.get_work") as read_work,
+            patch("ui.pages.work_detail_page.get_episodes") as read_episodes,
+            patch("ui.pages.work_detail_page.get_provider_metadata") as read_metadata,
+            patch("ui.pages.work_detail_page.get_tmdb_mapping") as read_mapping,
+        ):
+            worker.run()
+
+        self.assertEqual(len(emitted), 1)
+        token, work_id, payload = emitted[0]
+        self.assertEqual((token, work_id), (41, 12345))
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["episodes"][0]["episode_number"], 1)
+        self.assertFalse(payload["needs_catalog_refresh"])
+        self.assertEqual(payload["tmdb_context"]["tmdb_id"], 77)
+        self.assertEqual(payload["tmdb_context"]["tmdb_season_number"], 2)
+        read_snapshot.assert_called_once_with(12345)
+        read_work.assert_not_called()
+        read_episodes.assert_not_called()
+        read_metadata.assert_not_called()
+        read_mapping.assert_not_called()
 
     def test_episode_section_waits_when_selected_season_row_is_missing(self):
         page = WorkDetailPage()

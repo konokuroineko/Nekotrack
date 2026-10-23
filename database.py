@@ -1655,6 +1655,79 @@ def get_episodes(work_id):
         connection.close()
 
 
+def get_episode_section_snapshot(work_id):
+    """Read a Work Details episode snapshot through one SQLite connection.
+
+    Core work/episode failures propagate to the caller. Catalog metadata is an
+    optional enrichment; preserve a metadata-read exception in the return value
+    so the UI can log it and continue with the same fallback as before.
+    """
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return {
+            "work": None,
+            "episodes": [],
+            "catalog_metadata": None,
+            "catalog_metadata_error": None,
+        }
+
+    connection = get_connection()
+    try:
+        work = connection.execute(
+            """
+            SELECT works.*, user_library.status, user_library.progress_episodes,
+                   user_library.progress_chapters, user_library.progress_volumes,
+                   user_library.rating, user_library.notes,
+                   user_library.added_date, user_library.updated_date
+            FROM works LEFT JOIN user_library ON user_library.work_id = works.id
+            WHERE works.id = ?
+            """,
+            (safe_work_id,),
+        ).fetchone()
+        if work is None:
+            return {
+                "work": None,
+                "episodes": [],
+                "catalog_metadata": None,
+                "catalog_metadata_error": None,
+            }
+
+        episodes = connection.execute(
+            "SELECT * FROM episodes WHERE work_id = ? ORDER BY episode_number",
+            (safe_work_id,),
+        ).fetchall()
+
+        catalog_metadata = None
+        catalog_metadata_error = None
+        try:
+            metadata_row = connection.execute(
+                "SELECT payload_json FROM work_provider_metadata "
+                "WHERE work_id = ? AND provider = ?",
+                (safe_work_id, "tmdb_episode_match_version"),
+            ).fetchone()
+        except Exception as error:
+            catalog_metadata_error = error
+            metadata_row = None
+
+        if metadata_row:
+            try:
+                payload = json.loads(metadata_row["payload_json"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = None
+            if isinstance(payload, (dict, list)):
+                catalog_metadata = payload
+
+        return {
+            "work": work,
+            "episodes": episodes,
+            "catalog_metadata": catalog_metadata,
+            "catalog_metadata_error": catalog_metadata_error,
+        }
+    finally:
+        connection.close()
+
+
 def _reading_item_type(value):
     value = str(value or "").strip().lower()
     if value not in {"chapter", "volume"}:

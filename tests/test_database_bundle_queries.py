@@ -129,6 +129,23 @@ def reference_bundle_detail_readiness(work_ids):
     return result
 
 
+def reference_episode_section_snapshot(work_id):
+    """Former standalone readers, kept as a parity oracle."""
+    work = database.get_work(work_id)
+    if work is None:
+        return {
+            "work": None,
+            "episodes": [],
+            "catalog_metadata": None,
+        }
+    metadata = database.get_provider_metadata(work_id, "tmdb_episode_match_version")
+    return {
+        "work": dict(work),
+        "episodes": [dict(row) for row in database.get_episodes(work_id)],
+        "catalog_metadata": metadata,
+    }
+
+
 def reference_bundle_staff_page_state(work_ids):
     """Former per-work staff count and provider-metadata reads."""
     ids = database._validated_work_ids(work_ids)
@@ -160,7 +177,8 @@ class BundleDetailBatchingTests(unittest.TestCase):
                 CREATE TABLE works (
                     id INTEGER PRIMARY KEY, title TEXT NOT NULL, type TEXT NOT NULL,
                     format TEXT, cover_url TEXT, cover_path TEXT,
-                    episodes INTEGER, characters_loaded INTEGER NOT NULL DEFAULT 0
+                    episodes INTEGER, characters_loaded INTEGER NOT NULL DEFAULT 0,
+                    tmdb_id INTEGER, tmdb_season_number INTEGER
                 );
                 CREATE TABLE characters (
                     id INTEGER PRIMARY KEY, name TEXT NOT NULL, image_url TEXT, image_path TEXT
@@ -295,6 +313,49 @@ class BundleDetailBatchingTests(unittest.TestCase):
                 with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
                     fn([1, 2, 3])
                 self.assertEqual(factory.call_count, 1)
+
+    def test_episode_section_snapshot_matches_legacy_readers_with_one_connection(self):
+        con = database.get_connection()
+        try:
+            con.execute(
+                "UPDATE works SET episodes = 12, tmdb_id = 77, tmdb_season_number = 2 "
+                "WHERE id = 1"
+            )
+            con.executemany(
+                "INSERT INTO episodes (id, work_id, episode_number, title, watched) VALUES (?, 1, ?, ?, ?)",
+                [(201, 1, 1, "Episode 1", 1), (202, 1, 2, "Episode 2", 0)],
+            )
+            con.execute(
+                "INSERT INTO work_provider_metadata (work_id, provider, payload_json) VALUES (?, ?, ?)",
+                (1, "tmdb_episode_match_version", json.dumps({
+                    "version": 4, "fetched_at": 1750000000, "complete": True
+                })),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        expected = reference_episode_section_snapshot(1)
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            actual = database.get_episode_section_snapshot(1)
+
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(dict(actual["work"]), expected["work"])
+        self.assertEqual([dict(row) for row in actual["episodes"]], expected["episodes"])
+        self.assertEqual(actual["catalog_metadata"], expected["catalog_metadata"])
+        self.assertIsNone(actual["catalog_metadata_error"])
+        self.assertEqual(actual["work"]["tmdb_id"], 77)
+        self.assertEqual(actual["work"]["tmdb_season_number"], 2)
+
+    def test_episode_section_snapshot_reports_missing_work_without_extra_reads(self):
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            actual = database.get_episode_section_snapshot(987654)
+
+        self.assertEqual(factory.call_count, 1)
+        self.assertIsNone(actual["work"])
+        self.assertEqual(actual["episodes"], [])
+        self.assertIsNone(actual["catalog_metadata"])
+        self.assertIsNone(actual["catalog_metadata_error"])
 
     def test_batched_staff_page_state_matches_per_work_reads_with_one_connection(self):
         con = database.get_connection()

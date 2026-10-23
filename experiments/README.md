@@ -236,3 +236,13 @@ The FIFO queue in `has_pending_relation_enrichment` now uses `deque.popleft()` r
 than `list.pop(0)`, keeping traversal linear in queue operations. The new synthetic
 benchmark compares the old and new queue paths at large frontier sizes; it explicitly
 measures queue overhead only and makes no whole-app performance claim.
+
+
+## Work Details episode snapshot
+
+The episode-section worker now loads the selected work, saved episode rows and TMDB
+catalog-version metadata using one SQLite connection. It reuses the selected work's
+already-loaded TMDB ID/season fields rather than querying the same table again.
+Alternate titles remain a conditional read when catalog refresh is necessary.
+The new benchmark compares exact legacy outputs and connection counts on synthetic
+episode catalogs up to 5,000 rows.

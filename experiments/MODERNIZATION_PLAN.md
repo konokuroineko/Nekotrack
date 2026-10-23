@@ -336,3 +336,19 @@ Added an exact-behavior regression against the former implementation on a 2,500-
 frontier and a check for uncached related placeholders. A synthetic queue-overhead
 benchmark compares the old and new traversals at 1,000–20,000 items. It reports the
 queue component only, not whole-app or network speedup.
+
+
+## Fourteenth-pass Work Details episode snapshot
+
+The initial episode-section worker previously opened separate SQLite connections for
+the selected work row, saved episodes and TMDB catalog-version metadata, then could
+open more connections for the selected work's mapping and alternate titles. Added
+`get_episode_section_snapshot` to read the work row, episodes and optional catalog
+metadata on one connection. The existing nonfatal catalog-metadata failure is retained
+as a returned error for the UI to log; a missing work returns the same empty state.
+
+The worker consumes the snapshot and uses TMDB mapping fields already present in
+`works.*`, eliminating a redundant mapping connection. Alternate titles remain a
+conditional lookup only when the catalog needs refresh. Database parity, UI worker
+integration and a synthetic SQLite benchmark measure exact data equivalence and
+connections per read.
