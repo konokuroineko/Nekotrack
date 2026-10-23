@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 from difflib import SequenceMatcher
+from native_acceleration import sequence_match_ratio
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from ui.preferences import get
@@ -1958,7 +1959,7 @@ def _title_similarity(left, right):
     if name in query or query in name:
         containment = min(len(name), len(query)) / max(len(name), len(query))
         return 0.72 + 0.28 * containment
-    return SequenceMatcher(None, name, query, autojunk=False).ratio()
+    return sequence_match_ratio(name, query)
 
 
 def _candidate_title_similarity(candidate, title_variants):
