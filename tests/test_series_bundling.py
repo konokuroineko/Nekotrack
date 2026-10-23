@@ -70,6 +70,52 @@ class SeriesPrefixIndexTests(unittest.TestCase):
         self.assertEqual(matches[4], [])
 
 
+class SeriesExclusionIndexTests(unittest.TestCase):
+    def test_neighbor_lookup_matches_original_cross_product_check(self):
+        rng = random.Random(20261024)
+        for _ in range(500):
+            universe = list(range(1, rng.randint(5, 60)))
+            rng.shuffle(universe)
+            split = rng.randrange(1, len(universe))
+            left_members = set(universe[:split])
+            right_members = set(universe[split:])
+            if rng.randrange(5) == 0:
+                left_members.clear()
+            if rng.randrange(5) == 0:
+                right_members.clear()
+
+            excluded_links = set()
+            for _ in range(rng.randrange(0, 25)):
+                a = rng.choice(universe)
+                b = rng.choice(universe)
+                if a != b:
+                    excluded_links.add(tuple(sorted((a, b))))
+
+            expected = any(
+                tuple(sorted((left_id, right_id))) in excluded_links
+                for left_id in left_members
+                for right_id in right_members
+            )
+            neighbors = series._build_exclusion_neighbors(excluded_links)
+            actual = series._components_have_excluded_pair(
+                left_members, right_members, neighbors
+            )
+            with self.subTest(
+                left_size=len(left_members),
+                right_size=len(right_members),
+                exclusion_count=len(excluded_links),
+            ):
+                self.assertEqual(actual, expected)
+
+    def test_exclusion_neighbor_index_is_undirected(self):
+        neighbors = series._build_exclusion_neighbors({(12, 99), (13, 98)})
+        self.assertEqual(neighbors[12], {99})
+        self.assertEqual(neighbors[99], {12})
+        self.assertTrue(series._components_have_excluded_pair({12}, {99}, neighbors))
+        self.assertFalse(series._components_have_excluded_pair({12}, {98}, neighbors))
+        self.assertFalse(series._components_have_excluded_pair({12}, {98}, {}))
+
+
 class BundleOptionTests(unittest.TestCase):
     def test_tv_and_tv_short_are_always_bundleable(self):
         with patch("series.get", return_value=False):
