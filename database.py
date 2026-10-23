@@ -2447,13 +2447,15 @@ def save_anime(anime):
         ))
         synonyms = anime.get("synonyms")
         if isinstance(synonyms, (list, tuple)):
-            for synonym in synonyms:
-                if not isinstance(synonym, str) or not synonym.strip():
-                    continue
-                connection.execute(
-                    "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
-                    (work_id, synonym.strip(), None),
-                )
+            synonym_rows = [
+                (work_id, synonym.strip(), None)
+                for synonym in synonyms
+                if isinstance(synonym, str) and synonym.strip()
+            ]
+            connection.executemany(
+                "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
+                synonym_rows,
+            )
 
         # Preserve provider-native metadata instead of flattening it into AniList fields.
         if isinstance(mangabaka_data, dict) and mangabaka_payload_json is not None:
@@ -2471,6 +2473,7 @@ def save_anime(anime):
                 mangabaka_payload_json,
             ))
             title_records = mangabaka_data.get("titles") or []
+            alternate_title_rows = []
             for title_record in title_records:
                 if not isinstance(title_record, dict):
                     continue
@@ -2483,16 +2486,19 @@ def save_anime(anime):
                 language = title_record.get("language")
                 if not isinstance(language, str):
                     language = None
-                connection.execute(
-                    "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
-                    (work_id, alt_title, language),
-                )
+                alternate_title_rows.append((work_id, alt_title, language))
+            connection.executemany(
+                "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
+                alternate_title_rows,
+            )
         if studio_snapshot_valid is True:
             connection.execute(
                 "DELETE FROM work_studios WHERE work_id = ?",
                 (work_id,),
             )
 
+        studio_rows = []
+        work_studio_rows = []
         for edge in studio_edges if isinstance(studio_edges, list) else []:
             if not isinstance(edge, dict):
                 continue
@@ -2515,14 +2521,18 @@ def save_anime(anime):
                 continue
             if studio_id <= 0 or studio_id > _MAX_SQLITE_INTEGER:
                 continue
-            connection.execute(
-                "INSERT OR REPLACE INTO studios (id, name, is_main) VALUES (?, ?, ?)",
-                (studio_id, studio_name.strip(), 1 if edge.get("isMain") else 0),
+            studio_rows.append(
+                (studio_id, studio_name.strip(), 1 if edge.get("isMain") else 0)
             )
-            connection.execute(
-                "INSERT OR IGNORE INTO work_studios (work_id, studio_id) VALUES (?, ?)",
-                (work_id, studio_id),
-            )
+            work_studio_rows.append((work_id, studio_id))
+        connection.executemany(
+            "INSERT OR REPLACE INTO studios (id, name, is_main) VALUES (?, ?, ?)",
+            studio_rows,
+        )
+        connection.executemany(
+            "INSERT OR IGNORE INTO work_studios (work_id, studio_id) VALUES (?, ?)",
+            work_studio_rows,
+        )
         if relation_snapshot is not None:
             # Relation details are a cached snapshot, not an append-only history.
             # Delete stale outgoing edges within this transaction before writing
@@ -2532,6 +2542,8 @@ def save_anime(anime):
                 (work_id,),
             )
 
+        relation_target_rows = []
+        relation_rows = []
         for edge in relation_edges if isinstance(relation_edges, list) else []:
             if not isinstance(edge, dict):
                 continue
@@ -2631,35 +2643,7 @@ def save_anime(anime):
                     target_cover_url = target_cover_url.strip()
                 target_mal_id = _safe_optional_integer(node.get("idMal"), 1)
 
-                connection.execute("""
-                    INSERT INTO works (
-                        id, title, type, format, start_year, start_month, start_day,
-                        cover_url, mal_id
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        title = excluded.title,
-                        type = CASE
-                            WHEN ? THEN excluded.type ELSE works.type END,
-                        format = COALESCE(excluded.format, works.format),
-                        start_year = CASE
-                            WHEN excluded.start_year IS NULL
-                             AND excluded.start_month IS NULL
-                             AND excluded.start_day IS NULL
-                            THEN works.start_year ELSE excluded.start_year END,
-                        start_month = CASE
-                            WHEN excluded.start_year IS NULL
-                             AND excluded.start_month IS NULL
-                             AND excluded.start_day IS NULL
-                            THEN works.start_month ELSE excluded.start_month END,
-                        start_day = CASE
-                            WHEN excluded.start_year IS NULL
-                             AND excluded.start_month IS NULL
-                             AND excluded.start_day IS NULL
-                            THEN works.start_day ELSE excluded.start_day END,
-                        cover_url = COALESCE(excluded.cover_url, works.cover_url),
-                        mal_id = COALESCE(excluded.mal_id, works.mal_id)
-                """, (
+                relation_target_rows.append((
                     target_id,
                     target_title,
                     target_type,
@@ -2671,10 +2655,43 @@ def save_anime(anime):
                     target_mal_id,
                     1 if target_type_is_valid else 0,
                 ))
-            connection.execute(
-                "INSERT OR REPLACE INTO work_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)",
-                (work_id, target_id, relation_type),
+            relation_rows.append((work_id, target_id, relation_type))
+        connection.executemany(
+            """
+            INSERT INTO works (
+                id, title, type, format, start_year, start_month, start_day,
+                cover_url, mal_id
             )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                type = CASE
+                    WHEN ? THEN excluded.type ELSE works.type END,
+                format = COALESCE(excluded.format, works.format),
+                start_year = CASE
+                    WHEN excluded.start_year IS NULL
+                     AND excluded.start_month IS NULL
+                     AND excluded.start_day IS NULL
+                    THEN works.start_year ELSE excluded.start_year END,
+                start_month = CASE
+                    WHEN excluded.start_year IS NULL
+                     AND excluded.start_month IS NULL
+                     AND excluded.start_day IS NULL
+                    THEN works.start_month ELSE excluded.start_month END,
+                start_day = CASE
+                    WHEN excluded.start_year IS NULL
+                     AND excluded.start_month IS NULL
+                     AND excluded.start_day IS NULL
+                    THEN works.start_day ELSE excluded.start_day END,
+                cover_url = COALESCE(excluded.cover_url, works.cover_url),
+                mal_id = COALESCE(excluded.mal_id, works.mal_id)
+            """,
+            relation_target_rows,
+        )
+        connection.executemany(
+            "INSERT OR REPLACE INTO work_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)",
+            relation_rows,
+        )
         connection.commit()
     except Exception:
         connection.rollback()
