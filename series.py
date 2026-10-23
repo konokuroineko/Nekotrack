@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import defaultdict, deque
 import re
 import time
 
@@ -1229,10 +1229,10 @@ def group_media_results(results, enrich=False, max_requests=0, delay=0.25, stop_
 
 def has_pending_relation_enrichment(results):
     seen = set()
-    queue = list(results)
+    queue = deque(results)
 
     while queue:
-        item = queue.pop(0)
+        item = queue.popleft()
         item_id = int(item["id"])
         if item_id in seen:
             continue

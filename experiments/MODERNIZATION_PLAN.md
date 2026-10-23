@@ -323,3 +323,16 @@ legacy saved-count rules, and verifies next-page counters only move forward.
 Search relation discovery previously recursively bisected any failed provider batch until it retried individual IDs. A shared AniList timeout/429/TLS failure could therefore fan one failed batch into many more requests. The cache helper now requests positive AniList IDs and negative local MangaBaka IDs independently, caches any valid returned rows, and logs a compact structured event for a failed group. It leaves transient retrying to the existing bounded discovery loop instead of recursively generating single-item requests.
 
 Regression tests assert one request per failing AniList group and verify that an AniList outage no longer blocks valid negative MangaBaka IDs in the same discovery frontier.
+
+
+## Thirteenth-pass Search readiness traversal
+
+`has_pending_relation_enrichment` used a Python list as a FIFO queue and removed each
+item with `pop(0)`, shifting all remaining frontier entries each iteration. It now
+uses `collections.deque.popleft()`, preserving FIFO order and the prior early-return
+and visited-item behavior while avoiding repeated array shifts.
+
+Added an exact-behavior regression against the former implementation on a 2,500-item
+frontier and a check for uncached related placeholders. A synthetic queue-overhead
+benchmark compares the old and new traversals at 1,000–20,000 items. It reports the
+queue component only, not whole-app or network speedup.

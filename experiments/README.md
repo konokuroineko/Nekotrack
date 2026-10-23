@@ -228,3 +228,11 @@ Failed AniList relation batches no longer recursively explode into individual re
 AniList and negative local MangaBaka IDs are fetched independently, so a shared AniList
 failure does not block local provider results. The existing bounded discovery loop
 controls retries; tests verify request counts and mixed-provider isolation.
+
+
+## Search relation readiness queue
+
+The FIFO queue in `has_pending_relation_enrichment` now uses `deque.popleft()` rather
+than `list.pop(0)`, keeping traversal linear in queue operations. The new synthetic
+benchmark compares the old and new queue paths at large frontier sizes; it explicitly
+measures queue overhead only and makes no whole-app performance claim.

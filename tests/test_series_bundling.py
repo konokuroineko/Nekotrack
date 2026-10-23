@@ -313,6 +313,77 @@ class BundleOptionTests(unittest.TestCase):
 
 
 
+class RelationPendingQueueTests(unittest.TestCase):
+    @staticmethod
+    def _reference_has_pending(results):
+        seen = set()
+        queue = list(results)
+        while queue:
+            item = queue.pop(0)
+            item_id = int(item["id"])
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+            if series._get(item, "_relations_loaded"):
+                edges = series._search_relation_edges(item)
+            else:
+                cached = series._relation_cache.get(item_id)
+                if cached:
+                    edges = (cached.get("relations") or {}).get("edges", [])
+                elif series._get(item, "_related_only"):
+                    return True
+                else:
+                    edges = series._search_relation_edges(item)
+            for relation in edges:
+                if not series._relation_edge_allowed(item, relation):
+                    continue
+                node = relation.get("node") or {}
+                target_id = node.get("id")
+                if (
+                    target_id
+                    and int(target_id) not in seen
+                    and int(target_id) not in series._relation_cache
+                ):
+                    queue.append(series._related_placeholder(node))
+        return False
+
+    def test_deque_fifo_matches_reference_on_a_large_loaded_frontier(self):
+        frontier = []
+        for work_id in range(1, 2501):
+            item = media(work_id, f"Synthetic Series {work_id}", "TV")
+            item["_relations_loaded"] = True
+            frontier.append(item)
+
+        with patch.dict(series._relation_cache, {}, clear=True):
+            expected = self._reference_has_pending(frontier)
+            actual = series.has_pending_relation_enrichment(frontier)
+
+        self.assertFalse(expected)
+        self.assertEqual(actual, expected)
+
+    def test_deque_traversal_still_detects_an_uncached_related_placeholder(self):
+        root = media(1, "Example Series", "TV", relations=[
+            edge("SEQUEL", {
+                "id": 2,
+                "type": "ANIME",
+                "format": "TV",
+                "title": {"english": "Example Series Season 2", "romaji": "Example Series Season 2"},
+                "coverImage": {"large": None},
+                "episodes": 12,
+                "startDate": {"year": 2021, "month": 1, "day": 1},
+            })
+        ])
+        root["_relations_loaded"] = True
+
+        with patch.dict(series._relation_cache, {}, clear=True):
+            expected = self._reference_has_pending([root])
+            actual = series.has_pending_relation_enrichment([root])
+
+        self.assertTrue(expected)
+        self.assertEqual(actual, expected)
+
+
+
 class RelationBatchFailureIsolationTests(unittest.TestCase):
     def test_anilist_batch_failure_does_not_fan_out_to_single_item_requests(self):
         ids = [910001, 910002, 910003, 910004, 910005]
