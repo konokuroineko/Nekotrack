@@ -507,6 +507,39 @@ class RelationBatchFailureIsolationTests(unittest.TestCase):
 
 
 
+class BoundedRelationCacheTests(unittest.TestCase):
+    def test_cache_promotes_reads_and_evicts_least_recently_used(self):
+        cache = series._BoundedRelationCache(max_entries=2)
+        cache[1] = {"id": 1}
+        cache[2] = {"id": 2}
+        self.assertEqual(cache.get(1), {"id": 1})
+        cache[3] = {"id": 3}
+
+        self.assertEqual(list(cache), [1, 3])
+        self.assertNotIn(2, cache)
+
+    def test_batch_returns_all_results_even_when_cache_limit_is_exceeded(self):
+        cache = series._BoundedRelationCache(max_entries=2)
+        details = {
+            work_id: {
+                "id": work_id,
+                "relations": {"edges": []},
+            }
+            for work_id in (1, 2, 3)
+        }
+        with (
+            patch.object(series, "_relation_cache", cache),
+            patch("series.get_media_relations_batch", return_value=details),
+        ):
+            result = series._cache_relation_details_batch([1, 2, 3])
+
+        self.assertEqual(result, details)
+        self.assertEqual(list(cache), [2, 3])
+        self.assertLessEqual(len(cache), cache.max_entries)
+
+
+
+
 class AutoBundleActionTests(unittest.TestCase):
     def test_auto_bundle_reuses_library_grouping_and_persists_its_member_snapshot(self):
         import sqlite3

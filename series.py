@@ -1,4 +1,4 @@
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 import re
 import time
 
@@ -58,7 +58,36 @@ RELATION_BATCH_SIZE = 10
 MAX_NODE_FETCH_RETRIES = 3
 
 _relation_sync_checked_ids = set()
-_relation_cache = {}
+RELATION_CACHE_MAX_ENTRIES = 5000
+
+
+class _BoundedRelationCache(OrderedDict):
+    """Small LRU cache so relation graphs from old Search sessions are released."""
+
+    def __init__(self, max_entries=RELATION_CACHE_MAX_ENTRIES):
+        super().__init__()
+        self.max_entries = max(1, int(max_entries))
+
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        self.move_to_end(key)
+        return value
+
+    def get(self, key, default=None):
+        if key not in self:
+            return default
+        return self[key]
+
+    def __setitem__(self, key, value):
+        if key in self:
+            super().__delitem__(key)
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+        while len(self) > self.max_entries:
+            self.popitem(last=False)
+
+
+_relation_cache = _BoundedRelationCache()
 
 
 
@@ -659,13 +688,14 @@ def _apply_relation_details(item, details):
 def _cache_relation_details_batch(media_ids):
     """Fetch uncached relation graphs without fanning out failed provider batches."""
     ids = sorted({int(media_id) for media_id in media_ids if media_id is not None})
+    result_for_call = {
+        media_id: _relation_cache[media_id]
+        for media_id in ids
+        if media_id in _relation_cache
+    }
     missing = [media_id for media_id in ids if media_id not in _relation_cache]
     if not missing:
-        return {
-            media_id: _relation_cache[media_id]
-            for media_id in ids
-            if media_id in _relation_cache
-        }
+        return result_for_call
 
     # Keep the AniList request and local MangaBaka resolutions independent.
     # A transient AniList failure must not prevent negative-ID entries from
@@ -708,12 +738,15 @@ def _cache_relation_details_batch(media_ids):
             except (TypeError, ValueError, OverflowError):
                 continue
             if media_id in requested and details is not None:
+                # Keep all results in this call even if inserting later entries
+                # evicts an earlier graph from the bounded cross-search cache.
                 _relation_cache[media_id] = details
+                result_for_call[media_id] = details
 
     return {
-        media_id: _relation_cache[media_id]
+        media_id: result_for_call[media_id]
         for media_id in ids
-        if media_id in _relation_cache
+        if media_id in result_for_call
     }
 
 

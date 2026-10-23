@@ -481,3 +481,16 @@ component exclusions, saved membership grouping and explicit manual-link joins.
 The database regression test compares the combined result against all three former
 readers and asserts one connection. The CI synthetic benchmark covers 100 to 5,000
 works, checks exact output parity, and records time plus connection counts.
+
+
+## Twenty-eighth-pass bounded Search relation cache
+
+The process-wide relation graph cache previously grew for every unique item encountered
+through Search, Library refreshes and Work Details discovery. It is now an LRU cache
+limited to 5,000 relation records, releasing older graphs as new ones arrive. Batch
+results are also retained in a per-call map until returned, so eviction during a large
+batch cannot silently drop results from the current discovery pass.
+
+Regression tests verify recency promotion, oldest-entry eviction and exact return of
+all fetched rows even when a deliberately small test cache evicts an item mid-batch.
+This pass limits memory growth; it does not claim a CPU speedup.

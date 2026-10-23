@@ -334,3 +334,10 @@ plus SQL-call counts. It makes no API calls and does not access the user's datab
 Search-membership snapshots on one SQLite connection instead of three. Run
 `experiments/benchmark_library_grouping_reads.py` to compare output parity, latency
 and connection counts across synthetic libraries of 100, 1,000 and 5,000 works.
+
+
+## Bounded relation-graph cache
+
+Search relation graphs now use a 5,000-entry LRU cache rather than an unbounded process
+dictionary. An in-flight batch retains its fetched values until return, so cache
+eviction cannot truncate a result list. Tests cover LRU order and in-flight parity.
