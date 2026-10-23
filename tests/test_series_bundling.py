@@ -27,7 +27,7 @@ class SeriesPrefixIndexTests(unittest.TestCase):
             matches = []
             if len(tokens) >= 2:
                 for other_index, other_tokens in enumerate(token_lists):
-                    if len(other_tokens) < 2:
+                    if other_index == len(result) or len(other_tokens) < 2:
                         continue
                     shorter, longer = (
                         (tokens, other_tokens)
@@ -66,8 +66,8 @@ class SeriesPrefixIndexTests(unittest.TestCase):
         tokens, matches = series._prefix_related_tv_candidate_indices(keys)
         self.assertEqual(tokens[0:3], [(), ("solo",), ("another",)])
         self.assertEqual(matches[0:3], [[], [], []])
-        self.assertEqual(matches[3], [3])
-        self.assertEqual(matches[4], [4])
+        self.assertEqual(matches[3], [])
+        self.assertEqual(matches[4], [])
 
 
 class BundleOptionTests(unittest.TestCase):
