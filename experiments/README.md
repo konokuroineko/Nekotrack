@@ -48,3 +48,44 @@ the wheel in the same environment before packaging.
 No QML screen or UI migration is part of Phase A. Preserve existing application
 behavior and user data, and do not merge until CI, benchmark review and packaged-app
 checks are complete.
+
+## CI benchmark results (2026-10-23)
+
+The Phase A CI matrix passed on Windows and Linux with Python 3.11 and 3.14.
+The uploaded synthetic benchmark artifacts reported exact ranking / similarity
+output parity.
+
+### Optimized Python recommendations
+
+Median speedup ratio by number of synthetic candidates:
+
+| Candidates | Observed speedup ratio across CI machines | Observed median time |
+| ---: | ---: | --- |
+| 50 | 24.9–25.8× | Reference 110.9–231.7 ms; optimized 4.3–9.3 ms |
+| 250 | 42.5–45.4× | Reference 564.0–1,177.1 ms; optimized 13.3–26.8 ms |
+| 500 | 45.4–50.6× | Reference 1,151.3–2,381.1 ms; optimized 25.4–49.6 ms |
+
+The Python benchmark deliberately repeats source-credit index construction in its
+reference mode. This very large isolated gain validates removing that repeated work;
+it does not mean NekoTrack's full Home feed or app will be 25–50 times faster.
+
+### Rust title-similarity pilot
+
+Across the same four CI OS/Python combinations, native similarity matching was
+about 3.83–4.46× faster than Python difflib on 5,000 deterministic synthetic pairs
+(about 73.9–77.6% lower median time). Median timings were 18.8–36.9 ms for Rust
+and 72.0–157.0 ms for Python, depending on runner/Python version. Outputs matched
+exactly for all benchmark pairs, and the Rust parity tests passed.
+
+This validates that the native helper speeds up the isolated string-matching
+calculation. It does not establish an equivalent end-to-end TMDB enrichment gain:
+real provider response time and how many title comparisons happen per user action
+still need measurement on a user machine.
+
+### Next validation
+
+The remaining Phase A gate is a local before/after run on the user's Windows PC and
+a packaged executable check that proves the frozen app actually loads the Rust
+module. Benchmark the actual app/library; do not extrapolate whole-app speed from
+synthetic CI numbers. Keep the PR draft and defer QML Phase B until those results
+are reviewed.
