@@ -914,21 +914,24 @@ def invalidate_character_snapshots(work_ids):
     if ids is None or not ids:
         return 0
 
-    placeholders = ",".join("?" for _ in ids)
     connection = get_connection()
     try:
-        cursor = connection.execute(
-            f"UPDATE works SET characters_loaded = 0 WHERE id IN ({placeholders})",
-            ids,
-        )
+        updated_count = 0
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            cursor = connection.execute(
+                f"UPDATE works SET characters_loaded = 0 WHERE id IN ({placeholders})",
+                chunk,
+            )
+            if cursor.rowcount > 0:
+                updated_count += cursor.rowcount
         connection.commit()
-        return max(0, cursor.rowcount)
+        return max(0, updated_count)
     except Exception:
         connection.rollback()
         raise
     finally:
         connection.close()
-
 
 def get_tmdb_mapping(work_id):
     """Return the cached TMDB series/season mapping for one exact work."""
@@ -2988,17 +2991,16 @@ def save_automatic_bundle_membership(bundle_id, work_ids):
             "DELETE FROM automatic_bundle_memberships WHERE bundle_id = ?",
             (safe_bundle_id,),
         )
-        if safe_ids:
-            placeholders = ",".join("?" for _ in safe_ids)
-            existing = {
+        existing = set()
+        for chunk in _bundle_id_chunks(safe_ids):
+            placeholders = ",".join("?" for _ in chunk)
+            existing.update(
                 int(row["id"])
                 for row in connection.execute(
                     f"SELECT id FROM works WHERE id IN ({placeholders})",
-                    safe_ids,
+                    chunk,
                 ).fetchall()
-            }
-        else:
-            existing = set()
+            )
         member_ids = sorted(existing)
         if len(member_ids) >= 2:
             connection.executemany(
@@ -3015,7 +3017,6 @@ def save_automatic_bundle_membership(bundle_id, work_ids):
         raise
     finally:
         connection.close()
-
 
 def get_automatic_bundle_memberships(work_ids=None):
     """Return full saved Search-bundle snapshots touching these works."""
@@ -3120,37 +3121,46 @@ def remove_bundle_member(work_id, target_id, bundle_member_ids):
     if work_id == target_id or work_id not in member_ids:
         return False
 
-    all_ids = member_ids | {work_id, target_id}
-    placeholders = ",".join("?" for _ in all_ids)
-
+    all_ids = sorted(member_ids | {work_id, target_id})
     connection = get_connection()
     try:
-        existing = connection.execute(
-            f"SELECT id FROM works WHERE id IN ({placeholders})",
-            tuple(all_ids),
-        ).fetchall()
+        existing = set()
+        for chunk in _bundle_id_chunks(all_ids):
+            placeholders = ",".join("?" for _ in chunk)
+            existing.update(
+                int(row["id"])
+                for row in connection.execute(
+                    f"SELECT id FROM works WHERE id IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+            )
         if len(existing) != len(all_ids):
             return False
 
-        changed = False
-        for other_id in member_ids | {work_id}:
-            if other_id == target_id:
-                continue
-
-            left, right = sorted((target_id, other_id))
-
-            cursor = connection.execute(
-                "DELETE FROM manual_bundle_links WHERE work_a = ? AND work_b = ?",
-                (left, right),
+        # Remove the target's manual links in bounded queries, then insert all
+        # pairwise exclusions in one executemany call. This keeps the operation
+        # transactional while avoiding one SELECT and two writes per member.
+        partner_ids = sorted((member_ids | {work_id}) - {target_id})
+        changed_before = connection.total_changes
+        for chunk in _bundle_id_chunks(partner_ids):
+            placeholders = ",".join("?" for _ in chunk)
+            connection.execute(
+                f"""
+                DELETE FROM manual_bundle_links
+                WHERE (work_a = ? AND work_b IN ({placeholders}))
+                   OR (work_b = ? AND work_a IN ({placeholders}))
+                """,
+                [target_id, *chunk, target_id, *chunk],
             )
-            changed = cursor.rowcount > 0 or changed
 
-            cursor = connection.execute(
-                "INSERT OR IGNORE INTO bundle_exclusions (work_a, work_b) VALUES (?, ?)",
-                (left, right),
-            )
-            changed = cursor.rowcount > 0 or changed
-
+        connection.executemany(
+            "INSERT OR IGNORE INTO bundle_exclusions (work_a, work_b) VALUES (?, ?)",
+            [
+                (min(target_id, other_id), max(target_id, other_id))
+                for other_id in partner_ids
+            ],
+        )
+        changed = connection.total_changes > changed_before
         connection.commit()
         return changed
     except Exception:
@@ -3158,7 +3168,6 @@ def remove_bundle_member(work_id, target_id, bundle_member_ids):
         raise
     finally:
         connection.close()
-
 
 def get_bundle_exclusions(work_ids=None):
     """Return persisted bundle exclusions."""
@@ -3298,12 +3307,13 @@ def save_bundle_override(work_ids, anchor_id, custom_title=None, cover_work_id=N
         return False
 
     connection = get_connection()
-    placeholders = ",".join("?" for _ in ids)
     try:
-        connection.execute(
-            f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
-            ids,
-        )
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            connection.execute(
+                f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
+                chunk,
+            )
         connection.execute(
             """
             INSERT INTO bundle_overrides (
@@ -3321,28 +3331,30 @@ def save_bundle_override(work_ids, anchor_id, custom_title=None, cover_work_id=N
     finally:
         connection.close()
 
-
 def clear_bundle_override(work_ids):
     """Remove a bundle presentation override."""
     ids = _validated_work_ids(work_ids)
     if not ids:
         return False
 
-    placeholders = ",".join("?" for _ in ids)
     connection = get_connection()
     try:
-        cursor = connection.execute(
-            f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
-            ids,
-        )
+        deleted_count = 0
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            cursor = connection.execute(
+                f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
+                chunk,
+            )
+            if cursor.rowcount > 0:
+                deleted_count += cursor.rowcount
         connection.commit()
-        return cursor.rowcount > 0
+        return deleted_count > 0
     except Exception:
         connection.rollback()
         raise
     finally:
         connection.close()
-
 
 def add_to_library(work_id, status="Planning"):
     """Add a work or update its status without erasing saved progress and notes.

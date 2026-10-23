@@ -253,3 +253,19 @@ The synthetic bundle-details benchmark now includes old per-bundle override read
 versus one bulk override lookup, checks output equality, and includes connection
 counts in its end-to-end database operation bundle. Whole-app improvement remains
 unclaimed until real-library instrumentation is reviewed.
+
+
+## Eighth-pass large-ID write safety
+
+The large-library read audit also exposed write paths with unbounded `IN (...)`
+lists. Character-snapshot invalidation, automatic-bundle membership replacement,
+bundle-member removal, and bundle-appearance override save/clear operations now use
+bounded chunks on the same SQLite connection and transaction. Removing a bundle
+member additionally replaces per-member SELECT/delete/insert calls with chunked
+manual-link deletes and one batched exclusion insert. This preserves pairwise
+exclusions and the user's other manual links.
+
+The synthetic database tests create 1,200 disposable work rows and exercise these
+paths end to end. Assertions verify member snapshots, override identity/cover choices,
+manual-link removal and all 1,199 expected exclusions. No production database is
+accessed by those tests.

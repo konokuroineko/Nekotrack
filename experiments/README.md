@@ -182,3 +182,12 @@ The single-bundle accessor retains its anchor-selection behavior. Tests verify t
 cover application, a 1,200-ID query spanning chunks, and correct override selection.
 `experiments/benchmark_bundle_details.py` now compares per-bundle and bulk override
 reads along with the other bundled Work Details database operations.
+
+
+## Large-ID bundle write paths
+
+Write paths that take an entire library bundle now chunk their `IN (...)` reads and
+deletes while keeping one connection and one transaction. Bundle-member removal
+performs chunked manual-link deletion and batches the expected pairwise exclusions.
+`tests/test_database_bundle_queries.py` stress-tests these operations using 1,200
+synthetic work rows.

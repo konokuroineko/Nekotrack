@@ -368,6 +368,73 @@ class BundleDetailBatchingTests(unittest.TestCase):
             {100, 101, 102},
         )
 
+    def test_large_id_write_paths_chunk_and_preserve_bundle_semantics(self):
+        # Fill out the disposable fixture to 1,200 real works. This test never
+        # touches the user's NekoTrack database.
+        con = database.get_connection()
+        try:
+            con.executemany(
+                "INSERT INTO works (id, title, type, episodes, characters_loaded) VALUES (?, ?, 'ANIME', 0, 1)",
+                [
+                    (work_id, f"Synthetic Work {work_id}")
+                    for work_id in range(7, 1201)
+                ],
+            )
+            con.executemany(
+                "INSERT INTO manual_bundle_links (work_a, work_b) VALUES (?, ?)",
+                [(1, 1200), (2, 1200)],
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        ids = list(range(1, 1201))
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            self.assertEqual(database.invalidate_character_snapshots(ids), 1200)
+        self.assertEqual(factory.call_count, 1)
+        con = database.get_connection()
+        try:
+            self.assertEqual(
+                con.execute("SELECT COUNT(*) FROM works WHERE characters_loaded = 0").fetchone()[0],
+                1200,
+            )
+            con.execute("UPDATE works SET characters_loaded = 1")
+            con.commit()
+        finally:
+            con.close()
+
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            self.assertTrue(database.save_automatic_bundle_membership(1, ids))
+        self.assertEqual(factory.call_count, 1)
+        saved = database.get_automatic_bundle_memberships([1])
+        self.assertEqual(len(saved), 1200)
+        self.assertEqual((saved[0]["bundle_id"], saved[0]["work_id"]), (1, 1))
+        self.assertEqual((saved[-1]["bundle_id"], saved[-1]["work_id"]), (1, 1200))
+
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            self.assertTrue(database.save_bundle_override(
+                ids, anchor_id=1, custom_title="Large bundle", cover_work_id=1200
+            ))
+        self.assertEqual(factory.call_count, 1)
+        override = database.get_bundle_override([1200, 1])
+        self.assertEqual(override["custom_title"], "Large bundle")
+        self.assertEqual(override["cover_work_id"], 1200)
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            self.assertTrue(database.clear_bundle_override(ids))
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(database.get_bundle_overrides(ids), [])
+
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            self.assertTrue(database.remove_bundle_member(1, 1200, ids))
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(database.get_manual_bundle_links(), [])
+        exclusions = database.get_bundle_exclusions()
+        self.assertEqual(len(exclusions), 1199)
+        self.assertEqual(
+            (exclusions[0]["work_a"], exclusions[0]["work_b"]),
+            (1, 1200),
+        )
+
     def test_empty_and_invalid_relation_inputs_keep_existing_contract(self):
         self.assertEqual(database.get_bundle_characters(None), [])
         self.assertEqual(database.get_bundle_staff(None), [])
