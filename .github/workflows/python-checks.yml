@@ -47,9 +47,43 @@ jobs:
         if: runner.os == 'Linux'
         run: python installer/generate_icon.py
       - name: Compile Python modules
-        run: python -m compileall -q main.py api.py catalog_search.py debug_tools.py database.py image_cache.py series.py updater.py stress_test.py installer ui tests
+        run: python -m compileall -q main.py api.py native_acceleration.py catalog_search.py debug_tools.py database.py image_cache.py series.py updater.py stress_test.py installer ui tests
       - name: Run regression and deterministic stress tests
         run: python -m unittest discover -s tests -v
       - name: Smoke-test the timed adversarial soak harness
         if: runner.os == 'Linux'
         run: python stress_test.py --seconds 1 --seed 17 --report "${{ runner.temp }}/nekotrack-stress-smoke.json"
+
+  rust-native:
+    name: Rust extension parity (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.14"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Set up stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install maturin
+        run: python -m pip install --upgrade pip maturin
+      - name: Build optimized native wheel
+        run: maturin build --release --manifest-path rust/nekotrack_core/Cargo.toml --out target/wheels
+      - name: Install the native wheel
+        run: python -c "import glob, subprocess, sys; wheels = glob.glob('target/wheels/nekotrack_core-*.whl'); assert len(wheels) == 1, wheels; subprocess.check_call([sys.executable, '-m', 'pip', 'install', wheels[0]])"
+      - name: Check native/Python parity
+        run: python -m unittest discover -s tests -p test_native_acceleration.py -v
+      - name: Benchmark native similarity against Python
+        run: python experiments/benchmark_native_similarity.py --pairs 5000 --iterations 9 --json-out "${{ runner.temp }}/nekotrack-native-similarity.json"
+      - name: Upload comparable benchmark result
+        uses: actions/upload-artifact@v4
+        with:
+          name: nekotrack-native-benchmark-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: ${{ runner.temp }}/nekotrack-native-similarity.json
+          if-no-files-found: error
