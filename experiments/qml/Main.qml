@@ -14,6 +14,7 @@ ApplicationWindow {
     color: "#0D0E14"
 
     property int activePage: 0
+    property int previousPage: 0
     property string formatFilter: "All"
     property string statusFilter: "All"
     property string statusMessage: qsTr("Design preview · sample data only · nothing is saved.")
@@ -93,6 +94,8 @@ ApplicationWindow {
     }
 
     function openResult(title, mediaFormat, descriptionText, progressText, accentGlyph) {
+        if (activePage < 6)
+            previousPage = activePage
         selectedTitle = title
         selectedFormat = mediaFormat
         selectedDescription = descriptionText
@@ -207,7 +210,14 @@ ApplicationWindow {
                             focusPolicy: Qt.StrongFocus
                             Accessible.name: modelData.label
                             Accessible.description: qsTr("Show the %1 page in the design preview.").arg(modelData.label)
-                            onClicked: root.activePage = index
+                            onClicked: {
+                                root.activePage = index
+                                if (index === 1)
+                                    root.formatFilter = "All"
+                                else if (index === 2)
+                                    root.statusFilter = "All"
+                                root.refreshResults()
+                            }
 
                             contentItem: Text {
                                 text: navButton.text
@@ -390,8 +400,8 @@ ApplicationWindow {
                                 Repeater {
                                     model: [
                                         { value: "4", label: qsTr("SAMPLE TITLES"), glyph: "▤" },
-                                        { value: "1", label: qsTr("IN PROGRESS"), glyph: "▶" },
-                                        { value: "2", label: qsTr("MEDIA FORMATS"), glyph: "◈" }
+                                        { value: "2", label: qsTr("IN PROGRESS"), glyph: "▶" },
+                                        { value: "3", label: qsTr("MEDIA FORMATS"), glyph: "◈" }
                                     ]
 
                                     delegate: Rectangle {
@@ -656,9 +666,9 @@ ApplicationWindow {
 
                             Repeater {
                                 model: [
-                                    { date: "FRI · 24", month: "OCT", title: "Frieren: Beyond Journey's End", detail: "Episode 18 · Reminder enabled", glyph: "F" },
-                                    { date: "SAT · 25", month: "OCT", title: "The Apothecary Diaries", detail: "Next episode · No reminder", glyph: "A" },
-                                    { date: "MON · 27", month: "OCT", title: "Witch Hat Atelier", detail: "Reading plan · Sample item", glyph: "W" }
+                                    { date: "SAT · 24", month: "OCT", title: "Frieren: Beyond Journey's End", detail: "Episode 18 · Reminder enabled", glyph: "F" },
+                                    { date: "SUN · 25", month: "OCT", title: "The Apothecary Diaries", detail: "Next episode · No reminder", glyph: "A" },
+                                    { date: "TUE · 27", month: "OCT", title: "Witch Hat Atelier", detail: "Reading plan · Sample item", glyph: "W" }
                                 ]
 
                                 delegate: Rectangle {
@@ -880,7 +890,7 @@ ApplicationWindow {
                             Button {
                                 text: "‹  " + qsTr("Back")
                                 Accessible.name: qsTr("Back to the previous page")
-                                onClicked: root.activePage = root.navItems.findIndex(item => item.label === qsTr("Search"))
+                                onClicked: root.activePage = root.previousPage
                                 contentItem: Text {
                                     text: parent.text
                                     color: "#D8C8FF"
