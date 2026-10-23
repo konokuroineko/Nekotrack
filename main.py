@@ -48,6 +48,8 @@ APP_DATA_DIR = Path(
     or (Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")) / APP_NAME)
 ).expanduser().resolve()
 
+from native_acceleration import BACKEND_NAME as NATIVE_ACCELERATION_BACKEND
+
 from diagnostics import (
     configure_logging,
     install_qt_message_handler,
@@ -94,6 +96,7 @@ log_event(
     app_version=APP_VERSION,
     frozen=bool(getattr(sys, "frozen", False)),
     executable=Path(sys.executable).name,
+    native_acceleration_backend=NATIVE_ACCELERATION_BACKEND,
 )
 with log_operation("startup.prepare_user_data"):
     prepare_user_data()
