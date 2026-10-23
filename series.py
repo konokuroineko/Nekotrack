@@ -31,6 +31,27 @@ SEASON_CHAIN_RELATIONS = {"PREQUEL", "SEQUEL", "PARENT", "SUMMARY", "SIDE_STORY"
 RELATED_TRAVERSAL_RELATIONS = {
     "SPIN_OFF", "ALTERNATIVE", "COMPILATION", "FULL_STORY", "CONTAINS",
 }
+
+
+def _build_exclusion_neighbors(excluded_links):
+    """Build an undirected lookup for user-defined bundle exclusions."""
+    neighbors = defaultdict(set)
+    for left_id, right_id in excluded_links or ():
+        neighbors[left_id].add(right_id)
+        neighbors[right_id].add(left_id)
+    return neighbors
+
+
+def _components_have_excluded_pair(left_members, right_members, excluded_neighbors):
+    """Check cross-component exclusions without scanning every member pair."""
+    if not excluded_neighbors:
+        return False
+    if len(left_members) > len(right_members):
+        left_members, right_members = right_members, left_members
+    return any(
+        not excluded_neighbors.get(member_id, set()).isdisjoint(right_members)
+        for member_id in left_members
+    )
 ANIME_BUNDLE_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL"}
 RELATION_BATCH_SIZE = 10
 MAX_NODE_FETCH_RETRIES = 3
@@ -858,10 +879,8 @@ def _group_discovered(results, discovered):
         # regrouped as A -> C -> B after the user explicitly split A from B.
         left_members = component_members[left_root]
         right_members = component_members[right_root]
-        if any(
-            tuple(sorted((left_id, right_id))) in excluded_links
-            for left_id in left_members
-            for right_id in right_members
+        if _components_have_excluded_pair(
+            left_members, right_members, excluded_neighbors
         ):
             return False
 
@@ -877,6 +896,7 @@ def _group_discovered(results, discovered):
         tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
         for link in get_bundle_exclusions(ids)
     }
+    excluded_neighbors = _build_exclusion_neighbors(excluded_links)
     manual_ids = set()
     for link in manual_links:
         left_id = int(link["work_a"])
@@ -1394,10 +1414,8 @@ def get_library_series(rows=None):
         right_members = component_members[right_root]
         # Component-wide checks stop indirect relation chains from bypassing
         # an exclusion the user explicitly added.
-        if any(
-            tuple(sorted((left_id, right_id))) in excluded_links
-            for left_id in left_members
-            for right_id in right_members
+        if _components_have_excluded_pair(
+            left_members, right_members, excluded_neighbors
         ):
             return False
 
@@ -1421,6 +1439,7 @@ def get_library_series(rows=None):
         tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
         for link in get_bundle_exclusions(ids)
     }
+    excluded_neighbors = _build_exclusion_neighbors(excluded_links)
 
     # Search already computed these bundles using the full discovered relation
     # graph. Preserve that exact grouping in Library while honoring current
