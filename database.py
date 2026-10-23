@@ -833,6 +833,81 @@ def characters_are_loaded(work_id):
         connection.close()
 
 
+
+def get_bundle_detail_readiness(work_ids):
+    """Read local cache readiness for many bundled works with one connection.
+
+    Results intentionally contain only the facts needed by Work Details' preload
+    path; episode content itself stays in the episode section's dedicated worker.
+    """
+    ids = _validated_work_ids(work_ids)
+    if ids is None or not ids:
+        return {}
+
+    readiness = {
+        work_id: {
+            "work_exists": False,
+            "characters_loaded": False,
+            "expected_episodes": 0,
+            "episodes_saved": False,
+        }
+        for work_id in ids
+    }
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            loaded_flags = {}
+            work_rows = connection.execute(
+                f"""
+                SELECT id, episodes, characters_loaded
+                FROM works
+                WHERE id IN ({placeholders})
+                """,
+                chunk,
+            ).fetchall()
+            for row in work_rows:
+                work_id = int(row["id"])
+                entry = readiness[work_id]
+                entry["work_exists"] = True
+                entry["expected_episodes"] = row["episodes"] or 0
+                loaded_flags[work_id] = bool(row["characters_loaded"])
+
+            missing_role_ids = {
+                int(row["work_id"])
+                for row in connection.execute(
+                    f"""
+                    SELECT DISTINCT work_id
+                    FROM work_characters
+                    WHERE work_id IN ({placeholders}) AND role IS NULL
+                    """,
+                    chunk,
+                ).fetchall()
+            }
+            for work_id in chunk:
+                readiness[work_id]["characters_loaded"] = (
+                    loaded_flags.get(work_id, False)
+                    and work_id not in missing_role_ids
+                )
+
+            episode_ids = {
+                int(row["work_id"])
+                for row in connection.execute(
+                    f"""
+                    SELECT DISTINCT work_id
+                    FROM episodes
+                    WHERE work_id IN ({placeholders})
+                    """,
+                    chunk,
+                ).fetchall()
+            }
+            for work_id in chunk:
+                readiness[work_id]["episodes_saved"] = work_id in episode_ids
+    finally:
+        connection.close()
+    return readiness
+
+
 def invalidate_character_snapshots(work_ids):
     """Mark cached cast snapshots stale so a targeted refresh can retry them."""
     ids = _validated_work_ids(work_ids)

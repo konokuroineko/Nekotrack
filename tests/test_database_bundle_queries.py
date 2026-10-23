@@ -100,6 +100,34 @@ def reference_bundle_relations(work_ids):
     return sorted(unique.values(), key=lambda row: str(row.get("title") or "").lower())
 
 
+def reference_bundle_detail_readiness(work_ids):
+    """Former preload readiness checks, retained as a parity oracle."""
+    ids = database._validated_work_ids(work_ids)
+    if ids is None or not ids:
+        return {}
+    result = {}
+    for work_id in ids:
+        characters_loaded = database.characters_are_loaded(work_id)
+        work = database.get_work(work_id)
+        if work is None:
+            result[work_id] = {
+                "work_exists": False,
+                "characters_loaded": characters_loaded,
+                "expected_episodes": 0,
+                "episodes_saved": False,
+            }
+            continue
+        expected_episodes = work["episodes"] or 0
+        saved = database.get_episodes(work_id)
+        result[work_id] = {
+            "work_exists": True,
+            "characters_loaded": characters_loaded,
+            "expected_episodes": expected_episodes,
+            "episodes_saved": bool(saved),
+        }
+    return result
+
+
 class BundleDetailBatchingTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -112,7 +140,8 @@ class BundleDetailBatchingTests(unittest.TestCase):
             con.executescript("""
                 CREATE TABLE works (
                     id INTEGER PRIMARY KEY, title TEXT NOT NULL, type TEXT NOT NULL,
-                    format TEXT, cover_url TEXT, cover_path TEXT
+                    format TEXT, cover_url TEXT, cover_path TEXT,
+                    episodes INTEGER, characters_loaded INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE characters (
                     id INTEGER PRIMARY KEY, name TEXT NOT NULL, image_url TEXT, image_path TEXT
@@ -137,6 +166,19 @@ class BundleDetailBatchingTests(unittest.TestCase):
                     source_id INTEGER NOT NULL, target_id INTEGER NOT NULL,
                     relation_type TEXT NOT NULL,
                     PRIMARY KEY (source_id, target_id, relation_type)
+                );
+                CREATE TABLE episodes (
+                    id INTEGER PRIMARY KEY,
+                    work_id INTEGER NOT NULL,
+                    episode_number INTEGER NOT NULL,
+                    title TEXT, description TEXT, air_date TEXT,
+                    thumbnail_url TEXT, watched INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE user_library (
+                    work_id INTEGER PRIMARY KEY, status TEXT,
+                    progress_episodes INTEGER, progress_chapters INTEGER,
+                    progress_volumes INTEGER, rating INTEGER, notes TEXT,
+                    added_date TEXT, updated_date TEXT
                 );
             """)
             con.executemany(
@@ -196,16 +238,47 @@ class BundleDetailBatchingTests(unittest.TestCase):
         self.assertEqual(database.get_bundle_relations(relation_ids), reference_bundle_relations(relation_ids))
 
     def test_each_nonempty_bundle_reader_uses_one_connection(self):
-        for fn in (database.get_bundle_characters, database.get_bundle_staff, database.get_bundle_relations):
+        for fn in (database.get_bundle_characters, database.get_bundle_staff, database.get_bundle_relations, database.get_bundle_detail_readiness):
             with self.subTest(function=fn.__name__):
                 with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
                     fn([1, 2, 3])
                 self.assertEqual(factory.call_count, 1)
 
+    def test_batched_readiness_matches_per_work_checks_and_one_connection(self):
+        con = database.get_connection()
+        try:
+            con.execute("UPDATE works SET episodes = 2, characters_loaded = 1 WHERE id = 1")
+            con.execute("UPDATE works SET episodes = 4, characters_loaded = 1 WHERE id = 2")
+            con.execute("UPDATE works SET episodes = 0, characters_loaded = 0 WHERE id = 3")
+            con.execute("UPDATE work_characters SET role = NULL WHERE work_id = 2 AND character_id = 10")
+            con.executemany(
+                "INSERT INTO episodes (id, work_id, episode_number) VALUES (?, ?, ?)",
+                [(101, 1, 1), (102, 1, 2)],
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        ids = [1, 2, 3, 99]
+        expected = reference_bundle_detail_readiness(ids)
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            actual = database.get_bundle_detail_readiness(ids)
+        self.assertEqual(actual, expected)
+        self.assertEqual(factory.call_count, 1)
+        self.assertTrue(actual[1]["characters_loaded"])
+        self.assertTrue(actual[1]["episodes_saved"])
+        self.assertFalse(actual[2]["characters_loaded"])
+        self.assertFalse(actual[2]["episodes_saved"])
+        self.assertTrue(actual[3]["work_exists"])
+        self.assertTrue(actual[3]["characters_loaded"] is False)
+        self.assertFalse(actual[99]["work_exists"])
+
     def test_empty_and_invalid_relation_inputs_keep_existing_contract(self):
         self.assertEqual(database.get_bundle_characters(None), [])
         self.assertEqual(database.get_bundle_staff(None), [])
         self.assertEqual(database.get_bundle_relations(None), [])
+        self.assertEqual(database.get_bundle_detail_readiness(None), {})
+        self.assertEqual(database.get_bundle_detail_readiness([1, "invalid"]), {})
         self.assertEqual(database.get_bundle_relations([1, "invalid"]), [])
 
 

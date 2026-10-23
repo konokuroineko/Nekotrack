@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from diagnostics import log_event, log_exception
 
 from database import (
-    add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
+    add_manual_bundle_link, add_to_library, delete_work_data, get_bundle_characters, get_bundle_detail_readiness,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
     get_reading_progress, get_staff, is_work_in_library,
     get_tmdb_mapping, get_work, get_provider_metadata,
@@ -1766,28 +1766,29 @@ class WorkDetailPage(QWidget):
             return False, False
 
         try:
+            readiness = get_bundle_detail_readiness(detail_ids)
             detail_data_ready = all(
-                characters_are_loaded(work_id)
+                readiness.get(work_id, {}).get("characters_loaded", False)
                 for work_id in detail_ids
             )
         except Exception:
+            readiness = {}
             detail_data_ready = False
 
-        episode_data_ready = True
         if self._is_reading_media():
             return detail_data_ready, True
 
+        episode_data_ready = True
         for work_id in detail_ids:
             try:
-                work_row = get_work(work_id)
+                entry = readiness.get(work_id)
                 # A not-yet-imported work is not the same as a work with zero
-                # episodes. The import worker may still be writing this row.
-                if work_row is None:
+                # episodes. Preserve that distinction for preloaded detail views.
+                if not entry or not entry.get("work_exists"):
                     episode_data_ready = False
                     break
-                expected = int(work_row["episodes"] or 0)
-                saved = get_episodes(work_id)
-                if expected > 0 and not saved:
+                expected = int(entry.get("expected_episodes") or 0)
+                if expected > 0 and not entry.get("episodes_saved"):
                     episode_data_ready = False
                     break
             except Exception:

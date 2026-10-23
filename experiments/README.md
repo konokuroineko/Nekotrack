@@ -163,3 +163,12 @@ Bundle character aggregation tests mock `_load_bundle_character_rows`, the bound
 that now supplies work-specific rows. They still verify role precedence, member-order
 independence and `sqlite3.Row` compatibility; SQL parity and connection-count behavior
 are covered separately by `tests/test_database_bundle_queries.py`.
+
+
+## Batched Work Details readiness check
+
+The Work Details preload readiness check is included in
+`experiments/benchmark_bundle_details.py`. It compares the former per-work cache/work/
+episode-existence checks with the batched helper, verifies exact output parity, and
+includes the readiness read in its connection counts. The benchmark uses only
+synthetic SQLite data.

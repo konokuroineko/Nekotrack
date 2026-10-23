@@ -1,4 +1,4 @@
-"""Benchmark per-work versus batched bundle-detail SQLite reads.
+"""Benchmark per-work versus batched bundle-detail and readiness SQLite reads.
 
 Uses disposable synthetic data, makes no API calls, and never opens the user's DB.
 Checks exact output parity before reporting latency and SQLite connection counts.
@@ -20,7 +20,8 @@ for path in (ROOT, ROOT / "tests"):
         sys.path.insert(0, str(path))
 import database  # noqa: E402
 from test_database_bundle_queries import (  # noqa: E402
-    reference_bundle_characters, reference_bundle_relations, reference_bundle_staff,
+    reference_bundle_characters, reference_bundle_detail_readiness,
+    reference_bundle_relations, reference_bundle_staff,
 )
 
 
@@ -34,17 +35,23 @@ def create_synthetic_db(path: Path, count: int):
     con = database.get_connection()
     try:
         con.executescript("""
-            CREATE TABLE works (id INTEGER PRIMARY KEY, title TEXT NOT NULL, type TEXT NOT NULL, format TEXT, cover_url TEXT, cover_path TEXT);
+            CREATE TABLE works (id INTEGER PRIMARY KEY, title TEXT NOT NULL, type TEXT NOT NULL, format TEXT, cover_url TEXT, cover_path TEXT, episodes INTEGER, characters_loaded INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE characters (id INTEGER PRIMARY KEY, name TEXT NOT NULL, image_url TEXT, image_path TEXT);
             CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT NOT NULL, image_url TEXT, image_path TEXT);
             CREATE TABLE work_characters (work_id INTEGER NOT NULL, character_id INTEGER NOT NULL, role TEXT, PRIMARY KEY (work_id, character_id));
             CREATE TABLE work_character_voice_actors (work_id INTEGER NOT NULL, character_id INTEGER NOT NULL, person_id INTEGER NOT NULL, language TEXT, PRIMARY KEY (work_id, character_id, person_id));
             CREATE TABLE work_staff (work_id INTEGER NOT NULL, person_id INTEGER NOT NULL, role TEXT NOT NULL, PRIMARY KEY (work_id, person_id, role));
             CREATE TABLE work_relations (source_id INTEGER NOT NULL, target_id INTEGER NOT NULL, relation_type TEXT NOT NULL, PRIMARY KEY (source_id, target_id, relation_type));
+            CREATE TABLE episodes (id INTEGER PRIMARY KEY, work_id INTEGER NOT NULL, episode_number INTEGER NOT NULL, title TEXT, description TEXT, air_date TEXT, thumbnail_url TEXT, watched INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE user_library (work_id INTEGER PRIMARY KEY, status TEXT, progress_episodes INTEGER, progress_chapters INTEGER, progress_volumes INTEGER, rating INTEGER, notes TEXT, added_date TEXT, updated_date TEXT);
         """)
         works = [(i, f"Synthetic Work {i}", "ANIME", "TV", None, None) for i in range(1, count + 1)]
         works += [(count + 100 + i, f"External Relation {i}", "ANIME", "TV", None, None) for i in range(20)]
-        con.executemany("INSERT INTO works VALUES (?,?,?,?,?,?)", works)
+        con.executemany("INSERT INTO works (id,title,type,format,cover_url,cover_path) VALUES (?,?,?,?,?,?)", works)
+        con.executemany(
+            "UPDATE works SET episodes = ?, characters_loaded = 1 WHERE id = ?",
+            [(12 if work_id % 2 == 0 else 0, work_id) for work_id in range(1, count + 1)],
+        )
         con.executemany("INSERT INTO characters (id,name) VALUES (?,?)", [(1000+i, f"Character {i}") for i in range(30)])
         people = [(2000+i, f"Voice Actor {i:02d}", None, None) for i in range(25)]
         people += [(3000+i, f"Staff Person {i:02d}", None, None) for i in range(45)]
@@ -67,6 +74,10 @@ def create_synthetic_db(path: Path, count: int):
         con.executemany("INSERT INTO work_character_voice_actors VALUES (?,?,?,?)", voices)
         con.executemany("INSERT INTO work_staff VALUES (?,?,?)", staff)
         con.executemany("INSERT INTO work_relations VALUES (?,?,?)", relations)
+        con.executemany(
+            "INSERT INTO episodes (id, work_id, episode_number) VALUES (?, ?, ?)",
+            [(work_id * 1000 + 1, work_id, 1) for work_id in range(1, count + 1) if work_id % 2 == 0],
+        )
         con.commit()
     finally:
         con.close()
@@ -74,11 +85,21 @@ def create_synthetic_db(path: Path, count: int):
 
 
 def old_read(ids):
-    return (reference_bundle_characters(ids), reference_bundle_staff(ids), reference_bundle_relations(ids))
+    return (
+        reference_bundle_characters(ids),
+        reference_bundle_staff(ids),
+        reference_bundle_relations(ids),
+        reference_bundle_detail_readiness(ids),
+    )
 
 
 def batched_read(ids):
-    return (database.get_bundle_characters(ids), database.get_bundle_staff(ids), database.get_bundle_relations(ids))
+    return (
+        database.get_bundle_characters(ids),
+        database.get_bundle_staff(ids),
+        database.get_bundle_relations(ids),
+        database.get_bundle_detail_readiness(ids),
+    )
 
 
 def run_one_size(count, iterations):

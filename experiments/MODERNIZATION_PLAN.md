@@ -222,3 +222,18 @@ while retaining role-precedence, order-independence, and sqlite3.Row coverage. T
 production aggregation also normalizes returned row objects into dictionaries before
 using mapping access. The first CI run identified these four obsolete mock assumptions;
 the full regression and adversarial workflows must rerun on this fix.
+
+
+## Fifth-pass database audit — Work Details preload readiness
+
+The explicit Work Details preload path used to open separate SQLite connections for
+each member's character-cache flag/role completeness, work row, and saved-episode
+existence. A new `get_bundle_detail_readiness` helper now reads the same facts with
+three set-based queries over bounded ID chunks and one connection. It deliberately
+does not load episode content; the existing episode section worker still owns that.
+
+Parity tests compare the batched map with the former per-work readers, including
+missing work rows, zero-episode works, absent episode snapshots, and character rows
+with legacy NULL roles. The synthetic bundle-details benchmark also compares this
+readiness path and reports the combined connection reduction. This remains an
+isolated database benchmark rather than an app-wide speedup claim.
