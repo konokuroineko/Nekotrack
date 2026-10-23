@@ -1,12 +1,15 @@
 # Optional native acceleration
 
 This crate is the first Rust/PyO3 pilot for NekoTrack. It accelerates the
-matching-block portion of title similarity in TMDB metadata matching while
-preserving the existing Python normalization, exact-match and containment rules.
+matching-block portion of TMDB title similarity and short MangaBaka fuzzy-title
+matching while preserving the existing Python normalization and match thresholds.
 
 The Rust function implements the same ratio as
-difflib.SequenceMatcher(None, left, right, autojunk=False). The Python wrapper
-falls back to difflib if the compiled extension cannot be imported. A missing
+difflib.SequenceMatcher(None, left, right, autojunk=False). For MangaBaka's
+usual default-autojunk path, the Python wrapper uses the same native calculation
+only when the right-hand string is shorter than 200 characters, where difflib's
+autojunk heuristic is inactive; longer strings stay on the Python reference path.
+The Python wrapper falls back to difflib if the compiled extension cannot be imported. A missing
 Rust build must never prevent NekoTrack from starting.
 
 ## Build and test on Windows
