@@ -41,6 +41,30 @@ message.
 - [ ] Larger Windows text/scaling settings do not obscure controls or text.
 - [ ] The production application and installer are unaffected.
 
+## Modernization plan and performance work
+
+See [MODERNIZATION_PLAN.md](MODERNIZATION_PLAN.md) for the proposed full-app UI migration,
+performance acceptance gates, and conditional Rust/PyO3 plan. The direction is broader
+than this sample screen.
+
+A deterministic CPU-only benchmark is available from the repository root:
+
+```powershell
+python experiments/benchmark_recommendations.py --candidate-sizes 50 250 500 --sources 50 --iterations 7 --json-out artifacts/recommendation-baseline.json
+```
+
+It reports the local recommendation-ranking function's timing on synthetic data only.
+It does not read the user's database or call an API, and it must not be treated as an
+end-to-end startup/search benchmark. Save each run with the machine/Python/build details;
+compare the same settings before and after changes. Use the timings to choose whether
+a Rust port has a realistic payoff instead of assuming that Rust will speed up I/O or UI
+rendering.
+
+The current performance improvement precomputes stable source-credit weights once per
+ranking pass rather than rebuilding them for each eligible candidate. A regression test
+checks that this index is built once and that ranking output remains the same across
+the tested call. Its real-world benefit still needs measured before/after timings.
+
 ## Performance baseline
 
 Record measurements from the same computer and build before and after meaningful
