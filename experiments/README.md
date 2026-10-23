@@ -326,3 +326,11 @@ Run:
 This compares the former per-character cleanup with the set-based cleanup against
 disposable SQLite databases, verifies exact final-state parity, and records latency
 plus SQL-call counts. It makes no API calls and does not access the user's database.
+
+
+## Batched Library grouping-state reads
+
+`get_library_bundle_grouping_state` reads manual links, exclusions and automatic
+Search-membership snapshots on one SQLite connection instead of three. Run
+`experiments/benchmark_library_grouping_reads.py` to compare output parity, latency
+and connection counts across synthetic libraries of 100, 1,000 and 5,000 works.

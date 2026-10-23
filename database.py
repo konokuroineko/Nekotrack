@@ -3556,6 +3556,90 @@ def get_bundle_exclusions(work_ids=None):
     finally:
         connection.close()
 
+
+def get_library_bundle_grouping_state(work_ids):
+    """Read manual links, exclusions and saved Search memberships on one connection."""
+    ids = _validated_work_ids(work_ids)
+    empty = {
+        "manual_links": [],
+        "exclusions": [],
+        "automatic_memberships": [],
+    }
+    if ids is None or not ids:
+        return empty
+
+    manual_by_pair = {}
+    exclusions_by_pair = {}
+    bundle_ids = set()
+    memberships_by_pair = {}
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            for row in connection.execute(
+                f"""
+                SELECT work_a, work_b
+                FROM manual_bundle_links
+                WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
+                ORDER BY work_a, work_b
+                """,
+                [*chunk, *chunk],
+            ).fetchall():
+                pair = (int(row["work_a"]), int(row["work_b"]))
+                manual_by_pair[pair] = row
+
+            for row in connection.execute(
+                f"""
+                SELECT work_a, work_b
+                FROM bundle_exclusions
+                WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
+                ORDER BY work_a, work_b
+                """,
+                [*chunk, *chunk],
+            ).fetchall():
+                pair = (int(row["work_a"]), int(row["work_b"]))
+                exclusions_by_pair[pair] = row
+
+            bundle_ids.update(
+                int(row["bundle_id"])
+                for row in connection.execute(
+                    f"""
+                    SELECT DISTINCT bundle_id
+                    FROM automatic_bundle_memberships
+                    WHERE bundle_id IN ({placeholders})
+                       OR work_id IN ({placeholders})
+                    ORDER BY bundle_id
+                    """,
+                    [*chunk, *chunk],
+                ).fetchall()
+            )
+
+        for chunk in _bundle_id_chunks(sorted(bundle_ids)):
+            placeholders = ",".join("?" for _ in chunk)
+            for row in connection.execute(
+                f"""
+                SELECT bundle_id, work_id
+                FROM automatic_bundle_memberships
+                WHERE bundle_id IN ({placeholders})
+                ORDER BY bundle_id, work_id
+                """,
+                chunk,
+            ).fetchall():
+                pair = (int(row["bundle_id"]), int(row["work_id"]))
+                memberships_by_pair[pair] = row
+    finally:
+        connection.close()
+
+    return {
+        "manual_links": [manual_by_pair[pair] for pair in sorted(manual_by_pair)],
+        "exclusions": [exclusions_by_pair[pair] for pair in sorted(exclusions_by_pair)],
+        "automatic_memberships": [
+            memberships_by_pair[pair] for pair in sorted(memberships_by_pair)
+        ],
+    }
+
+
+
 def get_manual_bundle_partners(work_id):
     """Return the works explicitly manually linked to one work."""
     try:

@@ -717,6 +717,54 @@ class BundleDetailBatchingTests(unittest.TestCase):
                 ],
             )
 
+    def test_library_grouping_state_matches_three_readers_with_one_connection(self):
+        con = database.get_connection()
+        try:
+            con.executemany(
+                "INSERT INTO manual_bundle_links (work_a, work_b) VALUES (?, ?)",
+                [(1, 4), (2, 5), (4, 6)],
+            )
+            con.executemany(
+                "INSERT INTO bundle_exclusions (work_a, work_b) VALUES (?, ?)",
+                [(1, 3), (4, 5), (6, 8)],
+            )
+            con.executemany(
+                "INSERT INTO automatic_bundle_memberships (bundle_id, work_id) VALUES (?, ?)",
+                [(1, 1), (1, 2), (1, 5), (4, 4), (4, 6), (9, 4), (9, 5)],
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        ids = [1, 2, 4, 6]
+        expected = {
+            "manual_links": [
+                (int(row["work_a"]), int(row["work_b"]))
+                for row in database.get_manual_bundle_links(ids)
+            ],
+            "exclusions": [
+                (int(row["work_a"]), int(row["work_b"]))
+                for row in database.get_bundle_exclusions(ids)
+            ],
+            "automatic_memberships": [
+                (int(row["bundle_id"]), int(row["work_id"]))
+                for row in database.get_automatic_bundle_memberships(ids)
+            ],
+        }
+
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            actual_rows = database.get_library_bundle_grouping_state(ids)
+        self.assertEqual(factory.call_count, 1)
+        actual = {
+            "manual_links": [(int(row["work_a"]), int(row["work_b"])) for row in actual_rows["manual_links"]],
+            "exclusions": [(int(row["work_a"]), int(row["work_b"])) for row in actual_rows["exclusions"]],
+            "automatic_memberships": [
+                (int(row["bundle_id"]), int(row["work_id"]))
+                for row in actual_rows["automatic_memberships"]
+            ],
+        }
+        self.assertEqual(actual, expected)
+
     def test_empty_and_invalid_relation_inputs_keep_existing_contract(self):
         self.assertEqual(database.get_bundle_characters(None), [])
         self.assertEqual(database.get_bundle_staff(None), [])

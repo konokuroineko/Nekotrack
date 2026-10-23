@@ -467,3 +467,17 @@ synthetic cast entries. It compares final rows exactly, records median/p95 time 
 counts direct `execute`/ `executemany` calls. The benchmark only uses temporary
 databases and is attached to the Rust/backend benchmark matrix. Results measure local
 snapshot cleanup only, not network/API time or whole-app performance.
+
+
+## Twenty-seventh-pass Library grouping-state reads
+
+Library grouping used three independent connections to read manual links, exclusions
+and Search's saved automatic-membership snapshots, in addition to reading the work
+rows and relation graph. Added `get_library_bundle_grouping_state` to retrieve those
+three datasets in one connection, retaining their exact row sets and ordering and
+keeping ID lists chunked at 400 values. `get_library_series` now reuses that state for
+component exclusions, saved membership grouping and explicit manual-link joins.
+
+The database regression test compares the combined result against all three former
+readers and asserts one connection. The CI synthetic benchmark covers 100 to 5,000
+works, checks exact output parity, and records time plus connection counts.

@@ -6,10 +6,10 @@ from api import get_media_relations_batch
 from diagnostics import diagnostic_context, log_event, log_exception
 from database import (
     get_all_library,
-    get_automatic_bundle_memberships,
     get_bundle_override,
     get_bundle_overrides,
     get_bundle_exclusions,
+    get_library_bundle_grouping_state,
     get_connection,
     get_manual_bundle_links,
     save_anime,
@@ -1554,9 +1554,10 @@ def get_library_series(rows=None):
         return True
 
     row_by_id = {int(row["id"]): row for row in rows}
+    grouping_state = get_library_bundle_grouping_state(ids)
     excluded_links = {
         tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
-        for link in get_bundle_exclusions(ids)
+        for link in grouping_state["exclusions"]
     }
     excluded_neighbors = _build_exclusion_neighbors(excluded_links)
 
@@ -1564,7 +1565,7 @@ def get_library_series(rows=None):
     # graph. Preserve that exact grouping in Library while honoring current
     # format preferences and explicit pair exclusions.
     saved_groups = defaultdict(set)
-    for membership in get_automatic_bundle_memberships(ids):
+    for membership in grouping_state["automatic_memberships"]:
         bundle_id = int(membership["bundle_id"])
         work_id = int(membership["work_id"])
         if work_id in ids:
@@ -1604,7 +1605,7 @@ def get_library_series(rows=None):
 
     # Manual bundle links are explicit user overrides and may join works
     # even when AniList relations or formats would not allow automatic bundling.
-    for link in get_manual_bundle_links(ids):
+    for link in grouping_state["manual_links"]:
         source_id = int(link["work_a"])
         target_id = int(link["work_b"])
         if source_id in ids and target_id in ids:
