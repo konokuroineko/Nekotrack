@@ -31,7 +31,7 @@ from database import (
     get_episode_section_snapshot, get_reading_progress, get_staff, get_bundle_staff_page_state, is_work_in_library,
     get_tmdb_mapping, get_work, get_provider_metadata,
     save_work_display_override, save_anime, save_characters, save_cover_path,
-    save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
+    save_episode_thumbnail_path, save_episode_thumbnail_paths, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
     set_episode_watched, set_episode_progress, set_reading_progress_count, prune_episode_catalog,
 )
 from series import auto_bundle_library_work, get_library_series
@@ -760,6 +760,10 @@ class StaffPageWorker(QObject):
         self.pages_loaded.emit(results)
 
 
+
+EPISODE_IMAGE_PATH_DB_BATCH_SIZE = 12
+
+
 class EpisodeImageCacheWorker(QObject):
     finished = Signal(int)
     error = Signal(int, str)
@@ -776,11 +780,65 @@ class EpisodeImageCacheWorker(QObject):
 
     def run(self):
         errors = []
+        pending_paths = []
         log_event(
             "episodes.image_cache_worker_started",
             work_id=self.work_id,
             image_count=len(self.episodes),
         )
+
+        def flush_pending_paths():
+            if not pending_paths:
+                return
+            batch = list(pending_paths)
+            pending_paths.clear()
+            try:
+                saved_numbers = save_episode_thumbnail_paths(self.work_id, batch)
+                if not isinstance(saved_numbers, (set, list, tuple, frozenset)):
+                    raise TypeError("Batch thumbnail writer returned an invalid result.")
+                saved_numbers = {
+                    int(number)
+                    for number in saved_numbers
+                    if not isinstance(number, bool)
+                }
+            except Exception as error:
+                for episode_number, _local_path in batch:
+                    self.failed_episode_numbers.append(episode_number)
+                    errors.append(f"Episode {episode_number}: {type(error).__name__}")
+                    log_exception(
+                        "episodes.image_cache_item_failed",
+                        error,
+                        work_id=self.work_id,
+                        episode_number=episode_number,
+                        phase="path_persist",
+                        batch_size=len(batch),
+                    )
+                return
+
+            for episode_number, _local_path in batch:
+                if episode_number not in saved_numbers:
+                    error = RuntimeError("The cached image path could not be saved.")
+                    self.failed_episode_numbers.append(episode_number)
+                    errors.append(f"Episode {episode_number}: {type(error).__name__}")
+                    log_exception(
+                        "episodes.image_cache_item_failed",
+                        error,
+                        work_id=self.work_id,
+                        episode_number=episode_number,
+                        phase="path_persist",
+                        batch_size=len(batch),
+                    )
+                    continue
+
+                self.cached_count += 1
+                log_event(
+                    "episodes.image_cache_item_completed",
+                    work_id=self.work_id,
+                    episode_number=episode_number,
+                    path_saved=True,
+                    persistence_batch_size=len(batch),
+                )
+
         for episode in self.episodes:
             if self.stop_event is not None and self.stop_event.is_set():
                 self.cancelled = True
@@ -819,22 +877,9 @@ class EpisodeImageCacheWorker(QObject):
                 )
                 if not local_path:
                     raise ValueError("TMDB returned no usable image data.")
-
-                saved = save_episode_thumbnail_path(
-                    self.work_id,
-                    episode_number,
-                    local_path,
-                )
-                if not saved:
-                    raise RuntimeError("The cached image path could not be saved.")
-
-                self.cached_count += 1
-                log_event(
-                    "episodes.image_cache_item_completed",
-                    work_id=self.work_id,
-                    episode_number=episode_number,
-                    path_saved=True,
-                )
+                pending_paths.append((episode_number, local_path))
+                if len(pending_paths) >= EPISODE_IMAGE_PATH_DB_BATCH_SIZE:
+                    flush_pending_paths()
             except Exception as error:
                 self.failed_episode_numbers.append(episode_number)
                 errors.append(f"Episode {episode_number}: {type(error).__name__}")
@@ -843,7 +888,11 @@ class EpisodeImageCacheWorker(QObject):
                     error,
                     work_id=self.work_id,
                     episode_number=episode_number,
+                    phase="image_download",
                 )
+
+        # Keep successful downloads even if cancellation stops remaining work.
+        flush_pending_paths()
 
         log_event(
             "episodes.image_cache_worker_finished",
