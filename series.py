@@ -196,7 +196,7 @@ def _prefix_related_tv_candidate_indices(keys):
             by_prefix[tokens[:prefix_length]].append(index)
 
     candidates_by_index = []
-    for tokens in tokens_by_index:
+    for index, tokens in enumerate(tokens_by_index):
         if len(tokens) < 2:
             candidates_by_index.append([])
             continue
@@ -207,6 +207,7 @@ def _prefix_related_tv_candidate_indices(keys):
             matching_indices.update(exact_by_tokens.get(tokens[:prefix_length], ()))
         # Titles for which this title is itself a prefix.
         matching_indices.update(by_prefix.get(tokens, ()))
+        matching_indices.discard(index)
         candidates_by_index.append(sorted(matching_indices))
 
     return tokens_by_index, candidates_by_index
