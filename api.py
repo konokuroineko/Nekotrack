@@ -10,8 +10,8 @@ import requests
 import tempfile
 import threading
 import time
-from difflib import SequenceMatcher
-from native_acceleration import sequence_match_ratio
+from functools import lru_cache
+from native_acceleration import sequence_match_ratio, sequence_match_ratio_default
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from ui.preferences import get
@@ -1942,10 +1942,16 @@ def _parse_date(value):
         return None
 
 
+@lru_cache(maxsize=8192)
+def _normalize_title_text(value: str):
+    """Cache pure title normalization because the same aliases score many candidates."""
+    return re.sub(r"[\W_]+", "", value.casefold(), flags=re.UNICODE)
+
+
 def _normalize_title(value):
     # Keep Unicode letters and digits so Japanese native titles can match
     # TMDB's original_name field instead of normalizing to an empty string.
-    return re.sub(r"[\W_]+", "", str(value or "").casefold(), flags=re.UNICODE)
+    return _normalize_title_text(str(value or ""))
 
 
 def _title_similarity(left, right):
@@ -4016,10 +4022,15 @@ def normalize_mangabaka_series(series, preferred_id=None):
     }
 
 
-def _mangabaka_normalize_title(value):
-    value = str(value or "").casefold()
+@lru_cache(maxsize=8192)
+def _normalize_mangabaka_title_text(value: str):
+    value = value.casefold()
     value = re.sub(r"[\W_]+", " ", value, flags=re.UNICODE)
     return " ".join(value.split())
+
+
+def _mangabaka_normalize_title(value):
+    return _normalize_mangabaka_title_text(str(value or ""))
 
 
 def _series_title_candidates(series):
@@ -4062,7 +4073,7 @@ def match_series_for_anilist(anilist_media, candidates):
         candidate_titles.discard("")
         exact = bool(normalized_aliases.intersection(candidate_titles))
         score = 1.0 if exact else max(
-            (SequenceMatcher(None, left, right).ratio()
+            (sequence_match_ratio_default(left, right)
              for left in normalized_aliases for right in candidate_titles),
             default=0.0,
         )
