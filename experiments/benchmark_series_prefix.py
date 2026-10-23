@@ -49,11 +49,11 @@ def build_title_keys(count: int, seed: int = 20261023) -> list[str]:
 def reference_all_pairs(keys: list[str]) -> tuple[list[tuple[str, ...]], list[list[int]]]:
     token_lists = [tuple(str(key or "").split()) for key in keys]
     results = []
-    for tokens in token_lists:
+    for index, tokens in enumerate(token_lists):
         matches = []
         if len(tokens) >= 2:
             for other_index, other_tokens in enumerate(token_lists):
-                if len(other_tokens) < 2:
+                if other_index == index or len(other_tokens) < 2:
                     continue
                 shorter, longer = (
                     (tokens, other_tokens)
