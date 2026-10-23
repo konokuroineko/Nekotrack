@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from collections import OrderedDict
 import time
 import threading
 from unittest.mock import patch
@@ -845,6 +846,41 @@ class DetailSkeletonTests(unittest.TestCase):
                 first.deleteLater()
                 second.deleteLater()
                 self.app.processEvents()
+
+    def test_episode_artwork_cache_evicts_least_recently_used_entry(self):
+        with tempfile.TemporaryDirectory(prefix="nekotrack-artwork-lru-") as directory:
+            image_paths = []
+            for index in range(3):
+                path = os.path.join(directory, f"episode-{index}.png")
+                source = QPixmap(320, 180)
+                source.fill(Qt.GlobalColor.red)
+                self.assertTrue(source.save(path))
+                image_paths.append(path)
+
+            with (
+                patch.object(EpisodeArtwork, "_cache", OrderedDict()),
+                patch.object(EpisodeArtwork, "CACHE_LIMIT", 2),
+            ):
+                cards = []
+                try:
+                    for path in image_paths[:2]:
+                        card = EpisodeArtwork()
+                        cards.append(card)
+                        card.load(path)
+                    self.assertEqual(list(EpisodeArtwork._cache.keys()), image_paths[:2])
+
+                    # Make the oldest entry hot, so the other one should leave.
+                    cards[0].load(image_paths[0])
+                    third = EpisodeArtwork()
+                    cards.append(third)
+                    third.load(image_paths[2])
+
+                    self.assertEqual(list(EpisodeArtwork._cache.keys()), [image_paths[0], image_paths[2]])
+                    self.assertEqual(len(EpisodeArtwork._cache), 2)
+                finally:
+                    for card in cards:
+                        card.deleteLater()
+                    self.app.processEvents()
 
     def test_episode_image_plan_logs_missing_and_stale_local_artwork(self):
         page = WorkDetailPage()

@@ -1,5 +1,6 @@
 import math
 import threading
+from collections import OrderedDict
 import time
 
 from api import (
@@ -918,7 +919,8 @@ class EpisodeImageCacheWorker(QObject):
 
 
 class EpisodeArtwork(QLabel):
-    _cache = {}
+    CACHE_LIMIT = 256
+    _cache = OrderedDict()
 
     def __init__(self, work_id=None, episode_number=None, parent=None):
         super().__init__(parent)
@@ -948,6 +950,7 @@ class EpisodeArtwork(QLabel):
         # both another disk read and another smooth scale/crop operation.
         cached = self._cache.get(url)
         if cached is not None and not cached.isNull():
+            self._cache.move_to_end(url)
             self.setText("")
             self.setPixmap(cached)
             return
@@ -958,6 +961,9 @@ class EpisodeArtwork(QLabel):
             if not pixmap.isNull():
                 display_pixmap = self._cropped(pixmap)
                 self._cache[url] = display_pixmap
+                self._cache.move_to_end(url)
+                while len(self._cache) > self.CACHE_LIMIT:
+                    self._cache.popitem(last=False)
                 self.setText("")
                 self.setPixmap(display_pixmap)
                 return
