@@ -20,7 +20,7 @@ from api import (
 from ui.pages.work_detail_page import (
     EpisodeArtwork, EpisodeCard, StaffFlowLayout,
     EpisodeImageCacheWorker, EpisodeSyncWorker, EpisodeSectionDataWorker,
-    EpisodeProgressWorker, WorkDetailPage,
+    EpisodeProgressWorker, WorkDetailPage, EPISODE_IMAGE_PATH_DB_BATCH_SIZE,
 )
 
 
@@ -849,7 +849,7 @@ class DetailSkeletonTests(unittest.TestCase):
                 "ui.pages.work_detail_page.cache_tmdb_episode_image",
                 return_value=None,
             ),
-            patch("ui.pages.work_detail_page.save_episode_thumbnail_path") as save_path,
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_paths") as save_path,
             patch("ui.pages.work_detail_page.log_event") as log_event,
             patch("ui.pages.work_detail_page.log_exception") as log_exception,
         ):
@@ -869,6 +869,94 @@ class DetailSkeletonTests(unittest.TestCase):
             and call.kwargs.get("failed_count") == 1
             for call in log_event.call_args_list
         ))
+
+    def test_episode_image_cache_worker_batches_database_path_writes(self):
+        episode_count = EPISODE_IMAGE_PATH_DB_BATCH_SIZE + 5
+        episodes = [
+            {
+                "episodeNumber": number,
+                "thumbnail": f"https://image.tmdb.org/t/p/w500/{number}.jpg",
+            }
+            for number in range(1, episode_count + 1)
+        ]
+        cached_paths, failures, successes = [], [], []
+
+        def cache_image(_url, work_id, episode_number):
+            self.assertEqual(work_id, 12345)
+            path = f"cache/episode-{episode_number}.jpg"
+            cached_paths.append((episode_number, path))
+            return path
+
+        def save_batch(work_id, paths):
+            self.assertEqual(work_id, 12345)
+            return {number for number, _path in paths}
+
+        worker = EpisodeImageCacheWorker(12345, episodes)
+        worker.error.connect(lambda work_id, message: failures.append((work_id, message)))
+        worker.finished.connect(lambda work_id: successes.append(work_id))
+        with (
+            patch("ui.pages.work_detail_page.cache_tmdb_episode_image", side_effect=cache_image),
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_paths", side_effect=save_batch) as save_batch_mock,
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_path") as save_single_mock,
+            patch("ui.pages.work_detail_page.log_event"),
+            patch("ui.pages.work_detail_page.log_exception"),
+        ):
+            worker.run()
+
+        self.assertEqual(worker.attempted_count, episode_count)
+        self.assertEqual(worker.cached_count, episode_count)
+        self.assertEqual(worker.failed_episode_numbers, [])
+        self.assertEqual(successes, [12345])
+        self.assertEqual(failures, [])
+        self.assertEqual(save_batch_mock.call_count, 2)
+        self.assertEqual(
+            [len(call.args[1]) for call in save_batch_mock.call_args_list],
+            [EPISODE_IMAGE_PATH_DB_BATCH_SIZE, 5],
+        )
+        flattened = [pair for call in save_batch_mock.call_args_list for pair in call.args[1]]
+        self.assertEqual(flattened, cached_paths)
+        save_single_mock.assert_not_called()
+
+    def test_episode_image_cache_worker_flushes_cached_paths_when_cancelled(self):
+        stop_event = threading.Event()
+        episodes = [
+            {
+                "episodeNumber": number,
+                "thumbnail": f"https://image.tmdb.org/t/p/w500/{number}.jpg",
+            }
+            for number in range(1, 10)
+        ]
+        cached_paths, failures, successes = [], [], []
+
+        def cache_image(_url, _work_id, episode_number):
+            path = f"cache/episode-{episode_number}.jpg"
+            cached_paths.append((episode_number, path))
+            if episode_number == 3:
+                stop_event.set()
+            return path
+
+        worker = EpisodeImageCacheWorker(12345, episodes, stop_event)
+        worker.error.connect(lambda work_id, message: failures.append((work_id, message)))
+        worker.finished.connect(lambda work_id: successes.append(work_id))
+        with (
+            patch("ui.pages.work_detail_page.cache_tmdb_episode_image", side_effect=cache_image),
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_paths", side_effect=lambda _work, paths: {number for number, _path in paths}) as save_batch,
+            patch("ui.pages.work_detail_page.log_event"),
+            patch("ui.pages.work_detail_page.log_exception"),
+        ):
+            worker.run()
+
+        self.assertTrue(worker.cancelled)
+        self.assertEqual(
+            cached_paths,
+            [(1, "cache/episode-1.jpg"), (2, "cache/episode-2.jpg"), (3, "cache/episode-3.jpg")],
+        )
+        self.assertEqual(save_batch.call_count, 1)
+        self.assertEqual(save_batch.call_args.args[1], cached_paths)
+        self.assertEqual(worker.cached_count, 3)
+        self.assertEqual(worker.failed_episode_numbers, [])
+        self.assertEqual(successes, [12345])
+        self.assertEqual(failures, [])
 
     def test_episode_sync_thread_quits_without_gui_event_pump(self):
         page = WorkDetailPage()
@@ -983,7 +1071,7 @@ class DetailSkeletonTests(unittest.TestCase):
                 "ui.pages.work_detail_page.cache_tmdb_episode_image",
                 side_effect=lambda *args: (time.sleep(0.05), "cached-episode.jpg")[1],
             ),
-            patch("ui.pages.work_detail_page.save_episode_thumbnail_path", return_value=True),
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_paths", side_effect=lambda work_id, paths: {number for number, _path in paths}),
             patch(
                 "ui.pages.work_detail_page.log_event",
                 side_effect=lambda event, **fields: events.append((event, fields)),
@@ -1035,7 +1123,7 @@ class DetailSkeletonTests(unittest.TestCase):
                 "ui.pages.work_detail_page.cache_tmdb_episode_image",
                 return_value=None,
             ),
-            patch("ui.pages.work_detail_page.save_episode_thumbnail_path") as save_path,
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_paths") as save_path,
             patch(
                 "ui.pages.work_detail_page.log_event",
                 side_effect=lambda event, **fields: events.append((event, fields)),

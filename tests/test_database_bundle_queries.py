@@ -607,6 +607,42 @@ class BundleDetailBatchingTests(unittest.TestCase):
         self.assertEqual(remaining_reminders, [1200])
         self.assertEqual(progress, 1200)
 
+    def test_batched_episode_thumbnail_paths_match_single_writes_with_one_connection(self):
+        con = database.get_connection()
+        try:
+            con.executemany(
+                "INSERT INTO episodes (id, work_id, episode_number, title, thumbnail_url) VALUES (?, 1, ?, ?, NULL)",
+                [(801, 1, "Episode 1"), (802, 2, "Episode 2")],
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        paths = [
+            (1, "cache/episode-1.jpg"),
+            (2, Path("cache") / "episode-2.jpg"),
+            (2, "cache/episode-2-final.jpg"),
+            (999, "cache/not-present.jpg"),
+            (True, "cache/invalid.jpg"),
+            (3, ""),
+        ]
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            saved = database.save_episode_thumbnail_paths(1, paths)
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(saved, {1, 2})
+
+        con = database.get_connection()
+        try:
+            rows = con.execute(
+                "SELECT episode_number, thumbnail_url FROM episodes WHERE work_id = 1 ORDER BY episode_number"
+            ).fetchall()
+        finally:
+            con.close()
+        self.assertEqual(
+            [(int(row["episode_number"]), row["thumbnail_url"]) for row in rows],
+            [(1, "cache/episode-1.jpg"), (2, "cache/episode-2-final.jpg")],
+        )
+
     def test_empty_and_invalid_relation_inputs_keep_existing_contract(self):
         self.assertEqual(database.get_bundle_characters(None), [])
         self.assertEqual(database.get_bundle_staff(None), [])
