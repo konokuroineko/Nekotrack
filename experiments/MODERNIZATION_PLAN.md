@@ -237,3 +237,19 @@ missing work rows, zero-episode works, absent episode snapshots, and character r
 with legacy NULL roles. The synthetic bundle-details benchmark also compares this
 readiness path and reports the combined connection reduction. This remains an
 isolated database benchmark rather than an app-wide speedup claim.
+
+
+## Sixth-pass optimization — batched bundle-appearance overrides
+
+Search grouping and Library grouping applied presentation overrides one bundle at a
+time. For result sets with several multi-member bundles, that meant one database
+connection/query per group. They now collect all member IDs, fetch matching override
+rows once in bounded chunks, and apply titles/covers from an index. The single-bundle
+getter uses the same shared bulk reader, including ordered-anchor semantics.
+
+Added a grouping test that checks the custom title and cover still win with one bulk
+fetch, and a database test covering more than one query chunk and anchor precedence.
+The synthetic bundle-details benchmark now includes old per-bundle override reads
+versus one bulk override lookup, checks output equality, and includes connection
+counts in its end-to-end database operation bundle. Whole-app improvement remains
+unclaimed until real-library instrumentation is reviewed.

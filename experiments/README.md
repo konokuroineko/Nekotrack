@@ -172,3 +172,13 @@ The Work Details preload readiness check is included in
 episode-existence checks with the batched helper, verifies exact output parity, and
 includes the readiness read in its connection counts. The benchmark uses only
 synthetic SQLite data.
+
+
+## Batched bundle appearance overrides
+
+Search and Library grouping now load presentation overrides for all multi-member
+groups in one set-based read, instead of opening one database connection per bundle.
+The single-bundle accessor retains its anchor-selection behavior. Tests verify title/
+cover application, a 1,200-ID query spanning chunks, and correct override selection.
+`experiments/benchmark_bundle_details.py` now compares per-bundle and bulk override
+reads along with the other bundled Work Details database operations.

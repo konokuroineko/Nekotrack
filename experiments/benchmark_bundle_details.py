@@ -44,6 +44,7 @@ def create_synthetic_db(path: Path, count: int):
             CREATE TABLE work_relations (source_id INTEGER NOT NULL, target_id INTEGER NOT NULL, relation_type TEXT NOT NULL, PRIMARY KEY (source_id, target_id, relation_type));
             CREATE TABLE episodes (id INTEGER PRIMARY KEY, work_id INTEGER NOT NULL, episode_number INTEGER NOT NULL, title TEXT, description TEXT, air_date TEXT, thumbnail_url TEXT, watched INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE user_library (work_id INTEGER PRIMARY KEY, status TEXT, progress_episodes INTEGER, progress_chapters INTEGER, progress_volumes INTEGER, rating INTEGER, notes TEXT, added_date TEXT, updated_date TEXT);
+            CREATE TABLE bundle_overrides (bundle_anchor_id INTEGER PRIMARY KEY, custom_title TEXT, cover_work_id INTEGER, custom_cover_path TEXT);
         """)
         works = [(i, f"Synthetic Work {i}", "ANIME", "TV", None, None) for i in range(1, count + 1)]
         works += [(count + 100 + i, f"External Relation {i}", "ANIME", "TV", None, None) for i in range(20)]
@@ -78,10 +79,43 @@ def create_synthetic_db(path: Path, count: int):
             "INSERT INTO episodes (id, work_id, episode_number) VALUES (?, ?, ?)",
             [(work_id * 1000 + 1, work_id, 1) for work_id in range(1, count + 1) if work_id % 2 == 0],
         )
+        con.executemany(
+            "INSERT INTO bundle_overrides VALUES (?, ?, ?, ?)",
+            [(anchor, f"Custom Bundle {anchor}", anchor + 1, None)
+             for anchor in range(1, count, 4) if anchor + 1 <= count],
+        )
         con.commit()
     finally:
         con.close()
     return list(range(1, count + 1))
+
+
+def _bundle_groups(ids):
+    return [ids[start:start + 2] for start in range(0, len(ids), 2)
+            if len(ids[start:start + 2]) > 1]
+
+
+def reference_override_snapshots(ids):
+    snapshots = []
+    for members in _bundle_groups(ids):
+        row = database.get_bundle_override(members)
+        snapshots.append({
+            "member_ids": list(members),
+            "override": dict(row) if row is not None else None,
+        })
+    return snapshots
+
+
+def batched_override_snapshots(ids):
+    groups = _bundle_groups(ids)
+    rows = database.get_bundle_overrides(ids)
+    by_anchor = {int(row["bundle_anchor_id"]): dict(row) for row in rows}
+    snapshots = []
+    for members in groups:
+        selected = next((by_anchor[work_id] for work_id in sorted(members)
+                         if work_id in by_anchor), None)
+        snapshots.append({"member_ids": list(members), "override": selected})
+    return snapshots
 
 
 def old_read(ids):
@@ -90,6 +124,7 @@ def old_read(ids):
         reference_bundle_staff(ids),
         reference_bundle_relations(ids),
         reference_bundle_detail_readiness(ids),
+        reference_override_snapshots(ids),
     )
 
 
@@ -99,6 +134,7 @@ def batched_read(ids):
         database.get_bundle_staff(ids),
         database.get_bundle_relations(ids),
         database.get_bundle_detail_readiness(ids),
+        batched_override_snapshots(ids),
     )
 
 

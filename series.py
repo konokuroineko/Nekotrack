@@ -8,6 +8,7 @@ from database import (
     get_all_library,
     get_automatic_bundle_memberships,
     get_bundle_override,
+    get_bundle_overrides,
     get_bundle_exclusions,
     get_connection,
     get_manual_bundle_links,
@@ -806,7 +807,7 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
     return discovered, requests_used
 
 
-def _apply_bundle_override(group, members):
+def _apply_bundle_override(group, members, overrides_by_anchor=None):
     """Apply the persisted title and cover choice shared by all bundle cards."""
     safe_members = [
         member for member in (members or [])
@@ -816,11 +817,17 @@ def _apply_bundle_override(group, members):
         return group
     member_ids = [int(_get(member, "id")) for member in safe_members]
     try:
-        override = get_bundle_override(member_ids)
+        if overrides_by_anchor is None:
+            override = get_bundle_override(member_ids)
+        else:
+            # The old helper sorted IDs before selecting an anchor, regardless
+            # of visual/release ordering among bundle members.
+            override = next(
+                (overrides_by_anchor[work_id] for work_id in sorted(set(member_ids))
+                 if work_id in overrides_by_anchor),
+                None,
+            )
     except Exception as error:
-        # Early migrations and minimal test/recovery databases may not have
-        # the optional presentation table yet. Keep that expected case quiet;
-        # a missing decoration must never break otherwise-valid grouping.
         if "no such table: bundle_overrides" not in str(error).casefold():
             log_exception(
                 "bundling.presentation_override_unavailable",
@@ -855,6 +862,46 @@ def _apply_bundle_override(group, members):
             group["cover_url"] = _get(cover_member, "cover_url")
             group["_bundle_cover_work_id"] = selected_id
     return group
+
+
+def _apply_bundle_overrides(groups):
+    """Apply all bundle appearance overrides with one batched database read."""
+    entries = []
+    work_ids = set()
+    for group in groups or []:
+        members = _get(group, "_series_members") or [group]
+        safe_members = [
+            member for member in members
+            if _valid_relation_id(_get(member, "id")) is not None
+        ]
+        if len(safe_members) <= 1:
+            continue
+        member_ids = [int(_get(member, "id")) for member in safe_members]
+        entries.append((group, safe_members))
+        work_ids.update(member_ids)
+
+    if not entries:
+        return groups
+
+    try:
+        override_rows = get_bundle_overrides(sorted(work_ids))
+    except Exception as error:
+        if "no such table: bundle_overrides" not in str(error).casefold():
+            log_exception(
+                "bundling.presentation_override_unavailable",
+                error,
+                work_ids=sorted(work_ids),
+            )
+        return groups
+
+    overrides_by_anchor = {
+        int(_get(row, "bundle_anchor_id")): row
+        for row in override_rows
+        if _get(row, "bundle_anchor_id") is not None
+    }
+    for group, members in entries:
+        _apply_bundle_override(group, members, overrides_by_anchor)
+    return groups
 
 
 def _group_discovered(results, discovered):
@@ -1031,7 +1078,7 @@ def _group_discovered(results, discovered):
             representative["_series_members"] = bundle_members
             representative["_bundle_summary"] = _bundle_summary(bundle_members)
             representative["_bundle_default_member_id"] = int(_get(default_member, "id"))
-            _apply_bundle_override(representative, bundle_members)
+            # Overrides are applied in one batch after every group is assembled.
             grouped.append(
                 (
                     min(
@@ -1062,7 +1109,7 @@ def _group_discovered(results, discovered):
         )
 
     grouped.sort(key=lambda pair: pair[0])
-    return [item for _, item in grouped]
+    return _apply_bundle_overrides([item for _, item in grouped])
 
 
 def _diagnostic_media_summary(item, include_relations=False):
@@ -1541,10 +1588,7 @@ def get_library_series(rows=None):
         )
         group["_bundle_summary"] = _bundle_summary(members)
 
-        if len(members) > 1:
-            _apply_bundle_override(group, members)
-
         group["_bundle_default_member_id"] = int(members[0]["id"])
         result.append(group)
 
-    return result
+    return _apply_bundle_overrides(result)

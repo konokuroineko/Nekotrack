@@ -167,6 +167,12 @@ class BundleDetailBatchingTests(unittest.TestCase):
                     relation_type TEXT NOT NULL,
                     PRIMARY KEY (source_id, target_id, relation_type)
                 );
+                CREATE TABLE bundle_overrides (
+                    bundle_anchor_id INTEGER PRIMARY KEY,
+                    custom_title TEXT,
+                    cover_work_id INTEGER,
+                    custom_cover_path TEXT
+                );
                 CREATE TABLE episodes (
                     id INTEGER PRIMARY KEY,
                     work_id INTEGER NOT NULL,
@@ -273,10 +279,35 @@ class BundleDetailBatchingTests(unittest.TestCase):
         self.assertTrue(actual[3]["characters_loaded"] is False)
         self.assertFalse(actual[99]["work_exists"])
 
+    def test_bulk_bundle_overrides_chunk_large_id_lists_and_preserve_anchor_priority(self):
+        con = database.get_connection()
+        try:
+            con.executemany(
+                "INSERT INTO bundle_overrides VALUES (?, ?, ?, ?)",
+                [(10, "Ten", None, None), (500, "Five Hundred", None, None),
+                 (1200, "Twelve Hundred", None, None)],
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        ids = list(range(1, 1201))
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            rows = database.get_bundle_overrides(ids)
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(
+            [(row["bundle_anchor_id"], row["custom_title"]) for row in rows],
+            [(10, "Ten"), (500, "Five Hundred")],
+        )
+        chosen = database.get_bundle_override([1200, 500, 10])
+        self.assertEqual(chosen["bundle_anchor_id"], 10)
+
     def test_empty_and_invalid_relation_inputs_keep_existing_contract(self):
         self.assertEqual(database.get_bundle_characters(None), [])
         self.assertEqual(database.get_bundle_staff(None), [])
         self.assertEqual(database.get_bundle_relations(None), [])
+        self.assertEqual(database.get_bundle_overrides(None), [])
+        self.assertEqual(database.get_bundle_overrides([1, "invalid"]), [])
         self.assertEqual(database.get_bundle_detail_readiness(None), {})
         self.assertEqual(database.get_bundle_detail_readiness([1, "invalid"]), {})
         self.assertEqual(database.get_bundle_relations([1, "invalid"]), [])

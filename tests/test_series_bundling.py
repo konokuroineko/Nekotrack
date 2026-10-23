@@ -116,6 +116,33 @@ class SeriesExclusionIndexTests(unittest.TestCase):
         self.assertFalse(series._components_have_excluded_pair({12}, {98}, {}))
 
 
+class BundleOverrideBatchingTests(unittest.TestCase):
+    def test_search_grouping_applies_override_from_one_bulk_read(self):
+        first = media(1, "Same Series", "TV")
+        second = media(2, "Same Series", "TV")
+        override = {
+            "bundle_anchor_id": 1,
+            "custom_title": "My Custom Series",
+            "cover_work_id": 2,
+            "custom_cover_path": None,
+        }
+        with (
+            patch("series.get_manual_bundle_links", return_value=[]),
+            patch("series.get_bundle_exclusions", return_value=[]),
+            patch("series.get_bundle_overrides", return_value=[override]) as bulk,
+            patch("series.get_bundle_override") as single,
+            patch("series.get", return_value=False),
+        ):
+            groups = series.group_media_results([first, second], enrich=False)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["title"], "My Custom Series")
+        self.assertEqual(groups[0]["_bundle_cover_work_id"], 2)
+        bulk.assert_called_once_with([1, 2])
+        single.assert_not_called()
+
+
+
 class BundleOptionTests(unittest.TestCase):
     def test_tv_and_tv_short_are_always_bundleable(self):
         with patch("series.get", return_value=False):

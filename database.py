@@ -3200,32 +3200,45 @@ def get_manual_bundle_partners(work_id):
 
 
 
+def get_bundle_overrides(work_ids):
+    """Return all stored bundle overrides matching a set of possible anchors."""
+    ids = _validated_work_ids(work_ids)
+    if ids is None or not ids:
+        return []
+
+    by_anchor = {}
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT bundle_anchor_id, custom_title, cover_work_id, custom_cover_path
+                FROM bundle_overrides
+                WHERE bundle_anchor_id IN ({placeholders})
+                ORDER BY bundle_anchor_id
+                """,
+                chunk,
+            ).fetchall()
+            for row in rows:
+                by_anchor[int(row["bundle_anchor_id"])] = row
+    finally:
+        connection.close()
+    return [by_anchor[work_id] for work_id in ids if work_id in by_anchor]
+
+
+
 
 def get_bundle_override(work_ids):
     """Return the saved presentation override for a bundle touching these works."""
     ids = _validated_work_ids(work_ids)
     if not ids:
         return None
-
-    placeholders = ",".join("?" for _ in ids)
-    order_cases = " ".join(
-        f"WHEN ? THEN {index}"
-        for index, _ in enumerate(ids)
-    )
-    connection = get_connection()
-    try:
-        return connection.execute(
-            f"""
-            SELECT bundle_anchor_id, custom_title, cover_work_id, custom_cover_path
-            FROM bundle_overrides
-            WHERE bundle_anchor_id IN ({placeholders})
-            ORDER BY CASE bundle_anchor_id {order_cases} ELSE {len(ids)} END
-            LIMIT 1
-            """,
-            [*ids, *ids],
-        ).fetchone()
-    finally:
-        connection.close()
+    by_anchor = {
+        int(row["bundle_anchor_id"]): row
+        for row in get_bundle_overrides(ids)
+    }
+    return next((by_anchor[work_id] for work_id in ids if work_id in by_anchor), None)
 
 
 def save_bundle_override(work_ids, anchor_id, custom_title=None, cover_work_id=None, custom_cover_path=None):
