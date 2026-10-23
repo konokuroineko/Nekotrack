@@ -297,7 +297,7 @@ class BundleDetailBatchingTests(unittest.TestCase):
         self.assertEqual(factory.call_count, 1)
         self.assertEqual(
             [(row["bundle_anchor_id"], row["custom_title"]) for row in rows],
-            [(10, "Ten"), (500, "Five Hundred")],
+            [(10, "Ten"), (500, "Five Hundred"), (1200, "Twelve Hundred")],
         )
         chosen = database.get_bundle_override([1200, 500, 10])
         self.assertEqual(chosen["bundle_anchor_id"], 10)
