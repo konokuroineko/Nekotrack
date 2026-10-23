@@ -62,17 +62,26 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.11", "3.14"]
     runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+      - name: Install Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Set up stable Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Install maturin
-        run: python -m pip install --upgrade pip maturin
+      - name: Install application and build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt maturin
       - name: Build optimized native wheel
         run: maturin build --release --manifest-path rust/nekotrack_core/Cargo.toml --out target/wheels
       - name: Install the native wheel
@@ -81,9 +90,11 @@ jobs:
         run: python -m unittest discover -s tests -p test_native_acceleration.py -v
       - name: Benchmark native similarity against Python
         run: python experiments/benchmark_native_similarity.py --pairs 5000 --iterations 9 --json-out "${{ runner.temp }}/nekotrack-native-similarity.json"
-      - name: Upload comparable benchmark result
+      - name: Benchmark optimized Python recommendation ranking
+        run: python experiments/benchmark_recommendations.py --candidate-sizes 50 250 500 --sources 50 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-recommendation-ranking.json"
+      - name: Upload comparable backend benchmark results
         uses: actions/upload-artifact@v4
         with:
-          name: nekotrack-native-benchmark-${{ matrix.os }}-py${{ matrix.python-version }}
-          path: ${{ runner.temp }}/nekotrack-native-similarity.json
+          name: nekotrack-backend-benchmarks-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: ${{ runner.temp }}/nekotrack-*.json
           if-no-files-found: error
