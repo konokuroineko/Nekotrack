@@ -643,65 +643,86 @@ def save_characters(work_id, characters):
             connection.execute("DELETE FROM people WHERE id = ?", (person_id,))
 
     try:
+        character_rows = [
+            (character["id"], character["name"], character["image_url"])
+            for character in normalized
+        ]
+        work_character_rows = [
+            (work_id, character["id"], character["role"])
+            for character in normalized
+        ]
+        actor_people_rows = []
+        global_actor_rows = []
+        scoped_actor_rows = []
         for character in normalized:
-            connection.execute(
-                """
-                INSERT INTO characters (id, name, image_url) VALUES (?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    image_path = CASE
-                        WHEN excluded.image_url IS NOT NULL
-                         AND excluded.image_url IS NOT characters.image_url
-                        THEN NULL ELSE characters.image_path END,
-                    image_url = COALESCE(excluded.image_url, characters.image_url)
-                """,
-                (character["id"], character["name"], character["image_url"]),
-            )
-            connection.execute(
-                """
-                INSERT INTO work_characters (work_id, character_id, role)
-                VALUES (?, ?, ?)
-                ON CONFLICT(work_id, character_id) DO UPDATE SET role = excluded.role
-                """,
-                (work_id, character["id"], character["role"]),
-            )
             for actor in character["actors"]:
-                connection.execute(
-                    """
-                    INSERT INTO people (id, name, image_url) VALUES (?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        name = excluded.name,
-                        image_path = CASE
-                            WHEN excluded.image_url IS NOT NULL
-                             AND excluded.image_url IS NOT people.image_url
-                            THEN NULL ELSE people.image_path END,
-                        image_url = COALESCE(excluded.image_url, people.image_url)
-                    """,
-                    (actor["id"], actor["name"], actor["image_url"]),
+                actor_people_rows.append(
+                    (actor["id"], actor["name"], actor["image_url"])
                 )
-                # Keep the legacy global association table as a union for
-                # migrations/cleanup, but read credits from this work-scoped row.
-                connection.execute(
-                    """
-                    INSERT INTO character_voice_actors (character_id, person_id, language)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(character_id, person_id) DO UPDATE SET
-                        language = COALESCE(excluded.language, character_voice_actors.language)
-                    """,
-                    (character["id"], actor["id"], actor["language"]),
+                global_actor_rows.append(
+                    (character["id"], actor["id"], actor["language"])
                 )
-                connection.execute(
-                    """
-                    INSERT INTO work_character_voice_actors
-                        (work_id, character_id, person_id, language)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(work_id, character_id, person_id) DO UPDATE SET
-                        language = COALESCE(
-                            excluded.language, work_character_voice_actors.language
-                        )
-                    """,
-                    (work_id, character["id"], actor["id"], actor["language"]),
+                scoped_actor_rows.append(
+                    (work_id, character["id"], actor["id"], actor["language"])
                 )
+
+        connection.executemany(
+            """
+            INSERT INTO characters (id, name, image_url) VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                image_path = CASE
+                    WHEN excluded.image_url IS NOT NULL
+                     AND excluded.image_url IS NOT characters.image_url
+                    THEN NULL ELSE characters.image_path END,
+                image_url = COALESCE(excluded.image_url, characters.image_url)
+            """,
+            character_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO work_characters (work_id, character_id, role)
+            VALUES (?, ?, ?)
+            ON CONFLICT(work_id, character_id) DO UPDATE SET role = excluded.role
+            """,
+            work_character_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO people (id, name, image_url) VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                image_path = CASE
+                    WHEN excluded.image_url IS NOT NULL
+                     AND excluded.image_url IS NOT people.image_url
+                    THEN NULL ELSE people.image_path END,
+                image_url = COALESCE(excluded.image_url, people.image_url)
+            """,
+            actor_people_rows,
+        )
+        # Keep the legacy global association table as a union for migrations
+        # and cleanup, while reading credits from the work-scoped rows.
+        connection.executemany(
+            """
+            INSERT INTO character_voice_actors (character_id, person_id, language)
+            VALUES (?, ?, ?)
+            ON CONFLICT(character_id, person_id) DO UPDATE SET
+                language = COALESCE(excluded.language, character_voice_actors.language)
+            """,
+            global_actor_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO work_character_voice_actors
+                (work_id, character_id, person_id, language)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(work_id, character_id, person_id) DO UPDATE SET
+                language = COALESCE(
+                    excluded.language, work_character_voice_actors.language
+                )
+            """,
+            scoped_actor_rows,
+        )
 
         if snapshot_valid:
             incoming_character_ids = {character["id"] for character in normalized}
@@ -1358,24 +1379,29 @@ def save_staff(work_id, staff_edges, replace_snapshot=True):
                 (safe_work_id,),
             )
 
-        for person_id, person_name, image_url, role in normalized:
-            connection.execute(
-                """
-                INSERT INTO people (id, name, image_url) VALUES (?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    image_path = CASE
-                        WHEN excluded.image_url IS NOT NULL
-                         AND excluded.image_url IS NOT people.image_url
-                        THEN NULL ELSE people.image_path END,
-                    image_url = COALESCE(excluded.image_url, people.image_url)
-                """,
-                (person_id, person_name, image_url),
-            )
-            connection.execute(
-                "INSERT OR IGNORE INTO work_staff (work_id, person_id, role) VALUES (?, ?, ?)",
-                (safe_work_id, person_id, role),
-            )
+        connection.executemany(
+            """
+            INSERT INTO people (id, name, image_url) VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                image_path = CASE
+                    WHEN excluded.image_url IS NOT NULL
+                     AND excluded.image_url IS NOT people.image_url
+                    THEN NULL ELSE people.image_path END,
+                image_url = COALESCE(excluded.image_url, people.image_url)
+            """,
+            [
+                (person_id, person_name, image_url)
+                for person_id, person_name, image_url, _role in normalized
+            ],
+        )
+        connection.executemany(
+            "INSERT OR IGNORE INTO work_staff (work_id, person_id, role) VALUES (?, ?, ?)",
+            [
+                (safe_work_id, person_id, role)
+                for person_id, _person_name, _image_url, role in normalized
+            ],
+        )
 
         if snapshot_valid and replace_snapshot:
             for person_id in old_person_ids:
