@@ -23,11 +23,11 @@ class SeriesPrefixIndexTests(unittest.TestCase):
     def _reference_indices(keys):
         token_lists = [tuple(str(key or "").split()) for key in keys]
         result = []
-        for tokens in token_lists:
+        for index, tokens in enumerate(token_lists):
             matches = []
             if len(tokens) >= 2:
                 for other_index, other_tokens in enumerate(token_lists):
-                    if other_index == len(result) or len(other_tokens) < 2:
+                    if other_index == index or len(other_tokens) < 2:
                         continue
                     shorter, longer = (
                         (tokens, other_tokens)
