@@ -22,6 +22,7 @@ import database  # noqa: E402
 from test_database_bundle_queries import (  # noqa: E402
     reference_bundle_characters, reference_bundle_detail_readiness,
     reference_bundle_relations, reference_bundle_staff,
+    reference_bundle_staff_page_state,
 )
 
 
@@ -45,6 +46,7 @@ def create_synthetic_db(path: Path, count: int):
             CREATE TABLE episodes (id INTEGER PRIMARY KEY, work_id INTEGER NOT NULL, episode_number INTEGER NOT NULL, title TEXT, description TEXT, air_date TEXT, thumbnail_url TEXT, watched INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE user_library (work_id INTEGER PRIMARY KEY, status TEXT, progress_episodes INTEGER, progress_chapters INTEGER, progress_volumes INTEGER, rating INTEGER, notes TEXT, added_date TEXT, updated_date TEXT);
             CREATE TABLE bundle_overrides (bundle_anchor_id INTEGER PRIMARY KEY, custom_title TEXT, cover_work_id INTEGER, custom_cover_path TEXT);
+            CREATE TABLE work_provider_metadata (work_id INTEGER NOT NULL, provider TEXT NOT NULL, provider_id TEXT, payload_json TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (work_id, provider));
         """)
         works = [(i, f"Synthetic Work {i}", "ANIME", "TV", None, None) for i in range(1, count + 1)]
         works += [(count + 100 + i, f"External Relation {i}", "ANIME", "TV", None, None) for i in range(20)]
@@ -84,6 +86,13 @@ def create_synthetic_db(path: Path, count: int):
             [(anchor, f"Custom Bundle {anchor}", anchor + 1, None)
              for anchor in range(1, count, 4) if anchor + 1 <= count],
         )
+        con.executemany(
+            "INSERT INTO work_provider_metadata (work_id, provider, payload_json) VALUES (?, ?, ?)",
+            [
+                (work_id, "anilist_staff_page_info", '{"hasNextPage": true, "currentPage": 1}')
+                for work_id in range(1, count + 1) if work_id % 3 == 0
+            ],
+        )
         con.commit()
     finally:
         con.close()
@@ -93,6 +102,14 @@ def create_synthetic_db(path: Path, count: int):
 def _bundle_groups(ids):
     return [ids[start:start + 2] for start in range(0, len(ids), 2)
             if len(ids[start:start + 2]) > 1]
+
+
+def reference_staff_state(ids):
+    return reference_bundle_staff_page_state(ids)
+
+
+def batched_staff_state(ids):
+    return database.get_bundle_staff_page_state(ids)
 
 
 def reference_override_snapshots(ids):
@@ -125,6 +142,7 @@ def old_read(ids):
         reference_bundle_relations(ids),
         reference_bundle_detail_readiness(ids),
         reference_override_snapshots(ids),
+        reference_staff_state(ids),
     )
 
 
@@ -135,6 +153,7 @@ def batched_read(ids):
         database.get_bundle_relations(ids),
         database.get_bundle_detail_readiness(ids),
         batched_override_snapshots(ids),
+        batched_staff_state(ids),
     )
 
 

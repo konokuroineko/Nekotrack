@@ -2812,6 +2812,67 @@ def get_bundle_characters(work_ids):
     ))
 
 
+def get_bundle_staff_page_state(work_ids):
+    """Batch saved staff counts and AniList pagination metadata for bundle members."""
+    ids = _validated_work_ids(work_ids)
+    if ids is None or not ids:
+        return {}
+
+    result = {
+        work_id: {
+            "saved_staff_count": 0,
+            "anilist_media_id": None,
+            "page_info": None,
+        }
+        for work_id in ids
+    }
+    provider_keys = {
+        "anilist_media_id": "anilist_media_id",
+        "anilist_staff_page_info": "page_info",
+    }
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            count_rows = connection.execute(
+                f"""
+                SELECT ws.work_id, COUNT(DISTINCT people.id) AS staff_count
+                FROM work_staff AS ws
+                JOIN people ON people.id = ws.person_id
+                WHERE ws.work_id IN ({placeholders})
+                GROUP BY ws.work_id
+                """,
+                chunk,
+            ).fetchall()
+            for row in count_rows:
+                result[int(row["work_id"])]["saved_staff_count"] = int(
+                    row["staff_count"] or 0
+                )
+
+            metadata_rows = connection.execute(
+                f"""
+                SELECT work_id, provider, payload_json
+                FROM work_provider_metadata
+                WHERE work_id IN ({placeholders})
+                  AND provider IN ('anilist_media_id', 'anilist_staff_page_info')
+                """,
+                chunk,
+            ).fetchall()
+            for row in metadata_rows:
+                result_key = provider_keys.get(str(row["provider"] or "").strip().lower())
+                if result_key is None:
+                    continue
+                try:
+                    payload = json.loads(row["payload_json"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if isinstance(payload, (dict, list)):
+                    result[int(row["work_id"])][result_key] = payload
+    finally:
+        connection.close()
+    return result
+
+
 def _load_bundle_staff_rows(work_ids):
     """Load staff rows in batches and retain each work's original row/role order."""
     grouped = {}

@@ -207,3 +207,11 @@ Episode pruning keeps its simple `NOT IN` query for up to 400 valid episode numb
 Larger verified catalogs use a temporary keep table and `NOT EXISTS` deletes rather
 than building an unbounded SQL parameter list. The database regression fixture checks
 a 1,200-episode replacement including stale reminders and progress normalization.
+
+
+## Work Details staff-pagination state
+
+The "load more staff credits" decision now batch-reads per-work saved staff counts and
+persisted AniList link/page metadata rather than opening multiple connections per
+bundle member. The existing per-work fallback remains available on read failure.
+Parity and synthetic benchmark coverage compare the old and batched output.

@@ -294,3 +294,16 @@ keep their watched state.
 
 The database fixture includes a 1,200-episode replacement catalog with both kept and
 stale episode/reminder rows and validates the resulting progress cap.
+
+
+## Eleventh-pass Work Details staff-pagination state
+
+Before deciding whether to show the staff-credit "load more" action, Work Details used
+to count saved staff rows and separately read AniList pagination metadata for each
+bundle member. A new `get_bundle_staff_page_state` helper retrieves per-work staff
+counts, linked AniList IDs and page info in one connection with bounded queries.
+Work Details retains the old per-work fallback if this combined read fails, as well
+as the existing negative-ID link resolution and legacy no-page-info rule.
+
+Parity tests and the synthetic bundle-details benchmark now include this path, using
+work/credit fixtures only and no external APIs.

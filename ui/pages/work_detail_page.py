@@ -28,7 +28,7 @@ from diagnostics import log_event, log_exception
 from database import (
     add_manual_bundle_link, add_to_library, delete_work_data, get_bundle_characters, get_bundle_detail_readiness,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
-    get_reading_progress, get_staff, is_work_in_library,
+    get_reading_progress, get_staff, get_bundle_staff_page_state, is_work_in_library,
     get_tmdb_mapping, get_work, get_provider_metadata,
     save_work_display_override, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
@@ -5543,13 +5543,37 @@ class WorkDetailPage(QWidget):
 
     def _staff_page_requests(self, detail_ids):
         requests = []
-        for local_work_id in detail_ids or []:
+        normalized_ids = []
+        for raw_work_id in detail_ids or []:
             try:
-                local_work_id = int(local_work_id)
+                local_work_id = int(raw_work_id)
             except (TypeError, ValueError, OverflowError):
                 continue
-            if local_work_id == 0 or local_work_id in self._staff_exhausted_ids:
+            if (
+                local_work_id == 0
+                or local_work_id in self._staff_exhausted_ids
+                or local_work_id in normalized_ids
+            ):
                 continue
+            normalized_ids.append(local_work_id)
+
+        try:
+            page_state_by_id = get_bundle_staff_page_state(normalized_ids)
+        except Exception as error:
+            # Keep the old per-work path as a fallback if an old/malformed DB
+            # cannot supply the combined metadata read.
+            page_state_by_id = None
+            log_exception(
+                "work_detail.staff_page_state_batch_failed",
+                error,
+                work_ids=normalized_ids,
+            )
+
+        for local_work_id in normalized_ids:
+            state = (
+                page_state_by_id.get(local_work_id, {})
+                if page_state_by_id is not None else None
+            )
 
             # Most local works use their AniList ID as their work ID. A
             # MangaBaka-only work may keep a negative local ID but have an
@@ -5557,8 +5581,10 @@ class WorkDetailPage(QWidget):
             anilist_id = local_work_id if local_work_id > 0 else None
             if anilist_id is None:
                 try:
-                    linked_record = get_provider_metadata(
-                        local_work_id, "anilist_media_id"
+                    linked_record = (
+                        state.get("anilist_media_id")
+                        if state is not None
+                        else get_provider_metadata(local_work_id, "anilist_media_id")
                     )
                     raw_anilist_id = (
                         linked_record.get("id")
@@ -5570,16 +5596,21 @@ class WorkDetailPage(QWidget):
             if anilist_id is None or anilist_id <= 0:
                 continue
 
-            try:
-                saved_staff_count = len(get_staff(local_work_id))
-            except Exception:
-                saved_staff_count = 0
-            try:
-                page_info = get_provider_metadata(
-                    local_work_id, "anilist_staff_page_info"
-                )
-            except Exception:
-                page_info = None
+            if state is not None:
+                saved_staff_count = int(state.get("saved_staff_count") or 0)
+                page_info = state.get("page_info")
+            else:
+                try:
+                    saved_staff_count = len(get_staff(local_work_id))
+                except Exception:
+                    saved_staff_count = 0
+                try:
+                    page_info = get_provider_metadata(
+                        local_work_id, "anilist_staff_page_info"
+                    )
+                except Exception:
+                    page_info = None
+
             if isinstance(page_info, dict) and page_info.get("hasNextPage") is False:
                 self._staff_exhausted_ids.add(local_work_id)
                 continue

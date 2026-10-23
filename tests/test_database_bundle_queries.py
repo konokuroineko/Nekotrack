@@ -1,4 +1,5 @@
 """Parity and query-count tests for batched bundle detail reads."""
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -128,6 +129,21 @@ def reference_bundle_detail_readiness(work_ids):
     return result
 
 
+def reference_bundle_staff_page_state(work_ids):
+    """Former per-work staff count and provider-metadata reads."""
+    ids = database._validated_work_ids(work_ids)
+    if ids is None or not ids:
+        return {}
+    result = {}
+    for work_id in ids:
+        result[work_id] = {
+            "saved_staff_count": len(database.get_staff(work_id)),
+            "anilist_media_id": database.get_provider_metadata(work_id, "anilist_media_id"),
+            "page_info": database.get_provider_metadata(work_id, "anilist_staff_page_info"),
+        }
+    return result
+
+
 class BundleDetailBatchingTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -205,6 +221,14 @@ class BundleDetailBatchingTests(unittest.TestCase):
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (work_id, episode_number)
                 );
+                CREATE TABLE work_provider_metadata (
+                    work_id INTEGER NOT NULL,
+                    provider TEXT NOT NULL,
+                    provider_id TEXT,
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (work_id, provider)
+                );
             """)
             con.executemany(
                 "INSERT INTO works (id,title,type,format,cover_url) VALUES (?,?,'ANIME','TV',?)",
@@ -263,11 +287,37 @@ class BundleDetailBatchingTests(unittest.TestCase):
         self.assertEqual(database.get_bundle_relations(relation_ids), reference_bundle_relations(relation_ids))
 
     def test_each_nonempty_bundle_reader_uses_one_connection(self):
-        for fn in (database.get_bundle_characters, database.get_bundle_staff, database.get_bundle_relations, database.get_bundle_detail_readiness):
+        for fn in (database.get_bundle_characters, database.get_bundle_staff, database.get_bundle_relations, database.get_bundle_detail_readiness, database.get_bundle_staff_page_state):
             with self.subTest(function=fn.__name__):
                 with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
                     fn([1, 2, 3])
                 self.assertEqual(factory.call_count, 1)
+
+    def test_batched_staff_page_state_matches_per_work_reads_with_one_connection(self):
+        con = database.get_connection()
+        try:
+            con.executemany(
+                "INSERT INTO work_provider_metadata (work_id, provider, payload_json) VALUES (?, ?, ?)",
+                [
+                    (1, "anilist_staff_page_info", json.dumps({"hasNextPage": True, "currentPage": 3})),
+                    (2, "anilist_staff_page_info", json.dumps({"hasNextPage": False, "currentPage": 4})),
+                    (-10, "anilist_media_id", json.dumps({"id": 9910})),
+                    (-10, "anilist_staff_page_info", json.dumps({"hasNextPage": True, "currentPage": 2})),
+                ],
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        ids = [1, 2, 3, -10, 99]
+        expected = reference_bundle_staff_page_state(ids)
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            actual = database.get_bundle_staff_page_state(ids)
+        self.assertEqual(actual, expected)
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(actual[1]["saved_staff_count"], 5)
+        self.assertEqual(actual[1]["page_info"], {"hasNextPage": True, "currentPage": 3})
+        self.assertEqual(actual[-10]["anilist_media_id"], {"id": 9910})
 
     def test_batched_readiness_matches_per_work_checks_and_one_connection(self):
         con = database.get_connection()
@@ -366,6 +416,12 @@ class BundleDetailBatchingTests(unittest.TestCase):
         self.assertEqual(len(profile), 1200)
         self.assertTrue(profile[1]["characters"])
         self.assertTrue(profile[1]["staff"])
+
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            staff_state = database.get_bundle_staff_page_state(ids)
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(len(staff_state), 1200)
+        self.assertEqual(staff_state[1]["saved_staff_count"], 5)
 
         with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
             actors = database.get_bundle_character_voice_actors(ids, 10)
@@ -494,6 +550,7 @@ class BundleDetailBatchingTests(unittest.TestCase):
         self.assertEqual(database.get_bundle_overrides(None), [])
         self.assertEqual(database.get_bundle_overrides([1, "invalid"]), [])
         self.assertEqual(database.get_bundle_detail_readiness(None), {})
+        self.assertEqual(database.get_bundle_staff_page_state(None), {})
         self.assertEqual(database.get_bundle_detail_readiness([1, "invalid"]), {})
         self.assertEqual(database.get_bundle_relations([1, "invalid"]), [])
 
