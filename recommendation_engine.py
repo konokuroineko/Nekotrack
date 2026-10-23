@@ -496,7 +496,7 @@ def _build_credit_signal_index(credit_profile, favorite_entities, voice_language
     return source_weights, source_context, favorites
 
 
-def _candidate_credit_signal(work, credit_signal_index):
+def _candidate_credit_signal(work, credit_signal_index, voice_language):
     """Score a candidate against the shared, precomputed contributor index."""
     source_weights, source_context, favorites = credit_signal_index
     strongest_by_entity = {}
@@ -685,7 +685,7 @@ def rank_candidates(
                 credit_profile, favorite_entities, voice_language
             )
         credit_boost, credit_reason = _candidate_credit_signal(
-            raw, credit_signal_index
+            raw, credit_signal_index, voice_language
         )
         raw_score = (
             6.0
