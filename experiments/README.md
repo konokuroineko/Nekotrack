@@ -1,10 +1,10 @@
-# NekoTrack polyglot experiment
+# NekoTrack modernization experiment
 
-This directory contains an isolated Qt Quick/QML prototype. It is not imported by
-`main.py`, is not included by the production PyInstaller build, and does not
-read or write the NekoTrack database.
+This directory is the **ongoing modernization work** for NekoTrack, kept together
+in the same draft pull request. It is not a disposable demo and it does not modify
+the production app or packaged release yet.
 
-## Run the prototype
+## Run the full UI shell
 
 Use the same Python environment in which NekoTrack and PySide6 are installed.
 From the repository root:
@@ -13,81 +13,76 @@ From the repository root:
 python experiments/qml_preview.py
 ```
 
-The current screen uses sample data only. Search filters the sample anime, manga,
-and light novel entries. Selecting a card changes only an on-screen prototype
-message.
+The window now prototypes the main application destinations: Home, Library, Search,
+Calendar, Favorites, Settings, and a work-detail view. The layout uses sample titles
+and illustrative events only. It does not read, alter, or persist your real library;
+the controls demonstrate page/navigation behavior and design direction, not production
+functionality yet.
 
-## What this experiment is intended to establish
+## What is changing beyond the UI spike
 
-- Whether a Qt Quick/QML component can be developed and run alongside the
-  existing PySide6/Qt Widgets app without changing the production entry point.
-- Whether the visual direction improves responsive layout and repeated result
-  cards without losing keyboard focus visibility or useful accessible names.
-- Whether the QML layer can remain presentation-only, with Python retaining
-  application services, provider integration, and persistence.
-- What additional Qt Quick modules, resources, and build steps would be required
-  before production packaging could support QML.
+- [MODERNIZATION_PLAN.md](MODERNIZATION_PLAN.md) records the re-evaluated full-app
+  architecture, UI migration scope, performance acceptance gates, accessibility
+  requirements, and conditional Rust plan.
+- [benchmark_recommendations.py](benchmark_recommendations.py) measures the real
+  Python recommendation-ranking function on deterministic synthetic workloads.
+- The recommendation engine now precomputes source contributor weights once for
+  each ranking pass rather than repeating the same scan for every candidate.
+- A regression test checks that the shared index is built once and scoring output
+  remains unchanged for the tested workload.
+
+## Benchmark the CPU-bound recommendation path
+
+From the repository root in PowerShell:
+
+```powershell
+python experiments/benchmark_recommendations.py --candidate-sizes 50 250 500 --sources 50 --iterations 7 --json-out "$env:TEMP\nekotrack-ranking-baseline.json"
+```
+
+The benchmark uses synthetic inputs only. It does not call the network or read the
+database. It measures recommendation ranking, **not** cold startup, actual API
+latency, or end-to-end UI responsiveness. Keep the machine/Python/build details with
+the output. Run the same settings before and after a change and compare median and
+p95 timings; do not substitute estimated numbers.
+
+## Performance baseline checklist
+
+Collect real app timings separately from the synthetic benchmark. Repeat each scenario
+on the same computer/build and report median and p95; measure cold and warm cache runs
+separately.
+
+| Scenario | Baseline |
+| --- | --- |
+| Cold start to first usable main window | Not measured |
+| Home: first interactive content and fully loaded feed | Not measured |
+| Search: local filtering, provider request, and artwork separately | Not measured |
+| Library: query/grouping, first interactive card, full population | Not measured |
+| Large bundle detail: initial view and episode/chapter content | Not measured |
+| Recommendation CPU ranking (synthetic, no network/DB) | Use benchmark script |
+| Long-list scrolling / frame stutter | Not measured |
+| Peak working set (cold start and larger library) | Not measured |
 
 ## Manual acceptance checklist
 
-- [ ] The preview launches without QML warnings/errors.
-- [ ] Search filters by title, media format, and description.
-- [ ] Clear restores all sample results and returns focus to the search field.
-- [ ] Keyboard users can reach the search field, Clear button, and result cards.
-- [ ] The focused control is visibly identifiable.
-- [ ] Result cards expose a meaningful accessible name and description to the
-      Windows Narrator accessibility tree.
-- [ ] The window remains usable when resized down to its minimum size.
-- [ ] Larger Windows text/scaling settings do not obscure controls or text.
-- [ ] The production application and installer are unaffected.
+- [ ] Preview opens with no QML warnings/errors.
+- [ ] Side navigation switches between Home, Library, Search, Calendar, Favorites, and Settings.
+- [ ] Global search filters sample titles; library status filters and search format filters work.
+- [ ] Clear filters returns the sample results.
+- [ ] Selecting a card opens the detail concept and Back returns to the prior page.
+- [ ] Keyboard users can reach navigation, search, filters, cards, and actions with visible focus.
+- [ ] Windows Narrator exposes useful names and descriptions for controls and result cards.
+- [ ] Layout survives the minimum window size and larger Windows text scaling.
+- [ ] Light/dark, contrast, RTL, and reduced-motion behavior have been tested before production adoption.
+- [ ] Existing Widgets screens, local data, installer, updater and rollback are unchanged.
 
-## Modernization plan and performance work
+## Architecture direction
 
-See [MODERNIZATION_PLAN.md](MODERNIZATION_PLAN.md) for the proposed full-app UI migration,
-performance acceptance gates, and conditional Rust/PyO3 plan. The direction is broader
-than this sample screen.
+- **Python / PySide6:** APIs, business rules, sync, diagnostics, persistence access, and a narrow QObject/model adapter layer for QML.
+- **Qt Quick / QML / JavaScript:** the long-term full UI direction, migrated by screen behind the Python service boundary. It is not automatically faster than Widgets; use profiler results and the live-data vertical slice to validate it.
+- **Rust / PyO3 / maturin:** a measured performance kernel, not a rewrite of network calls, SQLite, or UI painting. Recommendation ranking and contributor matching are initial candidates to benchmark. Keep Rust only if the measured end-to-end gain justifies build, CI, and frozen-installer complexity.
+- **SQLite / SQL:** retain the local database and improve query batching/indexes based on timing evidence.
+- **PyInstaller / Inno Setup:** retain the release path until the new UI/optional native extension is packaged and tested end-to-end.
 
-A deterministic CPU-only benchmark is available from the repository root:
-
-```powershell
-python experiments/benchmark_recommendations.py --candidate-sizes 50 250 500 --sources 50 --iterations 7 --json-out artifacts/recommendation-baseline.json
-```
-
-It reports the local recommendation-ranking function's timing on synthetic data only.
-It does not read the user's database or call an API, and it must not be treated as an
-end-to-end startup/search benchmark. Save each run with the machine/Python/build details;
-compare the same settings before and after changes. Use the timings to choose whether
-a Rust port has a realistic payoff instead of assuming that Rust will speed up I/O or UI
-rendering.
-
-The current performance improvement precomputes stable source-credit weights once per
-ranking pass rather than rebuilding them for each eligible candidate. A regression test
-checks that this index is built once and that ranking output remains the same across
-the tested call. Its real-world benefit still needs measured before/after timings.
-
-## Performance baseline
-
-Record measurements from the same computer and build before and after meaningful
-changes. Do not fill in numbers from estimates.
-
-| Scenario | Baseline result | Measurement method |
-| --- | --- | --- |
-| Cold application startup | Not measured yet | Time from launch to usable main window; repeat several times |
-| Search response | Not measured yet | Measure a common query with cached data and with cache cleared |
-| Open a large bundle | Not measured yet | Time from selection to usable detail view |
-| Initial Library load | Not measured yet | Time from entering Library to visible, interactive cards |
-| Recommendation generation | Not measured yet | Measure ranking separately from waiting for network responses |
-
-Keep cold and warm runs separate, note machine and build details, and compare
-median results rather than relying on a single run.
-
-## Current architecture direction
-
-- **Python/PySide6:** primary application and service layer.
-- **QML/JavaScript:** experimental declarative UI layer, introduced incrementally.
-- **Rust:** only consider a native extension after profiling identifies a CPU-bound
-  operation and a benchmark demonstrates useful improvement.
-- **SQLite/SQL:** retain persistence and improve query/data-access boundaries.
-- **PowerShell/Inno Setup:** retain Windows update and installer tooling.
-
-No full UI migration or Rust dependency is implied by this prototype.
+The production UI migration and Rust dependency are not complete. The draft PR stays open
+until the useful screens are connected to real data, regression and accessibility checks
+pass, and before/after performance numbers support the changes.
