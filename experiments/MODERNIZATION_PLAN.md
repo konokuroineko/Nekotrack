@@ -1,99 +1,89 @@
-# NekoTrack modernization plan: UI, performance, and a deliberate polyglot core
+# NekoTrack performance and accessibility modernization
 
-**Status: proposed implementation plan; not a performance result.** This plan is intentionally part of the ongoing modernization PR. No production-screen replacement should be merged just because a prototype renders.
+**Product requirement: preserve the NekoTrack that exists today.** Its current Qt Widgets pages, visual styling, navigation, saved data, settings, and existing backend behavior are the reference implementation. This work must not invent a new UI or replace real behavior with sample cards. Any change that visibly alters the current design requires a separate explicit decision.
 
-## Decision summary
+## Architecture decision
 
-Keep the project as a native desktop application and evolve it in place:
+Keep the working stack and add only language/runtime complexity that earns its place:
 
-| Layer | Direction | Why / guardrail |
+| Area | Decision | Reason |
 | --- | --- | --- |
-| Desktop UI | **PySide6 + Qt Quick/QML + JavaScript** for the new shell and migrated screens | Best match for a fully redesigned, responsive, consistent desktop UI while retaining Qt and Python. QML is not automatically faster; profile frame time and startup. |
-| Application/services | **Python** | Keep AniList/TMDB/MangaBaka integration, sync, business rules, diagnostics, and update logic here. The QML view must not issue network or SQL requests directly. |
-| UI/data boundary | **Python QObject services and typed QAbstractListModel adapters** | QML receives already-prepared view data; long work runs in workers and returns through Qt signals. This preserves the current API/SQLite ownership boundaries. |
-| Persistence | **SQLite + SQL** | Keep local-first data and existing migrations. Optimize query shape, indexes, batching, and cache invalidation from query timings before considering a database replacement. |
-| Performance kernel | **Rust + PyO3 + maturin, conditional on profiling** | Prototype a real hot path only after the Python benchmark identifies it. Keep semantic parity tests and a Python fallback during evaluation. Rust will not make remote API waits, SQLite lock waits, or UI painting faster by itself. |
-| Packaging | Existing PyInstaller + Inno Setup, extended only after integration proves what QML/Rust runtime assets are needed | No installer changes during UI experiments. A native Rust extension must be built and tested on Windows, then verified inside the frozen installer. |
+| Complete desktop UI | **Keep PySide6 + Qt Widgets and the existing theme/branding/navigation.** | It is the only approach that guarantees the current look and workflows remain the source of truth. A QML rewrite would require rebuilding every page and backend/UI integration, and does not automatically improve speed. |
+| Existing backend | **Keep Python services, `api.py`, SQLite functions in `database.py`, bundling logic, background workers, diagnostics, update and rollback behavior.** | They already implement the app's actual behavior. Optimize in place rather than substituting a mock or rewriting providers. |
+| Performance extension | **Rust via PyO3 + maturin only for a demonstrated CPU-bound hotspot.** | Rust must improve the actual workload enough to justify native-build, CI, Windows packaging, and support costs. No port is approved based on language reputation alone. |
+| Persistence | **Keep SQLite and SQL.** | Measure queries and batch/index work before changing storage. Network waits and GUI painting are not fixed by replacing SQL. |
+| Installer/release | **Keep PyInstaller + Inno Setup.** | Extend packaging only if a tested native module becomes worthwhile; verify install, update, rollback, and fresh-install paths before release. |
 
-## Why not make the current tiny preview the whole project?
+QML/JavaScript was reconsidered and is **not the chosen replacement UI** for this requirement. A separate sample-only QML shell was removed from this PR because it looked different from the real app and did not use the complete backend. We should not ship a parallel mock UI merely to add another language.
 
-The search preview only proves that QML can start next to the current code. It does not establish that QML beats the current widgets UI, that the architecture is maintainable, or that Rust will improve user-perceived speed. The next UI iteration should be a complete navigable shell, then live data should be added screen-by-screen behind a narrow Python service boundary.
+## Non-negotiable parity checklist
 
-## Re-evaluating the UI choices
+- Preserve the current Neko theme, purple accent, wordmark/logo, wallpaper/background transparency, spacing, typography, card style, icons, hover and selection states, navigation order, and existing page layouts.
+- Preserve the current behavior across Home/recommendations, Library/bundles/progress, Search/providers/filters/pagination, Calendar/reminders, Favorites/profiles, Work Details/episodes/volumes/chapters/relations, Settings, setup, updates, and rollback.
+- Keep one source of truth for each API and persistence operation. API integration stays in `api.py`; database access stays in the existing database layer.
+- Preserve the user's database, preferences, image cache, saved bundles, custom appearance overrides, reading/watching progress, and update safety.
+- Accessibility improvements should work within the existing design: keyboard operation, meaningful accessible names/roles, visible focus where needed, scaling, correct light-mode surfaces, screen-reader behavior, and non-color cues. Do not restyle the app just to make this branch look new.
 
-| Choice | Advantages | Costs | Decision |
-| --- | --- | --- | --- |
-| Keep Qt Widgets and only restyle | Lowest rewrite and packaging risk; the app already has substantial widget functionality and tests | Harder to establish a unified, highly customized design system across the large screen set | Keep as fallback, not the preferred long-term design |
-| Move the whole view layer to Qt Quick/QML | Declarative layouts, reusable visual components, polished animations, adaptive/responsive screens; still uses Qt | Requires accessible QML equivalents, Python-facing models, packaging review, and staged migration | **Preferred UI direction**, conditional on a useful full-shell prototype and measured/accessible live-data slice |
-| Replace the desktop UI with a web stack or another toolkit | Different ecosystem and possibly attractive web-style components | Duplicates infrastructure and abandons much of the existing PySide6 investment; larger rewrite and regression surface | Not recommended for this project right now |
+## Performance work
 
-Do not embed every new QML page inside `QQuickWidget` by default. Qt documents that QQuickWidget introduces an offscreen render pass and disables Qt Quick's threaded render loop on all platforms; choose the integration model from a working architecture spike rather than convenience.
+### 1. Establish comparable measurements
 
-## Full UI scope
+The app already logs structured diagnostic operations. Use those timestamps to separate time spent in network calls, SQLite, bundling/data transformation, artwork, widget creation, and GUI-thread work. Keep cold and warm runs separate and report median/p95 from repeated trials on the same machine/build.
 
-The new design should cover the **whole application**, not just search:
+Priority workloads:
 
-- **App shell:** stable side navigation, page title/context, global search, update/connection status, responsive window layout.
-- **Home:** continue watching/reading, recommendation rows, upcoming releases, skeleton/loading/error/empty states.
-- **Library:** status filters, sort and format filters, bundles, progress editing, fast long-list scrolling.
-- **Search:** provider/type filters, debounced query input, result cards, loading and retry states.
-- **Work details:** real title/cover/description, bundle members, season/episode and volume/chapter progress, cast/staff/relations.
-- **Calendar and Favorites:** real release reminders and person/character/staff favorites; preserve existing behavior.
-- **Settings:** theme/light mode, scaling, language, accessibility and update/rollback controls.
-
-Use a coherent design system (spacing, typography, surface/elevation, radii, focus/hover/pressed states, icons) rather than styling each page independently. Do not sacrifice existing functions for visual polish.
-
-## Performance plan: measure first, then optimize
-
-Capture repeatable measurements on the same PC/build and report median plus p95; do not write estimates into the baseline. Keep cold-cache and warm-cache runs separate.
-
-| Workload | Measure separately |
+| Workload | Measure |
 | --- | --- |
-| Cold startup | process start to first usable window; time to first usable content |
-| Home | time to first interactive recommendations and time to fully populated rows |
-| Search | local query/filter time; debounce delay; provider request time; image arrival time |
-| Library | query time, grouping/bundling time, card/model population, first interactive paint |
-| Work details | bundle lookup, episode/chapter catalog lookup, view construction, artwork loading |
-| Recommendations | pure Python rank time on deterministic candidate/source-credit sizes; network fetch time separately |
-| Memory and scrolling | peak working set, card/model count, scroll/frame stutter on long lists |
+| Startup | launch to first usable window; first useful page content |
+| Home | local library snapshot, first interactive recommendations, full feed |
+| Search | local input/filter handling, AniList/MangaBaka request, artwork separately |
+| Library | SQL retrieval, grouping/bundles, card creation, first interactive content |
+| Work Details | initial open, large bundle sections, episode/chapter lists and artwork |
+| Recommendation ranking | pure CPU scoring time, separate from network/API wait |
+| Scrolling/memory | long-list scrolling responsiveness, number of live widgets/cards, peak working set |
 
-Priority order for real performance work:
+Do not treat synthetic CPU benchmarks as whole-app performance data. Do not put invented numbers in the README or PR.
 
-1. Instrument operations and split network wait, SQL/data processing, image decoding/cache, model transformation, and GUI-thread/render work.
-2. Fix known high-impact causes (repeated DB calls, work done on the GUI thread, duplicate image decode/download, unbounded widget creation, unnecessary full-list rerenders) where measurements confirm them.
-3. Prefer Qt Quick's virtualized ListView/model patterns for large feeds; keep QML delegates simple and lazy-load only expensive pages.
-4. Benchmark the recommendation engine separately. This repository has a pure `rank_candidates` path, so it is a candidate for a Rust experiment, but candidate scoring includes string normalization, Python dictionaries, contributor maps, and explanation text. Port only after timings identify the hot loop and a candidate Rust boundary avoids excessive Python/Rust conversions.
-5. Rerun the real workload after each change; report before/after numbers, not an assertion that a language is faster.
+### 2. Optimize the whole app in place
 
-### Rust acceptance gate
+Fix the measured causes rather than performing a broad rewrite. Likely areas to examine are repeated database/provider calls, duplicate work during grouping, unnecessary complete rerenders, image decode/cache churn, large widget construction on the GUI thread, and callbacks left attached during view replacement. Preserve output/ordering and UI behavior with regression tests.
 
-A Rust implementation is worth keeping only if it:
-- reproduces the Python reference results exactly where ordering/IDs/explanations are expected, with explicit float tolerances for numeric values;
-- passes normal tests plus randomized/adversarial parity cases;
-- demonstrates a substantial speedup in the isolated operation **and** a meaningful improvement in the full local workload;
-- builds reproducibly for the exact supported Python versions and Windows architecture and is included in the packaged app;
-- does not create an untested mandatory dependency or make install/update/rollback less reliable.
+Current changes in this PR:
+- Reuse a precomputed recommendation source-credit index during one ranking pass instead of rebuilding the same weights for every candidate. A regression test checks that the index is created once and the tested ranking output stays consistent. This is an algorithmic optimization hypothesis until before/after benchmark measurements quantify the benefit.
+- Fix recommendation scrollbar rebinding by disconnecting the previously tracked bar and avoiding redundant reconnects. A regression test checks old-bar callbacks and failed-disconnect warnings.
+- Add a deterministic CPU-only benchmark for `recommendation_engine.rank_candidates`. It uses synthetic data only and does not access the live database or network.
 
-Initial target for investigation: recommendation ranking / contributor matching, not HTTP requests and not Qt painting. A Python fallback remains until release packaging and benchmarks prove the extension safe and useful. If the measured gain is small, keep the cleaner Python implementation and optimize caching/data structures instead.
+Run from the repository root:
+```powershell
+python experiments/benchmark_recommendations.py --candidate-sizes 50 250 500 --sources 50 --iterations 7 --json-out "$env:TEMP\nekotrack-ranking-baseline.json"
+```
 
-## Accessibility and localization gates
+Record Python version, machine, branch/commit, candidate/source counts, median, and p95. Run the same workload before and after the optimization. For real NekoTrack scenarios, use the same installed app/library and export diagnostics. Do not compare measurements taken from different machines or unrelated versions.
 
-For every migrated screen: keyboard-only navigation and visible focus; Windows Narrator names/roles/states; high-contrast/contrast checks; text scaling and minimum-window behavior; no information conveyed by color alone; reduced-motion-friendly transitions; RTL layout and locale-aware dates/numbers. Verify light mode actually changes all relevant surfaces. Measure accessibility on the real QML controls, not only on the sample card.
+### 3. Rust gate
 
-## Acceptance gates before any merge/release
+The first Rust candidate should be selected from measured CPU profiling, with recommendation contributor matching/ranking investigated first because it is isolated and can be benchmarked. That is a candidate—not an assumption that it is currently the bottleneck.
 
-- The full QML shell covers every main navigation destination and survives minimum-size/window-scaling checks.
-- At least one vertical slice uses real Python services/model data (first read-only, then progress writes) and has loading/error/empty states.
-- Existing regression suite stays green; new integration and parity tests cover migrated behavior.
-- Baselines and before/after performance numbers are checked into the PR; no numbers are invented.
-- User-tested keyboard and Narrator flows work; no important feature disappears.
-- Windows PyInstaller installer/update/rollback paths work with the chosen QML assets and, if enabled, the Rust extension.
-- Draft stays open while work and verification are incomplete.
+Only add a Rust extension when:
+- profiling proves the path is materially CPU-bound rather than waiting on API/SQLite or GUI work;
+- Rust yields a substantial improvement in that isolated function and a measurable end-to-end benefit;
+- output, scoring, ordering, exclusion rules, and recommendation explanations match the Python reference under deterministic and randomized/adversarial tests;
+- a Python fallback remains until the native module is built and tested on Windows with every supported Python build;
+- the frozen PyInstaller app and installer/update/rollback paths pass.
 
-## Official references
+If the gain is small or native-boundary conversion dominates, keep the optimized Python code. Do not port the whole backend to Rust.
 
-- [Qt Quick performance guidance](https://doc.qt.io/qtforpython-6/overviews/qtquick-performance.html) — recommends profiling actual bottlenecks and cautions against overcomplicated delegates and indiscriminate Loader use.
-- [Qt Quick Profiler](https://doc.qt.io/qtcreator/creator-qml-performance-monitor.html) — identifies JavaScript work, invisible-item work, frame drops, and UI-thread stalls.
-- [Qt Quick accessibility](https://doc.qt.io/qt-6/accessible-qtquick.html) — documents accessibility names/roles/states and built-in keyboard behavior.
-- [QQuickWidget performance notes](https://doc.qt.io/qtforpython-6/PySide6/QtQuickWidgets/QQuickWidget.html) — describes its additional render pass and disabled threaded render loop.
-- [PyO3 guide](https://pyo3.rs/main/) and [maturin guide](https://www.maturin.rs/tutorial) — supported approach for a Rust extension to Python and release-mode benchmarking/builds.
+## Merge and release gates
+
+- One ongoing modernization PR; add related fixes here rather than creating more PRs.
+- CI must pass on all supported Python/OS combinations and the adversarial stress workflow.
+- Test the affected current UI pages against existing visual/behavioral regression tests; test a real local library rather than only sample data.
+- Record before/after performance evidence for each claimed speed improvement.
+- No loss of existing screens, backend functions, user data, progress, bundles, settings, or update/rollback safety.
+- Do not merge or publish a release until the user-facing checks and combined test suite are clean.
+
+## References
+
+- [Qt for Python performance guidance](https://doc.qt.io/qtforpython-6/overviews/qtquick-performance.html): profile actual bottlenecks and avoid spending GUI-frame time on blocking work.
+- [Qt Quick accessibility documentation](https://doc.qt.io/qt-6/accessible-qtquick.html): relevant if a future explicit decision reopens QML, but not a reason to replace the current UI by default.
+- [PyO3 user guide](https://pyo3.rs/main/) and [maturin guide](https://www.maturin.rs/tutorial.html): official methods for a measured Rust extension if the benchmark warrants it.
