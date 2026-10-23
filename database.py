@@ -246,6 +246,14 @@ def initialize_database():
             FOREIGN KEY (person_id) REFERENCES people(id)
         )
     """)
+
+    # Cleanup and grouped-cast queries look up a character/person pair across
+    # adaptations; the table's primary key starts with work_id and cannot serve
+    # that reverse lookup efficiently.
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_work_character_voice_actors_character_person "
+        "ON work_character_voice_actors(character_id, person_id, work_id)"
+    )
     if not voice_actor_scope_existed:
         # The old cache stored voices globally by character, which lost the
         # work-specific distinction between adaptations. Seed the new table
@@ -628,19 +636,6 @@ def save_characters(work_id, characters):
         })
 
     connection = get_connection()
-
-    def remove_person_if_orphaned(person_id):
-        references = connection.execute(
-            """
-            SELECT 1 FROM character_voice_actors WHERE person_id = ?
-            UNION ALL
-            SELECT 1 FROM work_staff WHERE person_id = ?
-            LIMIT 1
-            """,
-            (person_id, person_id),
-        ).fetchone()
-        if references is None:
-            connection.execute("DELETE FROM people WHERE id = ?", (person_id,))
 
     try:
         character_rows = [

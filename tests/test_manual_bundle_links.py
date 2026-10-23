@@ -26,6 +26,7 @@ class ManualBundleDatabaseTests(unittest.TestCase):
                         "idx_manual_bundle_links_work_b",
                         "idx_bundle_exclusions_work_b",
                         "idx_automatic_bundle_memberships_work_id",
+                        "idx_work_character_voice_actors_character_person",
                     }
                     self.assertTrue(expected.issubset(indexes), expected - indexes)
 
@@ -50,12 +51,18 @@ class ManualBundleDatabaseTests(unittest.TestCase):
                             "WHERE work_id IN (?)",
                             (123,),
                         ).fetchall(),
+                        "character_person": connection.execute(
+                            "EXPLAIN QUERY PLAN SELECT 1 FROM work_character_voice_actors "
+                            "WHERE character_id = ? AND person_id = ? LIMIT 1",
+                            (123, 456),
+                        ).fetchall(),
                     }
                     expected_index_by_query = {
                         "relations": "idx_work_relations_target_type_source",
                         "manual_links": "idx_manual_bundle_links_work_b",
                         "exclusions": "idx_bundle_exclusions_work_b",
                         "automatic_memberships": "idx_automatic_bundle_memberships_work_id",
+                        "character_person": "idx_work_character_voice_actors_character_person",
                     }
                     for name, plan_rows in plans.items():
                         details = " ".join(str(row["detail"]) for row in plan_rows)
