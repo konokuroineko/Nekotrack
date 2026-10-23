@@ -1,37 +1,14 @@
-# NekoTrack modernization experiment
+# NekoTrack performance and accessibility work
 
-This directory is the **ongoing modernization work** for NekoTrack, kept together
-in the same draft pull request. It is not a disposable demo and it does not modify
-the production app or packaged release yet.
+This directory holds benchmark tools and the plan for the single ongoing modernization
+pull request. The production app remains the reference for visuals and behavior: existing
+Qt Widgets pages, Neko theme, sidebar/wordmark, card styling, navigation, and backend
+functions must stay intact. This is not a new mock interface.
 
-## Run the full UI shell
+See [MODERNIZATION_PLAN.md](MODERNIZATION_PLAN.md) for the re-evaluated architecture,
+full-app parity requirements, performance priorities, accessibility checks, and Rust gate.
 
-Use the same Python environment in which NekoTrack and PySide6 are installed.
-From the repository root:
-
-```powershell
-python experiments/qml_preview.py
-```
-
-The window now prototypes the main application destinations: Home, Library, Search,
-Calendar, Favorites, Settings, and a work-detail view. The layout uses sample titles
-and illustrative events only. It does not read, alter, or persist your real library;
-the controls demonstrate page/navigation behavior and design direction, not production
-functionality yet.
-
-## What is changing beyond the UI spike
-
-- [MODERNIZATION_PLAN.md](MODERNIZATION_PLAN.md) records the re-evaluated full-app
-  architecture, UI migration scope, performance acceptance gates, accessibility
-  requirements, and conditional Rust plan.
-- [benchmark_recommendations.py](benchmark_recommendations.py) measures the real
-  Python recommendation-ranking function on deterministic synthetic workloads.
-- The recommendation engine now precomputes source contributor weights once for
-  each ranking pass rather than repeating the same scan for every candidate.
-- A regression test checks that the shared index is built once and scoring output
-  remains unchanged for the tested workload.
-
-## Benchmark the CPU-bound recommendation path
+## Reproducible recommendation-ranking benchmark
 
 From the repository root in PowerShell:
 
@@ -39,50 +16,51 @@ From the repository root in PowerShell:
 python experiments/benchmark_recommendations.py --candidate-sizes 50 250 500 --sources 50 --iterations 7 --json-out "$env:TEMP\nekotrack-ranking-baseline.json"
 ```
 
-The benchmark uses synthetic inputs only. It does not call the network or read the
-database. It measures recommendation ranking, **not** cold startup, actual API
-latency, or end-to-end UI responsiveness. Keep the machine/Python/build details with
-the output. Run the same settings before and after a change and compare median and
-p95 timings; do not substitute estimated numbers.
+This benchmark runs the current Python `recommendation_engine.rank_candidates` function
+on deterministic synthetic candidates/source credits. It makes no network requests and
+does not read the live database or personal library. It measures the CPU ranking path,
+not startup, search latency, the UI, or total recommendation refresh duration.
 
-## Performance baseline checklist
+Run the same command before and after a performance change on the same machine and
+Python version. Keep the JSON output along with the commit, machine, settings, median,
+and p95 measurements. The first benchmark after the optimization can establish a local
+baseline, but comparison against an unoptimized baseline is needed to quantify its gain.
+Do not invent or extrapolate performance numbers.
 
-Collect real app timings separately from the synthetic benchmark. Repeat each scenario
-on the same computer/build and report median and p95; measure cold and warm cache runs
-separately.
+## Current optimization work
 
-| Scenario | Baseline |
+The ranking path now builds shared source-credit weights once per ranking pass, rather
+than repeating that scan for each candidate. The new regression test checks that the
+index is built once and that ranking results remain consistent during the tested call.
+This reduces redundant work by design, but its measured impact has not been recorded yet.
+
+The recommendations view also has a safer scrollbar-rebinding path: it disconnects the
+previous tracked scrollbar, avoids unnecessary rebinding to the same bar, and includes
+a test that verifies stale scrollbars no longer trigger pagination and that the failed-
+disconnect warning is absent.
+
+## Whole-app performance baseline
+
+Use the same PC and same build for repeated runs. Keep cold and warm caches separate,
+and record median and p95. Use app diagnostics to separate API waiting, database calls,
+data transformations, artwork, UI construction, and first interactive content.
+
+| Workload | Baseline |
 | --- | --- |
-| Cold start to first usable main window | Not measured |
-| Home: first interactive content and fully loaded feed | Not measured |
-| Search: local filtering, provider request, and artwork separately | Not measured |
-| Library: query/grouping, first interactive card, full population | Not measured |
-| Large bundle detail: initial view and episode/chapter content | Not measured |
-| Recommendation CPU ranking (synthetic, no network/DB) | Use benchmark script |
-| Long-list scrolling / frame stutter | Not measured |
-| Peak working set (cold start and larger library) | Not measured |
+| Startup to first usable window | Not measured |
+| Home: first interactive recommendation content | Not measured |
+| Search: local filtering / API wait / artwork | Not measured |
+| Library: database, grouping, first interactive card | Not measured |
+| Large work-detail bundle and episode/chapter content | Not measured |
+| Recommendation CPU ranking | Run the synthetic benchmark above |
+| Long-list scroll responsiveness and peak memory | Not measured |
 
-## Manual acceptance checklist
+## Language choice
 
-- [ ] Preview opens with no QML warnings/errors.
-- [ ] Side navigation switches between Home, Library, Search, Calendar, Favorites, and Settings.
-- [ ] Global search filters sample titles; library status filters and search format filters work.
-- [ ] Clear filters returns the sample results.
-- [ ] Selecting a card opens the detail concept and Back returns to the prior page.
-- [ ] Keyboard users can reach navigation, search, filters, cards, and actions with visible focus.
-- [ ] Windows Narrator exposes useful names and descriptions for controls and result cards.
-- [ ] Layout survives the minimum window size and larger Windows text scaling.
-- [ ] Light/dark, contrast, RTL, and reduced-motion behavior have been tested before production adoption.
-- [ ] Existing Widgets screens, local data, installer, updater and rollback are unchanged.
+Keep Python and PySide6 for the existing UI, business logic, services, API and database
+boundaries. Rust via PyO3/maturin remains an option for a measured CPU-bound operation,
+not a rewrite of network access, SQLite, or UI rendering. The benchmark is the first
+screening step; keep Rust only if it produces a substantial isolated speedup **and** a
+measurable end-to-end benefit after packaging and conversion costs.
 
-## Architecture direction
-
-- **Python / PySide6:** APIs, business rules, sync, diagnostics, persistence access, and a narrow QObject/model adapter layer for QML.
-- **Qt Quick / QML / JavaScript:** the long-term full UI direction, migrated by screen behind the Python service boundary. It is not automatically faster than Widgets; use profiler results and the live-data vertical slice to validate it.
-- **Rust / PyO3 / maturin:** a measured performance kernel, not a rewrite of network calls, SQLite, or UI painting. Recommendation ranking and contributor matching are initial candidates to benchmark. Keep Rust only if the measured end-to-end gain justifies build, CI, and frozen-installer complexity.
-- **SQLite / SQL:** retain the local database and improve query batching/indexes based on timing evidence.
-- **PyInstaller / Inno Setup:** retain the release path until the new UI/optional native extension is packaged and tested end-to-end.
-
-The production UI migration and Rust dependency are not complete. The draft PR stays open
-until the useful screens are connected to real data, regression and accessibility checks
-pass, and before/after performance numbers support the changes.
+No QML rewrite or native extension is currently enabled in the production application.
