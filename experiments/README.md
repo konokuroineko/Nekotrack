@@ -60,6 +60,30 @@ pending; no speedup claim is made yet.
 - New tests cover exact series-candidate parity, normalizer-cache hits, short-title
   matching parity and long-string autojunk compatibility.
 
+## Indexed bundle-exclusion benchmark
+
+Run from the repository root:
+
+    python experiments/benchmark_series_exclusions.py --component-sizes 100 250 500 1000 --iterations 7 --json-out "$env:TEMP\nekotrack-series-exclusions.json"
+
+This compares the prior component cross-product exclusion scan with an undirected
+neighbor-index check when the tested components have no matching excluded pair. It
+verifies identical decisions before timing and reports median/p95 and speedup ratio.
+The fixture is intentionally a worst-case absence check for the old scan, uses only
+synthetic member sets, and does not read the user's database. CI results are pending.
+
+## Third-pass Python audit
+
+Both search-result grouping and local-library grouping used the same correct but
+potentially expensive nested loop to check whether any user-defined excluded pair
+crossed two components. The new helper checks excluded neighbors from the smaller
+component instead. Randomized tests compare the decision with the original nested
+scan, and existing grouping tests continue to cover transitive exclusions.
+
+This is a Python data-structure optimization, not a Rust candidate; optimizing it in
+Python keeps the behavior easy to test and avoids native-call overhead for a small
+set-membership operation.
+
 ## Interpreting the results
 
 Synthetic benchmarks help isolate a code path but do not prove a whole-app speedup.
