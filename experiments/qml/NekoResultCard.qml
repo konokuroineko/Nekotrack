@@ -9,7 +9,7 @@ ItemDelegate {
     required property string mediaFormat
     required property string descriptionText
     required property string progressText
-    property string accentGlyph: "N"
+    required property string accentGlyph
 
     Accessible.name: qsTr("%1, %2. %3").arg(title).arg(mediaFormat).arg(progressText)
     Accessible.description: descriptionText
