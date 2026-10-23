@@ -143,3 +143,15 @@ a packaged executable check that proves the frozen app actually loads the Rust
 module. Benchmark the actual app/library; do not extrapolate whole-app speed from
 synthetic CI numbers. Keep the PR draft and defer QML Phase B until those results
 are reviewed.
+
+
+## Batched bundle Work Details database reads
+
+Run from the repository root:
+
+    python experiments/benchmark_bundle_details.py --work-counts 5 20 50 --iterations 5 --json-out "$env:TEMP\nekotrack-bundle-details.json"
+
+The benchmark compares the former per-work Characters, Staff and Relations readers
+with the batched readers. It checks exact output parity before recording median/p95
+timings and SQLite connection counts. It uses a temporary synthetic database and
+makes no external API calls or reads from the user's database.

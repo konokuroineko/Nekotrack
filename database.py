@@ -2528,16 +2528,110 @@ def get_relations(work_id):
     finally:
         connection.close()
 
+
+def _bundle_member_work_ids(work_ids):
+    """Return valid work IDs in first-seen order for bundle aggregation."""
+    try:
+        iterator = iter(work_ids or [])
+    except (TypeError, ValueError):
+        return []
+    result, seen = [], set()
+    for value in iterator:
+        try:
+            work_id = _validated_work_id(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if work_id not in seen:
+            seen.add(work_id)
+            result.append(work_id)
+    return result
+
+
+def _bundle_id_chunks(work_ids, size=400):
+    """Keep IN-clause queries below SQLite's conservative parameter limit."""
+    for start in range(0, len(work_ids), size):
+        yield work_ids[start:start + size]
+
+
+def _load_bundle_character_rows(work_ids):
+    """Load per-work character and voice-actor rows with batched SQL queries."""
+    rows_by_work = {}
+    if not work_ids:
+        return rows_by_work
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(work_ids):
+            placeholders = ",".join("?" for _ in chunk)
+            query = f"""
+                WITH ranked_actors AS (
+                    SELECT
+                        wcv.work_id, wcv.character_id,
+                        people.id AS person_id,
+                        people.name AS person_name,
+                        people.image_path AS person_image_path,
+                        people.image_url AS person_image_url,
+                        wcv.language AS person_language,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY wcv.work_id, wcv.character_id
+                            ORDER BY
+                                CASE
+                                    WHEN LOWER(COALESCE(wcv.language, ''))
+                                         IN ('japanese', 'ja', 'jpn') THEN 0
+                                    ELSE 1
+                                END,
+                                wcv.language, people.name
+                        ) AS actor_rank
+                    FROM work_character_voice_actors AS wcv
+                    JOIN people ON people.id = wcv.person_id
+                    WHERE wcv.work_id IN ({placeholders})
+                )
+                SELECT
+                    wc.work_id AS _bundle_work_id,
+                    characters.id,
+                    characters.name AS character_name,
+                    characters.image_path AS character_image_path,
+                    characters.image_url AS character_image_url,
+                    wc.role AS character_role,
+                    ranked_actors.person_id,
+                    ranked_actors.person_name,
+                    ranked_actors.person_image_path,
+                    ranked_actors.person_image_url,
+                    ranked_actors.person_language
+                FROM work_characters AS wc
+                JOIN characters ON characters.id = wc.character_id
+                LEFT JOIN ranked_actors
+                  ON ranked_actors.work_id = wc.work_id
+                 AND ranked_actors.character_id = wc.character_id
+                 AND ranked_actors.actor_rank = 1
+                WHERE wc.work_id IN ({placeholders})
+                ORDER BY
+                    wc.work_id,
+                    CASE UPPER(COALESCE(wc.role, 'UNKNOWN'))
+                        WHEN 'MAIN' THEN 0 WHEN 'SUPPORTING' THEN 1
+                        WHEN 'BACKGROUND' THEN 2 ELSE 3
+                    END,
+                    characters.name
+            """
+            rows = connection.execute(query, (*chunk, *chunk)).fetchall()
+            for raw in rows:
+                row = dict(raw)
+                work_id = int(row.pop("_bundle_work_id"))
+                rows_by_work.setdefault(work_id, []).append(row)
+    finally:
+        connection.close()
+    return rows_by_work
+
+
 def get_bundle_characters(work_ids):
     """Return unique characters, preferring their strongest role across a bundle."""
+    ids = _bundle_member_work_ids(work_ids)
+    if not ids:
+        return []
+    per_work_rows = _load_bundle_character_rows(ids)
     unique = {}
     role_priority = {"MAIN": 0, "SUPPORTING": 1, "BACKGROUND": 2}
-
-    for work_id in work_ids or []:
-        for raw_row in get_characters(work_id):
-            # sqlite3.Row supports indexed access but not dict.get(); normalize
-            # each provider/database row before merging per-work roles.
-            row = dict(raw_row)
+    for work_id in ids:
+        for row in per_work_rows.get(work_id, ()):
             try:
                 character_id = int(row["id"])
             except (KeyError, TypeError, ValueError, OverflowError):
@@ -2547,9 +2641,6 @@ def get_bundle_characters(work_ids):
             if existing is None:
                 unique[character_id] = row
                 continue
-
-            # Role is specific to each work. Choose the strongest role in the
-            # entire bundle, regardless of which member was processed first.
             existing_role = str(existing.get("character_role") or "").upper()
             if role_priority.get(role, 3) < role_priority.get(existing_role, 3):
                 existing["character_role"] = row.get("character_role")
@@ -2562,9 +2653,8 @@ def get_bundle_characters(work_ids):
                 if person_id <= 0:
                     return (2, "", 0)
                 language = _voice_actor_language_label(item.get("person_language"))
-                priority = 0 if language == "Japanese" else 1
                 return (
-                    priority,
+                    0 if language == "Japanese" else 1,
                     str(item.get("person_name") or "").casefold(),
                     person_id,
                 )
@@ -2575,50 +2665,97 @@ def get_bundle_characters(work_ids):
                     "person_image_url", "person_language",
                 ):
                     existing[key] = row.get(key)
-
-    return sorted(
-        unique.values(),
-        key=lambda row: (
-            role_priority.get(str(row.get("character_role") or "").upper(), 3),
-            str(row.get("character_name") or "").lower(),
-        ),
-    )
+    return sorted(unique.values(), key=lambda row: (
+        role_priority.get(str(row.get("character_role") or "").upper(), 3),
+        str(row.get("character_name") or "").lower(),
+    ))
 
 
-def get_bundle_staff(work_ids):
-    """Return one card per staff person with unique roles merged across the bundle."""
-    unique = {}
-
-    for work_id in work_ids or []:
-        for row in get_staff(work_id):
-            person_id = int(row["person_id"])
-            entry = unique.get(person_id)
-
-            if entry is None:
-                entry = dict(row)
-                entry["_roles"] = []
-                unique[person_id] = entry
-
-            role_text = str(row["role"] or "")
-            for role in role_text.split("\n"):
-                role = role.strip()
-                if role and role not in entry["_roles"]:
-                    entry["_roles"].append(role)
-
-    for entry in unique.values():
-        entry["role"] = "\n".join(entry.pop("_roles", []))
+def _load_bundle_staff_rows(work_ids):
+    """Load staff rows in batches and retain each work's original row/role order."""
+    grouped = {}
+    if not work_ids:
+        return grouped
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(work_ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT DISTINCT
+                    ws.work_id AS _bundle_work_id, people.id AS person_id,
+                    people.name, people.image_path, people.image_url, ws.role
+                FROM work_staff AS ws
+                JOIN people ON people.id = ws.person_id
+                WHERE ws.work_id IN ({placeholders})
+                ORDER BY ws.work_id, people.name, people.id, ws.role
+                """,
+                chunk,
+            ).fetchall()
+            for raw in rows:
+                work_id = int(raw["_bundle_work_id"])
+                person_id = int(raw["person_id"])
+                by_person = grouped.setdefault(work_id, {})
+                entry = by_person.get(person_id)
+                if entry is None:
+                    entry = {
+                        "person_id": person_id, "name": raw["name"],
+                        "image_path": raw["image_path"], "image_url": raw["image_url"],
+                        "_roles": [],
+                    }
+                    by_person[person_id] = entry
+                if raw["role"] is not None:
+                    entry["_roles"].append(str(raw["role"]))
+    finally:
+        connection.close()
 
     from recommendation_engine import staff_role_weight
-    return sorted(
-        unique.values(),
-        key=lambda row: (
+    rows_by_work = {}
+    for work_id, by_person in grouped.items():
+        work_rows = []
+        for entry in by_person.values():
+            entry["role"] = "\n".join(entry.pop("_roles", []))
+            work_rows.append(entry)
+        work_rows.sort(key=lambda row: (
             -max(
                 (staff_role_weight(role) for role in str(row.get("role") or "").split("\n")),
                 default=0.30,
             ),
             str(row.get("name") or "").casefold(),
+        ))
+        rows_by_work[work_id] = work_rows
+    return rows_by_work
+
+
+def get_bundle_staff(work_ids):
+    """Return one card per staff person with unique roles merged across the bundle."""
+    ids = _bundle_member_work_ids(work_ids)
+    if not ids:
+        return []
+    per_work_rows = _load_bundle_staff_rows(ids)
+    unique = {}
+    for work_id in ids:
+        for row in per_work_rows.get(work_id, ()):
+            person_id = int(row["person_id"])
+            entry = unique.get(person_id)
+            if entry is None:
+                entry = dict(row)
+                entry["_roles"] = []
+                unique[person_id] = entry
+            for role in str(row["role"] or "").split("\n"):
+                role = role.strip()
+                if role and role not in entry["_roles"]:
+                    entry["_roles"].append(role)
+    for entry in unique.values():
+        entry["role"] = "\n".join(entry.pop("_roles", []))
+    from recommendation_engine import staff_role_weight
+    return sorted(unique.values(), key=lambda row: (
+        -max(
+            (staff_role_weight(role) for role in str(row.get("role") or "").split("\n")),
+            default=0.30,
         ),
-    )
+        str(row.get("name") or "").casefold(),
+    ))
 
 
 def get_bundle_relations(work_ids):
@@ -2626,41 +2763,47 @@ def get_bundle_relations(work_ids):
     ids = _validated_work_ids(work_ids)
     if not ids:
         return []
-    if ids is None:
-        return []
-    unique = {}
+    rows_by_source = {}
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT work_relations.*, works.title, works.format, works.type,
+                       works.cover_url, works.cover_path
+                FROM work_relations
+                LEFT JOIN works ON works.id = work_relations.target_id
+                WHERE work_relations.source_id IN ({placeholders})
+                ORDER BY work_relations.source_id, relation_type, title
+                """,
+                chunk,
+            ).fetchall()
+            for row in rows:
+                rows_by_source.setdefault(int(row["source_id"]), []).append(row)
+    finally:
+        connection.close()
 
+    unique = {}
     for work_id in ids:
-        for row in get_relations(work_id):
+        for row in rows_by_source.get(work_id, ()):
             target_id = row["target_id"]
             if target_id is None:
                 continue
-
             target_id = int(target_id)
-
-            # A relation between two members of the same bundle is internal,
-            # so it should not appear in the combined Relations section.
             if target_id in ids:
                 continue
-
             entry = unique.get(target_id)
             if entry is None:
                 entry = dict(row)
                 entry["_relation_types"] = []
                 unique[target_id] = entry
-
             relation_type = str(row["relation_type"] or "OTHER")
             if relation_type not in entry["_relation_types"]:
                 entry["_relation_types"].append(relation_type)
-
     for entry in unique.values():
         entry["relation_types"] = "\n".join(entry.pop("_relation_types", []))
-
-    return sorted(
-        unique.values(),
-        key=lambda row: str(row.get("title") or "").lower(),
-    )
-
+    return sorted(unique.values(), key=lambda row: str(row.get("title") or "").lower())
 
 def add_manual_bundle_link(work_a, work_b):
     """Persist an explicit user-selected bundle link between two works."""

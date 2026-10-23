@@ -195,3 +195,20 @@ Keep one ongoing modernization PR. Do not merge or release until all relevant CI
 checks pass, benchmark data is reviewed, real-app behavior has been tested, and the
 native/fallback packaging path is understood. No performance figure may be invented
 or inferred from language reputation.
+
+
+## Fourth-pass database audit — bundle Work Details reads
+
+Bundled Characters, Staff and Relations previously called the ordinary single-work
+reader once for each bundle member. This repeated SQLite connections and query setup
+while opening combined Work Details. The bundle helpers now issue set-based queries
+in bounded ID chunks and keep aggregation in Python so role/voice selection and
+relation de-duplication remain explicit. Staff rows are re-sorted per work using the
+existing scoring key before roles merge; relations retain the original work-ID and
+per-source relation/title ordering.
+
+A parity test compares the new readers with copies of the former implementation
+against a disposable SQLite fixture. Another test verifies that each non-empty
+reader opens one connection for a normal-sized bundle. CI runs a synthetic SQLite
+benchmark checking exact parity, timings, and connection counts. Its numbers isolate
+the database path and do not establish whole-app speedup.
