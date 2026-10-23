@@ -393,3 +393,19 @@ A deterministic 4,096-member regression compares final component membership with
 old merge rule and checks that the stress case no longer repeatedly copies the growing
 component. CI also benchmarks merge overhead and counts members moved between sets.
 The benchmark isolates this DSU operation; it is not a whole-library speedup claim.
+
+
+## Twentieth-pass episode catalog upserts
+
+`save_episodes` previously issued a separate thumbnail `SELECT` before each row upsert.
+It now gathers valid episode numbers, reads existing thumbnail paths in bounded 400-ID
+chunks on the same connection, and persists the prepared rows with `executemany`.
+The thumbnail-preservation rule is unchanged: a real local cache file is kept over a
+missing or remote provider URL. Duplicate episode-number records continue to apply in
+input order, with the later title/description/date updates and the same thumbnail
+coalescing behavior.
+
+A regression test covers cached-local-path protection, remote URL replacement,
+duplicate entries, invalid episode numbers, watched state and a single connection.
+CI benchmarks the old per-episode read pattern against the batched implementation,
+checking exact stored-state parity and recording SQL read count and median/p95 time.

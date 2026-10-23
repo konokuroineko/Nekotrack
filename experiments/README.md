@@ -273,3 +273,12 @@ avoiding repeated copies of large member sets on adverse merge orderings. Librar
 snapshot IDs follow the selected root. A deterministic stress test checks identical
 component partitions, and `experiments/benchmark_series_union_by_size.py` measures
 the isolated union/set-merge cost.
+
+
+## Batched episode catalog upserts
+
+Episode metadata refreshes now batch the existing-thumbnail reads in 400-ID chunks
+and persist normalized updates with one `executemany` call. Existing local cached
+images are still preserved; duplicate input entries retain their prior sequential
+semantics. `experiments/benchmark_episode_catalog_upserts.py` compares saved state,
+thumbnail SELECT counts, median/p95 latency and connection counts on synthetic data.
