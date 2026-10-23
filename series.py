@@ -173,6 +173,45 @@ def _series_key(title):
     return re.sub(r"[^a-z0-9]+", " ", value).strip()
 
 
+def _prefix_related_tv_candidate_indices(keys):
+    """Index title-prefix candidates without comparing every pair of TV titles.
+
+    Return tokenized keys and, for each original position, sorted original
+    indices whose two-or-more tokens are a prefix of each other. Sorting each
+    candidate list preserves the old nested loop's comparison order, which
+    matters because bundle exclusions can make union order observable.
+    """
+    tokens_by_index = [
+        tuple(str(key or "").split())
+        for key in (keys or [])
+    ]
+    exact_by_tokens = defaultdict(list)
+    by_prefix = defaultdict(list)
+
+    for index, tokens in enumerate(tokens_by_index):
+        if len(tokens) < 2:
+            continue
+        exact_by_tokens[tokens].append(index)
+        for prefix_length in range(2, len(tokens) + 1):
+            by_prefix[tokens[:prefix_length]].append(index)
+
+    candidates_by_index = []
+    for tokens in tokens_by_index:
+        if len(tokens) < 2:
+            candidates_by_index.append([])
+            continue
+
+        matching_indices = set()
+        # Titles that are the same as, or shorter prefixes of, this title.
+        for prefix_length in range(2, len(tokens) + 1):
+            matching_indices.update(exact_by_tokens.get(tokens[:prefix_length], ()))
+        # Titles for which this title is itself a prefix.
+        matching_indices.update(by_prefix.get(tokens, ()))
+        candidates_by_index.append(sorted(matching_indices))
+
+    return tokens_by_index, candidates_by_index
+
+
 def _series_group_key(item):
     return _media_family(item), _series_key(_title_text(item))
 
@@ -888,17 +927,21 @@ def _group_discovered(results, discovered):
         (item, _series_key(_title_text(item)))
         for item in tv_members
     ]
-    for item, key in tv_keys:
-        if not key:
-            continue
-        item_tokens = key.split()
-        if len(item_tokens) < 2:
+    tv_tokens, tv_candidate_indices = _prefix_related_tv_candidate_indices(
+        [key for _, key in tv_keys]
+    )
+    # Keep candidates in their original order so exclusion-aware union behavior
+    # remains the same while unrelated titles no longer trigger O(n^2) compares.
+    for item_index, (item, key) in enumerate(tv_keys):
+        item_tokens = tv_tokens[item_index]
+        if not key or len(item_tokens) < 2:
             continue
         item_id = int(_get(item, "id"))
-        for other, other_key in tv_keys:
+        for other_index in tv_candidate_indices[item_index]:
+            other, other_key = tv_keys[other_index]
             if item_id == int(_get(other, "id")) or not other_key:
                 continue
-            other_tokens = other_key.split()
+            other_tokens = tv_tokens[other_index]
             if len(other_tokens) < 2:
                 continue
             shorter, longer = (
