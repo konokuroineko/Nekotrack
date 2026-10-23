@@ -730,101 +730,196 @@ def save_characters(work_id, characters):
                 "SELECT character_id FROM work_characters WHERE work_id = ?",
                 (work_id,),
             ).fetchall()
-            for row in existing_character_rows:
-                old_character_id = row["character_id"]
-                if old_character_id not in incoming_character_ids:
-                    connection.execute(
-                        "DELETE FROM work_characters WHERE work_id = ? AND character_id = ?",
-                        (work_id, old_character_id),
-                    )
-                    old_scoped_actors = connection.execute(
-                        """
-                        SELECT person_id FROM work_character_voice_actors
-                        WHERE work_id = ? AND character_id = ?
-                        """,
-                        (work_id, old_character_id),
-                    ).fetchall()
-                    connection.execute(
-                        "DELETE FROM work_character_voice_actors WHERE work_id = ? AND character_id = ?",
-                        (work_id, old_character_id),
-                    )
-                    for old_actor_row in old_scoped_actors:
-                        still_assigned = connection.execute(
-                            """
-                            SELECT 1 FROM work_character_voice_actors
-                            WHERE character_id = ? AND person_id = ? LIMIT 1
-                            """,
-                            (old_character_id, old_actor_row["person_id"]),
-                        ).fetchone()
-                        if still_assigned is None:
-                            connection.execute(
-                                """
-                                DELETE FROM character_voice_actors
-                                WHERE character_id = ? AND person_id = ?
-                                """,
-                                (old_character_id, old_actor_row["person_id"]),
-                            )
-                            remove_person_if_orphaned(old_actor_row["person_id"])
-                    still_linked = connection.execute(
-                        "SELECT 1 FROM work_characters WHERE character_id = ? LIMIT 1",
-                        (old_character_id,),
-                    ).fetchone()
-                    if still_linked is None:
-                        # Character and voice-actor rows are globally keyed.
-                        # Remove them only after the character is no longer used
-                        # by any work, preserving shared cast entities.
-                        old_actor_rows = connection.execute(
-                            "SELECT person_id FROM character_voice_actors WHERE character_id = ?",
-                            (old_character_id,),
-                        ).fetchall()
-                        connection.execute(
-                            "DELETE FROM character_voice_actors WHERE character_id = ?",
-                            (old_character_id,),
-                        )
-                        for old_actor_row in old_actor_rows:
-                            remove_person_if_orphaned(old_actor_row["person_id"])
-                        connection.execute(
-                            "DELETE FROM characters WHERE id = ?",
-                            (old_character_id,),
-                        )
+            stale_character_ids = sorted({
+                int(row["character_id"])
+                for row in existing_character_rows
+                if int(row["character_id"]) not in incoming_character_ids
+            })
 
-            # A complete snapshot can remove actors from this work, but it must
-            # not erase the same character's valid actor credits in other works.
-            for character in normalized:
-                desired_actor_ids = {actor["id"] for actor in character["actors"]}
-                existing_actor_rows = connection.execute(
+            # The previous cleanup repeatedly queried each old character/actor
+            # pair. Snapshot refresh is a set reconciliation: collect the old
+            # work-scoped edges once, then let temporary tables drive the
+            # cleanup joins without constructing an unbounded IN list.
+            existing_scoped_actor_rows = connection.execute(
+                """
+                SELECT character_id, person_id
+                FROM work_character_voice_actors
+                WHERE work_id = ?
+                """,
+                (work_id,),
+            ).fetchall()
+            desired_actor_ids_by_character = {
+                character["id"]: {actor["id"] for actor in character["actors"]}
+                for character in normalized
+            }
+            removed_actor_pairs = sorted({
+                (int(row["character_id"]), int(row["person_id"]))
+                for row in existing_scoped_actor_rows
+                if (
+                    int(row["character_id"]) not in incoming_character_ids
+                    or int(row["person_id"]) not in desired_actor_ids_by_character.get(
+                        int(row["character_id"]), set()
+                    )
+                )
+            })
+
+            if stale_character_ids or removed_actor_pairs:
+                connection.execute(
                     """
-                    SELECT person_id FROM work_character_voice_actors
-                    WHERE work_id = ? AND character_id = ?
+                    CREATE TEMP TABLE _nekotrack_stale_character_ids (
+                        character_id INTEGER PRIMARY KEY
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TEMP TABLE _nekotrack_removed_character_actor_pairs (
+                        character_id INTEGER NOT NULL,
+                        person_id INTEGER NOT NULL,
+                        PRIMARY KEY (character_id, person_id)
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TEMP TABLE _nekotrack_cleanup_people (
+                        person_id INTEGER PRIMARY KEY
+                    )
+                    """
+                )
+                connection.executemany(
+                    "INSERT OR IGNORE INTO _nekotrack_stale_character_ids (character_id) VALUES (?)",
+                    ((character_id,) for character_id in stale_character_ids),
+                )
+                connection.executemany(
+                    """
+                    INSERT OR IGNORE INTO _nekotrack_removed_character_actor_pairs
+                        (character_id, person_id)
+                    VALUES (?, ?)
                     """,
-                    (work_id, character["id"]),
-                ).fetchall()
-                for row in existing_actor_rows:
-                    old_actor_id = row["person_id"]
-                    if old_actor_id not in desired_actor_ids:
-                        connection.execute(
-                            """
-                            DELETE FROM work_character_voice_actors
-                            WHERE work_id = ? AND character_id = ? AND person_id = ?
-                            """,
-                            (work_id, character["id"], old_actor_id),
+                    removed_actor_pairs,
+                )
+
+                # Drop the current work's obsolete character edges first. A
+                # character is globally obsolete only if no other work still
+                # uses it.
+                connection.execute(
+                    """
+                    DELETE FROM work_characters
+                    WHERE work_id = ?
+                      AND character_id IN (
+                          SELECT character_id FROM _nekotrack_stale_character_ids
+                      )
+                    """,
+                    (work_id,),
+                )
+                connection.execute(
+                    """
+                    DELETE FROM work_character_voice_actors
+                    WHERE work_id = ?
+                      AND EXISTS (
+                          SELECT 1
+                          FROM _nekotrack_removed_character_actor_pairs AS removed
+                          WHERE removed.character_id = work_character_voice_actors.character_id
+                            AND removed.person_id = work_character_voice_actors.person_id
+                      )
+                    """,
+                    (work_id,),
+                )
+
+                # Preserve the exact orphan policy of the former cleanup: old
+                # actor IDs are candidates when their last work-scoped edge
+                # disappears, and every global actor for a now-unreferenced
+                # character is also considered.
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO _nekotrack_cleanup_people (person_id)
+                    SELECT removed.person_id
+                    FROM _nekotrack_removed_character_actor_pairs AS removed
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM work_character_voice_actors AS scoped
+                        WHERE scoped.character_id = removed.character_id
+                          AND scoped.person_id = removed.person_id
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO _nekotrack_cleanup_people (person_id)
+                    SELECT DISTINCT cva.person_id
+                    FROM character_voice_actors AS cva
+                    JOIN _nekotrack_stale_character_ids AS stale
+                      ON stale.character_id = cva.character_id
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM work_characters AS wc
+                        WHERE wc.character_id = cva.character_id
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    DELETE FROM character_voice_actors
+                    WHERE (
+                        EXISTS (
+                            SELECT 1
+                            FROM _nekotrack_removed_character_actor_pairs AS removed
+                            WHERE removed.character_id = character_voice_actors.character_id
+                              AND removed.person_id = character_voice_actors.person_id
                         )
-                        still_assigned = connection.execute(
-                            """
-                            SELECT 1 FROM work_character_voice_actors
-                            WHERE character_id = ? AND person_id = ? LIMIT 1
-                            """,
-                            (character["id"], old_actor_id),
-                        ).fetchone()
-                        if still_assigned is None:
-                            connection.execute(
-                                """
-                                DELETE FROM character_voice_actors
-                                WHERE character_id = ? AND person_id = ?
-                                """,
-                                (character["id"], old_actor_id),
-                            )
-                            remove_person_if_orphaned(old_actor_id)
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM work_character_voice_actors AS scoped
+                            WHERE scoped.character_id = character_voice_actors.character_id
+                              AND scoped.person_id = character_voice_actors.person_id
+                        )
+                    )
+                    OR (
+                        EXISTS (
+                            SELECT 1
+                            FROM _nekotrack_stale_character_ids AS stale
+                            WHERE stale.character_id = character_voice_actors.character_id
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM work_characters AS wc
+                            WHERE wc.character_id = character_voice_actors.character_id
+                        )
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    DELETE FROM characters
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM _nekotrack_stale_character_ids AS stale
+                        WHERE stale.character_id = characters.id
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM work_characters AS wc
+                        WHERE wc.character_id = characters.id
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    DELETE FROM people
+                    WHERE id IN (
+                        SELECT person_id FROM _nekotrack_cleanup_people
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM character_voice_actors
+                        WHERE character_voice_actors.person_id = people.id
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM work_staff
+                        WHERE work_staff.person_id = people.id
+                    )
+                    """
+                )
 
             connection.execute(
                 "UPDATE works SET characters_loaded = 1 WHERE id = ?",

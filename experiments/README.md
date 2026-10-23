@@ -306,3 +306,12 @@ Reading-item metadata imports now use one prepared batch for chapter or volume r
 instead of calling `execute` for each item. The upsert only changes titles, so saved
 read-state remains intact. Test coverage exercises parsing, fallback numbering and
 duplicate item numbers.
+
+
+## Batched character snapshot cleanup
+
+Complete cast refreshes reconcile stale characters and work-scoped actor edges with
+temporary SQLite tables and set-based DELETE/NOT EXISTS statements rather than
+per-character/per-actor SELECT/DELETE calls. Shared cast entities survive while orphan
+characters and people are removed. `tests/test_character_voice_actors.py` covers a
+41-character cleanup, cross-adaptation references and the SQL call-count reduction.

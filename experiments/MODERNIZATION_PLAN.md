@@ -442,3 +442,18 @@ and upserts them using `executemany`. Duplicate item numbers still apply sequent
 blank incoming titles still leave saved titles intact, and conflict updates do not touch
 the `is_read` flag. The regression test covers explicit and fallback numbering, invalid
 labels, duplicate chapter numbers and an existing read flag.
+
+
+## Twenty-fifth-pass character snapshot cleanup
+
+A full character snapshot refresh previously issued repeated SELECT and DELETE calls
+for each stale character, its work-scoped voice actors, global actor associations and
+orphan people. The refresh now reads the current work-scoped edges once and uses
+temporary tables to set-reconcile removed actor pairs and stale character IDs. Global
+associations and characters are deleted only when their last valid reference is gone;
+people are deleted only when no character-voice-actor or staff reference remains.
+
+Regression coverage refreshes a 41-character cast to an empty complete snapshot,
+checks direct SQL execute calls remain bounded, and verifies that shared adaptation
+credits survive while truly stale characters/actors are removed and staff-referenced
+people are retained.
