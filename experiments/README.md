@@ -155,3 +155,11 @@ The benchmark compares the former per-work Characters, Staff and Relations reade
 with the batched readers. It checks exact output parity before recording median/p95
 timings and SQLite connection counts. It uses a temporary synthetic database and
 makes no external API calls or reads from the user's database.
+
+
+## Batch-reader test boundary
+
+Bundle character aggregation tests mock `_load_bundle_character_rows`, the boundary
+that now supplies work-specific rows. They still verify role precedence, member-order
+independence and `sqlite3.Row` compatibility; SQL parity and connection-count behavior
+are covered separately by `tests/test_database_bundle_queries.py`.

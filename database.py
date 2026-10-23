@@ -2631,7 +2631,9 @@ def get_bundle_characters(work_ids):
     unique = {}
     role_priority = {"MAIN": 0, "SUPPORTING": 1, "BACKGROUND": 2}
     for work_id in ids:
-        for row in per_work_rows.get(work_id, ()):
+        for raw_row in per_work_rows.get(work_id, ()):
+            # Keep accepting sqlite3.Row-like payloads from alternate callers/tests.
+            row = dict(raw_row)
             try:
                 character_id = int(row["id"])
             except (KeyError, TypeError, ValueError, OverflowError):

@@ -212,3 +212,13 @@ against a disposable SQLite fixture. Another test verifies that each non-empty
 reader opens one connection for a normal-sized bundle. CI runs a synthetic SQLite
 benchmark checking exact parity, timings, and connection counts. Its numbers isolate
 the database path and do not establish whole-app speedup.
+
+
+## CI compatibility fix after batched bundle reads
+
+The older character-role aggregation tests mocked the old single-work API and did not
+set up the database tables. They now mock the new per-work batch boundary instead,
+while retaining role-precedence, order-independence, and sqlite3.Row coverage. The
+production aggregation also normalizes returned row objects into dictionaries before
+using mapping access. The first CI run identified these four obsolete mock assumptions;
+the full regression and adversarial workflows must rerun on this fix.
