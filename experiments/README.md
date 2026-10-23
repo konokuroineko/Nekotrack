@@ -32,6 +32,34 @@ loaded. It checks exact outputs before timing and reports median, p95 and ratio.
 The CI workflow builds and tests the extension on Windows and Linux with Python
 3.11 and 3.14 and uploads both backend benchmark JSON files per environment.
 
+## Indexed series-title prefix benchmark
+
+From the repository root:
+
+    python experiments/benchmark_series_prefix.py --candidate-sizes 100 500 1000 2000 --iterations 5 --json-out "$env:TEMP\nekotrack-series-prefix.json"
+
+This compares the new prefix index in series grouping with a reference implementation
+of the prior all-pairs token-prefix scan. The benchmark verifies identical candidate
+indices in their original order before timing and reports median/p95 times and ratio.
+It uses synthetic title keys and does not access SQLite, the network, or the user's
+library. The CI native-build matrix also runs this benchmark and uploads its JSON with
+the other backend benchmark reports. CI timing for this newly added benchmark is
+pending; no speedup claim is made yet.
+
+## Second-pass Python audit
+
+- Series grouping had a nested all-pairs comparison of TV title keys. The new prefix
+  index only visits keys with a matching 2+ token prefix and retains the prior order
+  for exclusion-aware union calls. Regression tests compare the matching candidate
+  lists against the reference all-pairs algorithm.
+- TMDB and MangaBaka title normalization now use bounded 8,192-entry caches because
+  catalog matching repeatedly reuses the same aliases across candidates.
+- The MangaBaka fuzzy-title matcher now uses the optional Rust helper for short pairs.
+  It falls back to Python's standard library when the right-hand string reaches 200
+  characters so default autojunk behavior and match scores remain unchanged.
+- New tests cover exact series-candidate parity, normalizer-cache hits, short-title
+  matching parity and long-string autojunk compatibility.
+
 ## Interpreting the results
 
 Synthetic benchmarks help isolate a code path but do not prove a whole-app speedup.
@@ -51,9 +79,11 @@ checks are complete.
 
 ## CI benchmark results (2026-10-23)
 
-The Phase A CI matrix passed on Windows and Linux with Python 3.11 and 3.14.
-The uploaded synthetic benchmark artifacts reported exact ranking / similarity
-output parity.
+The Phase A CI matrix passed on Windows and Linux with Python 3.11 and 3.14 for the
+previous ranking/native-similarity implementation. The current second-pass audit adds
+series-prefix benchmarking and expanded parity tests; its CI results are pending.
+The previously uploaded synthetic benchmark artifacts reported exact ranking and
+similarity output parity.
 
 ### Optimized Python recommendations
 
