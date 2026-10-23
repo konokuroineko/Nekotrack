@@ -109,6 +109,20 @@ The new prefix benchmark is synthetic and isolates title-prefix candidate genera
 Record its output before claiming a whole-app speedup. For real benefit, next measure
 Home/Search grouping time on the same local library, along with title-enrichment time.
 
+## Third-pass Python audit
+
+- Both `series._group_discovered` and `series.get_library_series` protected user-defined
+  exclusions by checking the cartesian product of two union-find components. That
+  check was correct but could grow with component-size product on every attempted union.
+  An undirected neighbor index now checks only excluded neighbors of the smaller
+  component. The membership decision is equivalent to the former pair scan and keeps
+  the explicit no-indirect-bypass behavior intact.
+- Added randomized equivalence tests and a synthetic worst-case-absence benchmark
+  that records median/p95 timings across 100–1,000 members per side. The benchmark
+  contains no user library or SQLite data; results are pending CI.
+- Do not convert more functions to Rust without profiling. These grouping/index and
+  database-I/O paths are better addressed in Python/SQL first.
+
 ## Rust acceptance criteria
 
 - Exact equivalence with Python title-similarity ratios; no change to provider match
@@ -127,10 +141,9 @@ Home/Search grouping time on the same local library, along with title-enrichment
 
 The Phase A CI matrix passed on Windows and Linux with Python 3.11 and 3.14 on
 the earlier ranking/native-similarity commit, and the uploaded synthetic benchmark
-artifacts reported exact ranking/similarity output parity. The current second-pass
-audit adds indexed series-prefix matching, normalization caches and the short-title
-MangaBaka Rust path; those expanded tests and the new prefix benchmark are still
-pending CI on the latest branch head.
+artifacts reported exact ranking/similarity output parity. The current second/third-pass audits add indexed series-prefix matching, bounded
+normalization caches, a short-title MangaBaka Rust path, and indexed exclusion checks;
+those expanded tests and new series benchmarks are pending CI on the latest branch head.
 
 ### Optimized Python recommendations
 
