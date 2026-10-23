@@ -282,3 +282,11 @@ and persist normalized updates with one `executemany` call. Existing local cache
 images are still preserved; duplicate input entries retain their prior sequential
 semantics. `experiments/benchmark_episode_catalog_upserts.py` compares saved state,
 thumbnail SELECT counts, median/p95 latency and connection counts on synthetic data.
+
+
+## Batched staff snapshot cleanup
+
+Replacing a staff snapshot now checks old person candidates with a bounded set-based
+delete, retaining anyone still referenced by any work's staff credits or the global
+voice-actor association table. A regression test verifies orphan deletion and shared
+staff/cast retention.

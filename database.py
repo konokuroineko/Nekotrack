@@ -1403,19 +1403,29 @@ def save_staff(work_id, staff_edges, replace_snapshot=True):
             ],
         )
 
-        if snapshot_valid and replace_snapshot:
-            for person_id in old_person_ids:
-                still_referenced = connection.execute(
-                    """
-                    SELECT 1 FROM work_staff WHERE person_id = ?
-                    UNION ALL
-                    SELECT 1 FROM character_voice_actors WHERE person_id = ?
-                    LIMIT 1
+        if snapshot_valid and replace_snapshot and old_person_ids:
+            # Deleting one old person at a time required a separate reference
+            # query for every previous credit. Evaluate all candidates in
+            # bounded chunks and keep anyone still referenced by staff or cast.
+            ordered_old_ids = sorted(old_person_ids)
+            for start in range(0, len(ordered_old_ids), 400):
+                chunk = ordered_old_ids[start:start + 400]
+                placeholders = ",".join("?" for _ in chunk)
+                connection.execute(
+                    f"""
+                    DELETE FROM people
+                    WHERE id IN ({placeholders})
+                      AND NOT EXISTS (
+                          SELECT 1 FROM work_staff AS ws
+                          WHERE ws.person_id = people.id
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM character_voice_actors AS cva
+                          WHERE cva.person_id = people.id
+                      )
                     """,
-                    (person_id, person_id),
-                ).fetchone()
-                if still_referenced is None:
-                    connection.execute("DELETE FROM people WHERE id = ?", (person_id,))
+                    chunk,
+                )
 
         connection.commit()
     except Exception:

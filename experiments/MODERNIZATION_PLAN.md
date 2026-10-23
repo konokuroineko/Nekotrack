@@ -409,3 +409,16 @@ A regression test covers cached-local-path protection, remote URL replacement,
 duplicate entries, invalid episode numbers, watched state and a single connection.
 CI benchmarks the old per-episode read pattern against the batched implementation,
 checking exact stored-state parity and recording SQL read count and median/p95 time.
+
+
+## Twenty-second-pass staff snapshot cleanup
+
+When refreshing a complete staff snapshot, the previous code issued one reference lookup
+(and sometimes one person delete) for every old staff ID. It now deletes old candidates
+in 400-ID chunks using correlated `NOT EXISTS` checks against both `work_staff` and
+the legacy global voice-actor association table. This retains people referenced by
+another title's staff or voice-actor credits while removing people no longer referenced.
+
+The regression test replaces a work's full staff snapshot and checks three cases:
+a truly orphaned person is removed, a staff member in another work is retained, and
+a cast-only person is retained.
