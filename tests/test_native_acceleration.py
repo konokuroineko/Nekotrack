@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from difflib import SequenceMatcher
 import itertools
+import re
 import random
 import unittest
 
+import api
 import native_acceleration
 
 
@@ -80,6 +82,36 @@ class NativeAccelerationTests(unittest.TestCase):
                 self.assertEqual(
                     native_acceleration.sequence_match_ratio(left, right),
                     _reference(left, right),
+                )
+
+
+    def test_api_title_similarity_preserves_tmdb_matching_scores(self):
+        def reference_title_similarity(left, right):
+            name = re.sub(r"[\\W_]+", "", str(left or "").casefold(), flags=re.UNICODE)
+            query = re.sub(r"[\\W_]+", "", str(right or "").casefold(), flags=re.UNICODE)
+            if not name or not query:
+                return 0.0
+            if name == query:
+                return 1.0
+            if name in query or query in name:
+                containment = min(len(name), len(query)) / max(len(name), len(query))
+                return 0.72 + 0.28 * containment
+            return _reference(name, query)
+
+        cases = [
+            ("Re:Zero", "Re: Zero"),
+            ("Shingeki no Kyojin", "進撃の巨人"),
+            ("進撃の巨人", "進撃の巨人"),
+            ("The Title 2", "The Title"),
+            ("", "No title"),
+            ("Monogatari Series", "Monogatari Series Second Season"),
+            ("Éclair", "eclair"),
+        ]
+        for left, right in cases:
+            with self.subTest(left=left, right=right):
+                self.assertEqual(
+                    api._title_similarity(left, right),
+                    reference_title_similarity(left, right),
                 )
 
     def test_backend_indicator_matches_loaded_extension(self):
