@@ -16,23 +16,24 @@ From the repository root in PowerShell:
 python experiments/benchmark_recommendations.py --candidate-sizes 50 250 500 --sources 50 --iterations 7 --json-out "$env:TEMP\nekotrack-ranking-baseline.json"
 ```
 
-This benchmark runs the current Python `recommendation_engine.rank_candidates` function
-on deterministic synthetic candidates/source credits. It makes no network requests and
-does not read the live database or personal library. It measures the CPU ranking path,
-not startup, search latency, the UI, or total recommendation refresh duration.
+This benchmark runs the former repeated-index reference path and the optimized
+`recommendation_engine.rank_candidates` path against identical deterministic synthetic
+candidates/source credits. It makes no network requests and does not read the live database
+or personal library. It checks that both paths produce identical ranked output and reports
+median/p95 times and the median speedup. It measures the CPU ranking path, not startup,
+search latency, the UI, or total recommendation refresh duration.
 
-Run the same command before and after a performance change on the same machine and
-Python version. Keep the JSON output along with the commit, machine, settings, median,
-and p95 measurements. The first benchmark after the optimization can establish a local
-baseline, but comparison against an unoptimized baseline is needed to quantify its gain.
-Do not invent or extrapolate performance numbers.
+Run the same command on the same machine and Python version after any subsequent changes.
+Keep the JSON output with the commit, machine, settings, and results. These synthetic
+measurements quantify only the isolated ranking change; do not treat them as whole-app
+performance or assume a Rust port will improve them further without its own parity benchmark.
 
 ## Current optimization work
 
 The ranking path now builds shared source-credit weights once per ranking pass, rather
-than repeating that scan for each candidate. The new regression test checks that the
-index is built once and that ranking results remain consistent during the tested call.
-This reduces redundant work by design, but its measured impact has not been recorded yet.
+than repeating that scan for each candidate. The regression test verifies that the
+reference path rebuilds the index per eligible candidate, the optimized path builds it
+once, and both return the same ranked results. The benchmark compares their timings.
 
 The recommendations view also has a safer scrollbar-rebinding path: it disconnects the
 previous tracked scrollbar, avoids unnecessary rebinding to the same bar, and includes
