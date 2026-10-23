@@ -19,7 +19,8 @@ from api import (
 )
 from ui.pages.work_detail_page import (
     EpisodeArtwork, EpisodeCard, StaffFlowLayout,
-    EpisodeImageCacheWorker, EpisodeSyncWorker, EpisodeSectionDataWorker, WorkDetailPage,
+    EpisodeImageCacheWorker, EpisodeSyncWorker, EpisodeSectionDataWorker,
+    EpisodeProgressWorker, WorkDetailPage,
 )
 
 
@@ -111,6 +112,27 @@ class DetailSkeletonTests(unittest.TestCase):
 
         page.deleteLater()
         self.app.processEvents()
+
+    def test_episode_progress_worker_uses_counts_returned_by_write(self):
+        worker = EpisodeProgressWorker(
+            work_id=12345,
+            episode_number=7,
+            watched=True,
+        )
+        emitted = []
+        worker.data_ready.connect(
+            lambda work_id, watched_count, total_count, error:
+                emitted.append((work_id, watched_count, total_count, error))
+        )
+        with (
+            patch("ui.pages.work_detail_page.set_episode_watched", return_value=(7, 12)) as write_progress,
+            patch("ui.pages.work_detail_page.get_episodes") as read_episodes,
+        ):
+            worker.run()
+
+        self.assertEqual(emitted, [(12345, 7, 12, "")])
+        write_progress.assert_called_once_with(12345, 7, True)
+        read_episodes.assert_not_called()
 
     def test_episode_section_worker_consumes_one_database_snapshot(self):
         worker = EpisodeSectionDataWorker(

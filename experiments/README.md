@@ -246,3 +246,11 @@ already-loaded TMDB ID/season fields rather than querying the same table again.
 Alternate titles remain a conditional read when catalog refresh is necessary.
 The new benchmark compares exact legacy outputs and connection counts on synthetic
 episode catalogs up to 5,000 rows.
+
+
+## Watched-checkbox progress updates
+
+Episode checkbox changes now use the watched/total counters returned by the database
+write transaction rather than opening another connection and loading all episode rows
+just to recalculate those same counters. A worker test asserts the duplicate read stays
+removed.

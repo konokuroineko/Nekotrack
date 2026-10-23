@@ -593,10 +593,12 @@ class EpisodeProgressWorker(QObject):
             thread_ident=threading.get_ident(),
         )
         try:
-            set_episode_watched(self.work_id, self.episode_number, self.watched)
-            rows = get_episodes(self.work_id)
-            watched_count = sum(1 for row in rows if bool(row["watched"]))
-            total = len(rows)
+            # The write helper recalculates and returns both counters inside
+            # its transaction. Re-reading the entire episode list here added a
+            # second SQLite connection and a Python scan after every checkbox.
+            watched_count, total = set_episode_watched(
+                self.work_id, self.episode_number, self.watched
+            )
         except Exception as error:
             error_message = str(error)[:600]
             log_exception(

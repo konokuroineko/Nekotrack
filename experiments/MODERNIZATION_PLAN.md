@@ -352,3 +352,14 @@ The worker consumes the snapshot and uses TMDB mapping fields already present in
 conditional lookup only when the catalog needs refresh. Database parity, UI worker
 integration and a synthetic SQLite benchmark measure exact data equivalence and
 connections per read.
+
+
+## Fifteenth-pass watched-checkbox progress reads
+
+`set_episode_watched` already recalculates and returns the watched count and total
+inside the database transaction. `EpisodeProgressWorker` ignored that result and
+opened another connection to fetch every episode row and count them in Python after
+each checkbox change. The worker now consumes the returned counters directly. Its
+progress signal and status/log fields remain unchanged; the full-row read is removed.
+A UI-worker regression test verifies the emitted counters and asserts `get_episodes`
+is not called.
