@@ -199,3 +199,11 @@ Schema initialization adds non-destructive `IF NOT EXISTS` indexes on the revers
 endpoints of work relations, manual links, bundle exclusions and automatic bundle
 memberships. The corresponding test verifies their presence and checks
 `EXPLAIN QUERY PLAN` actually selects each index on the targeted lookup.
+
+
+## Large episode catalogs
+
+Episode pruning keeps its simple `NOT IN` query for up to 400 valid episode numbers.
+Larger verified catalogs use a temporary keep table and `NOT EXISTS` deletes rather
+than building an unbounded SQL parameter list. The database regression fixture checks
+a 1,200-episode replacement including stale reminders and progress normalization.

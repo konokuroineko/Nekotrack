@@ -1566,24 +1566,64 @@ def prune_episode_catalog(work_id, episode_data):
         return 0
 
     numbers = sorted(valid_numbers)
-    placeholders = ", ".join("?" for _ in numbers)
-    params = (safe_work_id, *numbers)
     connection = get_connection()
     try:
-        connection.execute(
-            f"""
-            DELETE FROM release_reminders
-            WHERE work_id = ? AND episode_number NOT IN ({placeholders})
-            """,
-            params,
-        )
-        cursor = connection.execute(
-            f"""
-            DELETE FROM episodes
-            WHERE work_id = ? AND episode_number NOT IN ({placeholders})
-            """,
-            params,
-        )
+        if len(numbers) <= 400:
+            # Keep the cheap direct path for ordinary seasonal catalogs.
+            placeholders = ", ".join("?" for _ in numbers)
+            params = (safe_work_id, *numbers)
+            connection.execute(
+                f"""
+                DELETE FROM release_reminders
+                WHERE work_id = ? AND episode_number NOT IN ({placeholders})
+                """,
+                params,
+            )
+            cursor = connection.execute(
+                f"""
+                DELETE FROM episodes
+                WHERE work_id = ? AND episode_number NOT IN ({placeholders})
+                """,
+                params,
+            )
+        else:
+            # A provider can return unusually large episode catalogs. Keep the
+            # ID list out of SQL parameters entirely instead of exceeding the
+            # SQLite variable limit on the NOT IN clause.
+            connection.execute("""
+                CREATE TEMP TABLE _nekotrack_keep_episode_numbers (
+                    episode_number INTEGER PRIMARY KEY
+                )
+            """)
+            connection.executemany(
+                "INSERT OR IGNORE INTO _nekotrack_keep_episode_numbers (episode_number) VALUES (?)",
+                ((number,) for number in numbers),
+            )
+            connection.execute(
+                """
+                DELETE FROM release_reminders
+                WHERE work_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM _nekotrack_keep_episode_numbers AS keep
+                      WHERE keep.episode_number = release_reminders.episode_number
+                  )
+                """,
+                (safe_work_id,),
+            )
+            cursor = connection.execute(
+                """
+                DELETE FROM episodes
+                WHERE work_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM _nekotrack_keep_episode_numbers AS keep
+                      WHERE keep.episode_number = episodes.episode_number
+                  )
+                """,
+                (safe_work_id,),
+            )
+
         connection.execute(
             """
             UPDATE user_library
@@ -1599,7 +1639,6 @@ def prune_episode_catalog(work_id, episode_data):
         raise
     finally:
         connection.close()
-
 
 def get_episodes(work_id):
     try:

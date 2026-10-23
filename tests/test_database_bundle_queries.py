@@ -198,6 +198,13 @@ class BundleDetailBatchingTests(unittest.TestCase):
                     progress_volumes INTEGER, rating INTEGER, notes TEXT,
                     added_date TEXT, updated_date TEXT
                 );
+                CREATE TABLE release_reminders (
+                    work_id INTEGER NOT NULL,
+                    episode_number INTEGER NOT NULL,
+                    notified_date TEXT,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (work_id, episode_number)
+                );
             """)
             con.executemany(
                 "INSERT INTO works (id,title,type,format,cover_url) VALUES (?,?,'ANIME','TV',?)",
@@ -433,6 +440,52 @@ class BundleDetailBatchingTests(unittest.TestCase):
             (exclusions[0]["work_a"], exclusions[0]["work_b"]),
             (1, 1200),
         )
+
+    def test_large_episode_catalog_pruning_uses_temp_table_and_preserves_kept_rows(self):
+        con = database.get_connection()
+        try:
+            con.executemany(
+                "INSERT INTO episodes (id, work_id, episode_number, title, watched) VALUES (?, 1, ?, ?, 0)",
+                [(101, 1, "One"), (102, 2, "Two"), (1200, 1200, "Twelve hundred"), (1500, 1500, "Stale episode")],
+            )
+            con.executemany(
+                "INSERT INTO release_reminders (work_id, episode_number, notified_date) VALUES (1, ?, NULL)",
+                [(1200,), (1500,)],
+            )
+            con.execute(
+                "INSERT INTO user_library (work_id, status, progress_episodes, progress_chapters, progress_volumes) "
+                "VALUES (1, 'Watching', 1400, 0, 0)"
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        replacement_catalog = [{"episodeNumber": number} for number in range(1, 1201)]
+        self.assertEqual(database.prune_episode_catalog(1, replacement_catalog), 1)
+
+        con = database.get_connection()
+        try:
+            remaining_episodes = [
+                int(row["episode_number"])
+                for row in con.execute(
+                    "SELECT episode_number FROM episodes WHERE work_id = 1 ORDER BY episode_number"
+                ).fetchall()
+            ]
+            remaining_reminders = [
+                int(row["episode_number"])
+                for row in con.execute(
+                    "SELECT episode_number FROM release_reminders WHERE work_id = 1 ORDER BY episode_number"
+                ).fetchall()
+            ]
+            progress = con.execute(
+                "SELECT progress_episodes FROM user_library WHERE work_id = 1"
+            ).fetchone()["progress_episodes"]
+        finally:
+            con.close()
+
+        self.assertEqual(remaining_episodes, [1, 2, 1200])
+        self.assertEqual(remaining_reminders, [1200])
+        self.assertEqual(progress, 1200)
 
     def test_empty_and_invalid_relation_inputs_keep_existing_contract(self):
         self.assertEqual(database.get_bundle_characters(None), [])

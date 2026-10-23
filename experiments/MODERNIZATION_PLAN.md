@@ -280,3 +280,17 @@ queries. Startup schema initialization now creates four `IF NOT EXISTS` reverse-
 indexes so existing databases gain the query acceleration without data migration or
 rebuilding tables. A test checks both the indexes' presence and SQLite's chosen
 query plans for the four hot predicates.
+
+
+## Tenth-pass episode-catalog pruning for very large seasons
+
+`prune_episode_catalog` previously built two `NOT IN` statements with one bind
+parameter for each distinct episode number. Ordinary seasons now keep that fast path
+when there are at most 400 valid numbers. Larger catalogs use a connection-local
+temporary keep table and `NOT EXISTS` deletes, avoiding SQLite's host-parameter limit
+without truncating the trusted replacement catalog. Stale watched-state rows are still
+removed only after a non-empty, valid catalog is supplied, and retained episode rows
+keep their watched state.
+
+The database fixture includes a 1,200-episode replacement catalog with both kept and
+stale episode/reminder rows and validates the resulting progress cap.
