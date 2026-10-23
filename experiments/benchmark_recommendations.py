@@ -130,44 +130,95 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         }
         for index in range(200)
     }
+
+    def score(candidates, rotation, precompute):
+        started = time.perf_counter()
+        ranked = rank_candidates(
+            candidates, history, favorite_works, rotation=rotation,
+            credit_profile=credit_profile, favorite_entities=favorite_entities,
+            voice_language="ALL", _precompute_credit_index=precompute,
+        )
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        signature = [
+            (
+                item.get("id"),
+                item.get("_recommendation_score"),
+                item.get("_recommendation_reason"),
+                item.get("_recommendation_matching_terms"),
+            )
+            for item in ranked
+        ]
+        return elapsed_ms, len(ranked), signature
+
     results = []
     for count in args.candidate_sizes:
         candidates = build_candidates(count)
-        # Warm imports, caches and interpreter paths, but don't include warmups.
-        for _ in range(args.warmups):
-            rank_candidates(
-                candidates, history, favorite_works, rotation=0,
-                credit_profile=credit_profile, favorite_entities=favorite_entities,
-                voice_language="ALL",
-            )
-        samples_ms = []
+        # Warm both paths with the same inputs; warmups are excluded from results.
+        for warmup in range(args.warmups):
+            score(candidates, warmup, False)
+            score(candidates, warmup, True)
+
+        baseline_samples_ms = []
+        optimized_samples_ms = []
         ranked_count = 0
+        outputs_match = True
         for iteration in range(args.iterations):
-            started = time.perf_counter()
-            ranked = rank_candidates(
-                candidates, history, favorite_works, rotation=iteration,
-                credit_profile=credit_profile, favorite_entities=favorite_entities,
-                voice_language="ALL",
+            # Alternate order to reduce consistent order/thermal bias.
+            modes = (False, True) if iteration % 2 == 0 else (True, False)
+            iteration_results = {}
+            for precompute in modes:
+                elapsed_ms, count_ranked, signature = score(
+                    candidates, iteration, precompute
+                )
+                key = "optimized" if precompute else "baseline"
+                iteration_results[key] = (elapsed_ms, count_ranked, signature)
+                if precompute:
+                    optimized_samples_ms.append(elapsed_ms)
+                else:
+                    baseline_samples_ms.append(elapsed_ms)
+                ranked_count = count_ranked
+            outputs_match = outputs_match and (
+                iteration_results["baseline"][1:] == iteration_results["optimized"][1:]
             )
-            samples_ms.append((time.perf_counter() - started) * 1000)
-            ranked_count = len(ranked)
+
+        baseline_median = statistics.median(baseline_samples_ms)
+        optimized_median = statistics.median(optimized_samples_ms)
+        speedup_percent = (
+            (baseline_median - optimized_median) / baseline_median * 100
+            if baseline_median > 0 else 0.0
+        )
         results.append({
             "input_candidates": count,
             "ranked_candidates_last_run": ranked_count,
             "source_profiles": args.sources,
             "credits_per_source_profile": args.credits_per_source,
-            "iterations": args.iterations,
-            "median_ms": round(statistics.median(samples_ms), 3),
-            "p95_ms": round(percentile(samples_ms, 0.95), 3),
-            "min_ms": round(min(samples_ms), 3),
-            "max_ms": round(max(samples_ms), 3),
+            "iterations_per_mode": args.iterations,
+            "ranking_outputs_match": outputs_match,
+            "baseline_rebuild_index_each_candidate": {
+                "median_ms": round(baseline_median, 3),
+                "p95_ms": round(percentile(baseline_samples_ms, 0.95), 3),
+                "min_ms": round(min(baseline_samples_ms), 3),
+                "max_ms": round(max(baseline_samples_ms), 3),
+            },
+            "optimized_precompute_once": {
+                "median_ms": round(optimized_median, 3),
+                "p95_ms": round(percentile(optimized_samples_ms, 0.95), 3),
+                "min_ms": round(min(optimized_samples_ms), 3),
+                "max_ms": round(max(optimized_samples_ms), 3),
+            },
+            "median_speedup_percent": round(speedup_percent, 2),
+            "median_speedup_ratio": round(
+                baseline_median / optimized_median, 3
+            ) if optimized_median > 0 else None,
         })
     return {
         "benchmark": "recommendation_engine.rank_candidates",
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         "workload": "deterministic synthetic data; CPU-only; no network or database",
-        "warmups": args.warmups,
+        "warmups_per_mode": args.warmups,
+        "baseline_mode": "rebuild source-credit index for each eligible candidate",
+        "optimized_mode": "precompute source-credit index once per ranking pass",
         "results": results,
     }
 
