@@ -322,7 +322,7 @@ class BundleDetailBatchingTests(unittest.TestCase):
                 "WHERE id = 1"
             )
             con.executemany(
-                "INSERT INTO episodes (id, work_id, episode_number, title, watched) VALUES (?, 1, ?, ?, ?)",
+                "INSERT INTO episodes (id, work_id, episode_number, title, watched) VALUES (?, ?, ?, ?, ?)",
                 [(201, 1, 1, "Episode 1", 1), (202, 1, 2, "Episode 2", 0)],
             )
             con.execute(

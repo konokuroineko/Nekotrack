@@ -168,7 +168,7 @@ class DetailSkeletonTests(unittest.TestCase):
             "episodes": saved_episodes,
             "catalog_metadata": {
                 "version": TMDB_EPISODE_CATALOG_VERSION,
-                "fetched_at": time.time(),
+                "fetched_at": time.time() - TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS - 1,
                 "complete": True,
             },
             "catalog_metadata_error": None,
@@ -184,6 +184,7 @@ class DetailSkeletonTests(unittest.TestCase):
             patch("ui.pages.work_detail_page.get_episodes") as read_episodes,
             patch("ui.pages.work_detail_page.get_provider_metadata") as read_metadata,
             patch("ui.pages.work_detail_page.get_tmdb_mapping") as read_mapping,
+            patch("ui.pages.work_detail_page.get_alternate_titles", return_value=[]) as read_alternates,
         ):
             worker.run()
 
@@ -192,7 +193,7 @@ class DetailSkeletonTests(unittest.TestCase):
         self.assertEqual((token, work_id), (41, 12345))
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["episodes"][0]["episode_number"], 1)
-        self.assertFalse(payload["needs_catalog_refresh"])
+        self.assertTrue(payload["needs_catalog_refresh"])
         self.assertEqual(payload["tmdb_context"]["tmdb_id"], 77)
         self.assertEqual(payload["tmdb_context"]["tmdb_season_number"], 2)
         read_snapshot.assert_called_once_with(12345)
@@ -200,6 +201,7 @@ class DetailSkeletonTests(unittest.TestCase):
         read_episodes.assert_not_called()
         read_metadata.assert_not_called()
         read_mapping.assert_not_called()
+        read_alternates.assert_called_once_with(12345)
 
     def test_episode_section_waits_when_selected_season_row_is_missing(self):
         page = WorkDetailPage()
@@ -254,7 +256,10 @@ class DetailSkeletonTests(unittest.TestCase):
         callbacks = []
 
         with (
-            patch("ui.pages.work_detail_page.get_work", return_value=None),
+            patch("ui.pages.work_detail_page.get_episode_section_snapshot", return_value={
+                "work": None, "episodes": [], "catalog_metadata": None,
+                "catalog_metadata_error": None,
+            }),
             patch(
                 "ui.pages.work_detail_page.QTimer.singleShot",
                 side_effect=lambda delay, callback: callbacks.append((delay, callback)),
@@ -291,7 +296,10 @@ class DetailSkeletonTests(unittest.TestCase):
         layout.addWidget(host)
         page.scroll_area.setWidget(content)
 
-        with patch("ui.pages.work_detail_page.get_work", return_value=None):
+        with patch("ui.pages.work_detail_page.get_episode_section_snapshot", return_value={
+                "work": None, "episodes": [], "catalog_metadata": None,
+                "catalog_metadata_error": None,
+            }):
             page._populate_episode_section(9, content, host, attempt=120)
             deadline = time.monotonic() + 4.0
             while (
@@ -395,25 +403,23 @@ class DetailSkeletonTests(unittest.TestCase):
             "watched": 0,
         }]
 
-        def read_work(_work_id):
-            database_threads.append(("work", threading.get_ident()))
-            return work_row
-
-        def read_episodes(_work_id):
-            database_threads.append(("episodes", threading.get_ident()))
-            return episode_rows
-
-        def read_metadata(_work_id, _provider):
-            database_threads.append(("metadata", threading.get_ident()))
-            return {
+        snapshot = {
+            "work": work_row,
+            "episodes": episode_rows,
+            "catalog_metadata": {
                 "version": TMDB_EPISODE_CATALOG_VERSION,
                 "fetched_at": time.time(),
-            }
+                "complete": True,
+            },
+            "catalog_metadata_error": None,
+        }
+
+        def read_snapshot(_work_id):
+            database_threads.append(("snapshot", threading.get_ident()))
+            return snapshot
 
         with (
-            patch("ui.pages.work_detail_page.get_work", side_effect=read_work),
-            patch("ui.pages.work_detail_page.get_episodes", side_effect=read_episodes),
-            patch("ui.pages.work_detail_page.get_provider_metadata", side_effect=read_metadata),
+            patch("ui.pages.work_detail_page.get_episode_section_snapshot", side_effect=read_snapshot),
             patch.object(page, "_start_episode_image_cache"),
         ):
             page._populate_episode_section(17, content, host)
@@ -430,7 +436,7 @@ class DetailSkeletonTests(unittest.TestCase):
 
         self.assertEqual(
             {name for name, _thread_id in database_threads},
-            {"work", "episodes", "metadata"},
+            {"snapshot"},
         )
         self.assertTrue(database_threads)
         self.assertTrue(
