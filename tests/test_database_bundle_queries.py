@@ -380,6 +380,7 @@ class BundleDetailBatchingTests(unittest.TestCase):
                     for work_id in range(7, 1201)
                 ],
             )
+            con.execute("UPDATE works SET characters_loaded = 1")
             con.executemany(
                 "INSERT INTO manual_bundle_links (work_a, work_b) VALUES (?, ?)",
                 [(1, 1200), (2, 1200)],
@@ -398,8 +399,6 @@ class BundleDetailBatchingTests(unittest.TestCase):
                 con.execute("SELECT COUNT(*) FROM works WHERE characters_loaded = 0").fetchone()[0],
                 1200,
             )
-            con.execute("UPDATE works SET characters_loaded = 1")
-            con.commit()
         finally:
             con.close()
 

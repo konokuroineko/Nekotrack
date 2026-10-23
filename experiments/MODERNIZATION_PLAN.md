@@ -269,3 +269,14 @@ The synthetic database tests create 1,200 disposable work rows and exercise thes
 paths end to end. Assertions verify member snapshots, override identity/cover choices,
 manual-link removal and all 1,199 expected exclusions. No production database is
 accessed by those tests.
+
+
+## Ninth-pass schema indexes for Library grouping
+
+The library grouping path repeatedly filters saved relations by either endpoint, and
+filters manual links, exclusions and automatic memberships by the non-primary-key
+endpoint. The existing composite primary keys only indexed one side of those
+queries. Startup schema initialization now creates four `IF NOT EXISTS` reverse-edge
+indexes so existing databases gain the query acceleration without data migration or
+rebuilding tables. A test checks both the indexes' presence and SQLite's chosen
+query plans for the four hot predicates.

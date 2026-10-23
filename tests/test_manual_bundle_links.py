@@ -6,6 +6,65 @@ import database
 
 
 class ManualBundleDatabaseTests(unittest.TestCase):
+
+    def test_library_grouping_reverse_edge_indexes_are_created_and_used(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                database.initialize_database()
+                connection = database.get_connection()
+                try:
+                    indexes = {
+                        row["name"]
+                        for row in connection.execute(
+                            "SELECT name FROM sqlite_master WHERE type = 'index'"
+                        ).fetchall()
+                    }
+                    expected = {
+                        "idx_work_relations_target_type_source",
+                        "idx_manual_bundle_links_work_b",
+                        "idx_bundle_exclusions_work_b",
+                        "idx_automatic_bundle_memberships_work_id",
+                    }
+                    self.assertTrue(expected.issubset(indexes), expected - indexes)
+
+                    plans = {
+                        "relations": connection.execute(
+                            "EXPLAIN QUERY PLAN SELECT source_id, target_id FROM work_relations "
+                            "WHERE relation_type IN ('SEQUEL') AND target_id IN (?)",
+                            (123,),
+                        ).fetchall(),
+                        "manual_links": connection.execute(
+                            "EXPLAIN QUERY PLAN SELECT work_a, work_b FROM manual_bundle_links "
+                            "WHERE work_b IN (?)",
+                            (123,),
+                        ).fetchall(),
+                        "exclusions": connection.execute(
+                            "EXPLAIN QUERY PLAN SELECT work_a, work_b FROM bundle_exclusions "
+                            "WHERE work_b IN (?)",
+                            (123,),
+                        ).fetchall(),
+                        "automatic_memberships": connection.execute(
+                            "EXPLAIN QUERY PLAN SELECT bundle_id, work_id FROM automatic_bundle_memberships "
+                            "WHERE work_id IN (?)",
+                            (123,),
+                        ).fetchall(),
+                    }
+                    expected_index_by_query = {
+                        "relations": "idx_work_relations_target_type_source",
+                        "manual_links": "idx_manual_bundle_links_work_b",
+                        "exclusions": "idx_bundle_exclusions_work_b",
+                        "automatic_memberships": "idx_automatic_bundle_memberships_work_id",
+                    }
+                    for name, plan_rows in plans.items():
+                        details = " ".join(str(row["detail"]) for row in plan_rows)
+                        self.assertIn(expected_index_by_query[name], details, (name, details))
+                finally:
+                    connection.close()
+            finally:
+                os.chdir(old_cwd)
+
     def test_delete_work_data_removes_local_work_and_library_entry(self):
         with tempfile.TemporaryDirectory() as directory:
             old_cwd = os.getcwd()

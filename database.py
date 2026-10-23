@@ -154,6 +154,26 @@ def initialize_database():
             FOREIGN KEY (work_id) REFERENCES works(id)
         )
     """)
+
+    # Reverse-edge indexes support Library grouping's OR predicates. The
+    # primary keys already index source/work_a/bundle_id; these cover the
+    # opposite endpoints without scanning every saved relation/link.
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_work_relations_target_type_source "
+        "ON work_relations(target_id, relation_type, source_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_manual_bundle_links_work_b "
+        "ON manual_bundle_links(work_b, work_a)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bundle_exclusions_work_b "
+        "ON bundle_exclusions(work_b, work_a)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_automatic_bundle_memberships_work_id "
+        "ON automatic_bundle_memberships(work_id, bundle_id)"
+    )
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS bundle_overrides (
             bundle_anchor_id INTEGER PRIMARY KEY,

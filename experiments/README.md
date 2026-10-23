@@ -191,3 +191,11 @@ deletes while keeping one connection and one transaction. Bundle-member removal
 performs chunked manual-link deletion and batches the expected pairwise exclusions.
 `tests/test_database_bundle_queries.py` stress-tests these operations using 1,200
 synthetic work rows.
+
+
+## Reverse-edge indexes for Library grouping
+
+Schema initialization adds non-destructive `IF NOT EXISTS` indexes on the reverse
+endpoints of work relations, manual links, bundle exclusions and automatic bundle
+memberships. The corresponding test verifies their presence and checks
+`EXPLAIN QUERY PLAN` actually selects each index on the targeted lookup.
