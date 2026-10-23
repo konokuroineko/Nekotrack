@@ -298,3 +298,11 @@ staff/cast retention.
 related-work metadata and outgoing relations. Input-order conflict behavior and the
 existing validation gates are retained. A focused test covers duplicate records and
 the `COALESCE` preservation rules for fields omitted by a later relation edge.
+
+
+## Batched chapter/volume metadata upserts
+
+Reading-item metadata imports now use one prepared batch for chapter or volume rows
+instead of calling `execute` for each item. The upsert only changes titles, so saved
+read-state remains intact. Test coverage exercises parsing, fallback numbering and
+duplicate item numbers.

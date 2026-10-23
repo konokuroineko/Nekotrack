@@ -433,3 +433,12 @@ relation target still ends with the same latest non-null metadata, while prior v
 survive missing provider fields. A regression fixture exercises duplicate aliases and
 studio IDs, repeated target IDs, multiple relation types and preservation of absent
 cover/date/MAL values.
+
+
+## Twenty-fourth-pass chapter/volume metadata persistence
+
+`save_reading_item_metadata` now prepares normalized reading-item rows in input order
+and upserts them using `executemany`. Duplicate item numbers still apply sequentially,
+blank incoming titles still leave saved titles intact, and conflict updates do not touch
+the `is_read` flag. The regression test covers explicit and fallback numbering, invalid
+labels, duplicate chapter numbers and an existing read flag.
