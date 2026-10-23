@@ -1477,27 +1477,51 @@ def save_episodes(work_id, episode_data):
             return None
         return value.strip() or None
 
+    # Prepare records and the unique episode-number set before opening the DB.
+    # Provider responses can contain hundreds of rows, so do not issue a
+    # thumbnail SELECT for every row during the upsert loop.
+    prepared = []
+    number_set = set()
+    for episode in episodes:
+        if not isinstance(episode, dict):
+            continue
+        number = valid_episode_number(episode.get("episodeNumber"))
+        if number is None:
+            continue
+        prepared.append((
+            number,
+            optional_text(episode.get("title")),
+            optional_text(episode.get("description")),
+            optional_text(episode.get("airdate")),
+            optional_text(episode.get("thumbnail")),
+        ))
+        number_set.add(number)
+
     connection = get_connection()
     try:
-        for episode in episodes:
-            if not isinstance(episode, dict):
-                continue
-            number = valid_episode_number(episode.get("episodeNumber"))
-            if number is None:
-                continue
-
-            incoming_thumbnail = optional_text(episode.get("thumbnail"))
-            existing = connection.execute(
-                """
-                SELECT thumbnail_url
+        current_thumbnails = {}
+        numbers = sorted(number_set)
+        for chunk in _bundle_id_chunks(numbers):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT episode_number, thumbnail_url
                 FROM episodes
-                WHERE work_id = ? AND episode_number = ?
+                WHERE work_id = ? AND episode_number IN ({placeholders})
                 """,
-                (safe_work_id, number),
-            ).fetchone()
+                [safe_work_id, *chunk],
+            ).fetchall()
+            current_thumbnails.update({
+                int(row["episode_number"]): row["thumbnail_url"]
+                for row in rows
+            })
+
+        upserts = []
+        for number, title, description, air_date, incoming_thumbnail in prepared:
+            raw_existing_thumbnail = current_thumbnails.get(number)
             existing_thumbnail = (
-                str(existing["thumbnail_url"]).strip()
-                if existing and existing["thumbnail_url"]
+                str(raw_existing_thumbnail).strip()
+                if raw_existing_thumbnail
                 else None
             )
 
@@ -1515,7 +1539,24 @@ def save_episodes(work_id, episode_data):
             else:
                 thumbnail = incoming_thumbnail
 
-            connection.execute("""
+            upserts.append((
+                safe_work_id,
+                number,
+                title,
+                description,
+                air_date,
+                thumbnail,
+            ))
+
+            # Simulate the thumbnail value seen by subsequent duplicate
+            # episode-number entries, matching the former sequential SELECT/
+            # upsert behavior while still issuing the writes as one batch.
+            if thumbnail is not None:
+                current_thumbnails[number] = thumbnail
+
+        if upserts:
+            connection.executemany(
+                """
                 INSERT INTO episodes (
                     work_id, episode_number, title, description, air_date, thumbnail_url
                 )
@@ -1525,14 +1566,9 @@ def save_episodes(work_id, episode_data):
                     description = COALESCE(excluded.description, episodes.description),
                     air_date = COALESCE(excluded.air_date, episodes.air_date),
                     thumbnail_url = COALESCE(excluded.thumbnail_url, episodes.thumbnail_url)
-            """, (
-                safe_work_id,
-                number,
-                optional_text(episode.get("title")),
-                optional_text(episode.get("description")),
-                optional_text(episode.get("airdate")),
-                thumbnail,
-            ))
+                """,
+                upserts,
+            )
         connection.commit()
     except Exception:
         connection.rollback()
@@ -1541,104 +1577,6 @@ def save_episodes(work_id, episode_data):
         connection.close()
 
 
-def prune_episode_catalog(work_id, episode_data):
-    """Remove stale episode rows after a verified replacement catalog loads.
-
-    Rows with the same episode number remain, preserving their watched state.
-    Empty or invalid provider responses never prune existing data.
-    """
-    safe_work_id = _validated_work_id(work_id)
-    try:
-        episodes = list(episode_data or [])
-    except TypeError:
-        return 0
-
-    valid_numbers = set()
-    for episode in episodes:
-        if not isinstance(episode, dict):
-            continue
-        number = _safe_optional_integer(
-            episode.get("episodeNumber"), 1, _MAX_TRACKED_EPISODE_NUMBER
-        )
-        if number is not None:
-            valid_numbers.add(number)
-    if not valid_numbers:
-        return 0
-
-    numbers = sorted(valid_numbers)
-    connection = get_connection()
-    try:
-        if len(numbers) <= 400:
-            # Keep the cheap direct path for ordinary seasonal catalogs.
-            placeholders = ", ".join("?" for _ in numbers)
-            params = (safe_work_id, *numbers)
-            connection.execute(
-                f"""
-                DELETE FROM release_reminders
-                WHERE work_id = ? AND episode_number NOT IN ({placeholders})
-                """,
-                params,
-            )
-            cursor = connection.execute(
-                f"""
-                DELETE FROM episodes
-                WHERE work_id = ? AND episode_number NOT IN ({placeholders})
-                """,
-                params,
-            )
-        else:
-            # A provider can return unusually large episode catalogs. Keep the
-            # ID list out of SQL parameters entirely instead of exceeding the
-            # SQLite variable limit on the NOT IN clause.
-            connection.execute("""
-                CREATE TEMP TABLE _nekotrack_keep_episode_numbers (
-                    episode_number INTEGER PRIMARY KEY
-                )
-            """)
-            connection.executemany(
-                "INSERT OR IGNORE INTO _nekotrack_keep_episode_numbers (episode_number) VALUES (?)",
-                ((number,) for number in numbers),
-            )
-            connection.execute(
-                """
-                DELETE FROM release_reminders
-                WHERE work_id = ?
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM _nekotrack_keep_episode_numbers AS keep
-                      WHERE keep.episode_number = release_reminders.episode_number
-                  )
-                """,
-                (safe_work_id,),
-            )
-            cursor = connection.execute(
-                """
-                DELETE FROM episodes
-                WHERE work_id = ?
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM _nekotrack_keep_episode_numbers AS keep
-                      WHERE keep.episode_number = episodes.episode_number
-                  )
-                """,
-                (safe_work_id,),
-            )
-
-        connection.execute(
-            """
-            UPDATE user_library
-            SET progress_episodes = MIN(COALESCE(progress_episodes, 0), ?)
-            WHERE work_id = ?
-            """,
-            (len(numbers), safe_work_id),
-        )
-        connection.commit()
-        return max(0, int(cursor.rowcount))
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
 
 def get_episodes(work_id):
     try:

@@ -643,6 +643,80 @@ class BundleDetailBatchingTests(unittest.TestCase):
             [(1, "cache/episode-1.jpg"), (2, "cache/episode-2-final.jpg")],
         )
 
+    def test_save_episodes_batches_thumbnail_reads_and_preserves_cached_paths(self):
+        with tempfile.TemporaryDirectory(prefix="nekotrack-save-episodes-") as directory:
+            cached_file = Path(directory) / "local-episode.jpg"
+            cached_file.write_bytes(b"cached")
+            con = database.get_connection()
+            try:
+                con.executemany(
+                    """
+                    INSERT INTO episodes (
+                        id, work_id, episode_number, title, description, air_date,
+                        thumbnail_url, watched
+                    ) VALUES (?, 1, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (501, 1, "Episode 1", "Old 1", "2020-01-01", str(cached_file), 1),
+                        (502, 2, "Episode 2", "Old 2", "2020-01-08", "https://old.invalid/2.jpg", 0),
+                    ],
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            incoming = [
+                {
+                    "episodeNumber": 1,
+                    "title": "Episode 1 Updated",
+                    "description": "New description",
+                    "airdate": "2020-01-02",
+                    "thumbnail": "https://image.tmdb.org/t/p/w500/remote-1.jpg",
+                },
+                {
+                    "episodeNumber": 2,
+                    "title": "Episode 2 Updated",
+                    "thumbnail": "https://image.tmdb.org/t/p/w500/remote-2.jpg",
+                },
+                {
+                    "episodeNumber": 3,
+                    "title": "Episode 3 First",
+                    "thumbnail": "https://image.tmdb.org/t/p/w500/remote-3-first.jpg",
+                },
+                {
+                    "episodeNumber": 3,
+                    "title": "Episode 3 Final",
+                    "thumbnail": None,
+                },
+                {"episodeNumber": True, "title": "Invalid"},
+                {"episodeNumber": 1.5, "title": "Fractional"},
+            ]
+            with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+                database.save_episodes(1, incoming)
+            self.assertEqual(factory.call_count, 1)
+
+            con = database.get_connection()
+            try:
+                rows = con.execute(
+                    """
+                    SELECT episode_number, title, description, air_date, thumbnail_url, watched
+                    FROM episodes WHERE work_id = 1 ORDER BY episode_number
+                    """
+                ).fetchall()
+            finally:
+                con.close()
+            self.assertEqual(
+                [(
+                    int(row["episode_number"]), row["title"], row["description"],
+                    row["air_date"], row["thumbnail_url"], int(row["watched"])
+                ) for row in rows],
+                [
+                    (1, "Episode 1 Updated", "New description", "2020-01-02", str(cached_file), 1),
+                    (2, "Episode 2 Updated", "Old 2", "2020-01-08", "https://image.tmdb.org/t/p/w500/remote-2.jpg", 0),
+                    (3, "Episode 3 Final", None, None, "https://image.tmdb.org/t/p/w500/remote-3-first.jpg", 0),
+                ],
+            )
+
     def test_empty_and_invalid_relation_inputs_keep_existing_contract(self):
         self.assertEqual(database.get_bundle_characters(None), [])
         self.assertEqual(database.get_bundle_staff(None), [])
