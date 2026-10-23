@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from difflib import SequenceMatcher
 import itertools
-import re
 import random
 import unittest
 
@@ -87,8 +86,8 @@ class NativeAccelerationTests(unittest.TestCase):
 
     def test_api_title_similarity_preserves_tmdb_matching_scores(self):
         def reference_title_similarity(left, right):
-            name = re.sub(r"[\\W_]+", "", str(left or "").casefold(), flags=re.UNICODE)
-            query = re.sub(r"[\\W_]+", "", str(right or "").casefold(), flags=re.UNICODE)
+            name = api._normalize_title(left)
+            query = api._normalize_title(right)
             if not name or not query:
                 return 0.0
             if name == query:
