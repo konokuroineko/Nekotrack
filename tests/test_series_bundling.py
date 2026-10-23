@@ -191,6 +191,83 @@ class LargeLibraryRelationQueryTests(unittest.TestCase):
 
 
 
+class ComponentUnionBySizeTests(unittest.TestCase):
+    @staticmethod
+    def _find(parent, item_id):
+        while parent[item_id] != item_id:
+            parent[item_id] = parent[parent[item_id]]
+            item_id = parent[item_id]
+        return item_id
+
+    def test_small_to_large_merge_preserves_members_and_avoids_repeated_large_copies(self):
+        count = 4096
+        balanced_parent = {item_id: item_id for item_id in range(count)}
+        balanced_members = {item_id: {item_id} for item_id in range(count)}
+        balanced_moves = 0
+
+        reference_parent = {item_id: item_id for item_id in range(count)}
+        reference_members = {item_id: {item_id} for item_id in range(count)}
+        reference_moves = 0
+
+        # The descending chain is hostile to the former "always attach right
+        # to left" rule: each merge would copy the entire growing component.
+        for left_id in range(count - 2, -1, -1):
+            balanced_left = self._find(balanced_parent, left_id)
+            balanced_right = self._find(balanced_parent, left_id + 1)
+            if balanced_left != balanced_right:
+                _root, moved = series._merge_component_roots(
+                    balanced_parent, balanced_members, balanced_left, balanced_right
+                )
+                balanced_moves += moved
+
+            reference_left = self._find(reference_parent, left_id)
+            reference_right = self._find(reference_parent, left_id + 1)
+            if reference_left != reference_right:
+                reference_moves += len(reference_members[reference_right])
+                reference_parent[reference_right] = reference_left
+                reference_members[reference_left].update(
+                    reference_members.pop(reference_right)
+                )
+
+        balanced_components = {}
+        reference_components = {}
+        for item_id in range(count):
+            balanced_components.setdefault(
+                self._find(balanced_parent, item_id), set()
+            ).add(item_id)
+            reference_components.setdefault(
+                self._find(reference_parent, item_id), set()
+            ).add(item_id)
+
+        self.assertEqual(
+            {frozenset(members) for members in balanced_components.values()},
+            {frozenset(members) for members in reference_components.values()},
+        )
+        self.assertEqual(len(balanced_components), 1)
+        self.assertEqual(next(iter(balanced_components.values())), set(range(count)))
+        self.assertLessEqual(balanced_moves, count)
+        self.assertGreater(reference_moves, count * count // 4)
+
+    def test_snapshot_sets_follow_the_selected_root(self):
+        parent = {1: 1, 2: 2, 3: 3}
+        members = {1: {1}, 2: {2, 3}, 3: set()}
+        snapshots = {1: {100}, 2: {200}, 3: set()}
+        # Use consistent disjoint-set keys and validate that the larger root,
+        # along with its snapshot IDs, survives the small-to-large merge.
+        parent = {1: 1, 2: 2}
+        members = {1: {1}, 2: {2, 3}}
+        snapshots = {1: {100}, 2: {200}}
+        root, moved = series._merge_component_roots(
+            parent, members, 1, 2, snapshots
+        )
+        self.assertEqual(root, 2)
+        self.assertEqual(moved, 1)
+        self.assertEqual(parent, {1: 2, 2: 2})
+        self.assertEqual(members, {2: {1, 2, 3}})
+        self.assertEqual(snapshots, {2: {100, 200}})
+
+
+
 class BundleOptionTests(unittest.TestCase):
     def test_tv_and_tv_short_are_always_bundleable(self):
         with patch("series.get", return_value=False):

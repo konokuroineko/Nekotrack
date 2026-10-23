@@ -61,6 +61,28 @@ _relation_sync_checked_ids = set()
 _relation_cache = {}
 
 
+
+def _merge_component_roots(
+    parent, component_members, left_root, right_root, component_snapshot_ids=None
+):
+    """Merge disjoint-set roots small-to-large to bound repeated set copying."""
+    left_members = component_members[left_root]
+    right_members = component_members[right_root]
+    if len(left_members) < len(right_members):
+        left_root, right_root = right_root, left_root
+        left_members, right_members = right_members, left_members
+
+    moved_member_count = len(right_members)
+    parent[right_root] = left_root
+    left_members.update(component_members.pop(right_root))
+    if component_snapshot_ids is not None:
+        component_snapshot_ids[left_root].update(
+            component_snapshot_ids.pop(right_root)
+        )
+    return left_root, moved_member_count
+
+
+
 def _get(item, key, default=None):
     """Read a field from either an AniList dict or a sqlite3.Row."""
     if hasattr(item, "get"):
@@ -944,8 +966,9 @@ def _group_discovered(results, discovered):
         ):
             return False
 
-        parent[right_root] = left_root
-        left_members.update(component_members.pop(right_root))
+        # Keep the larger component as the root. Component exclusions were
+        # checked above and are symmetric, so this only changes merge cost.
+        _merge_component_roots(parent, component_members, left_root, right_root)
         return True
 
     # Explicit manual links are an override: when the user links two works,
@@ -1523,9 +1546,11 @@ def get_library_series(rows=None):
         ):
             return False
 
-        parent[right_root] = left_root
-        left_members.update(component_members.pop(right_root))
-        left_snapshots.update(component_snapshot_ids.pop(right_root))
+        # Snapshot compatibility and exclusion checks are symmetric. Merge the
+        # smaller component into the larger one to avoid quadratic set copying.
+        _merge_component_roots(
+            parent, component_members, left_root, right_root, component_snapshot_ids
+        )
         return True
 
     row_by_id = {int(row["id"]): row for row in rows}
