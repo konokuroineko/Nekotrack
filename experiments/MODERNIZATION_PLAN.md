@@ -49,6 +49,15 @@ services, not part of the current implementation phase.
 - CI builds the native wheel on Windows and Linux with Python 3.11 and 3.14, runs
   parity tests, and uploads benchmark JSON for native title matching and Python
   recommendation ranking.
+- A code audit found a quadratic TV title-prefix comparison in series grouping.
+  It now uses a prefix index that returns the same matching candidate indices in the
+  same order, preserving exclusion-aware union behavior while avoiding comparisons
+  between unrelated titles. A reference-equivalence test and synthetic benchmark cover it.
+- TMDB and MangaBaka title normalizers now use bounded, 8,192-entry caches to avoid
+  repeating regex and whitespace normalization for aliases reused across candidates.
+- The separate MangaBaka fuzzy-match path also calls the Rust helper for short titles.
+  For right-hand strings of 200+ characters it deliberately stays on difflib, because
+  difflib's default autojunk behavior would otherwise change scores.
 
 ## Measurement plan
 
@@ -58,7 +67,9 @@ first, keep warm-up runs separate, and record median and p95.
 | Workload | Current evidence |
 | --- | --- |
 | Python recommendation ranking | A synthetic before/after benchmark exists; capture actual results from the benchmark output or CI artifact. |
-| Native title similarity | Exact parity is required; capture Python/Rust median, p95 and ratio from CI artifacts. |
+| Native title similarity | Exact parity is required; TMDB and short MangaBaka comparisons use Rust when available. Capture Python/Rust median, p95 and ratio from CI artifacts. |
+| TV title-prefix grouping | Compare the indexed candidate discovery against the original all-pairs reference; capture median/p95 at 100–2,000 synthetic titles. |
+| Repeated title normalization | Bounded cache hit behavior is tested; quantify end-to-end value only in provider-matching workloads. |
 | Full application startup | Not yet measured. |
 | API and TMDB lookup end-to-end latency | Not yet measured. |
 | Library first-content time and widget count | Not yet measured. |
@@ -69,6 +80,34 @@ An isolated microbenchmark is useful but is not an end-to-end performance claim.
 particular, title matching occurs after provider requests and may represent only a
 small fraction of wall-clock time. Keep the Rust pilot only if its benefit justifies
 the extra native build and packaging complexity and real usage shows an improvement.
+
+## Second-pass code audit
+
+The next Python targets were selected by reading the actual current paths rather than
+assuming CPU-bound code should be ported to Rust:
+
+- `series._group_discovered` had a nested loop comparing every TV title key against
+  every other key to find token-prefix relationships. With relation discovery allowed
+  to reach 2,000 nodes, this could scan roughly four million pairs. A prefix index now
+  visits only keys that actually share the qualifying 2+ token prefix. Candidate index
+  lists are sorted back into their original order so the exclusion-aware union calls
+  retain their previous order. Tests compare the indexed candidate lists with a direct
+  reference implementation on deterministic generated inputs.
+- `api._normalize_title` and `api._mangabaka_normalize_title` normalized the same
+  aliases repeatedly while candidates were scored. Their pure string transformation
+  steps now have bounded caches (8,192 entries each).
+- `match_series_for_anilist` had a second Python `SequenceMatcher` path that wasn't
+  using the native helper. Short title pairs now use the already-tested Rust function.
+  To preserve Python's *default* `autojunk=True` semantics exactly, right-hand strings
+  of 200 characters or more deliberately fall back to Python's standard-library matcher.
+- New tests cover exact candidate-order parity, normalization-cache hits, MangaBaka
+  integration, and default-autojunk compatibility. A separate synthetic benchmark
+  compares the prefix index to its former all-pairs algorithm. No UI code changes are
+  included.
+
+The new prefix benchmark is synthetic and isolates title-prefix candidate generation.
+Record its output before claiming a whole-app speedup. For real benefit, next measure
+Home/Search grouping time on the same local library, along with title-enrichment time.
 
 ## Rust acceptance criteria
 
@@ -119,11 +158,12 @@ still need measurement on a user machine.
 
 ### Next validation
 
-The remaining Phase A gate is a local before/after run on the user's Windows PC and
-a packaged executable check that proves the frozen app actually loads the Rust
-module. Benchmark the actual app/library; do not extrapolate whole-app speed from
-synthetic CI numbers. Keep the PR draft and defer QML Phase B until those results
-are reviewed.
+The remaining Phase A gate is a local before/after run on the user's Windows PC,
+including ordinary search and library/work-detail workflows. Verify the source app
+reports the Rust backend as loaded in diagnostics. A packaged executable check is a
+release gate, not a prerequisite for launching the source app or reviewing the current
+benchmarks. Do not extrapolate whole-app speed from synthetic CI numbers. Keep the PR
+draft and defer QML Phase B until those results are reviewed.
 
 ## Phase B entry gate
 
