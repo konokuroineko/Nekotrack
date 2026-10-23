@@ -313,6 +313,51 @@ class BundleOptionTests(unittest.TestCase):
 
 
 
+class RelationBatchFailureIsolationTests(unittest.TestCase):
+    def test_anilist_batch_failure_does_not_fan_out_to_single_item_requests(self):
+        ids = [910001, 910002, 910003, 910004, 910005]
+        calls = []
+
+        def fail_batch(request_ids):
+            calls.append(list(request_ids))
+            raise RuntimeError("AniList temporarily unavailable")
+
+        with (
+            patch.dict(series._relation_cache, {}, clear=True),
+            patch("series.get_media_relations_batch", side_effect=fail_batch),
+        ):
+            result = series._cache_relation_details_batch(ids)
+
+        self.assertEqual(result, {})
+        self.assertEqual(calls, [ids])
+
+    def test_anilist_failure_does_not_block_negative_mangabaka_ids(self):
+        positive_id = 920001
+        local_id = -920001
+        local_details = {
+            "id": local_id, "type": "MANGA", "format": "MANGA",
+            "title": {"english": "Local title"}, "relations": {"edges": []},
+        }
+        calls = []
+
+        def split_provider_fetch(request_ids):
+            calls.append(list(request_ids))
+            if request_ids == [positive_id]:
+                raise RuntimeError("AniList temporarily unavailable")
+            return {local_id: local_details}
+
+        with (
+            patch.dict(series._relation_cache, {}, clear=True),
+            patch("series.get_media_relations_batch", side_effect=split_provider_fetch),
+        ):
+            result = series._cache_relation_details_batch([positive_id, local_id])
+
+        self.assertEqual(calls, [[positive_id], [local_id]])
+        self.assertEqual(result, {local_id: local_details})
+
+
+
+
 
 class AutoBundleActionTests(unittest.TestCase):
     def test_auto_bundle_reuses_library_grouping_and_persists_its_member_snapshot(self):

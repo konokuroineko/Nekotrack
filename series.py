@@ -635,6 +635,7 @@ def _apply_relation_details(item, details):
 
 
 def _cache_relation_details_batch(media_ids):
+    """Fetch uncached relation graphs without fanning out failed provider batches."""
     ids = sorted({int(media_id) for media_id in media_ids if media_id is not None})
     missing = [media_id for media_id in ids if media_id not in _relation_cache]
     if not missing:
@@ -644,43 +645,55 @@ def _cache_relation_details_batch(media_ids):
             if media_id in _relation_cache
         }
 
-    try:
-        fetched = get_media_relations_batch(missing)
-    except Exception:
-        if len(missing) == 1:
-            return {
-                media_id: _relation_cache[media_id]
-                for media_id in ids
-                if media_id in _relation_cache
-            }
+    # Keep the AniList request and local MangaBaka resolutions independent.
+    # A transient AniList failure must not prevent negative-ID entries from
+    # loading, and must not recursively turn one failed request into N requests.
+    provider_groups = (
+        ("anilist", [media_id for media_id in missing if media_id > 0]),
+        ("mangabaka", [media_id for media_id in missing if media_id < 0]),
+    )
+    for provider, group_ids in provider_groups:
+        if not group_ids:
+            continue
+        requested = set(group_ids)
+        try:
+            fetched = get_media_relations_batch(group_ids)
+        except Exception as error:
+            # _discover_related already retries unresolved IDs a bounded number
+            # of times. Keep the batch intact here rather than recursively
+            # issuing one request per member during a shared outage.
+            log_event(
+                "bundling.relation_batch_failed",
+                provider=provider,
+                error_type=type(error).__name__,
+                error=str(error)[:300],
+                requested_count=len(group_ids),
+                requested_ids=group_ids[:50],
+            )
+            continue
+        if not isinstance(fetched, dict):
+            log_event(
+                "bundling.relation_batch_malformed",
+                provider=provider,
+                returned_type=type(fetched).__name__,
+                requested_count=len(group_ids),
+            )
+            continue
 
-        midpoint = max(1, len(missing) // 2)
-        left = _cache_relation_details_batch(missing[:midpoint])
-        right = _cache_relation_details_batch(missing[midpoint:])
-        left.update(right)
-        return {
-            media_id: left[media_id]
-            for media_id in ids
-            if media_id in left
-        }
-
-    for media_id, details in fetched.items():
-        if details is not None:
-            _relation_cache[int(media_id)] = details
-
-    missing_after_fetch = [
-        media_id for media_id in missing if media_id not in _relation_cache
-    ]
-    if missing_after_fetch and len(missing_after_fetch) < len(missing):
-        recovered = _cache_relation_details_batch(missing_after_fetch)
-        for media_id, details in recovered.items():
-            _relation_cache[media_id] = details
+        for raw_id, details in fetched.items():
+            try:
+                media_id = int(raw_id)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if media_id in requested and details is not None:
+                _relation_cache[media_id] = details
 
     return {
         media_id: _relation_cache[media_id]
         for media_id in ids
         if media_id in _relation_cache
     }
+
 
 
 def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_event=None):

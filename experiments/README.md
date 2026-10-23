@@ -220,3 +220,11 @@ Parity and synthetic benchmark coverage compare the old and batched output.
 The staff-pagination batching keeps linked AniList ID lookups limited to negative
 local IDs, as the former UI path did, and has an integration test for load-more
 decisions and resume-page handling.
+
+
+## Relation-discovery failure isolation
+
+Failed AniList relation batches no longer recursively explode into individual requests.
+AniList and negative local MangaBaka IDs are fetched independently, so a shared AniList
+failure does not block local provider results. The existing bounded discovery loop
+controls retries; tests verify request counts and mixed-provider isolation.

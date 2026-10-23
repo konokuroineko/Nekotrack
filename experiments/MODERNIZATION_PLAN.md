@@ -316,3 +316,10 @@ how the former UI path used that metadata. Positive AniList work IDs skip that e
 payload, while all members still share the same page-info/staff-count queries. An
 integration test now confirms one batch call, preserves the "has next page" and
 legacy saved-count rules, and verifies next-page counters only move forward.
+
+
+## Twelfth-pass relation-discovery failure isolation
+
+Search relation discovery previously recursively bisected any failed provider batch until it retried individual IDs. A shared AniList timeout/429/TLS failure could therefore fan one failed batch into many more requests. The cache helper now requests positive AniList IDs and negative local MangaBaka IDs independently, caches any valid returned rows, and logs a compact structured event for a failed group. It leaves transient retrying to the existing bounded discovery loop instead of recursively generating single-item requests.
+
+Regression tests assert one request per failing AniList group and verify that an AniList outage no longer blocks valid negative MangaBaka IDs in the same discovery frontier.
