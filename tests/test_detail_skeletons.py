@@ -67,10 +67,16 @@ class DetailSkeletonTests(unittest.TestCase):
             "format": "TV",
         }
 
-        with (
-            patch("ui.pages.work_detail_page.characters_are_loaded", return_value=False),
-            patch("ui.pages.work_detail_page.get_work", return_value=None),
-            patch("ui.pages.work_detail_page.get_episodes", return_value=[]),
+        with patch(
+            "ui.pages.work_detail_page.get_bundle_detail_readiness",
+            return_value={
+                12345: {
+                    "work_exists": False,
+                    "characters_loaded": False,
+                    "expected_episodes": 0,
+                    "episodes_saved": False,
+                }
+            },
         ):
             self.assertEqual(page._local_detail_ready([12345]), (False, False))
 
