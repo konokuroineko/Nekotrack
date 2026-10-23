@@ -1,10 +1,12 @@
 import os
+import tempfile
 import unittest
 import time
 import threading
 from unittest.mock import patch
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPixmap
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -810,6 +812,39 @@ class DetailSkeletonTests(unittest.TestCase):
         frame.deleteLater()
         page.deleteLater()
         self.app.processEvents()
+
+    def test_episode_artwork_reuses_pre_cropped_pixmap_without_rereading_or_recropping(self):
+        with tempfile.TemporaryDirectory(prefix="nekotrack-artwork-cache-") as directory:
+            image_path = os.path.join(directory, "episode.png")
+            source = QPixmap(640, 360)
+            source.fill(Qt.GlobalColor.red)
+            self.assertTrue(source.save(image_path))
+            EpisodeArtwork._cache.pop(image_path, None)
+
+            first = EpisodeArtwork()
+            second = EpisodeArtwork()
+            try:
+                with patch.object(
+                    EpisodeArtwork, "_cropped", wraps=first._cropped
+                ) as crop:
+                    first.load(image_path)
+                    self.assertEqual(crop.call_count, 1)
+                    first_pixmap = first.pixmap()
+                    self.assertIsNotNone(first_pixmap)
+                    self.assertFalse(first_pixmap.isNull())
+
+                    second.load(image_path)
+                    self.assertEqual(crop.call_count, 1)
+                    second_pixmap = second.pixmap()
+                    self.assertIsNotNone(second_pixmap)
+                    self.assertFalse(second_pixmap.isNull())
+                    self.assertEqual(second_pixmap.size().width(), 220)
+                    self.assertEqual(second_pixmap.size().height(), 124)
+            finally:
+                EpisodeArtwork._cache.pop(image_path, None)
+                first.deleteLater()
+                second.deleteLater()
+                self.app.processEvents()
 
     def test_episode_image_plan_logs_missing_and_stale_local_artwork(self):
         page = WorkDetailPage()

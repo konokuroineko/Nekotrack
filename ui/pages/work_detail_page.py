@@ -944,20 +944,23 @@ class EpisodeArtwork(QLabel):
             self._show_fallback("NO IMAGE")
             return
 
+        # Store the final fixed-size pixmap so recreated episode cards avoid
+        # both another disk read and another smooth scale/crop operation.
+        cached = self._cache.get(url)
+        if cached is not None and not cached.isNull():
+            self.setText("")
+            self.setPixmap(cached)
+            return
+
         local_path = Path(url)
         if local_path.is_file():
             pixmap = QPixmap(str(local_path))
             if not pixmap.isNull():
-                self._cache[url] = pixmap
+                display_pixmap = self._cropped(pixmap)
+                self._cache[url] = display_pixmap
                 self.setText("")
-                self.setPixmap(self._cropped(pixmap))
+                self.setPixmap(display_pixmap)
                 return
-
-        cached = self._cache.get(url)
-        if cached is not None and not cached.isNull():
-            self.setText("")
-            self.setPixmap(self._cropped(cached))
-            return
 
         # Remote episode URLs are intentionally never fetched by the widget.
         # The background episode-image cache worker owns all TMDB downloads.
