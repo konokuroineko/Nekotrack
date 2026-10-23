@@ -11,6 +11,7 @@ from pathlib import Path
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
 
 
 def main() -> int:
@@ -19,6 +20,10 @@ def main() -> int:
     if not main_qml.is_file():
         print(f"QML preview entry point was not found: {main_qml}", file=sys.stderr)
         return 2
+
+    # The prototype customizes Control backgrounds/content items. Select a
+    # style that supports those overrides before constructing QGuiApplication.
+    QQuickStyle.setStyle("Basic")
 
     app = QGuiApplication(sys.argv)
     app.setApplicationName("NekoTrack QML Preview")
