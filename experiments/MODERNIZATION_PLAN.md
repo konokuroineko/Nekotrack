@@ -363,3 +363,18 @@ each checkbox change. The worker now consumes the returned counters directly. It
 progress signal and status/log fields remain unchanged; the full-row read is removed.
 A UI-worker regression test verifies the emitted counters and asserts `get_episodes`
 is not called.
+
+
+## Sixteenth-pass episode-thumbnail path writes
+
+Episode image downloads already ran on a worker, but persisting each cached path opened
+a new SQLite connection and committed a transaction per episode. Added
+`save_episode_thumbnail_paths`, which validates path values, checks target episode rows,
+then updates them on one connection/transaction. The image worker flushes at most 12
+downloaded paths per batch and flushes pending successes even if cancellation stops the
+queue part-way through. Download errors remain per-episode failures; a write failure
+marks only that persistence batch failed so the existing retry mechanism can recover.
+
+Tests cover multi-batch completion, cancellation flush, missing episode rows and final
+path values. A synthetic benchmark compares old per-episode writes with batched writes,
+reporting connection reduction and median/p95 timing while excluding network time.

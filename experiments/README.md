@@ -254,3 +254,13 @@ Episode checkbox changes now use the watched/total counters returned by the data
 write transaction rather than opening another connection and loading all episode rows
 just to recalculate those same counters. A worker test asserts the duplicate read stays
 removed.
+
+
+## Batched episode-thumbnail path writes
+
+The background image-cache worker now persists cached local paths in batches of up to
+12 instead of opening a SQLite connection and committing once per image. It flushes
+already-downloaded images when cancellation stops the queue. Regression tests cover
+normal batches, partial cancellation, invalid/missing episode rows and completion
+signals. Run `experiments/benchmark_episode_thumbnail_writes.py` to compare legacy
+per-image writes with batched SQLite-only persistence on synthetic data.
