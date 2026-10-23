@@ -1,3 +1,4 @@
+import random
 import unittest
 from unittest.mock import patch
 
@@ -15,6 +16,58 @@ def media(media_id, title, fmt="TV", media_type="ANIME", relations=None):
 
 def edge(relation_type, node):
     return {"relationType": relation_type, "node": node}
+
+
+class SeriesPrefixIndexTests(unittest.TestCase):
+    @staticmethod
+    def _reference_indices(keys):
+        token_lists = [tuple(str(key or "").split()) for key in keys]
+        result = []
+        for tokens in token_lists:
+            matches = []
+            if len(tokens) >= 2:
+                for other_index, other_tokens in enumerate(token_lists):
+                    if len(other_tokens) < 2:
+                        continue
+                    shorter, longer = (
+                        (tokens, other_tokens)
+                        if len(tokens) <= len(other_tokens)
+                        else (other_tokens, tokens)
+                    )
+                    if longer[:len(shorter)] == shorter:
+                        matches.append(other_index)
+            result.append(matches)
+        return token_lists, result
+
+    def test_index_matches_original_all_pairs_logic_and_order(self):
+        keys = [
+            "", "solo", "echo series", "echo series season 2",
+            "echo series season 2 part 2", "echo series ova",
+            "unrelated title", "unrelated title", "東京 物語",
+        ]
+        rng = random.Random(20261023)
+        roots = ["north wind", "blue archive", "one piece", "monogatari", "neko track"]
+        suffixes = ["", "season two", "season two part three", "ova", "arc zero"]
+        for index in range(250):
+            root = rng.choice(roots)
+            suffix = rng.choice(suffixes)
+            keys.append(" ".join(part for part in (root, suffix, f"variant{index}") if part))
+            if index % 6 == 0:
+                keys.append(root + " " + suffix if suffix else root)
+
+        expected_tokens, expected_indices = self._reference_indices(keys)
+        actual_tokens, actual_indices = series._prefix_related_tv_candidate_indices(keys)
+
+        self.assertEqual(actual_tokens, expected_tokens)
+        self.assertEqual(actual_indices, expected_indices)
+
+    def test_short_or_empty_titles_have_no_prefix_candidates(self):
+        keys = ["", "solo", "another", "solo season 2", "solo season 3"]
+        tokens, matches = series._prefix_related_tv_candidate_indices(keys)
+        self.assertEqual(tokens[0:3], [(), ("solo",), ("another",)])
+        self.assertEqual(matches[0:3], [[], [], []])
+        self.assertEqual(matches[3], [3])
+        self.assertEqual(matches[4], [4])
 
 
 class BundleOptionTests(unittest.TestCase):
