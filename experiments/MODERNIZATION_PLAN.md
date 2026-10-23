@@ -125,9 +125,12 @@ Home/Search grouping time on the same local library, along with title-enrichment
 
 ## CI benchmark results (2026-10-23)
 
-The Phase A CI matrix passed on Windows and Linux with Python 3.11 and 3.14.
-The uploaded synthetic benchmark artifacts reported exact ranking / similarity
-output parity.
+The Phase A CI matrix passed on Windows and Linux with Python 3.11 and 3.14 on
+the earlier ranking/native-similarity commit, and the uploaded synthetic benchmark
+artifacts reported exact ranking/similarity output parity. The current second-pass
+audit adds indexed series-prefix matching, normalization caches and the short-title
+MangaBaka Rust path; those expanded tests and the new prefix benchmark are still
+pending CI on the latest branch head.
 
 ### Optimized Python recommendations
 
