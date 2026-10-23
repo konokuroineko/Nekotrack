@@ -5,13 +5,13 @@ import QtQuick.Layouts 1.15
 ItemDelegate {
     id: control
 
-    required property string titleText
+    required property string title
     required property string mediaFormat
     required property string descriptionText
     required property string progressText
     property string accentGlyph: "N"
 
-    Accessible.name: qsTr("%1, %2. %3").arg(titleText).arg(mediaFormat).arg(progressText)
+    Accessible.name: qsTr("%1, %2. %3").arg(title).arg(mediaFormat).arg(progressText)
     Accessible.description: descriptionText
     focusPolicy: Qt.StrongFocus
     hoverEnabled: true
@@ -36,7 +36,7 @@ ItemDelegate {
                 color: "#D9CCFF"
                 font.pixelSize: 25
                 font.bold: true
-                accessibleName: qsTr("Artwork placeholder")
+                Accessible.name: qsTr("Artwork placeholder")
             }
         }
 
@@ -47,7 +47,7 @@ ItemDelegate {
 
             Text {
                 Layout.fillWidth: true
-                text: control.titleText
+                text: control.title
                 color: "#F4F1FF"
                 font.pixelSize: 16
                 font.weight: Font.DemiBold
