@@ -1878,6 +1878,82 @@ def save_episode_thumbnail_path(work_id, episode_number, thumbnail_path):
         connection.close()
 
 
+
+def save_episode_thumbnail_paths(work_id, episode_paths):
+    """Persist multiple cached episode paths using one connection and transaction.
+
+    Returns the episode numbers whose rows existed and were updated. Duplicate
+    episode numbers use the last valid path supplied.
+    """
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return set()
+    if safe_work_id <= 0:
+        return set()
+    try:
+        values = list(episode_paths or [])
+    except TypeError:
+        return set()
+
+    normalized = {}
+    for entry in values:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+            continue
+        raw_number, raw_path = entry
+        number = _safe_optional_integer(
+            raw_number, 1, _MAX_TRACKED_EPISODE_NUMBER
+        )
+        if number is None or isinstance(raw_number, bool):
+            continue
+        if not isinstance(raw_path, (str, Path)):
+            continue
+        path = str(raw_path).strip()
+        if not path or len(path) > 4096:
+            continue
+        normalized[number] = path
+
+    if not normalized:
+        return set()
+
+    connection = get_connection()
+    try:
+        existing = set()
+        numbers = sorted(normalized)
+        for chunk in _bundle_id_chunks(numbers):
+            placeholders = ",".join("?" for _ in chunk)
+            existing.update(
+                int(row["episode_number"])
+                for row in connection.execute(
+                    f"""
+                    SELECT episode_number
+                    FROM episodes
+                    WHERE work_id = ? AND episode_number IN ({placeholders})
+                    """,
+                    [safe_work_id, *chunk],
+                ).fetchall()
+            )
+
+        if existing:
+            connection.executemany(
+                """
+                UPDATE episodes
+                SET thumbnail_url = ?
+                WHERE work_id = ? AND episode_number = ?
+                """,
+                (
+                    (normalized[number], safe_work_id, number)
+                    for number in sorted(existing)
+                ),
+            )
+        connection.commit()
+        return existing
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
 def set_episode_watched(work_id, episode_number, watched):
     """Set one episode's watched state after validating the local IDs."""
     try:
