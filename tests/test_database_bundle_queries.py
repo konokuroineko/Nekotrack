@@ -766,6 +766,43 @@ class BundleDetailBatchingTests(unittest.TestCase):
         }
         self.assertEqual(actual, expected)
 
+    def test_provider_metadata_batch_reads_multiple_providers_with_one_connection(self):
+        con = database.get_connection()
+        try:
+            con.executemany(
+                """
+                INSERT INTO work_provider_metadata
+                    (work_id, provider, provider_id, payload_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (1, "mangabaka", "101", json.dumps({"title": "First"})),
+                    (400, "mangabaka_volumes", None, json.dumps([{"number": 1}])),
+                    (401, "mangabaka_news", None, json.dumps([{"title": "News"}])),
+                    (1200, "unrequested", None, json.dumps({"skip": True})),
+                    (500, "mangabaka", None, "{broken json"),
+                ],
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        with patch.object(
+            database, "get_connection", wraps=database.get_connection
+        ) as factory:
+            result = database.get_provider_metadata_batch(
+                list(range(1, 1201)),
+                ["MangaBaka", "mangabaka_volumes", "mangabaka_news"],
+            )
+
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(result[1]["mangabaka"], {"title": "First"})
+        self.assertEqual(result[400]["mangabaka_volumes"], [{"number": 1}])
+        self.assertEqual(result[401]["mangabaka_news"], [{"title": "News"}])
+        self.assertNotIn("unrequested", result[1200])
+        self.assertNotIn("mangabaka", result[500])
+        self.assertEqual(len(result), 1200)
+
     def test_empty_and_invalid_relation_inputs_keep_existing_contract(self):
         self.assertEqual(database.get_bundle_characters(None), [])
         self.assertEqual(database.get_bundle_staff(None), [])
