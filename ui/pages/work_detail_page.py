@@ -1517,6 +1517,9 @@ class WorkDetailPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self.scroll_area)
+        # Apply styles while the page is still empty; repeating setStyleSheet on
+        # every detail open forces Qt to repolish the entire attached widget tree.
+        self._apply_detail_styles()
         self._ui_stall_watchdog_thread = threading.Thread(
             target=self._ui_stall_watchdog_loop,
             name="NekoTrack-UI-Stall-Watchdog",
@@ -2281,7 +2284,7 @@ class WorkDetailPage(QWidget):
 
     def _apply_detail_styles(self):
         checkbox_checkmark = _CHECKBOX_CHECKMARK.replace('"', '\\"')
-        self.setStyleSheet(f"""
+        stylesheet = f"""
             QPushButton#back {{ background: transparent; border: 0; color: {COLORS['secondary']}; padding: 5px 0; font-weight: 750; }}
             QPushButton#back:hover {{ color: {COLORS['primary']}; }}
             QFrame#hero {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 22px; }}
@@ -2387,7 +2390,9 @@ class WorkDetailPage(QWidget):
             QPushButton#deleteBundle:hover {{ background:{COLORS['danger']}; }}
             QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {COLORS['border_hover']}; background: {surface_rgba('background_alt')}; }}
             QCheckBox::indicator:checked {{ background: {COLORS['accent']}; border-color: {COLORS['accent']}; image: url("{checkbox_checkmark}"); }}
-        """)
+        """
+        if self.styleSheet() != stylesheet:
+            self.setStyleSheet(stylesheet)
 
     def refresh_theme(self):
         self._apply_detail_styles()

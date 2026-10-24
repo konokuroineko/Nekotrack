@@ -598,3 +598,9 @@ test no longer mocks the obsolete single-path writer that the worker no longer c
 - Work Details now records when a newly opened view becomes fully ready, including elapsed time and whether the view came from the in-process detail cache. The existing shell timing remains separate, so a fast skeleton attachment cannot be mistaken for a fully loaded detail view.
 - The three-view detail-widget cache remains intentionally process-local; Qt widget trees are not persisted across launches. The new measurements will help distinguish this expected cold-cache rebuild from slow provider or database work.
 - This is profiling instrumentation only. It does not change loading order, persistence, cache policy or provider behavior, and it makes no whole-app speed claim. Validate the timings on the user's Windows source-mode run before selecting the next startup/detail optimization.
+
+## Thirty-sixth-pass Work Details stylesheet reuse
+
+The Windows source-mode diagnostics showed complete Re:Zero detail readiness at about 543–696 ms on a cold open and about 80 ms on a cached repeat. Episode snapshot reads took about 2 ms and the section data workers were in the low single-digit millisecond range; GUI-side widget rendering remained the larger measured part of the detail path. The page also reapplied its large stylesheet on every cold or cached open.
+
+Work Details now applies its initial stylesheet while the page has no populated detail tree. Repeated open calls still check whether the generated stylesheet differs, but Qt's expensive `setStyleSheet`/child-repolish path is skipped when the theme has not changed. The existing theme-refresh path still updates styles when colors change. This is a targeted UI optimization; the next Windows diagnostic run should confirm the real-world gain.
