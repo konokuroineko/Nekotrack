@@ -812,7 +812,7 @@ class BundleDetailBatchingTests(unittest.TestCase):
             )
             connection.executemany(
                 "INSERT INTO people (id, name, image_url, image_path) VALUES (?, ?, NULL, NULL)",
-                [(101, "Person One"), (102, "Person Two")],
+                [(990001, "Person One"), (990002, "Person Two")],
             )
             connection.executemany(
                 "INSERT INTO work_characters (work_id, character_id, role) VALUES (?, ?, ?)",
@@ -832,8 +832,8 @@ class BundleDetailBatchingTests(unittest.TestCase):
                     (work_id, character_id, person_id, language)
                     for work_id in range(1, 402)
                     for character_id, person_id, language in (
-                        (1, 101, "Japanese"),
-                        (2, 102, "English"),
+                        (1, 990001, "Japanese"),
+                        (2, 990002, "English"),
                     )
                 ],
             )
@@ -842,7 +842,7 @@ class BundleDetailBatchingTests(unittest.TestCase):
                 [
                     (work_id, person_id, role)
                     for work_id in range(1, 402)
-                    for person_id, role in ((101, "Director"), (102, "Script"))
+                    for person_id, role in ((990001, "Director"), (990002, "Script"))
                 ],
             )
             connection.commit()
@@ -863,17 +863,17 @@ class BundleDetailBatchingTests(unittest.TestCase):
             ],
             "voice_actors": [
                 {
-                    "id": 101, "language": "Japanese",
+                    "id": 990001, "language": "Japanese",
                     "character_id": 1, "character_role": "MAIN",
                 },
                 {
-                    "id": 102, "language": "English",
+                    "id": 990002, "language": "English",
                     "character_id": 2, "character_role": "SUPPORTING",
                 },
             ],
             "staff": [
-                {"id": 101, "role": "Director"},
-                {"id": 102, "role": "Script"},
+                {"id": 990001, "role": "Director"},
+                {"id": 990002, "role": "Script"},
             ],
         }
         self.assertEqual(result[1], expected)
