@@ -87,6 +87,58 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
+    def test_prepare_detail_state_batches_mangabaka_metadata_for_bundle(self):
+        page = WorkDetailPage()
+        work = {
+            "id": 101,
+            "type": "MANGA",
+            "format": "NOVEL",
+            "_series_members": [
+                {"id": 101},
+                {"id": 102},
+            ],
+        }
+        values = {
+            101: {
+                "mangabaka": {"id": 1001, "title": "First member"},
+                "mangabaka_volumes": [{"number": 1, "title": "Volume One"}],
+                "mangabaka_news": [{"title": "Latest news"}],
+            },
+            102: {
+                "mangabaka": {"id": 1002, "title": "Second member"},
+                "mangabaka_volumes": [{"number": 2, "title": "Volume Two"}],
+            },
+        }
+
+        with (
+            patch.object(page, "_is_reading_media", return_value=True),
+            patch(
+                "ui.pages.work_detail_page.get_provider_metadata_batch",
+                return_value=values,
+            ) as batch,
+            patch("ui.pages.work_detail_page.get_provider_metadata") as per_work,
+        ):
+            detail_ids = page._prepare_detail_state(work)
+
+        self.assertEqual(detail_ids, [101, 102])
+        batch.assert_called_once_with(
+            [101, 102],
+            ("mangabaka", "mangabaka_volumes", "mangabaka_news"),
+        )
+        per_work.assert_not_called()
+        self.assertEqual(
+            page.mangabaka_metadata,
+            {"id": 1001, "title": "First member"},
+        )
+        self.assertEqual(
+            page.mangabaka_volume_records,
+            [{"number": 1, "title": "Volume One"}],
+        )
+        self.assertEqual(page.mangabaka_news, [{"title": "Latest news"}])
+
+        page.deleteLater()
+        self.app.processEvents()
+
     def test_staff_page_requests_use_one_batched_read_and_preserve_pagination_rules(self):
         page = WorkDetailPage()
         page._staff_next_pages[123] = 4
