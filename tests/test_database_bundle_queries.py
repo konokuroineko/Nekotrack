@@ -227,7 +227,8 @@ class BundleDetailBatchingTests(unittest.TestCase):
                     work_id INTEGER NOT NULL,
                     episode_number INTEGER NOT NULL,
                     title TEXT, description TEXT, air_date TEXT,
-                    thumbnail_url TEXT, watched INTEGER NOT NULL DEFAULT 0
+                    thumbnail_url TEXT, watched INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE (work_id, episode_number)
                 );
                 CREATE TABLE user_library (
                     work_id INTEGER PRIMARY KEY, status TEXT,
