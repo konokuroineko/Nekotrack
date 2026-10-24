@@ -547,4 +547,6 @@ Work Details now uses the batch result while preserving bundle-member priority, 
 primary work, provider-specific payload types and a per-provider fallback if the combined
 read fails. Temporary-database coverage checks 1,200 work IDs, several provider names,
 malformed JSON filtering and one connection; a Qt integration test asserts the detail setup
-uses the batch reader and performs no per-work metadata reads on the normal path.
+uses the batch reader and performs no per-work metadata reads on the normal path. The existing
+bundle-detail benchmark now compares selected work/payload parity and times the old versus
+batched metadata lookup as part of its full-run connection-count report.
