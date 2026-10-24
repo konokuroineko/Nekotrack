@@ -63,6 +63,45 @@ class TMDBEpisodeMatchingTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
         self.assertIn("first_air_date_year", request.call_args_list[0].args[1])
 
+    def test_tv_search_skips_duplicate_exact_title_queries(self):
+        payload = {
+            "results": [{
+                "id": 909,
+                "name": "Example Show",
+                "original_name": "Example Show",
+                "first_air_date": "2020-01-05",
+                "origin_country": ["JP"],
+                "popularity": 1,
+            }]
+        }
+        with patch("api._tmdb_get", return_value=payload) as request:
+            result = api._find_tmdb_series(
+                ["Example Show", "Example Show", " Example Show "],
+                datetime.date(2020, 1, 5),
+            )
+
+        self.assertEqual(result["id"], 909)
+        self.assertEqual(request.call_count, 1)
+
+    def test_movie_search_skips_duplicate_exact_title_queries(self):
+        payload = {
+            "results": [{
+                "id": 910,
+                "title": "Example OVA",
+                "original_title": "Example OVA",
+                "release_date": "2020-01-05",
+                "popularity": 1,
+            }]
+        }
+        with patch("api._tmdb_get", return_value=payload) as request:
+            result = api._find_tmdb_movie(
+                ["Example OVA", "Example OVA", " Example OVA "],
+                datetime.date(2020, 1, 5),
+            )
+
+        self.assertEqual(result["id"], 910)
+        self.assertEqual(request.call_count, 1)
+
     def test_tv_search_refuses_to_choose_a_popular_but_unrelated_series(self):
         unrelated = {
             "results": [{
@@ -387,6 +426,94 @@ class TMDBEpisodeMatchingTests(unittest.TestCase):
                     connection.close()
                 self.assertEqual(library["progress_episodes"], 2)
                 self.assertEqual(library["status"], "Watching")
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_bulk_progress_uses_bounded_set_updates_and_one_count_query(self):
+        previous_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as directory:
+            os.chdir(directory)
+            try:
+                database.initialize_database()
+                work_id = 924
+                database.save_anime({
+                    "id": work_id,
+                    "type": "ANIME",
+                    "format": "TV",
+                    "episodes": 600,
+                    "title": {
+                        "english": "Progress Benchmark",
+                        "romaji": "Progress Benchmark",
+                        "native": None,
+                    },
+                    "coverImage": {"large": None},
+                    "startDate": {"year": 2020, "month": 1, "day": 1},
+                })
+                database.add_to_library(work_id)
+                database.save_episodes(work_id, [
+                    {"episodeNumber": number, "title": f"Episode {number}"}
+                    for number in range(1, 601)
+                ])
+
+                statements = []
+                real_get_connection = database.get_connection
+
+                def traced_connection():
+                    connection = real_get_connection()
+                    connection.set_trace_callback(statements.append)
+                    return connection
+
+                with patch.object(
+                    database, "get_connection", side_effect=traced_connection
+                ):
+                    self.assertEqual(
+                        database.set_episode_progress(work_id, range(1, 451)),
+                        (450, 600),
+                    )
+
+                episode_updates = [
+                    sql for sql in statements
+                    if sql.lstrip().upper().startswith("UPDATE EPISODES")
+                ]
+                keep_set_inserts = [
+                    sql for sql in statements
+                    if sql.lstrip().upper().startswith(
+                        "INSERT OR IGNORE INTO _EPISODE_PROGRESS_WATCHED_NUMBERS"
+                    )
+                ]
+                episode_count_reads = [
+                    sql for sql in statements
+                    if sql.lstrip().upper().startswith("SELECT COUNT(*)")
+                    and "FROM EPISODES" in sql.upper()
+                ]
+                self.assertEqual(len(episode_updates), 1)
+                self.assertEqual(len(keep_set_inserts), 2)
+                self.assertEqual(len(episode_count_reads), 1)
+
+                rows = database.get_episodes(work_id)
+                self.assertEqual(len(rows), 600)
+                self.assertEqual(sum(int(row["watched"]) for row in rows), 450)
+                self.assertEqual(int(rows[449]["watched"]), 1)
+                self.assertEqual(int(rows[450]["watched"]), 0)
+
+                statements.clear()
+                with patch.object(
+                    database, "get_connection", side_effect=traced_connection
+                ):
+                    self.assertEqual(
+                        database.set_episode_watched(work_id, 451, True),
+                        (451, 600),
+                    )
+                episode_count_reads = [
+                    sql for sql in statements
+                    if sql.lstrip().upper().startswith("SELECT COUNT(*)")
+                    and "FROM EPISODES" in sql.upper()
+                ]
+                self.assertEqual(len(episode_count_reads), 1)
+                self.assertFalse(any(
+                    "SELECT 1 FROM USER_LIBRARY" in sql.upper()
+                    for sql in statements
+                ))
             finally:
                 os.chdir(previous_cwd)
 

@@ -142,9 +142,13 @@ class LibrarySeriesSnapshotTests(unittest.TestCase):
         ]
         self._save_group(records, 1)
         self.assertTrue(database.add_bundle_exclusion(1, 2))
-        with patch("series.get", side_effect=lambda key: key == "bundle_include_novels"):
+        with (
+            patch("series.get", side_effect=lambda key: key == "bundle_include_novels"),
+            patch("series.get_library_bundle_grouping_state", wraps=database.get_library_bundle_grouping_state) as grouping_state,
+        ):
             groups = series.get_library_series()
 
+        grouping_state.assert_called_once_with({1, 2, 3})
         member_sets = {
             frozenset(int(member["id"]) for member in group["_series_members"])
             for group in groups

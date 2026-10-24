@@ -154,6 +154,26 @@ def initialize_database():
             FOREIGN KEY (work_id) REFERENCES works(id)
         )
     """)
+
+    # Reverse-edge indexes support Library grouping's OR predicates. The
+    # primary keys already index source/work_a/bundle_id; these cover the
+    # opposite endpoints without scanning every saved relation/link.
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_work_relations_target_type_source "
+        "ON work_relations(target_id, relation_type, source_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_manual_bundle_links_work_b "
+        "ON manual_bundle_links(work_b, work_a)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bundle_exclusions_work_b "
+        "ON bundle_exclusions(work_b, work_a)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_automatic_bundle_memberships_work_id "
+        "ON automatic_bundle_memberships(work_id, bundle_id)"
+    )
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS bundle_overrides (
             bundle_anchor_id INTEGER PRIMARY KEY,
@@ -226,6 +246,14 @@ def initialize_database():
             FOREIGN KEY (person_id) REFERENCES people(id)
         )
     """)
+
+    # Cleanup and grouped-cast queries look up a character/person pair across
+    # adaptations; the table's primary key starts with work_id and cannot serve
+    # that reverse lookup efficiently.
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_work_character_voice_actors_character_person "
+        "ON work_character_voice_actors(character_id, person_id, work_id)"
+    )
     if not voice_actor_scope_existed:
         # The old cache stored voices globally by character, which lost the
         # work-specific distinction between adaptations. Seed the new table
@@ -609,79 +637,87 @@ def save_characters(work_id, characters):
 
     connection = get_connection()
 
-    def remove_person_if_orphaned(person_id):
-        references = connection.execute(
-            """
-            SELECT 1 FROM character_voice_actors WHERE person_id = ?
-            UNION ALL
-            SELECT 1 FROM work_staff WHERE person_id = ?
-            LIMIT 1
-            """,
-            (person_id, person_id),
-        ).fetchone()
-        if references is None:
-            connection.execute("DELETE FROM people WHERE id = ?", (person_id,))
-
     try:
+        character_rows = [
+            (character["id"], character["name"], character["image_url"])
+            for character in normalized
+        ]
+        work_character_rows = [
+            (work_id, character["id"], character["role"])
+            for character in normalized
+        ]
+        actor_people_rows = []
+        global_actor_rows = []
+        scoped_actor_rows = []
         for character in normalized:
-            connection.execute(
-                """
-                INSERT INTO characters (id, name, image_url) VALUES (?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    image_path = CASE
-                        WHEN excluded.image_url IS NOT NULL
-                         AND excluded.image_url IS NOT characters.image_url
-                        THEN NULL ELSE characters.image_path END,
-                    image_url = COALESCE(excluded.image_url, characters.image_url)
-                """,
-                (character["id"], character["name"], character["image_url"]),
-            )
-            connection.execute(
-                """
-                INSERT INTO work_characters (work_id, character_id, role)
-                VALUES (?, ?, ?)
-                ON CONFLICT(work_id, character_id) DO UPDATE SET role = excluded.role
-                """,
-                (work_id, character["id"], character["role"]),
-            )
             for actor in character["actors"]:
-                connection.execute(
-                    """
-                    INSERT INTO people (id, name, image_url) VALUES (?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        name = excluded.name,
-                        image_path = CASE
-                            WHEN excluded.image_url IS NOT NULL
-                             AND excluded.image_url IS NOT people.image_url
-                            THEN NULL ELSE people.image_path END,
-                        image_url = COALESCE(excluded.image_url, people.image_url)
-                    """,
-                    (actor["id"], actor["name"], actor["image_url"]),
+                actor_people_rows.append(
+                    (actor["id"], actor["name"], actor["image_url"])
                 )
-                # Keep the legacy global association table as a union for
-                # migrations/cleanup, but read credits from this work-scoped row.
-                connection.execute(
-                    """
-                    INSERT INTO character_voice_actors (character_id, person_id, language)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(character_id, person_id) DO UPDATE SET
-                        language = COALESCE(excluded.language, character_voice_actors.language)
-                    """,
-                    (character["id"], actor["id"], actor["language"]),
+                global_actor_rows.append(
+                    (character["id"], actor["id"], actor["language"])
                 )
-                connection.execute(
-                    """
-                    INSERT INTO work_character_voice_actors
-                        (work_id, character_id, person_id, language)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(work_id, character_id, person_id) DO UPDATE SET
-                        language = COALESCE(
-                            excluded.language, work_character_voice_actors.language
-                        )
-                    """,
-                    (work_id, character["id"], actor["id"], actor["language"]),
+                scoped_actor_rows.append(
+                    (work_id, character["id"], actor["id"], actor["language"])
                 )
+
+        connection.executemany(
+            """
+            INSERT INTO characters (id, name, image_url) VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                image_path = CASE
+                    WHEN excluded.image_url IS NOT NULL
+                     AND excluded.image_url IS NOT characters.image_url
+                    THEN NULL ELSE characters.image_path END,
+                image_url = COALESCE(excluded.image_url, characters.image_url)
+            """,
+            character_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO work_characters (work_id, character_id, role)
+            VALUES (?, ?, ?)
+            ON CONFLICT(work_id, character_id) DO UPDATE SET role = excluded.role
+            """,
+            work_character_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO people (id, name, image_url) VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                image_path = CASE
+                    WHEN excluded.image_url IS NOT NULL
+                     AND excluded.image_url IS NOT people.image_url
+                    THEN NULL ELSE people.image_path END,
+                image_url = COALESCE(excluded.image_url, people.image_url)
+            """,
+            actor_people_rows,
+        )
+        # Keep the legacy global association table as a union for migrations
+        # and cleanup, while reading credits from the work-scoped rows.
+        connection.executemany(
+            """
+            INSERT INTO character_voice_actors (character_id, person_id, language)
+            VALUES (?, ?, ?)
+            ON CONFLICT(character_id, person_id) DO UPDATE SET
+                language = COALESCE(excluded.language, character_voice_actors.language)
+            """,
+            global_actor_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO work_character_voice_actors
+                (work_id, character_id, person_id, language)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(work_id, character_id, person_id) DO UPDATE SET
+                language = COALESCE(
+                    excluded.language, work_character_voice_actors.language
+                )
+            """,
+            scoped_actor_rows,
+        )
 
         if snapshot_valid:
             incoming_character_ids = {character["id"] for character in normalized}
@@ -689,101 +725,196 @@ def save_characters(work_id, characters):
                 "SELECT character_id FROM work_characters WHERE work_id = ?",
                 (work_id,),
             ).fetchall()
-            for row in existing_character_rows:
-                old_character_id = row["character_id"]
-                if old_character_id not in incoming_character_ids:
-                    connection.execute(
-                        "DELETE FROM work_characters WHERE work_id = ? AND character_id = ?",
-                        (work_id, old_character_id),
-                    )
-                    old_scoped_actors = connection.execute(
-                        """
-                        SELECT person_id FROM work_character_voice_actors
-                        WHERE work_id = ? AND character_id = ?
-                        """,
-                        (work_id, old_character_id),
-                    ).fetchall()
-                    connection.execute(
-                        "DELETE FROM work_character_voice_actors WHERE work_id = ? AND character_id = ?",
-                        (work_id, old_character_id),
-                    )
-                    for old_actor_row in old_scoped_actors:
-                        still_assigned = connection.execute(
-                            """
-                            SELECT 1 FROM work_character_voice_actors
-                            WHERE character_id = ? AND person_id = ? LIMIT 1
-                            """,
-                            (old_character_id, old_actor_row["person_id"]),
-                        ).fetchone()
-                        if still_assigned is None:
-                            connection.execute(
-                                """
-                                DELETE FROM character_voice_actors
-                                WHERE character_id = ? AND person_id = ?
-                                """,
-                                (old_character_id, old_actor_row["person_id"]),
-                            )
-                            remove_person_if_orphaned(old_actor_row["person_id"])
-                    still_linked = connection.execute(
-                        "SELECT 1 FROM work_characters WHERE character_id = ? LIMIT 1",
-                        (old_character_id,),
-                    ).fetchone()
-                    if still_linked is None:
-                        # Character and voice-actor rows are globally keyed.
-                        # Remove them only after the character is no longer used
-                        # by any work, preserving shared cast entities.
-                        old_actor_rows = connection.execute(
-                            "SELECT person_id FROM character_voice_actors WHERE character_id = ?",
-                            (old_character_id,),
-                        ).fetchall()
-                        connection.execute(
-                            "DELETE FROM character_voice_actors WHERE character_id = ?",
-                            (old_character_id,),
-                        )
-                        for old_actor_row in old_actor_rows:
-                            remove_person_if_orphaned(old_actor_row["person_id"])
-                        connection.execute(
-                            "DELETE FROM characters WHERE id = ?",
-                            (old_character_id,),
-                        )
+            stale_character_ids = sorted({
+                int(row["character_id"])
+                for row in existing_character_rows
+                if int(row["character_id"]) not in incoming_character_ids
+            })
 
-            # A complete snapshot can remove actors from this work, but it must
-            # not erase the same character's valid actor credits in other works.
-            for character in normalized:
-                desired_actor_ids = {actor["id"] for actor in character["actors"]}
-                existing_actor_rows = connection.execute(
+            # The previous cleanup repeatedly queried each old character/actor
+            # pair. Snapshot refresh is a set reconciliation: collect the old
+            # work-scoped edges once, then let temporary tables drive the
+            # cleanup joins without constructing an unbounded IN list.
+            existing_scoped_actor_rows = connection.execute(
+                """
+                SELECT character_id, person_id
+                FROM work_character_voice_actors
+                WHERE work_id = ?
+                """,
+                (work_id,),
+            ).fetchall()
+            desired_actor_ids_by_character = {
+                character["id"]: {actor["id"] for actor in character["actors"]}
+                for character in normalized
+            }
+            removed_actor_pairs = sorted({
+                (int(row["character_id"]), int(row["person_id"]))
+                for row in existing_scoped_actor_rows
+                if (
+                    int(row["character_id"]) not in incoming_character_ids
+                    or int(row["person_id"]) not in desired_actor_ids_by_character.get(
+                        int(row["character_id"]), set()
+                    )
+                )
+            })
+
+            if stale_character_ids or removed_actor_pairs:
+                connection.execute(
                     """
-                    SELECT person_id FROM work_character_voice_actors
-                    WHERE work_id = ? AND character_id = ?
+                    CREATE TEMP TABLE _nekotrack_stale_character_ids (
+                        character_id INTEGER PRIMARY KEY
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TEMP TABLE _nekotrack_removed_character_actor_pairs (
+                        character_id INTEGER NOT NULL,
+                        person_id INTEGER NOT NULL,
+                        PRIMARY KEY (character_id, person_id)
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TEMP TABLE _nekotrack_cleanup_people (
+                        person_id INTEGER PRIMARY KEY
+                    )
+                    """
+                )
+                connection.executemany(
+                    "INSERT OR IGNORE INTO _nekotrack_stale_character_ids (character_id) VALUES (?)",
+                    ((character_id,) for character_id in stale_character_ids),
+                )
+                connection.executemany(
+                    """
+                    INSERT OR IGNORE INTO _nekotrack_removed_character_actor_pairs
+                        (character_id, person_id)
+                    VALUES (?, ?)
                     """,
-                    (work_id, character["id"]),
-                ).fetchall()
-                for row in existing_actor_rows:
-                    old_actor_id = row["person_id"]
-                    if old_actor_id not in desired_actor_ids:
-                        connection.execute(
-                            """
-                            DELETE FROM work_character_voice_actors
-                            WHERE work_id = ? AND character_id = ? AND person_id = ?
-                            """,
-                            (work_id, character["id"], old_actor_id),
+                    removed_actor_pairs,
+                )
+
+                # Drop the current work's obsolete character edges first. A
+                # character is globally obsolete only if no other work still
+                # uses it.
+                connection.execute(
+                    """
+                    DELETE FROM work_characters
+                    WHERE work_id = ?
+                      AND character_id IN (
+                          SELECT character_id FROM _nekotrack_stale_character_ids
+                      )
+                    """,
+                    (work_id,),
+                )
+                connection.execute(
+                    """
+                    DELETE FROM work_character_voice_actors
+                    WHERE work_id = ?
+                      AND EXISTS (
+                          SELECT 1
+                          FROM _nekotrack_removed_character_actor_pairs AS removed
+                          WHERE removed.character_id = work_character_voice_actors.character_id
+                            AND removed.person_id = work_character_voice_actors.person_id
+                      )
+                    """,
+                    (work_id,),
+                )
+
+                # Preserve the exact orphan policy of the former cleanup: old
+                # actor IDs are candidates when their last work-scoped edge
+                # disappears, and every global actor for a now-unreferenced
+                # character is also considered.
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO _nekotrack_cleanup_people (person_id)
+                    SELECT removed.person_id
+                    FROM _nekotrack_removed_character_actor_pairs AS removed
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM work_character_voice_actors AS scoped
+                        WHERE scoped.character_id = removed.character_id
+                          AND scoped.person_id = removed.person_id
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO _nekotrack_cleanup_people (person_id)
+                    SELECT DISTINCT cva.person_id
+                    FROM character_voice_actors AS cva
+                    JOIN _nekotrack_stale_character_ids AS stale
+                      ON stale.character_id = cva.character_id
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM work_characters AS wc
+                        WHERE wc.character_id = cva.character_id
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    DELETE FROM character_voice_actors
+                    WHERE (
+                        EXISTS (
+                            SELECT 1
+                            FROM _nekotrack_removed_character_actor_pairs AS removed
+                            WHERE removed.character_id = character_voice_actors.character_id
+                              AND removed.person_id = character_voice_actors.person_id
                         )
-                        still_assigned = connection.execute(
-                            """
-                            SELECT 1 FROM work_character_voice_actors
-                            WHERE character_id = ? AND person_id = ? LIMIT 1
-                            """,
-                            (character["id"], old_actor_id),
-                        ).fetchone()
-                        if still_assigned is None:
-                            connection.execute(
-                                """
-                                DELETE FROM character_voice_actors
-                                WHERE character_id = ? AND person_id = ?
-                                """,
-                                (character["id"], old_actor_id),
-                            )
-                            remove_person_if_orphaned(old_actor_id)
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM work_character_voice_actors AS scoped
+                            WHERE scoped.character_id = character_voice_actors.character_id
+                              AND scoped.person_id = character_voice_actors.person_id
+                        )
+                    )
+                    OR (
+                        EXISTS (
+                            SELECT 1
+                            FROM _nekotrack_stale_character_ids AS stale
+                            WHERE stale.character_id = character_voice_actors.character_id
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM work_characters AS wc
+                            WHERE wc.character_id = character_voice_actors.character_id
+                        )
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    DELETE FROM characters
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM _nekotrack_stale_character_ids AS stale
+                        WHERE stale.character_id = characters.id
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM work_characters AS wc
+                        WHERE wc.character_id = characters.id
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    DELETE FROM people
+                    WHERE id IN (
+                        SELECT person_id FROM _nekotrack_cleanup_people
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM character_voice_actors
+                        WHERE character_voice_actors.person_id = people.id
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM work_staff
+                        WHERE work_staff.person_id = people.id
+                    )
+                    """
+                )
 
             connection.execute(
                 "UPDATE works SET characters_loaded = 1 WHERE id = ?",
@@ -833,27 +964,105 @@ def characters_are_loaded(work_id):
         connection.close()
 
 
+
+def get_bundle_detail_readiness(work_ids):
+    """Read local cache readiness for many bundled works with one connection.
+
+    Results intentionally contain only the facts needed by Work Details' preload
+    path; episode content itself stays in the episode section's dedicated worker.
+    """
+    ids = _validated_work_ids(work_ids)
+    if ids is None or not ids:
+        return {}
+
+    readiness = {
+        work_id: {
+            "work_exists": False,
+            "characters_loaded": False,
+            "expected_episodes": 0,
+            "episodes_saved": False,
+        }
+        for work_id in ids
+    }
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            loaded_flags = {}
+            work_rows = connection.execute(
+                f"""
+                SELECT id, episodes, characters_loaded
+                FROM works
+                WHERE id IN ({placeholders})
+                """,
+                chunk,
+            ).fetchall()
+            for row in work_rows:
+                work_id = int(row["id"])
+                entry = readiness[work_id]
+                entry["work_exists"] = True
+                entry["expected_episodes"] = row["episodes"] or 0
+                loaded_flags[work_id] = bool(row["characters_loaded"])
+
+            missing_role_ids = {
+                int(row["work_id"])
+                for row in connection.execute(
+                    f"""
+                    SELECT DISTINCT work_id
+                    FROM work_characters
+                    WHERE work_id IN ({placeholders}) AND role IS NULL
+                    """,
+                    chunk,
+                ).fetchall()
+            }
+            for work_id in chunk:
+                readiness[work_id]["characters_loaded"] = (
+                    loaded_flags.get(work_id, False)
+                    and work_id not in missing_role_ids
+                )
+
+            episode_ids = {
+                int(row["work_id"])
+                for row in connection.execute(
+                    f"""
+                    SELECT DISTINCT work_id
+                    FROM episodes
+                    WHERE work_id IN ({placeholders})
+                    """,
+                    chunk,
+                ).fetchall()
+            }
+            for work_id in chunk:
+                readiness[work_id]["episodes_saved"] = work_id in episode_ids
+    finally:
+        connection.close()
+    return readiness
+
+
 def invalidate_character_snapshots(work_ids):
     """Mark cached cast snapshots stale so a targeted refresh can retry them."""
     ids = _validated_work_ids(work_ids)
     if ids is None or not ids:
         return 0
 
-    placeholders = ",".join("?" for _ in ids)
     connection = get_connection()
     try:
-        cursor = connection.execute(
-            f"UPDATE works SET characters_loaded = 0 WHERE id IN ({placeholders})",
-            ids,
-        )
+        updated_count = 0
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            cursor = connection.execute(
+                f"UPDATE works SET characters_loaded = 0 WHERE id IN ({placeholders})",
+                chunk,
+            )
+            if cursor.rowcount > 0:
+                updated_count += cursor.rowcount
         connection.commit()
-        return max(0, cursor.rowcount)
+        return max(0, updated_count)
     except Exception:
         connection.rollback()
         raise
     finally:
         connection.close()
-
 
 def get_tmdb_mapping(work_id):
     """Return the cached TMDB series/season mapping for one exact work."""
@@ -1062,32 +1271,34 @@ def get_bundle_character_voice_actors(work_ids, character_id):
     safe_character_id = _cast_provider_id(character_id)
     if safe_character_id is None:
         return []
-    placeholders = ",".join("?" for _ in ids)
+    rows = []
     connection = get_connection()
     try:
-        rows = connection.execute(
-            f"""
-            SELECT
-                people.id AS person_id,
-                people.name AS name,
-                people.image_path AS image_path,
-                people.image_url AS image_url,
-                work_character_voice_actors.language AS source_language,
-                work_character_voice_actors.work_id AS work_id,
-                COALESCE(
-                    NULLIF(TRIM(works.title), ''),
-                    'Work ' || CAST(work_character_voice_actors.work_id AS TEXT)
-                ) AS work_title
-            FROM work_character_voice_actors
-            JOIN people ON people.id = work_character_voice_actors.person_id
-            LEFT JOIN works ON works.id = work_character_voice_actors.work_id
-            WHERE work_character_voice_actors.work_id IN ({placeholders})
-              AND work_character_voice_actors.character_id = ?
-            ORDER BY people.id, work_character_voice_actors.work_id,
-                     work_character_voice_actors.language
-            """,
-            [*ids, safe_character_id],
-        ).fetchall()
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows.extend(connection.execute(
+                f"""
+                SELECT
+                    people.id AS person_id,
+                    people.name AS name,
+                    people.image_path AS image_path,
+                    people.image_url AS image_url,
+                    work_character_voice_actors.language AS source_language,
+                    work_character_voice_actors.work_id AS work_id,
+                    COALESCE(
+                        NULLIF(TRIM(works.title), ''),
+                        'Work ' || CAST(work_character_voice_actors.work_id AS TEXT)
+                    ) AS work_title
+                FROM work_character_voice_actors
+                JOIN people ON people.id = work_character_voice_actors.person_id
+                LEFT JOIN works ON works.id = work_character_voice_actors.work_id
+                WHERE work_character_voice_actors.work_id IN ({placeholders})
+                  AND work_character_voice_actors.character_id = ?
+                ORDER BY people.id, work_character_voice_actors.work_id,
+                         work_character_voice_actors.language
+                """,
+                [*chunk, safe_character_id],
+            ).fetchall())
     finally:
         connection.close()
 
@@ -1258,38 +1469,53 @@ def save_staff(work_id, staff_edges, replace_snapshot=True):
                 (safe_work_id,),
             )
 
-        for person_id, person_name, image_url, role in normalized:
-            connection.execute(
-                """
-                INSERT INTO people (id, name, image_url) VALUES (?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    image_path = CASE
-                        WHEN excluded.image_url IS NOT NULL
-                         AND excluded.image_url IS NOT people.image_url
-                        THEN NULL ELSE people.image_path END,
-                    image_url = COALESCE(excluded.image_url, people.image_url)
-                """,
-                (person_id, person_name, image_url),
-            )
-            connection.execute(
-                "INSERT OR IGNORE INTO work_staff (work_id, person_id, role) VALUES (?, ?, ?)",
-                (safe_work_id, person_id, role),
-            )
+        connection.executemany(
+            """
+            INSERT INTO people (id, name, image_url) VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                image_path = CASE
+                    WHEN excluded.image_url IS NOT NULL
+                     AND excluded.image_url IS NOT people.image_url
+                    THEN NULL ELSE people.image_path END,
+                image_url = COALESCE(excluded.image_url, people.image_url)
+            """,
+            [
+                (person_id, person_name, image_url)
+                for person_id, person_name, image_url, _role in normalized
+            ],
+        )
+        connection.executemany(
+            "INSERT OR IGNORE INTO work_staff (work_id, person_id, role) VALUES (?, ?, ?)",
+            [
+                (safe_work_id, person_id, role)
+                for person_id, _person_name, _image_url, role in normalized
+            ],
+        )
 
-        if snapshot_valid and replace_snapshot:
-            for person_id in old_person_ids:
-                still_referenced = connection.execute(
-                    """
-                    SELECT 1 FROM work_staff WHERE person_id = ?
-                    UNION ALL
-                    SELECT 1 FROM character_voice_actors WHERE person_id = ?
-                    LIMIT 1
+        if snapshot_valid and replace_snapshot and old_person_ids:
+            # Deleting one old person at a time required a separate reference
+            # query for every previous credit. Evaluate all candidates in
+            # bounded chunks and keep anyone still referenced by staff or cast.
+            ordered_old_ids = sorted(old_person_ids)
+            for start in range(0, len(ordered_old_ids), 400):
+                chunk = ordered_old_ids[start:start + 400]
+                placeholders = ",".join("?" for _ in chunk)
+                connection.execute(
+                    f"""
+                    DELETE FROM people
+                    WHERE id IN ({placeholders})
+                      AND NOT EXISTS (
+                          SELECT 1 FROM work_staff AS ws
+                          WHERE ws.person_id = people.id
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM character_voice_actors AS cva
+                          WHERE cva.person_id = people.id
+                      )
                     """,
-                    (person_id, person_id),
-                ).fetchone()
-                if still_referenced is None:
-                    connection.execute("DELETE FROM people WHERE id = ?", (person_id,))
+                    chunk,
+                )
 
         connection.commit()
     except Exception:
@@ -1377,27 +1603,51 @@ def save_episodes(work_id, episode_data):
             return None
         return value.strip() or None
 
+    # Prepare records and the unique episode-number set before opening the DB.
+    # Provider responses can contain hundreds of rows, so do not issue a
+    # thumbnail SELECT for every row during the upsert loop.
+    prepared = []
+    number_set = set()
+    for episode in episodes:
+        if not isinstance(episode, dict):
+            continue
+        number = valid_episode_number(episode.get("episodeNumber"))
+        if number is None:
+            continue
+        prepared.append((
+            number,
+            optional_text(episode.get("title")),
+            optional_text(episode.get("description")),
+            optional_text(episode.get("airdate")),
+            optional_text(episode.get("thumbnail")),
+        ))
+        number_set.add(number)
+
     connection = get_connection()
     try:
-        for episode in episodes:
-            if not isinstance(episode, dict):
-                continue
-            number = valid_episode_number(episode.get("episodeNumber"))
-            if number is None:
-                continue
-
-            incoming_thumbnail = optional_text(episode.get("thumbnail"))
-            existing = connection.execute(
-                """
-                SELECT thumbnail_url
+        current_thumbnails = {}
+        numbers = sorted(number_set)
+        for chunk in _bundle_id_chunks(numbers):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT episode_number, thumbnail_url
                 FROM episodes
-                WHERE work_id = ? AND episode_number = ?
+                WHERE work_id = ? AND episode_number IN ({placeholders})
                 """,
-                (safe_work_id, number),
-            ).fetchone()
+                [safe_work_id, *chunk],
+            ).fetchall()
+            current_thumbnails.update({
+                int(row["episode_number"]): row["thumbnail_url"]
+                for row in rows
+            })
+
+        upserts = []
+        for number, title, description, air_date, incoming_thumbnail in prepared:
+            raw_existing_thumbnail = current_thumbnails.get(number)
             existing_thumbnail = (
-                str(existing["thumbnail_url"]).strip()
-                if existing and existing["thumbnail_url"]
+                str(raw_existing_thumbnail).strip()
+                if raw_existing_thumbnail
                 else None
             )
 
@@ -1415,7 +1665,24 @@ def save_episodes(work_id, episode_data):
             else:
                 thumbnail = incoming_thumbnail
 
-            connection.execute("""
+            upserts.append((
+                safe_work_id,
+                number,
+                title,
+                description,
+                air_date,
+                thumbnail,
+            ))
+
+            # Simulate the thumbnail value seen by subsequent duplicate
+            # episode-number entries, matching the former sequential SELECT/
+            # upsert behavior while still issuing the writes as one batch.
+            if thumbnail is not None:
+                current_thumbnails[number] = thumbnail
+
+        if upserts:
+            connection.executemany(
+                """
                 INSERT INTO episodes (
                     work_id, episode_number, title, description, air_date, thumbnail_url
                 )
@@ -1425,14 +1692,9 @@ def save_episodes(work_id, episode_data):
                     description = COALESCE(excluded.description, episodes.description),
                     air_date = COALESCE(excluded.air_date, episodes.air_date),
                     thumbnail_url = COALESCE(excluded.thumbnail_url, episodes.thumbnail_url)
-            """, (
-                safe_work_id,
-                number,
-                optional_text(episode.get("title")),
-                optional_text(episode.get("description")),
-                optional_text(episode.get("airdate")),
-                thumbnail,
-            ))
+                """,
+                upserts,
+            )
         connection.commit()
     except Exception:
         connection.rollback()
@@ -1441,11 +1703,14 @@ def save_episodes(work_id, episode_data):
         connection.close()
 
 
+
+
 def prune_episode_catalog(work_id, episode_data):
     """Remove stale episode rows after a verified replacement catalog loads.
 
-    Rows with the same episode number remain, preserving their watched state.
-    Empty or invalid provider responses never prune existing data.
+    Rows with matching episode numbers retain their watched state. Empty or
+    invalid provider results never prune saved data. Large keep-sets use a
+    temporary table so SQLite's bound-variable limit is not exceeded.
     """
     safe_work_id = _validated_work_id(work_id)
     try:
@@ -1466,24 +1731,64 @@ def prune_episode_catalog(work_id, episode_data):
         return 0
 
     numbers = sorted(valid_numbers)
-    placeholders = ", ".join("?" for _ in numbers)
-    params = (safe_work_id, *numbers)
     connection = get_connection()
     try:
-        connection.execute(
-            f"""
-            DELETE FROM release_reminders
-            WHERE work_id = ? AND episode_number NOT IN ({placeholders})
-            """,
-            params,
-        )
-        cursor = connection.execute(
-            f"""
-            DELETE FROM episodes
-            WHERE work_id = ? AND episode_number NOT IN ({placeholders})
-            """,
-            params,
-        )
+        if len(numbers) <= 400:
+            placeholders = ", ".join("?" for _ in numbers)
+            params = (safe_work_id, *numbers)
+            connection.execute(
+                f"""
+                DELETE FROM release_reminders
+                WHERE work_id = ? AND episode_number NOT IN ({placeholders})
+                """,
+                params,
+            )
+            cursor = connection.execute(
+                f"""
+                DELETE FROM episodes
+                WHERE work_id = ? AND episode_number NOT IN ({placeholders})
+                """,
+                params,
+            )
+        else:
+            connection.execute(
+                """
+                CREATE TEMP TABLE IF NOT EXISTS _episode_catalog_keep_numbers (
+                    episode_number INTEGER PRIMARY KEY
+                )
+                """
+            )
+            connection.execute("DELETE FROM _episode_catalog_keep_numbers")
+            for chunk in _bundle_id_chunks(numbers):
+                placeholders = ", ".join("(?)" for _ in chunk)
+                connection.execute(
+                    "INSERT OR IGNORE INTO _episode_catalog_keep_numbers "
+                    f"(episode_number) VALUES {placeholders}",
+                    tuple(chunk),
+                )
+            connection.execute(
+                """
+                DELETE FROM release_reminders
+                WHERE work_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM _episode_catalog_keep_numbers AS keep
+                      WHERE keep.episode_number = release_reminders.episode_number
+                  )
+                """,
+                (safe_work_id,),
+            )
+            cursor = connection.execute(
+                """
+                DELETE FROM episodes
+                WHERE work_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM _episode_catalog_keep_numbers AS keep
+                      WHERE keep.episode_number = episodes.episode_number
+                  )
+                """,
+                (safe_work_id,),
+            )
+
         connection.execute(
             """
             UPDATE user_library
@@ -1500,7 +1805,6 @@ def prune_episode_catalog(work_id, episode_data):
     finally:
         connection.close()
 
-
 def get_episodes(work_id):
     try:
         safe_work_id = _validated_work_id(work_id)
@@ -1512,6 +1816,79 @@ def get_episodes(work_id):
             "SELECT * FROM episodes WHERE work_id = ? ORDER BY episode_number",
             (safe_work_id,),
         ).fetchall()
+    finally:
+        connection.close()
+
+
+def get_episode_section_snapshot(work_id):
+    """Read a Work Details episode snapshot through one SQLite connection.
+
+    Core work/episode failures propagate to the caller. Catalog metadata is an
+    optional enrichment; preserve a metadata-read exception in the return value
+    so the UI can log it and continue with the same fallback as before.
+    """
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return {
+            "work": None,
+            "episodes": [],
+            "catalog_metadata": None,
+            "catalog_metadata_error": None,
+        }
+
+    connection = get_connection()
+    try:
+        work = connection.execute(
+            """
+            SELECT works.*, user_library.status, user_library.progress_episodes,
+                   user_library.progress_chapters, user_library.progress_volumes,
+                   user_library.rating, user_library.notes,
+                   user_library.added_date, user_library.updated_date
+            FROM works LEFT JOIN user_library ON user_library.work_id = works.id
+            WHERE works.id = ?
+            """,
+            (safe_work_id,),
+        ).fetchone()
+        if work is None:
+            return {
+                "work": None,
+                "episodes": [],
+                "catalog_metadata": None,
+                "catalog_metadata_error": None,
+            }
+
+        episodes = connection.execute(
+            "SELECT * FROM episodes WHERE work_id = ? ORDER BY episode_number",
+            (safe_work_id,),
+        ).fetchall()
+
+        catalog_metadata = None
+        catalog_metadata_error = None
+        try:
+            metadata_row = connection.execute(
+                "SELECT payload_json FROM work_provider_metadata "
+                "WHERE work_id = ? AND provider = ?",
+                (safe_work_id, "tmdb_episode_match_version"),
+            ).fetchone()
+        except Exception as error:
+            catalog_metadata_error = error
+            metadata_row = None
+
+        if metadata_row:
+            try:
+                payload = json.loads(metadata_row["payload_json"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = None
+            if isinstance(payload, (dict, list)):
+                catalog_metadata = payload
+
+        return {
+            "work": work,
+            "episodes": episodes,
+            "catalog_metadata": catalog_metadata,
+            "catalog_metadata_error": catalog_metadata_error,
+        }
     finally:
         connection.close()
 
@@ -1538,23 +1915,21 @@ def get_reading_progress(work_id, item_type, total_hint=None):
     try:
         row = connection.execute(
             f"""
-            SELECT COALESCE(
-                (SELECT read_count FROM reading_progress
-                 WHERE work_id = ? AND item_type = ?),
-                (SELECT {progress_column} FROM user_library
-                 WHERE work_id = ?),
-                0
-            ) AS read_count
+            SELECT
+                COALESCE(
+                    (SELECT read_count FROM reading_progress
+                     WHERE work_id = ? AND item_type = ?),
+                    (SELECT {progress_column} FROM user_library
+                     WHERE work_id = ?),
+                    0
+                ) AS read_count,
+                (
+                    SELECT COALESCE(MAX(item_number), 0)
+                    FROM reading_items
+                    WHERE work_id = ? AND item_type = ?
+                ) AS highest_item
             """,
-            (safe_work_id, kind, safe_work_id),
-        ).fetchone()
-        item_row = connection.execute(
-            """
-            SELECT COALESCE(MAX(item_number), 0) AS highest_item
-            FROM reading_items
-            WHERE work_id = ? AND item_type = ?
-            """,
-            (safe_work_id, kind),
+            (safe_work_id, kind, safe_work_id, safe_work_id, kind),
         ).fetchone()
     finally:
         connection.close()
@@ -1563,7 +1938,7 @@ def get_reading_progress(work_id, item_type, total_hint=None):
         _safe_optional_integer(total_hint, 0, _MAX_TRACKED_EPISODE_NUMBER)
         if total_hint is not None else None
     )
-    stored_total = int(item_row["highest_item"] or 0) if item_row else 0
+    stored_total = int(row["highest_item"] or 0) if row else 0
     total = (
         hinted_total if hinted_total is not None and hinted_total > 0
         else stored_total
@@ -1572,7 +1947,7 @@ def get_reading_progress(work_id, item_type, total_hint=None):
 
 
 def set_reading_progress_count(work_id, item_type, read_count, total_hint=None):
-    """Save chapter/volume progress durably without generating per-item placeholders."""
+    """Save chapter/volume progress without reopening the database to read it back."""
     kind = _reading_item_type(item_type)
     try:
         safe_work_id = _validated_work_id(work_id)
@@ -1616,13 +1991,23 @@ def set_reading_progress_count(work_id, item_type, read_count, total_hint=None):
             (parsed_count, safe_work_id),
         )
         connection.commit()
+        if parsed_total is not None and parsed_total > 0:
+            saved_total = parsed_total
+        else:
+            saved_total = int(connection.execute(
+                """
+                SELECT COALESCE(MAX(item_number), 0)
+                FROM reading_items
+                WHERE work_id = ? AND item_type = ?
+                """,
+                (safe_work_id, kind),
+            ).fetchone()[0] or 0)
     except Exception:
         connection.rollback()
         raise
     finally:
         connection.close()
-    return get_reading_progress(safe_work_id, kind, parsed_total)
-
+    return parsed_count, saved_total
 
 def save_episode_thumbnail_path(work_id, episode_number, thumbnail_path):
     """Persist the local cached image path for one episode."""
@@ -1666,6 +2051,82 @@ def save_episode_thumbnail_path(work_id, episode_number, thumbnail_path):
         connection.close()
 
 
+
+def save_episode_thumbnail_paths(work_id, episode_paths):
+    """Persist multiple cached episode paths using one connection and transaction.
+
+    Returns the episode numbers whose rows existed and were updated. Duplicate
+    episode numbers use the last valid path supplied.
+    """
+    try:
+        safe_work_id = _validated_work_id(work_id)
+    except (TypeError, ValueError, OverflowError):
+        return set()
+    if safe_work_id <= 0:
+        return set()
+    try:
+        values = list(episode_paths or [])
+    except TypeError:
+        return set()
+
+    normalized = {}
+    for entry in values:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+            continue
+        raw_number, raw_path = entry
+        number = _safe_optional_integer(
+            raw_number, 1, _MAX_TRACKED_EPISODE_NUMBER
+        )
+        if number is None or isinstance(raw_number, bool):
+            continue
+        if not isinstance(raw_path, (str, Path)):
+            continue
+        path = str(raw_path).strip()
+        if not path or len(path) > 4096:
+            continue
+        normalized[number] = path
+
+    if not normalized:
+        return set()
+
+    connection = get_connection()
+    try:
+        existing = set()
+        numbers = sorted(normalized)
+        for chunk in _bundle_id_chunks(numbers):
+            placeholders = ",".join("?" for _ in chunk)
+            existing.update(
+                int(row["episode_number"])
+                for row in connection.execute(
+                    f"""
+                    SELECT episode_number
+                    FROM episodes
+                    WHERE work_id = ? AND episode_number IN ({placeholders})
+                    """,
+                    [safe_work_id, *chunk],
+                ).fetchall()
+            )
+
+        if existing:
+            connection.executemany(
+                """
+                UPDATE episodes
+                SET thumbnail_url = ?
+                WHERE work_id = ? AND episode_number = ?
+                """,
+                (
+                    (normalized[number], safe_work_id, number)
+                    for number in sorted(existing)
+                ),
+            )
+        connection.commit()
+        return existing
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
 def set_episode_watched(work_id, episode_number, watched):
     """Set one episode's watched state after validating the local IDs."""
     try:
@@ -1690,31 +2151,32 @@ def set_episode_watched(work_id, episode_number, watched):
             """,
             (1 if watched else 0, safe_work_id, safe_episode_number),
         )
-        watched_count = connection.execute(
-            "SELECT COUNT(*) FROM episodes WHERE work_id = ? AND watched = 1",
+        counts = connection.execute(
+            """
+            SELECT COUNT(*),
+                   COALESCE(SUM(CASE WHEN watched = 1 THEN 1 ELSE 0 END), 0)
+            FROM episodes
+            WHERE work_id = ?
+            """,
             (safe_work_id,),
-        ).fetchone()[0]
-        total = connection.execute(
-            "SELECT COUNT(*) FROM episodes WHERE work_id = ?",
-            (safe_work_id,),
-        ).fetchone()[0]
-        if connection.execute(
-            "SELECT 1 FROM user_library WHERE work_id = ?",
-            (safe_work_id,),
-        ).fetchone():
-            status = (
-                "Completed" if total and watched_count >= total
-                else "Watching" if watched_count
-                else "Planning"
-            )
-            connection.execute(
-                """
-                UPDATE user_library
-                SET progress_episodes = ?, status = ?, updated_date = CURRENT_TIMESTAMP
-                WHERE work_id = ?
-                """,
-                (watched_count, status, safe_work_id),
-            )
+        ).fetchone()
+        total = int(counts[0] or 0)
+        watched_count = int(counts[1] or 0)
+        status = (
+            "Completed" if total and watched_count >= total
+            else "Watching" if watched_count
+            else "Planning"
+        )
+        # UPDATE on a missing library row is a no-op, so there is no need for a
+        # separate SELECT existence check before updating the saved counters.
+        connection.execute(
+            """
+            UPDATE user_library
+            SET progress_episodes = ?, status = ?, updated_date = CURRENT_TIMESTAMP
+            WHERE work_id = ?
+            """,
+            (watched_count, status, safe_work_id),
+        )
         connection.commit()
         return watched_count, total
     except Exception:
@@ -1724,12 +2186,13 @@ def set_episode_watched(work_id, episode_number, watched):
         connection.close()
 
 
-
 def set_episode_progress(work_id, watched_episode_numbers):
     """Set watched progress for an ordered selection of episode primary keys.
 
-    The caller converts a display-order progress value to saved episode IDs.
     Rows not included are set unwatched so a user can move progress backwards.
+    Small selections use one CASE/IN update. Large selections use a temporary
+    keep-set table, then perform one set-based update rather than one UPDATE
+    statement per watched episode.
     """
     try:
         safe_work_id = _validated_work_id(work_id)
@@ -1753,42 +2216,80 @@ def set_episode_progress(work_id, watched_episode_numbers):
 
     connection = get_connection()
     try:
-        connection.execute(
-            "UPDATE episodes SET watched = 0 WHERE work_id = ?",
-            (safe_work_id,),
-        )
-        connection.executemany(
-            """
-            UPDATE episodes SET watched = 1
-            WHERE work_id = ? AND episode_number = ?
-            """,
-            ((safe_work_id, number) for number in safe_numbers),
-        )
-        watched_count = connection.execute(
-            "SELECT COUNT(*) FROM episodes WHERE work_id = ? AND watched = 1",
-            (safe_work_id,),
-        ).fetchone()[0]
-        total = connection.execute(
-            "SELECT COUNT(*) FROM episodes WHERE work_id = ?",
-            (safe_work_id,),
-        ).fetchone()[0]
-        if connection.execute(
-            "SELECT 1 FROM user_library WHERE work_id = ?",
-            (safe_work_id,),
-        ).fetchone():
-            status = (
-                "Completed" if total and watched_count >= total
-                else "Watching" if watched_count
-                else "Planning"
-            )
+        if not safe_numbers:
             connection.execute(
-                """
-                UPDATE user_library
-                SET progress_episodes = ?, status = ?, updated_date = CURRENT_TIMESTAMP
+                "UPDATE episodes SET watched = 0 WHERE work_id = ?",
+                (safe_work_id,),
+            )
+        elif len(safe_numbers) <= 400:
+            placeholders = ", ".join("?" for _ in safe_numbers)
+            connection.execute(
+                f"""
+                UPDATE episodes
+                SET watched = CASE
+                    WHEN episode_number IN ({placeholders}) THEN 1
+                    ELSE 0
+                END
                 WHERE work_id = ?
                 """,
-                (watched_count, status, safe_work_id),
+                (*safe_numbers, safe_work_id),
             )
+        else:
+            connection.execute(
+                """
+                CREATE TEMP TABLE IF NOT EXISTS _episode_progress_watched_numbers (
+                    episode_number INTEGER PRIMARY KEY
+                )
+                """
+            )
+            connection.execute("DELETE FROM _episode_progress_watched_numbers")
+            for chunk in _bundle_id_chunks(safe_numbers):
+                placeholders = ", ".join("(?)" for _ in chunk)
+                connection.execute(
+                    "INSERT OR IGNORE INTO _episode_progress_watched_numbers "
+                    f"(episode_number) VALUES {placeholders}",
+                    tuple(chunk),
+                )
+            connection.execute(
+                """
+                UPDATE episodes
+                SET watched = CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM _episode_progress_watched_numbers AS selected
+                        WHERE selected.episode_number = episodes.episode_number
+                    ) THEN 1
+                    ELSE 0
+                END
+                WHERE work_id = ?
+                """,
+                (safe_work_id,),
+            )
+
+        counts = connection.execute(
+            """
+            SELECT COUNT(*),
+                   COALESCE(SUM(CASE WHEN watched = 1 THEN 1 ELSE 0 END), 0)
+            FROM episodes
+            WHERE work_id = ?
+            """,
+            (safe_work_id,),
+        ).fetchone()
+        total = int(counts[0] or 0)
+        watched_count = int(counts[1] or 0)
+        status = (
+            "Completed" if total and watched_count >= total
+            else "Watching" if watched_count
+            else "Planning"
+        )
+        connection.execute(
+            """
+            UPDATE user_library
+            SET progress_episodes = ?, status = ?, updated_date = CURRENT_TIMESTAMP
+            WHERE work_id = ?
+            """,
+            (watched_count, status, safe_work_id),
+        )
         connection.commit()
         return watched_count, total
     except Exception:
@@ -1796,7 +2297,6 @@ def set_episode_progress(work_id, watched_episode_numbers):
         raise
     finally:
         connection.close()
-
 
 def get_provider_metadata(work_id, provider="mangabaka"):
     """Return preserved raw metadata for a work and provider, if available."""
@@ -1824,6 +2324,57 @@ def get_provider_metadata(work_id, provider="mangabaka"):
         return None
     return payload if isinstance(payload, (dict, list)) else None
 
+
+
+def get_provider_metadata_batch(work_ids, providers):
+    """Read selected provider payloads for many works with one SQLite connection.
+
+    Invalid IDs/providers are rejected before querying. The returned mapping is
+    keyed by work ID, then normalized provider name; malformed or non-object /
+    array JSON payloads are omitted just as in get_provider_metadata().
+    """
+    ids = _validated_work_ids(work_ids)
+    if ids is None or not ids:
+        return {}
+
+    if not isinstance(providers, (list, tuple, set, frozenset)):
+        return {}
+    normalized_providers = sorted({
+        provider.strip().lower()
+        for provider in providers
+        if isinstance(provider, str) and provider.strip()
+    })
+    if not normalized_providers:
+        return {}
+
+    result = {work_id: {} for work_id in ids}
+    connection = get_connection()
+    try:
+        provider_placeholders = ",".join("?" for _ in normalized_providers)
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT work_id, provider, payload_json
+                FROM work_provider_metadata
+                WHERE work_id IN ({placeholders})
+                  AND provider IN ({provider_placeholders})
+                ORDER BY work_id, provider
+                """,
+                (*chunk, *normalized_providers),
+            ).fetchall()
+            for row in rows:
+                try:
+                    work_id = int(row["work_id"])
+                    provider = str(row["provider"]).strip().lower()
+                    payload = json.loads(row["payload_json"])
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if isinstance(payload, (dict, list)) and work_id in result:
+                    result[work_id][provider] = payload
+    finally:
+        connection.close()
+    return result
 
 def save_provider_metadata(work_id, provider, payload, provider_id=None):
     """Persist a JSON-compatible provider payload before opening a DB connection."""
@@ -1889,7 +2440,7 @@ def save_reading_item_metadata(work_id, item_type, items):
             if not isinstance(raw_number, str):
                 return None
             raw_text = raw_number.strip()
-            if re.fullmatch(r"[0-9]+(?:\\.[0-9]+)?", raw_text):
+            if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", raw_text):
                 try:
                     numeric = float(raw_text)
                     if not math.isfinite(numeric) or not numeric.is_integer() or numeric < 1:
@@ -1898,7 +2449,7 @@ def save_reading_item_metadata(work_id, item_type, items):
                 except (TypeError, ValueError, OverflowError):
                     return None
             else:
-                match = re.search(r"(?<![-0-9])\\d+", raw_text)
+                match = re.search(r"(?<![-0-9])\d+", raw_text)
                 if not match:
                     return None
                 try:
@@ -1907,47 +2458,49 @@ def save_reading_item_metadata(work_id, item_type, items):
                     return None
         return number if 1 <= number <= _MAX_TRACKED_EPISODE_NUMBER else None
 
+    prepared_rows = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_number = None
+        has_explicit_number = False
+        for key in ("number", "item_number", "volume_number", "chapter_number"):
+            candidate = item.get(key)
+            if candidate not in (None, ""):
+                raw_number = candidate
+                has_explicit_number = True
+                break
+
+        number = index if not has_explicit_number else parse_item_number(raw_number)
+        if number is None or not 1 <= number <= _MAX_TRACKED_EPISODE_NUMBER:
+            continue
+
+        title_value = item.get("title")
+        if not isinstance(title_value, str) or not title_value.strip():
+            title_value = item.get("name")
+        title = title_value.strip() if isinstance(title_value, str) else None
+        prepared_rows.append((safe_work_id, kind, number, title or None))
+
     connection = get_connection()
-    saved = 0
     try:
-        for index, item in enumerate(items, start=1):
-            if not isinstance(item, dict):
-                continue
-            raw_number = None
-            has_explicit_number = False
-            for key in ("number", "item_number", "volume_number", "chapter_number"):
-                candidate = item.get(key)
-                if candidate not in (None, ""):
-                    raw_number = candidate
-                    has_explicit_number = True
-                    break
-
-            number = index if not has_explicit_number else parse_item_number(raw_number)
-            if number is None or not 1 <= number <= _MAX_TRACKED_EPISODE_NUMBER:
-                continue
-
-            title_value = item.get("title")
-            if not isinstance(title_value, str) or not title_value.strip():
-                title_value = item.get("name")
-            title = title_value.strip() if isinstance(title_value, str) else None
-            connection.execute("""
-                INSERT INTO reading_items (work_id, item_type, item_number, title, is_read)
-                VALUES (?, ?, ?, ?, 0)
-                ON CONFLICT(work_id, item_type, item_number) DO UPDATE SET
-                    title = CASE
-                        WHEN excluded.title IS NOT NULL AND TRIM(excluded.title) != ''
-                        THEN excluded.title ELSE reading_items.title END
-            """, (safe_work_id, kind, number, title or None))
-            saved += 1
+        connection.executemany(
+            """
+            INSERT INTO reading_items (work_id, item_type, item_number, title, is_read)
+            VALUES (?, ?, ?, ?, 0)
+            ON CONFLICT(work_id, item_type, item_number) DO UPDATE SET
+                title = CASE
+                    WHEN excluded.title IS NOT NULL AND TRIM(excluded.title) != ''
+                    THEN excluded.title ELSE reading_items.title END
+            """,
+            prepared_rows,
+        )
         connection.commit()
     except Exception:
         connection.rollback()
         raise
     finally:
         connection.close()
-    return saved
-
-
+    return len(prepared_rows)
 
 def save_anime(anime):
     work_id = _validated_work_id(anime.get("id") if isinstance(anime, dict) else None)
@@ -2185,13 +2738,15 @@ def save_anime(anime):
         ))
         synonyms = anime.get("synonyms")
         if isinstance(synonyms, (list, tuple)):
-            for synonym in synonyms:
-                if not isinstance(synonym, str) or not synonym.strip():
-                    continue
-                connection.execute(
-                    "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
-                    (work_id, synonym.strip(), None),
-                )
+            synonym_rows = [
+                (work_id, synonym.strip(), None)
+                for synonym in synonyms
+                if isinstance(synonym, str) and synonym.strip()
+            ]
+            connection.executemany(
+                "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
+                synonym_rows,
+            )
 
         # Preserve provider-native metadata instead of flattening it into AniList fields.
         if isinstance(mangabaka_data, dict) and mangabaka_payload_json is not None:
@@ -2209,6 +2764,7 @@ def save_anime(anime):
                 mangabaka_payload_json,
             ))
             title_records = mangabaka_data.get("titles") or []
+            alternate_title_rows = []
             for title_record in title_records:
                 if not isinstance(title_record, dict):
                     continue
@@ -2221,16 +2777,19 @@ def save_anime(anime):
                 language = title_record.get("language")
                 if not isinstance(language, str):
                     language = None
-                connection.execute(
-                    "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
-                    (work_id, alt_title, language),
-                )
+                alternate_title_rows.append((work_id, alt_title, language))
+            connection.executemany(
+                "INSERT OR IGNORE INTO alternate_titles (work_id, title, language) VALUES (?, ?, ?)",
+                alternate_title_rows,
+            )
         if studio_snapshot_valid is True:
             connection.execute(
                 "DELETE FROM work_studios WHERE work_id = ?",
                 (work_id,),
             )
 
+        studio_rows = []
+        work_studio_rows = []
         for edge in studio_edges if isinstance(studio_edges, list) else []:
             if not isinstance(edge, dict):
                 continue
@@ -2253,14 +2812,18 @@ def save_anime(anime):
                 continue
             if studio_id <= 0 or studio_id > _MAX_SQLITE_INTEGER:
                 continue
-            connection.execute(
-                "INSERT OR REPLACE INTO studios (id, name, is_main) VALUES (?, ?, ?)",
-                (studio_id, studio_name.strip(), 1 if edge.get("isMain") else 0),
+            studio_rows.append(
+                (studio_id, studio_name.strip(), 1 if edge.get("isMain") else 0)
             )
-            connection.execute(
-                "INSERT OR IGNORE INTO work_studios (work_id, studio_id) VALUES (?, ?)",
-                (work_id, studio_id),
-            )
+            work_studio_rows.append((work_id, studio_id))
+        connection.executemany(
+            "INSERT OR REPLACE INTO studios (id, name, is_main) VALUES (?, ?, ?)",
+            studio_rows,
+        )
+        connection.executemany(
+            "INSERT OR IGNORE INTO work_studios (work_id, studio_id) VALUES (?, ?)",
+            work_studio_rows,
+        )
         if relation_snapshot is not None:
             # Relation details are a cached snapshot, not an append-only history.
             # Delete stale outgoing edges within this transaction before writing
@@ -2270,6 +2833,8 @@ def save_anime(anime):
                 (work_id,),
             )
 
+        relation_target_rows = []
+        relation_rows = []
         for edge in relation_edges if isinstance(relation_edges, list) else []:
             if not isinstance(edge, dict):
                 continue
@@ -2369,35 +2934,7 @@ def save_anime(anime):
                     target_cover_url = target_cover_url.strip()
                 target_mal_id = _safe_optional_integer(node.get("idMal"), 1)
 
-                connection.execute("""
-                    INSERT INTO works (
-                        id, title, type, format, start_year, start_month, start_day,
-                        cover_url, mal_id
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        title = excluded.title,
-                        type = CASE
-                            WHEN ? THEN excluded.type ELSE works.type END,
-                        format = COALESCE(excluded.format, works.format),
-                        start_year = CASE
-                            WHEN excluded.start_year IS NULL
-                             AND excluded.start_month IS NULL
-                             AND excluded.start_day IS NULL
-                            THEN works.start_year ELSE excluded.start_year END,
-                        start_month = CASE
-                            WHEN excluded.start_year IS NULL
-                             AND excluded.start_month IS NULL
-                             AND excluded.start_day IS NULL
-                            THEN works.start_month ELSE excluded.start_month END,
-                        start_day = CASE
-                            WHEN excluded.start_year IS NULL
-                             AND excluded.start_month IS NULL
-                             AND excluded.start_day IS NULL
-                            THEN works.start_day ELSE excluded.start_day END,
-                        cover_url = COALESCE(excluded.cover_url, works.cover_url),
-                        mal_id = COALESCE(excluded.mal_id, works.mal_id)
-                """, (
+                relation_target_rows.append((
                     target_id,
                     target_title,
                     target_type,
@@ -2409,10 +2946,43 @@ def save_anime(anime):
                     target_mal_id,
                     1 if target_type_is_valid else 0,
                 ))
-            connection.execute(
-                "INSERT OR REPLACE INTO work_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)",
-                (work_id, target_id, relation_type),
+            relation_rows.append((work_id, target_id, relation_type))
+        connection.executemany(
+            """
+            INSERT INTO works (
+                id, title, type, format, start_year, start_month, start_day,
+                cover_url, mal_id
             )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                type = CASE
+                    WHEN ? THEN excluded.type ELSE works.type END,
+                format = COALESCE(excluded.format, works.format),
+                start_year = CASE
+                    WHEN excluded.start_year IS NULL
+                     AND excluded.start_month IS NULL
+                     AND excluded.start_day IS NULL
+                    THEN works.start_year ELSE excluded.start_year END,
+                start_month = CASE
+                    WHEN excluded.start_year IS NULL
+                     AND excluded.start_month IS NULL
+                     AND excluded.start_day IS NULL
+                    THEN works.start_month ELSE excluded.start_month END,
+                start_day = CASE
+                    WHEN excluded.start_year IS NULL
+                     AND excluded.start_month IS NULL
+                     AND excluded.start_day IS NULL
+                    THEN works.start_day ELSE excluded.start_day END,
+                cover_url = COALESCE(excluded.cover_url, works.cover_url),
+                mal_id = COALESCE(excluded.mal_id, works.mal_id)
+            """,
+            relation_target_rows,
+        )
+        connection.executemany(
+            "INSERT OR REPLACE INTO work_relations (source_id, target_id, relation_type) VALUES (?, ?, ?)",
+            relation_rows,
+        )
         connection.commit()
     except Exception:
         connection.rollback()
@@ -2528,15 +3098,111 @@ def get_relations(work_id):
     finally:
         connection.close()
 
+
+def _bundle_member_work_ids(work_ids):
+    """Return valid work IDs in first-seen order for bundle aggregation."""
+    try:
+        iterator = iter(work_ids or [])
+    except (TypeError, ValueError):
+        return []
+    result, seen = [], set()
+    for value in iterator:
+        try:
+            work_id = _validated_work_id(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if work_id not in seen:
+            seen.add(work_id)
+            result.append(work_id)
+    return result
+
+
+def _bundle_id_chunks(work_ids, size=400):
+    """Keep IN-clause queries below SQLite's conservative parameter limit."""
+    for start in range(0, len(work_ids), size):
+        yield work_ids[start:start + size]
+
+
+def _load_bundle_character_rows(work_ids):
+    """Load per-work character and voice-actor rows with batched SQL queries."""
+    rows_by_work = {}
+    if not work_ids:
+        return rows_by_work
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(work_ids):
+            placeholders = ",".join("?" for _ in chunk)
+            query = f"""
+                WITH ranked_actors AS (
+                    SELECT
+                        wcv.work_id, wcv.character_id,
+                        people.id AS person_id,
+                        people.name AS person_name,
+                        people.image_path AS person_image_path,
+                        people.image_url AS person_image_url,
+                        wcv.language AS person_language,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY wcv.work_id, wcv.character_id
+                            ORDER BY
+                                CASE
+                                    WHEN LOWER(COALESCE(wcv.language, ''))
+                                         IN ('japanese', 'ja', 'jpn') THEN 0
+                                    ELSE 1
+                                END,
+                                wcv.language, people.name
+                        ) AS actor_rank
+                    FROM work_character_voice_actors AS wcv
+                    JOIN people ON people.id = wcv.person_id
+                    WHERE wcv.work_id IN ({placeholders})
+                )
+                SELECT
+                    wc.work_id AS _bundle_work_id,
+                    characters.id,
+                    characters.name AS character_name,
+                    characters.image_path AS character_image_path,
+                    characters.image_url AS character_image_url,
+                    wc.role AS character_role,
+                    ranked_actors.person_id,
+                    ranked_actors.person_name,
+                    ranked_actors.person_image_path,
+                    ranked_actors.person_image_url,
+                    ranked_actors.person_language
+                FROM work_characters AS wc
+                JOIN characters ON characters.id = wc.character_id
+                LEFT JOIN ranked_actors
+                  ON ranked_actors.work_id = wc.work_id
+                 AND ranked_actors.character_id = wc.character_id
+                 AND ranked_actors.actor_rank = 1
+                WHERE wc.work_id IN ({placeholders})
+                ORDER BY
+                    wc.work_id,
+                    CASE UPPER(COALESCE(wc.role, 'UNKNOWN'))
+                        WHEN 'MAIN' THEN 0 WHEN 'SUPPORTING' THEN 1
+                        WHEN 'BACKGROUND' THEN 2 ELSE 3
+                    END,
+                    characters.name
+            """
+            rows = connection.execute(query, (*chunk, *chunk)).fetchall()
+            for raw in rows:
+                row = dict(raw)
+                work_id = int(row.pop("_bundle_work_id"))
+                rows_by_work.setdefault(work_id, []).append(row)
+    finally:
+        connection.close()
+    return rows_by_work
+
+
 def get_bundle_characters(work_ids):
     """Return unique characters, preferring their strongest role across a bundle."""
+    ids = _bundle_member_work_ids(work_ids)
+    if not ids:
+        return []
+    per_work_rows = _load_bundle_character_rows(ids)
     unique = {}
     role_priority = {"MAIN": 0, "SUPPORTING": 1, "BACKGROUND": 2}
-
-    for work_id in work_ids or []:
-        for raw_row in get_characters(work_id):
-            # sqlite3.Row supports indexed access but not dict.get(); normalize
-            # each provider/database row before merging per-work roles.
+    for work_id in ids:
+        for raw_row in per_work_rows.get(work_id, ()):
+            # Keep accepting sqlite3.Row-like payloads from alternate callers/tests.
             row = dict(raw_row)
             try:
                 character_id = int(row["id"])
@@ -2547,9 +3213,6 @@ def get_bundle_characters(work_ids):
             if existing is None:
                 unique[character_id] = row
                 continue
-
-            # Role is specific to each work. Choose the strongest role in the
-            # entire bundle, regardless of which member was processed first.
             existing_role = str(existing.get("character_role") or "").upper()
             if role_priority.get(role, 3) < role_priority.get(existing_role, 3):
                 existing["character_role"] = row.get("character_role")
@@ -2562,9 +3225,8 @@ def get_bundle_characters(work_ids):
                 if person_id <= 0:
                     return (2, "", 0)
                 language = _voice_actor_language_label(item.get("person_language"))
-                priority = 0 if language == "Japanese" else 1
                 return (
-                    priority,
+                    0 if language == "Japanese" else 1,
                     str(item.get("person_name") or "").casefold(),
                     person_id,
                 )
@@ -2575,50 +3237,161 @@ def get_bundle_characters(work_ids):
                     "person_image_url", "person_language",
                 ):
                     existing[key] = row.get(key)
-
-    return sorted(
-        unique.values(),
-        key=lambda row: (
-            role_priority.get(str(row.get("character_role") or "").upper(), 3),
-            str(row.get("character_name") or "").lower(),
-        ),
-    )
+    return sorted(unique.values(), key=lambda row: (
+        role_priority.get(str(row.get("character_role") or "").upper(), 3),
+        str(row.get("character_name") or "").lower(),
+    ))
 
 
-def get_bundle_staff(work_ids):
-    """Return one card per staff person with unique roles merged across the bundle."""
-    unique = {}
+def get_bundle_staff_page_state(work_ids):
+    """Batch saved staff counts and AniList pagination metadata for bundle members."""
+    ids = _validated_work_ids(work_ids)
+    if ids is None or not ids:
+        return {}
 
-    for work_id in work_ids or []:
-        for row in get_staff(work_id):
-            person_id = int(row["person_id"])
-            entry = unique.get(person_id)
+    result = {
+        work_id: {
+            "saved_staff_count": 0,
+            "anilist_media_id": None,
+            "page_info": None,
+        }
+        for work_id in ids
+    }
+    provider_keys = {
+        "anilist_media_id": "anilist_media_id",
+        "anilist_staff_page_info": "page_info",
+    }
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            count_rows = connection.execute(
+                f"""
+                SELECT ws.work_id, COUNT(DISTINCT people.id) AS staff_count
+                FROM work_staff AS ws
+                JOIN people ON people.id = ws.person_id
+                WHERE ws.work_id IN ({placeholders})
+                GROUP BY ws.work_id
+                """,
+                chunk,
+            ).fetchall()
+            for row in count_rows:
+                result[int(row["work_id"])]["saved_staff_count"] = int(
+                    row["staff_count"] or 0
+                )
 
-            if entry is None:
-                entry = dict(row)
-                entry["_roles"] = []
-                unique[person_id] = entry
+            metadata_rows = connection.execute(
+                f"""
+                SELECT work_id, provider, payload_json
+                FROM work_provider_metadata
+                WHERE work_id IN ({placeholders})
+                  AND (
+                      provider = 'anilist_staff_page_info'
+                      OR (provider = 'anilist_media_id' AND work_id < 0)
+                  )
+                """,
+                chunk,
+            ).fetchall()
+            for row in metadata_rows:
+                result_key = provider_keys.get(str(row["provider"] or "").strip().lower())
+                if result_key is None:
+                    continue
+                try:
+                    payload = json.loads(row["payload_json"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if isinstance(payload, (dict, list)):
+                    result[int(row["work_id"])][result_key] = payload
+    finally:
+        connection.close()
+    return result
 
-            role_text = str(row["role"] or "")
-            for role in role_text.split("\n"):
-                role = role.strip()
-                if role and role not in entry["_roles"]:
-                    entry["_roles"].append(role)
 
-    for entry in unique.values():
-        entry["role"] = "\n".join(entry.pop("_roles", []))
+def _load_bundle_staff_rows(work_ids):
+    """Load staff rows in batches and retain each work's original row/role order."""
+    grouped = {}
+    if not work_ids:
+        return grouped
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(work_ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT DISTINCT
+                    ws.work_id AS _bundle_work_id, people.id AS person_id,
+                    people.name, people.image_path, people.image_url, ws.role
+                FROM work_staff AS ws
+                JOIN people ON people.id = ws.person_id
+                WHERE ws.work_id IN ({placeholders})
+                ORDER BY ws.work_id, people.name, people.id, ws.role
+                """,
+                chunk,
+            ).fetchall()
+            for raw in rows:
+                work_id = int(raw["_bundle_work_id"])
+                person_id = int(raw["person_id"])
+                by_person = grouped.setdefault(work_id, {})
+                entry = by_person.get(person_id)
+                if entry is None:
+                    entry = {
+                        "person_id": person_id, "name": raw["name"],
+                        "image_path": raw["image_path"], "image_url": raw["image_url"],
+                        "_roles": [],
+                    }
+                    by_person[person_id] = entry
+                if raw["role"] is not None:
+                    entry["_roles"].append(str(raw["role"]))
+    finally:
+        connection.close()
 
     from recommendation_engine import staff_role_weight
-    return sorted(
-        unique.values(),
-        key=lambda row: (
+    rows_by_work = {}
+    for work_id, by_person in grouped.items():
+        work_rows = []
+        for entry in by_person.values():
+            entry["role"] = "\n".join(entry.pop("_roles", []))
+            work_rows.append(entry)
+        work_rows.sort(key=lambda row: (
             -max(
                 (staff_role_weight(role) for role in str(row.get("role") or "").split("\n")),
                 default=0.30,
             ),
             str(row.get("name") or "").casefold(),
+        ))
+        rows_by_work[work_id] = work_rows
+    return rows_by_work
+
+
+def get_bundle_staff(work_ids):
+    """Return one card per staff person with unique roles merged across the bundle."""
+    ids = _bundle_member_work_ids(work_ids)
+    if not ids:
+        return []
+    per_work_rows = _load_bundle_staff_rows(ids)
+    unique = {}
+    for work_id in ids:
+        for row in per_work_rows.get(work_id, ()):
+            person_id = int(row["person_id"])
+            entry = unique.get(person_id)
+            if entry is None:
+                entry = dict(row)
+                entry["_roles"] = []
+                unique[person_id] = entry
+            for role in str(row["role"] or "").split("\n"):
+                role = role.strip()
+                if role and role not in entry["_roles"]:
+                    entry["_roles"].append(role)
+    for entry in unique.values():
+        entry["role"] = "\n".join(entry.pop("_roles", []))
+    from recommendation_engine import staff_role_weight
+    return sorted(unique.values(), key=lambda row: (
+        -max(
+            (staff_role_weight(role) for role in str(row.get("role") or "").split("\n")),
+            default=0.30,
         ),
-    )
+        str(row.get("name") or "").casefold(),
+    ))
 
 
 def get_bundle_relations(work_ids):
@@ -2626,41 +3399,47 @@ def get_bundle_relations(work_ids):
     ids = _validated_work_ids(work_ids)
     if not ids:
         return []
-    if ids is None:
-        return []
-    unique = {}
+    rows_by_source = {}
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT work_relations.*, works.title, works.format, works.type,
+                       works.cover_url, works.cover_path
+                FROM work_relations
+                LEFT JOIN works ON works.id = work_relations.target_id
+                WHERE work_relations.source_id IN ({placeholders})
+                ORDER BY work_relations.source_id, relation_type, title
+                """,
+                chunk,
+            ).fetchall()
+            for row in rows:
+                rows_by_source.setdefault(int(row["source_id"]), []).append(row)
+    finally:
+        connection.close()
 
+    unique = {}
     for work_id in ids:
-        for row in get_relations(work_id):
+        for row in rows_by_source.get(work_id, ()):
             target_id = row["target_id"]
             if target_id is None:
                 continue
-
             target_id = int(target_id)
-
-            # A relation between two members of the same bundle is internal,
-            # so it should not appear in the combined Relations section.
             if target_id in ids:
                 continue
-
             entry = unique.get(target_id)
             if entry is None:
                 entry = dict(row)
                 entry["_relation_types"] = []
                 unique[target_id] = entry
-
             relation_type = str(row["relation_type"] or "OTHER")
             if relation_type not in entry["_relation_types"]:
                 entry["_relation_types"].append(relation_type)
-
     for entry in unique.values():
         entry["relation_types"] = "\n".join(entry.pop("_relation_types", []))
-
-    return sorted(
-        unique.values(),
-        key=lambda row: str(row.get("title") or "").lower(),
-    )
-
+    return sorted(unique.values(), key=lambda row: str(row.get("title") or "").lower())
 
 def add_manual_bundle_link(work_a, work_b):
     """Persist an explicit user-selected bundle link between two works."""
@@ -2731,19 +3510,24 @@ def get_manual_bundle_links(work_ids=None):
                 "SELECT work_a, work_b FROM manual_bundle_links ORDER BY work_a, work_b"
             ).fetchall()
 
-        placeholders = ",".join("?" for _ in ids)
-        return connection.execute(
-            f"""
-            SELECT work_a, work_b
-            FROM manual_bundle_links
-            WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
-            ORDER BY work_a, work_b
-            """,
-            [*ids, *ids],
-        ).fetchall()
+        rows_by_pair = {}
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT work_a, work_b
+                FROM manual_bundle_links
+                WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
+                ORDER BY work_a, work_b
+                """,
+                [*chunk, *chunk],
+            ).fetchall()
+            for row in rows:
+                key = (int(row["work_a"]), int(row["work_b"]))
+                rows_by_pair[key] = row
+        return [rows_by_pair[key] for key in sorted(rows_by_pair)]
     finally:
         connection.close()
-
 
 def save_automatic_bundle_membership(bundle_id, work_ids):
     """Replace the saved member snapshot for an automatically grouped Search result."""
@@ -2761,17 +3545,16 @@ def save_automatic_bundle_membership(bundle_id, work_ids):
             "DELETE FROM automatic_bundle_memberships WHERE bundle_id = ?",
             (safe_bundle_id,),
         )
-        if safe_ids:
-            placeholders = ",".join("?" for _ in safe_ids)
-            existing = {
+        existing = set()
+        for chunk in _bundle_id_chunks(safe_ids):
+            placeholders = ",".join("?" for _ in chunk)
+            existing.update(
                 int(row["id"])
                 for row in connection.execute(
                     f"SELECT id FROM works WHERE id IN ({placeholders})",
-                    safe_ids,
+                    chunk,
                 ).fetchall()
-            }
-        else:
-            existing = set()
+            )
         member_ids = sorted(existing)
         if len(member_ids) >= 2:
             connection.executemany(
@@ -2788,7 +3571,6 @@ def save_automatic_bundle_membership(bundle_id, work_ids):
         raise
     finally:
         connection.close()
-
 
 def get_automatic_bundle_memberships(work_ids=None):
     """Return full saved Search-bundle snapshots touching these works."""
@@ -2810,10 +3592,10 @@ def get_automatic_bundle_memberships(work_ids=None):
                 """
             ).fetchall()
 
-        placeholders = ",".join("?" for _ in ids)
-        bundle_ids = [
-            int(row["bundle_id"])
-            for row in connection.execute(
+        bundle_ids = set()
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
                 f"""
                 SELECT DISTINCT bundle_id
                 FROM automatic_bundle_memberships
@@ -2821,24 +3603,31 @@ def get_automatic_bundle_memberships(work_ids=None):
                    OR work_id IN ({placeholders})
                 ORDER BY bundle_id
                 """,
-                [*ids, *ids],
+                [*chunk, *chunk],
             ).fetchall()
-        ]
+            bundle_ids.update(int(row["bundle_id"]) for row in rows)
+
         if not bundle_ids:
             return []
-        group_placeholders = ",".join("?" for _ in bundle_ids)
-        return connection.execute(
-            f"""
-            SELECT bundle_id, work_id
-            FROM automatic_bundle_memberships
-            WHERE bundle_id IN ({group_placeholders})
-            ORDER BY bundle_id, work_id
-            """,
-            bundle_ids,
-        ).fetchall()
+
+        memberships_by_pair = {}
+        for chunk in _bundle_id_chunks(sorted(bundle_ids)):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT bundle_id, work_id
+                FROM automatic_bundle_memberships
+                WHERE bundle_id IN ({placeholders})
+                ORDER BY bundle_id, work_id
+                """,
+                chunk,
+            ).fetchall()
+            for row in rows:
+                key = (int(row["bundle_id"]), int(row["work_id"]))
+                memberships_by_pair[key] = row
+        return [memberships_by_pair[key] for key in sorted(memberships_by_pair)]
     finally:
         connection.close()
-
 
 def add_bundle_exclusion(work_a, work_b):
     """Prevent two works from being automatically grouped together."""
@@ -2886,37 +3675,46 @@ def remove_bundle_member(work_id, target_id, bundle_member_ids):
     if work_id == target_id or work_id not in member_ids:
         return False
 
-    all_ids = member_ids | {work_id, target_id}
-    placeholders = ",".join("?" for _ in all_ids)
-
+    all_ids = sorted(member_ids | {work_id, target_id})
     connection = get_connection()
     try:
-        existing = connection.execute(
-            f"SELECT id FROM works WHERE id IN ({placeholders})",
-            tuple(all_ids),
-        ).fetchall()
+        existing = set()
+        for chunk in _bundle_id_chunks(all_ids):
+            placeholders = ",".join("?" for _ in chunk)
+            existing.update(
+                int(row["id"])
+                for row in connection.execute(
+                    f"SELECT id FROM works WHERE id IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+            )
         if len(existing) != len(all_ids):
             return False
 
-        changed = False
-        for other_id in member_ids | {work_id}:
-            if other_id == target_id:
-                continue
-
-            left, right = sorted((target_id, other_id))
-
-            cursor = connection.execute(
-                "DELETE FROM manual_bundle_links WHERE work_a = ? AND work_b = ?",
-                (left, right),
+        # Remove the target's manual links in bounded queries, then insert all
+        # pairwise exclusions in one executemany call. This keeps the operation
+        # transactional while avoiding one SELECT and two writes per member.
+        partner_ids = sorted((member_ids | {work_id}) - {target_id})
+        changed_before = connection.total_changes
+        for chunk in _bundle_id_chunks(partner_ids):
+            placeholders = ",".join("?" for _ in chunk)
+            connection.execute(
+                f"""
+                DELETE FROM manual_bundle_links
+                WHERE (work_a = ? AND work_b IN ({placeholders}))
+                   OR (work_b = ? AND work_a IN ({placeholders}))
+                """,
+                [target_id, *chunk, target_id, *chunk],
             )
-            changed = cursor.rowcount > 0 or changed
 
-            cursor = connection.execute(
-                "INSERT OR IGNORE INTO bundle_exclusions (work_a, work_b) VALUES (?, ?)",
-                (left, right),
-            )
-            changed = cursor.rowcount > 0 or changed
-
+        connection.executemany(
+            "INSERT OR IGNORE INTO bundle_exclusions (work_a, work_b) VALUES (?, ?)",
+            [
+                (min(target_id, other_id), max(target_id, other_id))
+                for other_id in partner_ids
+            ],
+        )
+        changed = connection.total_changes > changed_before
         connection.commit()
         return changed
     except Exception:
@@ -2924,7 +3722,6 @@ def remove_bundle_member(work_id, target_id, bundle_member_ids):
         raise
     finally:
         connection.close()
-
 
 def get_bundle_exclusions(work_ids=None):
     """Return persisted bundle exclusions."""
@@ -2938,18 +3735,108 @@ def get_bundle_exclusions(work_ids=None):
             return connection.execute(
                 "SELECT work_a, work_b FROM bundle_exclusions ORDER BY work_a, work_b"
             ).fetchall()
-        placeholders = ",".join("?" for _ in ids)
-        return connection.execute(
-            f"""
-            SELECT work_a, work_b
-            FROM bundle_exclusions
-            WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
-            ORDER BY work_a, work_b
-            """,
-            [*ids, *ids],
-        ).fetchall()
+
+        rows_by_pair = {}
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT work_a, work_b
+                FROM bundle_exclusions
+                WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
+                ORDER BY work_a, work_b
+                """,
+                [*chunk, *chunk],
+            ).fetchall()
+            for row in rows:
+                key = (int(row["work_a"]), int(row["work_b"]))
+                rows_by_pair[key] = row
+        return [rows_by_pair[key] for key in sorted(rows_by_pair)]
     finally:
         connection.close()
+
+
+def get_library_bundle_grouping_state(work_ids):
+    """Read manual links, exclusions and saved Search memberships on one connection."""
+    ids = _validated_work_ids(work_ids)
+    empty = {
+        "manual_links": [],
+        "exclusions": [],
+        "automatic_memberships": [],
+    }
+    if ids is None or not ids:
+        return empty
+
+    manual_by_pair = {}
+    exclusions_by_pair = {}
+    bundle_ids = set()
+    memberships_by_pair = {}
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            for row in connection.execute(
+                f"""
+                SELECT work_a, work_b
+                FROM manual_bundle_links
+                WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
+                ORDER BY work_a, work_b
+                """,
+                [*chunk, *chunk],
+            ).fetchall():
+                pair = (int(row["work_a"]), int(row["work_b"]))
+                manual_by_pair[pair] = row
+
+            for row in connection.execute(
+                f"""
+                SELECT work_a, work_b
+                FROM bundle_exclusions
+                WHERE work_a IN ({placeholders}) OR work_b IN ({placeholders})
+                ORDER BY work_a, work_b
+                """,
+                [*chunk, *chunk],
+            ).fetchall():
+                pair = (int(row["work_a"]), int(row["work_b"]))
+                exclusions_by_pair[pair] = row
+
+            bundle_ids.update(
+                int(row["bundle_id"])
+                for row in connection.execute(
+                    f"""
+                    SELECT DISTINCT bundle_id
+                    FROM automatic_bundle_memberships
+                    WHERE bundle_id IN ({placeholders})
+                       OR work_id IN ({placeholders})
+                    ORDER BY bundle_id
+                    """,
+                    [*chunk, *chunk],
+                ).fetchall()
+            )
+
+        for chunk in _bundle_id_chunks(sorted(bundle_ids)):
+            placeholders = ",".join("?" for _ in chunk)
+            for row in connection.execute(
+                f"""
+                SELECT bundle_id, work_id
+                FROM automatic_bundle_memberships
+                WHERE bundle_id IN ({placeholders})
+                ORDER BY bundle_id, work_id
+                """,
+                chunk,
+            ).fetchall():
+                pair = (int(row["bundle_id"]), int(row["work_id"]))
+                memberships_by_pair[pair] = row
+    finally:
+        connection.close()
+
+    return {
+        "manual_links": [manual_by_pair[pair] for pair in sorted(manual_by_pair)],
+        "exclusions": [exclusions_by_pair[pair] for pair in sorted(exclusions_by_pair)],
+        "automatic_memberships": [
+            memberships_by_pair[pair] for pair in sorted(memberships_by_pair)
+        ],
+    }
+
 
 
 def get_manual_bundle_partners(work_id):
@@ -2980,32 +3867,45 @@ def get_manual_bundle_partners(work_id):
 
 
 
+def get_bundle_overrides(work_ids):
+    """Return all stored bundle overrides matching a set of possible anchors."""
+    ids = _validated_work_ids(work_ids)
+    if ids is None or not ids:
+        return []
+
+    by_anchor = {}
+    connection = get_connection()
+    try:
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT bundle_anchor_id, custom_title, cover_work_id, custom_cover_path
+                FROM bundle_overrides
+                WHERE bundle_anchor_id IN ({placeholders})
+                ORDER BY bundle_anchor_id
+                """,
+                chunk,
+            ).fetchall()
+            for row in rows:
+                by_anchor[int(row["bundle_anchor_id"])] = row
+    finally:
+        connection.close()
+    return [by_anchor[work_id] for work_id in ids if work_id in by_anchor]
+
+
+
 
 def get_bundle_override(work_ids):
     """Return the saved presentation override for a bundle touching these works."""
     ids = _validated_work_ids(work_ids)
     if not ids:
         return None
-
-    placeholders = ",".join("?" for _ in ids)
-    order_cases = " ".join(
-        f"WHEN ? THEN {index}"
-        for index, _ in enumerate(ids)
-    )
-    connection = get_connection()
-    try:
-        return connection.execute(
-            f"""
-            SELECT bundle_anchor_id, custom_title, cover_work_id, custom_cover_path
-            FROM bundle_overrides
-            WHERE bundle_anchor_id IN ({placeholders})
-            ORDER BY CASE bundle_anchor_id {order_cases} ELSE {len(ids)} END
-            LIMIT 1
-            """,
-            [*ids, *ids],
-        ).fetchone()
-    finally:
-        connection.close()
+    by_anchor = {
+        int(row["bundle_anchor_id"]): row
+        for row in get_bundle_overrides(ids)
+    }
+    return next((by_anchor[work_id] for work_id in ids if work_id in by_anchor), None)
 
 
 def save_bundle_override(work_ids, anchor_id, custom_title=None, cover_work_id=None, custom_cover_path=None):
@@ -3045,12 +3945,13 @@ def save_bundle_override(work_ids, anchor_id, custom_title=None, cover_work_id=N
         return False
 
     connection = get_connection()
-    placeholders = ",".join("?" for _ in ids)
     try:
-        connection.execute(
-            f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
-            ids,
-        )
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            connection.execute(
+                f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
+                chunk,
+            )
         connection.execute(
             """
             INSERT INTO bundle_overrides (
@@ -3068,28 +3969,30 @@ def save_bundle_override(work_ids, anchor_id, custom_title=None, cover_work_id=N
     finally:
         connection.close()
 
-
 def clear_bundle_override(work_ids):
     """Remove a bundle presentation override."""
     ids = _validated_work_ids(work_ids)
     if not ids:
         return False
 
-    placeholders = ",".join("?" for _ in ids)
     connection = get_connection()
     try:
-        cursor = connection.execute(
-            f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
-            ids,
-        )
+        deleted_count = 0
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            cursor = connection.execute(
+                f"DELETE FROM bundle_overrides WHERE bundle_anchor_id IN ({placeholders})",
+                chunk,
+            )
+            if cursor.rowcount > 0:
+                deleted_count += cursor.rowcount
         connection.commit()
-        return cursor.rowcount > 0
+        return deleted_count > 0
     except Exception:
         connection.rollback()
         raise
     finally:
         connection.close()
-
 
 def add_to_library(work_id, status="Planning"):
     """Add a work or update its status without erasing saved progress and notes.
@@ -4121,7 +5024,7 @@ def get_entity_favorites(entity_type=None):
 
 
 def get_recommendation_credit_profile(work_ids):
-    """Return role- and language-aware credits for local works, keyed by work ID."""
+    """Return local credits using bounded row batches and one SQLite connection."""
     ids = _validated_work_ids(work_ids)
     if ids is None or not ids:
         return {}
@@ -4129,53 +5032,61 @@ def get_recommendation_credit_profile(work_ids):
         work_id: {"characters": [], "voice_actors": [], "staff": []}
         for work_id in ids
     }
-    placeholders = ",".join("?" for _ in ids)
     connection = get_connection()
     try:
-        character_rows = connection.execute(
-            f"""
-            SELECT wc.work_id, c.id AS entity_id, wc.role
-            FROM work_characters AS wc
-            JOIN characters AS c ON c.id = wc.character_id
-            WHERE wc.work_id IN ({placeholders})
-            ORDER BY wc.work_id, wc.character_id
-            """, ids
-        ).fetchall()
-        actor_rows = connection.execute(
-            f"""
-            SELECT wcv.work_id, wcv.person_id AS entity_id, wcv.language,
-                   wc.role AS character_role, wcv.character_id
-            FROM work_character_voice_actors AS wcv
-            JOIN work_characters AS wc
-              ON wc.work_id = wcv.work_id
-             AND wc.character_id = wcv.character_id
-            WHERE wcv.work_id IN ({placeholders})
-            ORDER BY wcv.work_id, wcv.character_id, wcv.person_id, wcv.language
-            """, ids
-        ).fetchall()
-        staff_rows = connection.execute(
-            f"""
-            SELECT ws.work_id, ws.person_id AS entity_id, ws.role
-            FROM work_staff AS ws
-            WHERE ws.work_id IN ({placeholders})
-            ORDER BY ws.work_id, ws.person_id, ws.role
-            """, ids
-        ).fetchall()
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            # Consume each result batch before issuing the next query. The old
+            # implementation retained all three complete-library row sets in
+            # addition to the output profile, multiplying peak transient memory.
+            for row in connection.execute(
+                f"""
+                SELECT wc.work_id, c.id AS entity_id, wc.role
+                FROM work_characters AS wc
+                JOIN characters AS c ON c.id = wc.character_id
+                WHERE wc.work_id IN ({placeholders})
+                ORDER BY wc.work_id, wc.character_id
+                """,
+                chunk,
+            ):
+                profile[int(row["work_id"])]["characters"].append({
+                    "id": int(row["entity_id"]),
+                    "role": str(row["role"] or "UNKNOWN"),
+                })
+
+            for row in connection.execute(
+                f"""
+                SELECT wcv.work_id, wcv.person_id AS entity_id, wcv.language,
+                       wc.role AS character_role, wcv.character_id
+                FROM work_character_voice_actors AS wcv
+                JOIN work_characters AS wc
+                  ON wc.work_id = wcv.work_id
+                 AND wc.character_id = wcv.character_id
+                WHERE wcv.work_id IN ({placeholders})
+                ORDER BY wcv.work_id, wcv.character_id, wcv.person_id, wcv.language
+                """,
+                chunk,
+            ):
+                profile[int(row["work_id"])]["voice_actors"].append({
+                    "id": int(row["entity_id"]),
+                    "language": str(row["language"] or ""),
+                    "character_id": int(row["character_id"]),
+                    "character_role": str(row["character_role"] or "UNKNOWN"),
+                })
+
+            for row in connection.execute(
+                f"""
+                SELECT ws.work_id, ws.person_id AS entity_id, ws.role
+                FROM work_staff AS ws
+                WHERE ws.work_id IN ({placeholders})
+                ORDER BY ws.work_id, ws.person_id, ws.role
+                """,
+                chunk,
+            ):
+                profile[int(row["work_id"])]["staff"].append({
+                    "id": int(row["entity_id"]),
+                    "role": str(row["role"] or ""),
+                })
     finally:
         connection.close()
-
-    for row in character_rows:
-        profile[int(row["work_id"])]["characters"].append({
-            "id": int(row["entity_id"]), "role": str(row["role"] or "UNKNOWN"),
-        })
-    for row in actor_rows:
-        profile[int(row["work_id"])]["voice_actors"].append({
-            "id": int(row["entity_id"]), "language": str(row["language"] or ""),
-            "character_id": int(row["character_id"]),
-            "character_role": str(row["character_role"] or "UNKNOWN"),
-        })
-    for row in staff_rows:
-        profile[int(row["work_id"])]["staff"].append({
-            "id": int(row["entity_id"]), "role": str(row["role"] or ""),
-        })
     return profile

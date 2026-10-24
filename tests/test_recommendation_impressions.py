@@ -1,13 +1,14 @@
 """Qt viewport checks for persistent recommendation impressions."""
 
 import os
+import warnings
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import unittest
 from unittest.mock import patch
 
 from PySide6.QtWidgets import (
-    QApplication, QGridLayout, QLabel, QPushButton, QToolButton, QSizePolicy, QWidget,
+    QApplication, QGridLayout, QLabel, QPushButton, QScrollBar, QToolButton, QSizePolicy, QWidget,
 )
 
 from ui.preferences import get
@@ -48,6 +49,29 @@ class RecommendationImpressionTests(unittest.TestCase):
         self.viewport.close()
         self.page.deleteLater()
         self.app.processEvents()
+
+    def test_visibility_scrollbar_rebinding_disconnects_old_bar_without_warnings(self):
+        first_scroll_bar = QScrollBar(self.page)
+        second_scroll_bar = QScrollBar(self.page)
+        first_scroll_bar.setRange(0, 10)
+        second_scroll_bar.setRange(0, 10)
+
+        with (
+            patch.object(self.page, "_maybe_load_more") as load_more,
+            warnings.catch_warnings(record=True) as captured_warnings,
+        ):
+            warnings.simplefilter("always", RuntimeWarning)
+            self.page.set_visibility_viewport(self.viewport, first_scroll_bar)
+            self.page.set_visibility_viewport(self.viewport, first_scroll_bar)
+            self.page.set_visibility_viewport(self.viewport, second_scroll_bar)
+            first_scroll_bar.setValue(1)
+            second_scroll_bar.setValue(1)
+
+        self.assertEqual(load_more.call_count, 1)
+        self.assertFalse(
+            any("Failed to disconnect" in str(item.message) for item in captured_warnings),
+            [str(item.message) for item in captured_warnings],
+        )
 
     def test_empty_feed_keeps_pagination_available_when_catalog_has_more(self):
         self.page._results = []

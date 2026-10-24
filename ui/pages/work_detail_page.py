@@ -1,5 +1,6 @@
 import math
 import threading
+from collections import OrderedDict
 import time
 
 from api import (
@@ -26,12 +27,12 @@ from PySide6.QtWidgets import (
 from diagnostics import log_event, log_exception
 
 from database import (
-    add_manual_bundle_link, add_to_library, characters_are_loaded, delete_work_data, get_bundle_characters,
+    add_manual_bundle_link, add_to_library, delete_work_data, get_bundle_characters, get_bundle_detail_readiness,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
-    get_reading_progress, get_staff, is_work_in_library,
-    get_tmdb_mapping, get_work, get_provider_metadata,
+    get_episode_section_snapshot, get_reading_progress, get_staff, get_bundle_staff_page_state, is_work_in_library,
+    get_tmdb_mapping, get_work, get_provider_metadata, get_provider_metadata_batch,
     save_work_display_override, save_anime, save_characters, save_cover_path,
-    save_episode_thumbnail_path, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
+    save_episode_thumbnail_paths, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
     set_episode_watched, set_episode_progress, set_reading_progress_count, prune_episode_catalog,
 )
 from series import auto_bundle_library_work, get_library_series
@@ -416,38 +417,29 @@ class EpisodeSectionDataWorker(QObject):
             "attempt": self.attempt,
         }
         try:
-            work_row = self._phase(
-                "work_row_read",
-                lambda: get_work(self.work_id),
+            snapshot = self._phase(
+                "episode_section_snapshot_read",
+                lambda: get_episode_section_snapshot(self.work_id),
             )
+            work_row = snapshot.get("work") if isinstance(snapshot, dict) else None
             if work_row is None:
                 payload["status"] = "missing_work"
             else:
                 work = dict(work_row)
-                raw_rows = self._phase(
-                    "episode_rows_read",
-                    lambda: get_episodes(self.work_id),
-                )
                 episodes = WorkDetailPage._normalize_episode_rows(
-                    self.work_id, raw_rows
+                    self.work_id, snapshot.get("episodes") or []
                 )
                 payload.update({
                     "status": "ok",
                     "work": work,
                     "episodes": episodes,
                 })
-                try:
-                    metadata = self._phase(
-                        "catalog_metadata_read",
-                        lambda: get_provider_metadata(
-                            self.work_id, "tmdb_episode_match_version"
-                        ),
-                    )
-                except Exception as error:
-                    metadata = None
+                metadata = snapshot.get("catalog_metadata")
+                metadata_error = snapshot.get("catalog_metadata_error")
+                if metadata_error is not None:
                     log_exception(
                         "episodes.section_catalog_metadata_read_failed",
-                        error,
+                        metadata_error,
                         work_id=self.work_id,
                         attempt=self.attempt,
                     )
@@ -526,19 +518,11 @@ class EpisodeSectionDataWorker(QObject):
                     if catalog_version < TMDB_EPISODE_CATALOG_VERSION:
                         tmdb_id, tmdb_season_number = None, None
                     else:
-                        try:
-                            tmdb_id, tmdb_season_number = self._phase(
-                                "tmdb_mapping_read",
-                                lambda: get_tmdb_mapping(self.work_id),
-                            )
-                        except Exception as error:
-                            tmdb_id, tmdb_season_number = None, None
-                            log_exception(
-                                "episodes.section_tmdb_mapping_read_failed",
-                                error,
-                                work_id=self.work_id,
-                                attempt=self.attempt,
-                            )
+                        # get_work() returns works.*, so the mapping is already
+                        # in this snapshot; opening another connection cannot add
+                        # information for this same selected work.
+                        tmdb_id = work.get("tmdb_id")
+                        tmdb_season_number = work.get("tmdb_season_number")
                     payload["tmdb_context"] = {
                         "title_variants": title_variants,
                         "start_date": start_date,
@@ -610,10 +594,12 @@ class EpisodeProgressWorker(QObject):
             thread_ident=threading.get_ident(),
         )
         try:
-            set_episode_watched(self.work_id, self.episode_number, self.watched)
-            rows = get_episodes(self.work_id)
-            watched_count = sum(1 for row in rows if bool(row["watched"]))
-            total = len(rows)
+            # The write helper recalculates and returns both counters inside
+            # its transaction. Re-reading the entire episode list here added a
+            # second SQLite connection and a Python scan after every checkbox.
+            watched_count, total = set_episode_watched(
+                self.work_id, self.episode_number, self.watched
+            )
         except Exception as error:
             error_message = str(error)[:600]
             log_exception(
@@ -775,6 +761,10 @@ class StaffPageWorker(QObject):
         self.pages_loaded.emit(results)
 
 
+
+EPISODE_IMAGE_PATH_DB_BATCH_SIZE = 12
+
+
 class EpisodeImageCacheWorker(QObject):
     finished = Signal(int)
     error = Signal(int, str)
@@ -791,11 +781,65 @@ class EpisodeImageCacheWorker(QObject):
 
     def run(self):
         errors = []
+        pending_paths = []
         log_event(
             "episodes.image_cache_worker_started",
             work_id=self.work_id,
             image_count=len(self.episodes),
         )
+
+        def flush_pending_paths():
+            if not pending_paths:
+                return
+            batch = list(pending_paths)
+            pending_paths.clear()
+            try:
+                saved_numbers = save_episode_thumbnail_paths(self.work_id, batch)
+                if not isinstance(saved_numbers, (set, list, tuple, frozenset)):
+                    raise TypeError("Batch thumbnail writer returned an invalid result.")
+                saved_numbers = {
+                    int(number)
+                    for number in saved_numbers
+                    if not isinstance(number, bool)
+                }
+            except Exception as error:
+                for episode_number, _local_path in batch:
+                    self.failed_episode_numbers.append(episode_number)
+                    errors.append(f"Episode {episode_number}: {type(error).__name__}")
+                    log_exception(
+                        "episodes.image_cache_item_failed",
+                        error,
+                        work_id=self.work_id,
+                        episode_number=episode_number,
+                        phase="path_persist",
+                        batch_size=len(batch),
+                    )
+                return
+
+            for episode_number, _local_path in batch:
+                if episode_number not in saved_numbers:
+                    error = RuntimeError("The cached image path could not be saved.")
+                    self.failed_episode_numbers.append(episode_number)
+                    errors.append(f"Episode {episode_number}: {type(error).__name__}")
+                    log_exception(
+                        "episodes.image_cache_item_failed",
+                        error,
+                        work_id=self.work_id,
+                        episode_number=episode_number,
+                        phase="path_persist",
+                        batch_size=len(batch),
+                    )
+                    continue
+
+                self.cached_count += 1
+                log_event(
+                    "episodes.image_cache_item_completed",
+                    work_id=self.work_id,
+                    episode_number=episode_number,
+                    path_saved=True,
+                    persistence_batch_size=len(batch),
+                )
+
         for episode in self.episodes:
             if self.stop_event is not None and self.stop_event.is_set():
                 self.cancelled = True
@@ -834,22 +878,9 @@ class EpisodeImageCacheWorker(QObject):
                 )
                 if not local_path:
                     raise ValueError("TMDB returned no usable image data.")
-
-                saved = save_episode_thumbnail_path(
-                    self.work_id,
-                    episode_number,
-                    local_path,
-                )
-                if not saved:
-                    raise RuntimeError("The cached image path could not be saved.")
-
-                self.cached_count += 1
-                log_event(
-                    "episodes.image_cache_item_completed",
-                    work_id=self.work_id,
-                    episode_number=episode_number,
-                    path_saved=True,
-                )
+                pending_paths.append((episode_number, local_path))
+                if len(pending_paths) >= EPISODE_IMAGE_PATH_DB_BATCH_SIZE:
+                    flush_pending_paths()
             except Exception as error:
                 self.failed_episode_numbers.append(episode_number)
                 errors.append(f"Episode {episode_number}: {type(error).__name__}")
@@ -858,7 +889,11 @@ class EpisodeImageCacheWorker(QObject):
                     error,
                     work_id=self.work_id,
                     episode_number=episode_number,
+                    phase="image_download",
                 )
+
+        # Keep successful downloads even if cancellation stops remaining work.
+        flush_pending_paths()
 
         log_event(
             "episodes.image_cache_worker_finished",
@@ -884,7 +919,8 @@ class EpisodeImageCacheWorker(QObject):
 
 
 class EpisodeArtwork(QLabel):
-    _cache = {}
+    CACHE_LIMIT = 256
+    _cache = OrderedDict()
 
     def __init__(self, work_id=None, episode_number=None, parent=None):
         super().__init__(parent)
@@ -910,20 +946,27 @@ class EpisodeArtwork(QLabel):
             self._show_fallback("NO IMAGE")
             return
 
+        # Store the final fixed-size pixmap so recreated episode cards avoid
+        # both another disk read and another smooth scale/crop operation.
+        cached = self._cache.get(url)
+        if cached is not None and not cached.isNull():
+            self._cache.move_to_end(url)
+            self.setText("")
+            self.setPixmap(cached)
+            return
+
         local_path = Path(url)
         if local_path.is_file():
             pixmap = QPixmap(str(local_path))
             if not pixmap.isNull():
-                self._cache[url] = pixmap
+                display_pixmap = self._cropped(pixmap)
+                self._cache[url] = display_pixmap
+                self._cache.move_to_end(url)
+                while len(self._cache) > self.CACHE_LIMIT:
+                    self._cache.popitem(last=False)
                 self.setText("")
-                self.setPixmap(self._cropped(pixmap))
+                self.setPixmap(display_pixmap)
                 return
-
-        cached = self._cache.get(url)
-        if cached is not None and not cached.isNull():
-            self.setText("")
-            self.setPixmap(self._cropped(cached))
-            return
 
         # Remote episode URLs are intentionally never fetched by the widget.
         # The background episode-image cache worker owns all TMDB downloads.
@@ -1474,6 +1517,9 @@ class WorkDetailPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self.scroll_area)
+        # Apply styles while the page is still empty; repeating setStyleSheet on
+        # every detail open forces Qt to repolish the entire attached widget tree.
+        self._apply_detail_styles()
         self._ui_stall_watchdog_thread = threading.Thread(
             target=self._ui_stall_watchdog_loop,
             name="NekoTrack-UI-Stall-Watchdog",
@@ -1727,29 +1773,96 @@ class WorkDetailPage(QWidget):
         self.mangabaka_news = []
         primary_id = self._value("id")
         if self._is_reading_media():
+            lookup_ids = []
             if not isinstance(self.mangabaka_metadata, dict):
-                for provider_work_id in detail_ids or ([primary_id] if primary_id is not None else []):
-                    try:
-                        saved_metadata = get_provider_metadata(int(provider_work_id), "mangabaka")
-                    except Exception:
-                        saved_metadata = None
-                    if isinstance(saved_metadata, dict):
-                        self.mangabaka_metadata = saved_metadata
-                        primary_id = provider_work_id
-                        break
+                lookup_ids.extend(
+                    detail_ids or ([primary_id] if primary_id is not None else [])
+                )
+            if primary_id is not None and primary_id not in lookup_ids:
+                lookup_ids.append(primary_id)
+
+            saved_metadata_by_work = None
+            if lookup_ids:
+                try:
+                    saved_metadata_by_work = get_provider_metadata_batch(
+                        lookup_ids,
+                        ("mangabaka", "mangabaka_volumes", "mangabaka_news"),
+                    )
+                except Exception as error:
+                    # Preserve the previous resilient per-provider fallback if
+                    # the combined metadata read cannot be used on an older DB.
+                    log_exception(
+                        "work_detail.provider_metadata_batch_failed",
+                        error,
+                        work_ids=lookup_ids,
+                    )
+
+            if not isinstance(self.mangabaka_metadata, dict):
+                if saved_metadata_by_work is not None:
+                    for provider_work_id in (
+                        detail_ids
+                        or ([primary_id] if primary_id is not None else [])
+                    ):
+                        try:
+                            candidate_id = int(provider_work_id)
+                        except (TypeError, ValueError, OverflowError):
+                            continue
+                        saved_metadata = (
+                            saved_metadata_by_work.get(candidate_id, {}).get("mangabaka")
+                        )
+                        if isinstance(saved_metadata, dict):
+                            self.mangabaka_metadata = saved_metadata
+                            primary_id = provider_work_id
+                            break
+                else:
+                    for provider_work_id in (
+                        detail_ids
+                        or ([primary_id] if primary_id is not None else [])
+                    ):
+                        try:
+                            saved_metadata = get_provider_metadata(
+                                int(provider_work_id), "mangabaka"
+                            )
+                        except Exception:
+                            saved_metadata = None
+                        if isinstance(saved_metadata, dict):
+                            self.mangabaka_metadata = saved_metadata
+                            primary_id = provider_work_id
+                            break
+
             if primary_id is not None:
-                try:
-                    saved_volumes = get_provider_metadata(int(primary_id), "mangabaka_volumes")
-                    if isinstance(saved_volumes, list):
-                        self.mangabaka_volume_records = saved_volumes
-                except Exception:
-                    self.mangabaka_volume_records = []
-                try:
-                    saved_news = get_provider_metadata(int(primary_id), "mangabaka_news")
-                    if isinstance(saved_news, list):
-                        self.mangabaka_news = saved_news
-                except Exception:
-                    self.mangabaka_news = []
+                if saved_metadata_by_work is not None:
+                    try:
+                        primary_metadata = saved_metadata_by_work.get(
+                            int(primary_id), {}
+                        )
+                    except (TypeError, ValueError, OverflowError):
+                        primary_metadata = {}
+                    saved_volumes = primary_metadata.get("mangabaka_volumes")
+                    self.mangabaka_volume_records = (
+                        saved_volumes if isinstance(saved_volumes, list) else []
+                    )
+                    saved_news = primary_metadata.get("mangabaka_news")
+                    self.mangabaka_news = (
+                        saved_news if isinstance(saved_news, list) else []
+                    )
+                else:
+                    try:
+                        saved_volumes = get_provider_metadata(
+                            int(primary_id), "mangabaka_volumes"
+                        )
+                        if isinstance(saved_volumes, list):
+                            self.mangabaka_volume_records = saved_volumes
+                    except Exception:
+                        self.mangabaka_volume_records = []
+                    try:
+                        saved_news = get_provider_metadata(
+                            int(primary_id), "mangabaka_news"
+                        )
+                        if isinstance(saved_news, list):
+                            self.mangabaka_news = saved_news
+                    except Exception:
+                        self.mangabaka_news = []
 
         previous_selected = self._selected_episode_work_id
         if previous_selected in detail_ids:
@@ -1766,28 +1879,29 @@ class WorkDetailPage(QWidget):
             return False, False
 
         try:
+            readiness = get_bundle_detail_readiness(detail_ids)
             detail_data_ready = all(
-                characters_are_loaded(work_id)
+                readiness.get(work_id, {}).get("characters_loaded", False)
                 for work_id in detail_ids
             )
         except Exception:
+            readiness = {}
             detail_data_ready = False
 
-        episode_data_ready = True
         if self._is_reading_media():
             return detail_data_ready, True
 
+        episode_data_ready = True
         for work_id in detail_ids:
             try:
-                work_row = get_work(work_id)
+                entry = readiness.get(work_id)
                 # A not-yet-imported work is not the same as a work with zero
-                # episodes. The import worker may still be writing this row.
-                if work_row is None:
+                # episodes. Preserve that distinction for preloaded detail views.
+                if not entry or not entry.get("work_exists"):
                     episode_data_ready = False
                     break
-                expected = int(work_row["episodes"] or 0)
-                saved = get_episodes(work_id)
-                if expected > 0 and not saved:
+                expected = int(entry.get("expected_episodes") or 0)
+                if expected > 0 and not entry.get("episodes_saved"):
                     episode_data_ready = False
                     break
             except Exception:
@@ -1994,6 +2108,24 @@ class WorkDetailPage(QWidget):
                 "work_detail.cacheable_content_ready",
                 work_ids=list(content.property("_detail_cache_key") or []),
             )
+            opened_at = getattr(content, "_detail_open_started_at", None)
+            if (
+                opened_at is not None
+                and not bool(content.property("_detail_ready_timing_logged"))
+            ):
+                content.setProperty("_detail_ready_timing_logged", True)
+                log_event(
+                    "work_detail.content_ready",
+                    work_ids=list(content.property("_detail_cache_key") or []),
+                    cache_hit=False,
+                    elapsed_ms=round((time.perf_counter() - opened_at) * 1000, 2),
+                    detail_sections_ready=bool(
+                        getattr(content, "_detail_sections_ready", False)
+                    ),
+                    episode_section_ready=bool(
+                        getattr(content, "_episode_section_ready", False)
+                    ),
+                )
         return cacheable
 
     def _cache_detail_content(self, key, content):
@@ -2111,6 +2243,18 @@ class WorkDetailPage(QWidget):
             self._apply_detail_styles()
             self._queue_pending_episode_cards(cached)
             log_event(
+                "work_detail.content_ready",
+                work_ids=detail_ids,
+                cache_hit=True,
+                elapsed_ms=round((time.perf_counter() - open_started_at) * 1000, 2),
+                detail_sections_ready=bool(
+                    getattr(cached, "_detail_sections_ready", False)
+                ),
+                episode_section_ready=bool(
+                    getattr(cached, "_episode_section_ready", False)
+                ),
+            )
+            log_event(
                 "work_detail.open_completed",
                 work_ids=detail_ids,
                 cache_hit=True,
@@ -2123,6 +2267,8 @@ class WorkDetailPage(QWidget):
             detail_ids,
             defer_missing=True,
         )
+        content._detail_open_started_at = open_started_at
+        content.setProperty("_detail_ready_timing_logged", False)
         self.scroll_area.setWidget(content)
         self._apply_detail_styles()
         self._queue_pending_episode_cards(content)
@@ -2138,7 +2284,7 @@ class WorkDetailPage(QWidget):
 
     def _apply_detail_styles(self):
         checkbox_checkmark = _CHECKBOX_CHECKMARK.replace('"', '\\"')
-        self.setStyleSheet(f"""
+        stylesheet = f"""
             QPushButton#back {{ background: transparent; border: 0; color: {COLORS['secondary']}; padding: 5px 0; font-weight: 750; }}
             QPushButton#back:hover {{ color: {COLORS['primary']}; }}
             QFrame#hero {{ background: {surface_rgba('surface')}; border: 1px solid {COLORS['frame']}; border-radius: 22px; }}
@@ -2244,7 +2390,9 @@ class WorkDetailPage(QWidget):
             QPushButton#deleteBundle:hover {{ background:{COLORS['danger']}; }}
             QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {COLORS['border_hover']}; background: {surface_rgba('background_alt')}; }}
             QCheckBox::indicator:checked {{ background: {COLORS['accent']}; border-color: {COLORS['accent']}; image: url("{checkbox_checkmark}"); }}
-        """)
+        """
+        if self.styleSheet() != stylesheet:
+            self.setStyleSheet(stylesheet)
 
     def refresh_theme(self):
         self._apply_detail_styles()
@@ -5542,13 +5690,37 @@ class WorkDetailPage(QWidget):
 
     def _staff_page_requests(self, detail_ids):
         requests = []
-        for local_work_id in detail_ids or []:
+        normalized_ids = []
+        for raw_work_id in detail_ids or []:
             try:
-                local_work_id = int(local_work_id)
+                local_work_id = int(raw_work_id)
             except (TypeError, ValueError, OverflowError):
                 continue
-            if local_work_id == 0 or local_work_id in self._staff_exhausted_ids:
+            if (
+                local_work_id == 0
+                or local_work_id in self._staff_exhausted_ids
+                or local_work_id in normalized_ids
+            ):
                 continue
+            normalized_ids.append(local_work_id)
+
+        try:
+            page_state_by_id = get_bundle_staff_page_state(normalized_ids)
+        except Exception as error:
+            # Keep the old per-work path as a fallback if an old/malformed DB
+            # cannot supply the combined metadata read.
+            page_state_by_id = None
+            log_exception(
+                "work_detail.staff_page_state_batch_failed",
+                error,
+                work_ids=normalized_ids,
+            )
+
+        for local_work_id in normalized_ids:
+            state = (
+                page_state_by_id.get(local_work_id, {})
+                if page_state_by_id is not None else None
+            )
 
             # Most local works use their AniList ID as their work ID. A
             # MangaBaka-only work may keep a negative local ID but have an
@@ -5556,8 +5728,10 @@ class WorkDetailPage(QWidget):
             anilist_id = local_work_id if local_work_id > 0 else None
             if anilist_id is None:
                 try:
-                    linked_record = get_provider_metadata(
-                        local_work_id, "anilist_media_id"
+                    linked_record = (
+                        state.get("anilist_media_id")
+                        if state is not None
+                        else get_provider_metadata(local_work_id, "anilist_media_id")
                     )
                     raw_anilist_id = (
                         linked_record.get("id")
@@ -5569,16 +5743,21 @@ class WorkDetailPage(QWidget):
             if anilist_id is None or anilist_id <= 0:
                 continue
 
-            try:
-                saved_staff_count = len(get_staff(local_work_id))
-            except Exception:
-                saved_staff_count = 0
-            try:
-                page_info = get_provider_metadata(
-                    local_work_id, "anilist_staff_page_info"
-                )
-            except Exception:
-                page_info = None
+            if state is not None:
+                saved_staff_count = int(state.get("saved_staff_count") or 0)
+                page_info = state.get("page_info")
+            else:
+                try:
+                    saved_staff_count = len(get_staff(local_work_id))
+                except Exception:
+                    saved_staff_count = 0
+                try:
+                    page_info = get_provider_metadata(
+                        local_work_id, "anilist_staff_page_info"
+                    )
+                except Exception:
+                    page_info = None
+
             if isinstance(page_info, dict) and page_info.get("hasNextPage") is False:
                 self._staff_exhausted_ids.add(local_work_id)
                 continue

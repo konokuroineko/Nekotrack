@@ -18,19 +18,25 @@ class BundleCharacterRoleTests(unittest.TestCase):
             "person_language": person_language,
         }
 
+    @staticmethod
+    def _mock_rows(rows_by_work):
+        # The batched reader returns a mapping of work ID to work-specific rows.
+        return patch(
+            "database._load_bundle_character_rows",
+            side_effect=lambda work_ids: {
+                int(work_id): rows_by_work.get(int(work_id), [])
+                for work_id in work_ids
+            },
+        )
+
     def test_main_role_wins_independent_of_bundle_member_order(self):
         rows_by_work = {
             1: [self._character("SUPPORTING")],
             2: [self._character("MAIN")],
         }
-
-        with patch(
-            "database.get_characters",
-            side_effect=lambda work_id: rows_by_work.get(int(work_id), []),
-        ):
+        with self._mock_rows(rows_by_work):
             forward = database.get_bundle_characters([1, 2])
             reverse = database.get_bundle_characters([2, 1])
-
         self.assertEqual(len(forward), 1)
         self.assertEqual(len(reverse), 1)
         self.assertEqual(forward[0]["character_role"], "MAIN")
@@ -50,13 +56,8 @@ class BundleCharacterRoleTests(unittest.TestCase):
             ).fetchone()
         finally:
             connection.close()
-
-        with patch(
-            "database.get_characters",
-            side_effect=lambda work_id: [supporting] if int(work_id) == 1 else [main],
-        ):
+        with self._mock_rows({1: [supporting], 2: [main]}):
             result = database.get_bundle_characters([1, 2])
-
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["character_role"], "MAIN")
 
@@ -65,13 +66,9 @@ class BundleCharacterRoleTests(unittest.TestCase):
             1: [self._character("MAIN", 8002, "Beta Actor", "Japanese")],
             2: [self._character("MAIN", 8001, "Alpha Actor", "Japanese")],
         }
-        with patch(
-            "database.get_characters",
-            side_effect=lambda work_id: rows_by_work.get(int(work_id), []),
-        ):
+        with self._mock_rows(rows_by_work):
             forward = database.get_bundle_characters([1, 2])
             reverse = database.get_bundle_characters([2, 1])
-
         self.assertEqual(forward[0]["person_id"], 8001)
         self.assertEqual(reverse[0]["person_id"], 8001)
         self.assertEqual(forward[0]["person_name"], "Alpha Actor")
@@ -82,13 +79,8 @@ class BundleCharacterRoleTests(unittest.TestCase):
             1: [self._character("BACKGROUND")],
             2: [self._character("SUPPORTING")],
         }
-
-        with patch(
-            "database.get_characters",
-            side_effect=lambda work_id: rows_by_work.get(int(work_id), []),
-        ):
+        with self._mock_rows(rows_by_work):
             result = database.get_bundle_characters([1, 2])
-
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["character_role"], "SUPPORTING")
 

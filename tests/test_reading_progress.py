@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import database
 from ui.pages.work_detail_page import WorkDetailPage
@@ -138,6 +139,53 @@ class ReadingProgressTests(unittest.TestCase):
         self.assertEqual(WorkDetailPage._work_count(object(), stored_work, "chapters"), 73)
         self.assertEqual(WorkDetailPage._work_count(object(), stored_work, "volumes"), 12)
 
+    def test_reading_item_metadata_batches_upserts_and_preserves_read_state(self):
+        work_id = 401
+        database.save_anime(self._work(work_id, "MANGA", "NOVEL", chapters=100, volumes=10))
+        con = database.get_connection()
+        try:
+            con.execute(
+                """
+                INSERT INTO reading_items (work_id, item_type, item_number, title, is_read)
+                VALUES (?, 'chapter', 2, 'Old Chapter 2', 1)
+                """,
+                (work_id,),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        items = [
+            {"number": "1", "title": "Chapter One"},
+            {"number": "Chapter 2", "title": "Chapter Two"},
+            {"number": "invalid", "title": "Skip"},
+            {"title": "Fallback Index"},
+            {"number": "2", "title": "Updated Chapter Two"},
+            {"number": True, "title": "Skip Boolean"},
+        ]
+        with patch.object(database, "get_connection", wraps=database.get_connection) as factory:
+            saved_count = database.save_reading_item_metadata(work_id, "chapter", items)
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(saved_count, 4)
+
+        con = database.get_connection()
+        try:
+            rows = con.execute(
+                """
+                SELECT item_number, title, is_read
+                FROM reading_items
+                WHERE work_id = ? AND item_type = 'chapter'
+                ORDER BY item_number
+                """,
+                (work_id,),
+            ).fetchall()
+        finally:
+            con.close()
+        self.assertEqual(
+            [(int(row["item_number"]), row["title"], int(row["is_read"])) for row in rows],
+            [(1, "Chapter One", 0), (2, "Updated Chapter Two", 1), (4, "Fallback Index", 0)],
+        )
+
     def test_older_manga_episode_imports_are_removed_but_anime_episodes_remain(self):
         anime_id = 201
         manga_id = 202
@@ -162,6 +210,56 @@ class ReadingProgressTests(unittest.TestCase):
         self.assertEqual(len(database.get_episodes(anime_id)), 1)
         self.assertEqual(database.get_episodes(manga_id), [])
         self.assertEqual(database.get_tmdb_mapping(manga_id), (None, None))
+
+
+    def test_reading_progress_reads_and_writes_reuse_one_connection(self):
+        work_id = 501
+        database.save_anime(
+            self._work(work_id, "MANGA", "NOVEL", chapters=10, volumes=2)
+        )
+        database.add_to_library(work_id)
+        connection = database.get_connection()
+        try:
+            connection.executemany(
+                """
+                INSERT INTO reading_items (work_id, item_type, item_number, title, is_read)
+                VALUES (?, 'chapter', ?, ?, 0)
+                """,
+                [
+                    (work_id, 1, "Chapter One"),
+                    (work_id, 2, "Chapter Two"),
+                    (work_id, 5, "Chapter Five"),
+                ],
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with patch.object(
+            database, "get_connection", wraps=database.get_connection
+        ) as factory:
+            self.assertEqual(
+                database.set_reading_progress_count(work_id, "chapter", 4, 10),
+                (4, 10),
+            )
+        self.assertEqual(factory.call_count, 1)
+
+        statements = []
+        real_get_connection = database.get_connection
+
+        def traced_connection():
+            connection = real_get_connection()
+            connection.set_trace_callback(statements.append)
+            return connection
+
+        with patch.object(database, "get_connection", side_effect=traced_connection):
+            self.assertEqual(database.get_reading_progress(work_id, "chapter"), (4, 5))
+
+        selects = [
+            sql for sql in statements
+            if sql.lstrip().upper().startswith("SELECT")
+        ]
+        self.assertEqual(len(selects), 1)
 
 
 if __name__ == "__main__":

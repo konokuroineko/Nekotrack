@@ -1,8 +1,11 @@
 import os
 import shutil
 import sys
+import time
 import uuid
 from pathlib import Path
+
+_BOOTSTRAP_STARTED_AT = time.perf_counter()
 
 from PySide6.QtCore import QObject, QPointF, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen, QPolygonF
@@ -47,6 +50,8 @@ APP_DATA_DIR = Path(
     os.environ.get("NEKOTRACK_DATA_DIR")
     or (Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")) / APP_NAME)
 ).expanduser().resolve()
+
+from native_acceleration import BACKEND_NAME as NATIVE_ACCELERATION_BACKEND
 
 from diagnostics import (
     configure_logging,
@@ -94,6 +99,7 @@ log_event(
     app_version=APP_VERSION,
     frozen=bool(getattr(sys, "frozen", False)),
     executable=Path(sys.executable).name,
+    native_acceleration_backend=NATIVE_ACCELERATION_BACKEND,
 )
 with log_operation("startup.prepare_user_data"):
     prepare_user_data()
@@ -114,6 +120,12 @@ from updater import (
     _is_trusted_release_page_url,
     find_previous_update_backup,
     launch_update_helper,
+)
+
+
+log_event(
+    "startup.python_bootstrap_completed",
+    elapsed_ms=round((time.perf_counter() - _BOOTSTRAP_STARTED_AT) * 1000, 2),
 )
 
 

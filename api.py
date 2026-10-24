@@ -10,7 +10,8 @@ import requests
 import tempfile
 import threading
 import time
-from difflib import SequenceMatcher
+from functools import lru_cache
+from native_acceleration import sequence_match_ratio, sequence_match_ratio_default
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from ui.preferences import get
@@ -1931,6 +1932,18 @@ def _tmdb_get(path, params=None):
         raise RuntimeError(f"TMDB returned an unexpected response for {path}.")
     return payload
 
+
+def _unique_title_variants(values):
+    """Remove exact duplicate query strings while preserving provider search order."""
+    unique = []
+    seen = set()
+    for value in values or []:
+        query = str(value or "").strip()
+        if query and query not in seen:
+            seen.add(query)
+            unique.append(query)
+    return unique
+
 def _parse_date(value):
     text = str(value or "").strip()
     if not text:
@@ -1941,10 +1954,16 @@ def _parse_date(value):
         return None
 
 
+@lru_cache(maxsize=8192)
+def _normalize_title_text(value: str):
+    """Cache pure title normalization because the same aliases score many candidates."""
+    return re.sub(r"[\W_]+", "", value.casefold(), flags=re.UNICODE)
+
+
 def _normalize_title(value):
     # Keep Unicode letters and digits so Japanese native titles can match
     # TMDB's original_name field instead of normalizing to an empty string.
-    return re.sub(r"[\W_]+", "", str(value or "").casefold(), flags=re.UNICODE)
+    return _normalize_title_text(str(value or ""))
 
 
 def _title_similarity(left, right):
@@ -1958,18 +1977,14 @@ def _title_similarity(left, right):
     if name in query or query in name:
         containment = min(len(name), len(query)) / max(len(name), len(query))
         return 0.72 + 0.28 * containment
-    return SequenceMatcher(None, name, query, autojunk=False).ratio()
+    return sequence_match_ratio(name, query)
 
 
 def _candidate_title_similarity(candidate, title_variants):
     if not isinstance(candidate, dict):
         return 0.0
     names = (candidate.get("name"), candidate.get("original_name"))
-    variants = [
-        str(value).strip()
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    ]
+    variants = _unique_title_variants(title_variants)
     return max(
         (
             _title_similarity(name, variant)
@@ -2002,11 +2017,7 @@ def _candidate_score(candidate, title_variants, target_date):
 
 
 def _find_tmdb_series(title_variants, target_date):
-    variants = [
-        str(value).strip()
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    ]
+    variants = _unique_title_variants(title_variants)
     if not variants:
         raise RuntimeError("No title is available for TMDB series search.")
 
@@ -2224,11 +2235,7 @@ def _candidate_movie_score(candidate, title_variants, target_date):
     return score, similarity, release_date
 
 def _find_tmdb_movie(title_variants, target_date):
-    variants = [
-        str(value).strip()
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    ]
+    variants = _unique_title_variants(title_variants)
     if not variants:
         raise RuntimeError("No title is available for TMDB movie search.")
 
@@ -2286,12 +2293,7 @@ def _find_tmdb_movie(title_variants, target_date):
 
 def _find_tmdb_ova_movies(title_variants, target_date, expected_episodes):
     """Resolve one TMDB movie per OVA episode using AniList alternate titles."""
-    variants = [
-        str(value).strip()
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    ]
-    variants = list(dict.fromkeys(value for value in variants if value))
+    variants = _unique_title_variants(title_variants)
     try:
         expected = max(1, int(expected_episodes or 1))
     except (TypeError, ValueError):
@@ -4015,10 +4017,15 @@ def normalize_mangabaka_series(series, preferred_id=None):
     }
 
 
-def _mangabaka_normalize_title(value):
-    value = str(value or "").casefold()
+@lru_cache(maxsize=8192)
+def _normalize_mangabaka_title_text(value: str):
+    value = value.casefold()
     value = re.sub(r"[\W_]+", " ", value, flags=re.UNICODE)
     return " ".join(value.split())
+
+
+def _mangabaka_normalize_title(value):
+    return _normalize_mangabaka_title_text(str(value or ""))
 
 
 def _series_title_candidates(series):
@@ -4061,7 +4068,7 @@ def match_series_for_anilist(anilist_media, candidates):
         candidate_titles.discard("")
         exact = bool(normalized_aliases.intersection(candidate_titles))
         score = 1.0 if exact else max(
-            (SequenceMatcher(None, left, right).ratio()
+            (sequence_match_ratio_default(left, right)
              for left in normalized_aliases for right in candidate_titles),
             default=0.0,
         )

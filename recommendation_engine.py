@@ -439,7 +439,8 @@ def credit_profile_from_media_record(work):
     }
 
 
-def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_language):
+def _build_credit_signal_index(credit_profile, favorite_entities, voice_language):
+    """Precompute source contributor weights once for an entire ranking pass."""
     source_weights = Counter()
     source_context = {}
     for payload in (credit_profile or {}).values():
@@ -492,6 +493,12 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
         if kind in {"character", "voice_actor", "staff"} and entity_id is not None:
             favorites.add((kind, entity_id))
 
+    return source_weights, source_context, favorites
+
+
+def _candidate_credit_signal(work, credit_signal_index, voice_language):
+    """Score a candidate against the shared, precomputed contributor index."""
+    source_weights, source_context, favorites = credit_signal_index
     strongest_by_entity = {}
     reasons = []
     characters = work.get("characters")
@@ -614,7 +621,7 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
 def rank_candidates(
     candidates, history=None, favorite_works=None, rotation=0,
     credit_profile=None, favorite_entities=None, voice_language="ALL",
-    exclude_seen=False,
+    exclude_seen=False, _precompute_credit_index=True,
 ):
     """Score candidates with local feedback, weighted credits and exposure."""
     history = history or {}
@@ -623,6 +630,10 @@ def rank_candidates(
     credit_profile = credit_profile or {}
     favorite_entities = favorite_entities or []
     voice_language = str(voice_language or "ALL").upper()
+    # Contributor weights depend on the source library, not on an individual
+    # candidate. Build this index lazily once per ranking pass rather than
+    # rescanning every saved source title for every candidate.
+    credit_signal_index = None
     scored = []
     for raw in candidates or []:
         if not isinstance(raw, dict):
@@ -669,8 +680,20 @@ def rank_candidates(
         community_score = max(0, min(100, _safe_int(raw.get("averageScore"))))
         recommendation_score = max(0, min(100, _safe_int(raw.get("_recommendation_rating"))))
         popularity = max(0, _safe_int(raw.get("popularity")))
+        if _precompute_credit_index:
+            if credit_signal_index is None:
+                credit_signal_index = _build_credit_signal_index(
+                    credit_profile, favorite_entities, voice_language
+                )
+            candidate_credit_index = credit_signal_index
+        else:
+            # Benchmark/reference mode: reproduce the former per-candidate
+            # indexing work so the benefit of precomputation can be measured.
+            candidate_credit_index = _build_credit_signal_index(
+                credit_profile, favorite_entities, voice_language
+            )
         credit_boost, credit_reason = _candidate_credit_signal(
-            raw, credit_profile, favorite_entities, voice_language
+            raw, candidate_credit_index, voice_language
         )
         raw_score = (
             6.0
