@@ -5024,7 +5024,7 @@ def get_entity_favorites(entity_type=None):
 
 
 def get_recommendation_credit_profile(work_ids):
-    """Return role- and language-aware credits for local works, keyed by work ID."""
+    """Return local credits using bounded row batches and one SQLite connection."""
     ids = _validated_work_ids(work_ids)
     if ids is None or not ids:
         return {}
@@ -5032,21 +5032,29 @@ def get_recommendation_credit_profile(work_ids):
         work_id: {"characters": [], "voice_actors": [], "staff": []}
         for work_id in ids
     }
-    character_rows, actor_rows, staff_rows = [], [], []
     connection = get_connection()
     try:
         for chunk in _bundle_id_chunks(ids):
             placeholders = ",".join("?" for _ in chunk)
-            character_rows.extend(connection.execute(
+            # Consume each result batch before issuing the next query. The old
+            # implementation retained all three complete-library row sets in
+            # addition to the output profile, multiplying peak transient memory.
+            for row in connection.execute(
                 f"""
                 SELECT wc.work_id, c.id AS entity_id, wc.role
                 FROM work_characters AS wc
                 JOIN characters AS c ON c.id = wc.character_id
                 WHERE wc.work_id IN ({placeholders})
                 ORDER BY wc.work_id, wc.character_id
-                """, chunk
-            ).fetchall())
-            actor_rows.extend(connection.execute(
+                """,
+                chunk,
+            ):
+                profile[int(row["work_id"])]["characters"].append({
+                    "id": int(row["entity_id"]),
+                    "role": str(row["role"] or "UNKNOWN"),
+                })
+
+            for row in connection.execute(
                 f"""
                 SELECT wcv.work_id, wcv.person_id AS entity_id, wcv.language,
                        wc.role AS character_role, wcv.character_id
@@ -5056,32 +5064,29 @@ def get_recommendation_credit_profile(work_ids):
                  AND wc.character_id = wcv.character_id
                 WHERE wcv.work_id IN ({placeholders})
                 ORDER BY wcv.work_id, wcv.character_id, wcv.person_id, wcv.language
-                """, chunk
-            ).fetchall())
-            staff_rows.extend(connection.execute(
+                """,
+                chunk,
+            ):
+                profile[int(row["work_id"])]["voice_actors"].append({
+                    "id": int(row["entity_id"]),
+                    "language": str(row["language"] or ""),
+                    "character_id": int(row["character_id"]),
+                    "character_role": str(row["character_role"] or "UNKNOWN"),
+                })
+
+            for row in connection.execute(
                 f"""
                 SELECT ws.work_id, ws.person_id AS entity_id, ws.role
                 FROM work_staff AS ws
                 WHERE ws.work_id IN ({placeholders})
                 ORDER BY ws.work_id, ws.person_id, ws.role
-                """, chunk
-            ).fetchall())
+                """,
+                chunk,
+            ):
+                profile[int(row["work_id"])]["staff"].append({
+                    "id": int(row["entity_id"]),
+                    "role": str(row["role"] or ""),
+                })
     finally:
         connection.close()
-
-    for row in character_rows:
-        profile[int(row["work_id"])]["characters"].append({
-            "id": int(row["entity_id"]), "role": str(row["role"] or "UNKNOWN"),
-        })
-    for row in actor_rows:
-        profile[int(row["work_id"])]["voice_actors"].append({
-            "id": int(row["entity_id"]), "language": str(row["language"] or ""),
-            "character_id": int(row["character_id"]),
-            "character_role": str(row["character_role"] or "UNKNOWN"),
-        })
-    for row in staff_rows:
-        profile[int(row["work_id"])]["staff"].append({
-            "id": int(row["entity_id"]), "role": str(row["role"] or ""),
-        })
     return profile
-
