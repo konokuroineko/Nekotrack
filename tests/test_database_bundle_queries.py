@@ -852,7 +852,7 @@ class BundleDetailBatchingTests(unittest.TestCase):
         with patch.object(
             database, "get_connection", wraps=database.get_connection
         ) as factory:
-            result = database.get_recommendation_credit_profile(range(1, 402))
+            result = database.get_recommendation_credit_profile(list(range(1, 402)))
 
         self.assertEqual(factory.call_count, 1)
         self.assertEqual(len(result), 401)
