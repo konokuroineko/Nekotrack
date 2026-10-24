@@ -93,6 +93,30 @@ def create_synthetic_db(path: Path, count: int):
                 for work_id in range(1, count + 1) if work_id % 3 == 0
             ],
         )
+        metadata_work_id = max(1, count // 2)
+        con.executemany(
+            "INSERT INTO work_provider_metadata (work_id, provider, provider_id, payload_json) VALUES (?, ?, ?, ?)",
+            [
+                (
+                    metadata_work_id,
+                    "mangabaka",
+                    str(metadata_work_id + 10000),
+                    json.dumps({"id": metadata_work_id + 10000, "title": f"Metadata work {metadata_work_id}"}),
+                ),
+                (
+                    metadata_work_id,
+                    "mangabaka_volumes",
+                    None,
+                    json.dumps([{"number": 1, "title": "Volume One"}]),
+                ),
+                (
+                    metadata_work_id,
+                    "mangabaka_news",
+                    None,
+                    json.dumps([{"title": "Synthetic news"}]),
+                ),
+            ],
+        )
         con.commit()
     finally:
         con.close()
@@ -135,6 +159,52 @@ def batched_override_snapshots(ids):
     return snapshots
 
 
+
+def reference_provider_metadata(ids):
+    """Former Work Details metadata lookup: one provider read per member until found."""
+    selected_id = None
+    selected_metadata = None
+    for work_id in ids:
+        metadata = database.get_provider_metadata(work_id, "mangabaka")
+        if isinstance(metadata, dict):
+            selected_id = work_id
+            selected_metadata = metadata
+            break
+    primary_id = selected_id if selected_id is not None else (ids[0] if ids else None)
+    if primary_id is None:
+        return {"work_id": None, "mangabaka": None, "volumes": None, "news": None}
+    return {
+        "work_id": selected_id,
+        "mangabaka": selected_metadata,
+        "volumes": database.get_provider_metadata(primary_id, "mangabaka_volumes"),
+        "news": database.get_provider_metadata(primary_id, "mangabaka_news"),
+    }
+
+
+def batched_provider_metadata(ids):
+    """Equivalent metadata selection using one batched DB read."""
+    payloads = database.get_provider_metadata_batch(
+        ids, ("mangabaka", "mangabaka_volumes", "mangabaka_news")
+    )
+    selected_id = None
+    selected_metadata = None
+    for work_id in ids:
+        metadata = payloads.get(work_id, {}).get("mangabaka")
+        if isinstance(metadata, dict):
+            selected_id = work_id
+            selected_metadata = metadata
+            break
+    primary_id = selected_id if selected_id is not None else (ids[0] if ids else None)
+    if primary_id is None:
+        return {"work_id": None, "mangabaka": None, "volumes": None, "news": None}
+    values = payloads.get(primary_id, {})
+    return {
+        "work_id": selected_id,
+        "mangabaka": selected_metadata,
+        "volumes": values.get("mangabaka_volumes"),
+        "news": values.get("mangabaka_news"),
+    }
+
 def old_read(ids):
     return (
         reference_bundle_characters(ids),
@@ -143,6 +213,7 @@ def old_read(ids):
         reference_bundle_detail_readiness(ids),
         reference_override_snapshots(ids),
         reference_staff_state(ids),
+        reference_provider_metadata(ids),
     )
 
 
@@ -154,6 +225,7 @@ def batched_read(ids):
         database.get_bundle_detail_readiness(ids),
         batched_override_snapshots(ids),
         batched_staff_state(ids),
+        batched_provider_metadata(ids),
     )
 
 
