@@ -804,6 +804,7 @@ class BundleDetailBatchingTests(unittest.TestCase):
         self.assertEqual(len(result), 1200)
 
     def test_recommendation_credit_profile_streams_across_work_id_chunks(self):
+        work_ids = list(range(900001, 900402))
         connection = database.get_connection()
         try:
             connection.executemany(
@@ -818,7 +819,7 @@ class BundleDetailBatchingTests(unittest.TestCase):
                 "INSERT INTO work_characters (work_id, character_id, role) VALUES (?, ?, ?)",
                 [
                     (work_id, character_id, role)
-                    for work_id in range(1, 402)
+                    for work_id in work_ids
                     for character_id, role in ((1, "MAIN"), (2, "SUPPORTING"))
                 ],
             )
@@ -830,7 +831,7 @@ class BundleDetailBatchingTests(unittest.TestCase):
                 """,
                 [
                     (work_id, character_id, person_id, language)
-                    for work_id in range(1, 402)
+                    for work_id in work_ids
                     for character_id, person_id, language in (
                         (1, 990001, "Japanese"),
                         (2, 990002, "English"),
@@ -841,7 +842,7 @@ class BundleDetailBatchingTests(unittest.TestCase):
                 "INSERT INTO work_staff (work_id, person_id, role) VALUES (?, ?, ?)",
                 [
                     (work_id, person_id, role)
-                    for work_id in range(1, 402)
+                    for work_id in work_ids
                     for person_id, role in ((990001, "Director"), (990002, "Script"))
                 ],
             )
@@ -852,7 +853,7 @@ class BundleDetailBatchingTests(unittest.TestCase):
         with patch.object(
             database, "get_connection", wraps=database.get_connection
         ) as factory:
-            result = database.get_recommendation_credit_profile(list(range(1, 402)))
+            result = database.get_recommendation_credit_profile(work_ids)
 
         self.assertEqual(factory.call_count, 1)
         self.assertEqual(len(result), 401)
@@ -876,9 +877,9 @@ class BundleDetailBatchingTests(unittest.TestCase):
                 {"id": 990002, "role": "Script"},
             ],
         }
-        self.assertEqual(result[1], expected)
-        self.assertEqual(result[400], expected)
-        self.assertEqual(result[401], expected)
+        self.assertEqual(result[900001], expected)
+        self.assertEqual(result[900400], expected)
+        self.assertEqual(result[900401], expected)
 
     def test_empty_and_invalid_relation_inputs_keep_existing_contract(self):
         self.assertEqual(database.get_bundle_characters(None), [])
