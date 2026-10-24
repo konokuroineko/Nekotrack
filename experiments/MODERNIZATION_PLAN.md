@@ -535,3 +535,16 @@ write.
 A regression test checks that both the write/read-back path and the standalone aggregate
 read use one connection, and that the combined SELECT preserves the read count and stored
 highest-item total.
+
+## Thirty-first-pass bundled provider metadata reads
+
+Opening reading-media bundles previously opened SQLite once per member while searching for
+saved MangaBaka metadata, then opened separate connections for saved volume and news payloads.
+Added `get_provider_metadata_batch`, which reads the requested providers in bounded work-ID
+chunks using one connection and preserves the existing JSON-object/array validation.
+
+Work Details now uses the batch result while preserving bundle-member priority, the selected
+primary work, provider-specific payload types and a per-provider fallback if the combined
+read fails. Temporary-database coverage checks 1,200 work IDs, several provider names,
+malformed JSON filtering and one connection; a Qt integration test asserts the detail setup
+uses the batch reader and performs no per-work metadata reads on the normal path.
