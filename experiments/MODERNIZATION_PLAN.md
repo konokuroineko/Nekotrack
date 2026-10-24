@@ -494,3 +494,31 @@ batch cannot silently drop results from the current discovery pass.
 Regression tests verify recency promotion, oldest-entry eviction and exact return of
 all fetched rows even when a deliberately small test cache evicts an item mid-batch.
 This pass limits memory growth; it does not claim a CPU speedup.
+
+## Twenty-ninth-pass episode progress writes
+
+Bulk progress updates previously reset every episode to unwatched and then executed a
+separate UPDATE for every selected episode number. They now use one set-based UPDATE:
+small selections use a bounded CASE/IN expression, while larger selections are loaded
+into a temporary keep-set table in 400-ID multi-value chunks. Both paths preserve the
+old rule that unselected episodes become unwatched, including missing/noncontiguous IDs.
+
+Both single-episode and bulk progress updates now calculate total and watched counts in
+one aggregate query and update the library row directly instead of first querying whether
+that row exists. Added a 600-episode regression test that verifies watched-state parity,
+one episode UPDATE, bounded temporary-table inserts, a single aggregate count query and
+the single-episode toggle's matching counter behavior.
+
+## CI-discovered database consistency fix
+
+A branch audit caught that `work_detail_page.py` imported `prune_episode_catalog` while
+the current branch's `database.py` no longer defined it. Restored the function with the
+intended large-catalog temporary keep-set implementation; catalogs up to 400 numbers use
+the simple `NOT IN` path, while larger catalogs load the keep-set in bounded chunks and
+delete stale episodes/reminders without exceeding SQLite's parameter limit. Empty or
+invalid catalog responses still never prune saved data.
+
+Two fixture/test defects found by the same CI run were also corrected: the temporary
+episode table now has the production `(work_id, episode_number)` unique constraint needed
+by the UPSERT, and the character snapshot cleanup test imports `unittest.mock.patch`.
+The PR stays draft until the full CI run for the repaired head completes.
