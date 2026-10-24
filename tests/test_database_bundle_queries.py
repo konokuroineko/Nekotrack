@@ -803,6 +803,83 @@ class BundleDetailBatchingTests(unittest.TestCase):
         self.assertNotIn("mangabaka", result[500])
         self.assertEqual(len(result), 1200)
 
+    def test_recommendation_credit_profile_streams_across_work_id_chunks(self):
+        connection = database.get_connection()
+        try:
+            connection.executemany(
+                "INSERT INTO characters (id, name) VALUES (?, ?)",
+                [(1, "Character One"), (2, "Character Two")],
+            )
+            connection.executemany(
+                "INSERT INTO people (id, name, image_url, image_path) VALUES (?, ?, NULL, NULL)",
+                [(101, "Person One"), (102, "Person Two")],
+            )
+            connection.executemany(
+                "INSERT INTO work_characters (work_id, character_id, role) VALUES (?, ?, ?)",
+                [
+                    (work_id, character_id, role)
+                    for work_id in range(1, 402)
+                    for character_id, role in ((1, "MAIN"), (2, "SUPPORTING"))
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO work_character_voice_actors
+                    (work_id, character_id, person_id, language)
+                VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (work_id, character_id, person_id, language)
+                    for work_id in range(1, 402)
+                    for character_id, person_id, language in (
+                        (1, 101, "Japanese"),
+                        (2, 102, "English"),
+                    )
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO work_staff (work_id, person_id, role) VALUES (?, ?, ?)",
+                [
+                    (work_id, person_id, role)
+                    for work_id in range(1, 402)
+                    for person_id, role in ((101, "Director"), (102, "Script"))
+                ],
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with patch.object(
+            database, "get_connection", wraps=database.get_connection
+        ) as factory:
+            result = database.get_recommendation_credit_profile(range(1, 402))
+
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(len(result), 401)
+        expected = {
+            "characters": [
+                {"id": 1, "role": "MAIN"},
+                {"id": 2, "role": "SUPPORTING"},
+            ],
+            "voice_actors": [
+                {
+                    "id": 101, "language": "Japanese",
+                    "character_id": 1, "character_role": "MAIN",
+                },
+                {
+                    "id": 102, "language": "English",
+                    "character_id": 2, "character_role": "SUPPORTING",
+                },
+            ],
+            "staff": [
+                {"id": 101, "role": "Director"},
+                {"id": 102, "role": "Script"},
+            ],
+        }
+        self.assertEqual(result[1], expected)
+        self.assertEqual(result[400], expected)
+        self.assertEqual(result[401], expected)
+
     def test_empty_and_invalid_relation_inputs_keep_existing_contract(self):
         self.assertEqual(database.get_bundle_characters(None), [])
         self.assertEqual(database.get_bundle_staff(None), [])
