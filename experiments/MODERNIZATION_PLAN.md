@@ -522,3 +522,16 @@ Two fixture/test defects found by the same CI run were also corrected: the tempo
 episode table now has the production `(work_id, episode_number)` unique constraint needed
 by the UPSERT, and the character snapshot cleanup test imports `unittest.mock.patch`.
 The PR stays draft until the full CI run for the repaired head completes.
+
+## Thirtieth-pass reading-progress round trips
+
+Reading-progress reads previously issued two SELECT statements to obtain the durable read
+count and the highest stored chapter/volume number. The same connection now retrieves
+both through one SELECT with scalar subqueries. Saving a numeric progress count now returns
+the saved value directly and only queries the highest stored item number when no positive
+total hint is available; it no longer closes and reopens SQLite just to read back its own
+write.
+
+A regression test checks that both the write/read-back path and the standalone aggregate
+read use one connection, and that the combined SELECT preserves the read count and stored
+highest-item total.
