@@ -550,3 +550,15 @@ malformed JSON filtering and one connection; a Qt integration test asserts the d
 uses the batch reader and performs no per-work metadata reads on the normal path. The existing
 bundle-detail benchmark now compares selected work/payload parity and times the old versus
 batched metadata lookup as part of its full-run connection-count report.
+
+## Thirty-second-pass TMDB query deduplication
+
+TMDB series/movie matchers now remove exact duplicate title query strings while retaining
+first-seen order and preserving distinct spelling/casing variants. The same helper is used
+for candidate scoring, so duplicate aliases no longer multiply string-comparison work.
+This does not remove the deliberate second series-search pass without an air-date/year
+filter; its request parameters differ and preserve the existing fallback behavior.
+
+Regression tests mock exact TMDB result payloads and assert identical selected candidates
+with one network lookup for repeated same-title variants. This pass reduces redundant
+requests only when input aliases are exact duplicates; it makes no broad API-latency claim.
