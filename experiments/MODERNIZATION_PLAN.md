@@ -573,3 +573,19 @@ only transient database-row retention changes.
 A regression test populates 401 works to cross a chunk boundary, verifies exact role/language
 credit records at both sides of that boundary, and asserts the profile is still loaded with
 one SQLite connection.
+
+## Thirty-fourth-pass relation-cache concurrency
+
+The process-wide 5,000-entry relation LRU is now protected by a re-entrant lock. Cache lookup
+and LRU promotion happen atomically, iteration uses a stable key snapshot, and insertion/eviction
+are synchronized across Search, Library and Work Details workers. The batch loader also uses a
+single `get` per cached ID instead of checking membership and then indexing separately, which
+could race with eviction.
+
+The deterministic tests now replace the cache object rather than using `patch.dict` to clear a
+live shared `OrderedDict`; this avoids mutating the cache while a background worker is iterating
+it. A multithreaded regression exercises writes, reads, eviction and iteration together.
+
+The same CI review fixed two test-only defects: the new 401-work credit-profile fixture now uses
+unique person IDs instead of colliding with the shared fixture rows, and the thumbnail batching
+test no longer mocks the obsolete single-path writer that the worker no longer calls.
