@@ -212,5 +212,55 @@ class ReadingProgressTests(unittest.TestCase):
         self.assertEqual(database.get_tmdb_mapping(manga_id), (None, None))
 
 
+    def test_reading_progress_reads_and_writes_reuse_one_connection(self):
+        work_id = 501
+        database.save_anime(
+            self._work(work_id, "MANGA", "NOVEL", chapters=10, volumes=2)
+        )
+        database.add_to_library(work_id)
+        connection = database.get_connection()
+        try:
+            connection.executemany(
+                """
+                INSERT INTO reading_items (work_id, item_type, item_number, title, is_read)
+                VALUES (?, 'chapter', ?, ?, 0)
+                """,
+                [
+                    (work_id, 1, "Chapter One"),
+                    (work_id, 2, "Chapter Two"),
+                    (work_id, 5, "Chapter Five"),
+                ],
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with patch.object(
+            database, "get_connection", wraps=database.get_connection
+        ) as factory:
+            self.assertEqual(
+                database.set_reading_progress_count(work_id, "chapter", 4, 10),
+                (4, 10),
+            )
+        self.assertEqual(factory.call_count, 1)
+
+        statements = []
+        real_get_connection = database.get_connection
+
+        def traced_connection():
+            connection = real_get_connection()
+            connection.set_trace_callback(statements.append)
+            return connection
+
+        with patch.object(database, "get_connection", side_effect=traced_connection):
+            self.assertEqual(database.get_reading_progress(work_id, "chapter"), (4, 5))
+
+        selects = [
+            sql for sql in statements
+            if sql.lstrip().upper().startswith("SELECT")
+        ]
+        self.assertEqual(len(selects), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
