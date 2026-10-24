@@ -562,3 +562,14 @@ filter; its request parameters differ and preserve the existing fallback behavio
 Regression tests mock exact TMDB result payloads and assert identical selected candidates
 with one network lookup for repeated same-title variants. This pass reduces redundant
 requests only when input aliases are exact duplicates; it makes no broad API-latency claim.
+
+## Thirty-third-pass recommendation credit profile memory
+
+`get_recommendation_credit_profile` now consumes character, voice-actor and staff query
+rows one 400-work chunk at a time instead of retaining three whole-library row lists before
+building the output profile. The output still contains the same ordered normalized records;
+only transient database-row retention changes.
+
+A regression test populates 401 works to cross a chunk boundary, verifies exact role/language
+credit records at both sides of that boundary, and asserts the profile is still loaded with
+one SQLite connection.
