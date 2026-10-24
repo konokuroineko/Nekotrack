@@ -30,7 +30,7 @@ from database import (
     add_manual_bundle_link, add_to_library, delete_work_data, get_bundle_characters, get_bundle_detail_readiness,
     get_alternate_titles, get_bundle_relations, get_bundle_staff, get_connection, get_episodes,
     get_episode_section_snapshot, get_reading_progress, get_staff, get_bundle_staff_page_state, is_work_in_library,
-    get_tmdb_mapping, get_work, get_provider_metadata,
+    get_tmdb_mapping, get_work, get_provider_metadata, get_provider_metadata_batch,
     save_work_display_override, save_anime, save_characters, save_cover_path,
     save_episode_thumbnail_paths, save_episodes, save_provider_metadata, save_staff, save_tmdb_mapping,
     set_episode_watched, set_episode_progress, set_reading_progress_count, prune_episode_catalog,
@@ -1770,29 +1770,96 @@ class WorkDetailPage(QWidget):
         self.mangabaka_news = []
         primary_id = self._value("id")
         if self._is_reading_media():
+            lookup_ids = []
             if not isinstance(self.mangabaka_metadata, dict):
-                for provider_work_id in detail_ids or ([primary_id] if primary_id is not None else []):
-                    try:
-                        saved_metadata = get_provider_metadata(int(provider_work_id), "mangabaka")
-                    except Exception:
-                        saved_metadata = None
-                    if isinstance(saved_metadata, dict):
-                        self.mangabaka_metadata = saved_metadata
-                        primary_id = provider_work_id
-                        break
+                lookup_ids.extend(
+                    detail_ids or ([primary_id] if primary_id is not None else [])
+                )
+            if primary_id is not None and primary_id not in lookup_ids:
+                lookup_ids.append(primary_id)
+
+            saved_metadata_by_work = None
+            if lookup_ids:
+                try:
+                    saved_metadata_by_work = get_provider_metadata_batch(
+                        lookup_ids,
+                        ("mangabaka", "mangabaka_volumes", "mangabaka_news"),
+                    )
+                except Exception as error:
+                    # Preserve the previous resilient per-provider fallback if
+                    # the combined metadata read cannot be used on an older DB.
+                    log_exception(
+                        "work_detail.provider_metadata_batch_failed",
+                        error,
+                        work_ids=lookup_ids,
+                    )
+
+            if not isinstance(self.mangabaka_metadata, dict):
+                if saved_metadata_by_work is not None:
+                    for provider_work_id in (
+                        detail_ids
+                        or ([primary_id] if primary_id is not None else [])
+                    ):
+                        try:
+                            candidate_id = int(provider_work_id)
+                        except (TypeError, ValueError, OverflowError):
+                            continue
+                        saved_metadata = (
+                            saved_metadata_by_work.get(candidate_id, {}).get("mangabaka")
+                        )
+                        if isinstance(saved_metadata, dict):
+                            self.mangabaka_metadata = saved_metadata
+                            primary_id = provider_work_id
+                            break
+                else:
+                    for provider_work_id in (
+                        detail_ids
+                        or ([primary_id] if primary_id is not None else [])
+                    ):
+                        try:
+                            saved_metadata = get_provider_metadata(
+                                int(provider_work_id), "mangabaka"
+                            )
+                        except Exception:
+                            saved_metadata = None
+                        if isinstance(saved_metadata, dict):
+                            self.mangabaka_metadata = saved_metadata
+                            primary_id = provider_work_id
+                            break
+
             if primary_id is not None:
-                try:
-                    saved_volumes = get_provider_metadata(int(primary_id), "mangabaka_volumes")
-                    if isinstance(saved_volumes, list):
-                        self.mangabaka_volume_records = saved_volumes
-                except Exception:
-                    self.mangabaka_volume_records = []
-                try:
-                    saved_news = get_provider_metadata(int(primary_id), "mangabaka_news")
-                    if isinstance(saved_news, list):
-                        self.mangabaka_news = saved_news
-                except Exception:
-                    self.mangabaka_news = []
+                if saved_metadata_by_work is not None:
+                    try:
+                        primary_metadata = saved_metadata_by_work.get(
+                            int(primary_id), {}
+                        )
+                    except (TypeError, ValueError, OverflowError):
+                        primary_metadata = {}
+                    saved_volumes = primary_metadata.get("mangabaka_volumes")
+                    self.mangabaka_volume_records = (
+                        saved_volumes if isinstance(saved_volumes, list) else []
+                    )
+                    saved_news = primary_metadata.get("mangabaka_news")
+                    self.mangabaka_news = (
+                        saved_news if isinstance(saved_news, list) else []
+                    )
+                else:
+                    try:
+                        saved_volumes = get_provider_metadata(
+                            int(primary_id), "mangabaka_volumes"
+                        )
+                        if isinstance(saved_volumes, list):
+                            self.mangabaka_volume_records = saved_volumes
+                    except Exception:
+                        self.mangabaka_volume_records = []
+                    try:
+                        saved_news = get_provider_metadata(
+                            int(primary_id), "mangabaka_news"
+                        )
+                        if isinstance(saved_news, list):
+                            self.mangabaka_news = saved_news
+                    except Exception:
+                        self.mangabaka_news = []
 
         previous_selected = self._selected_episode_work_id
         if previous_selected in detail_ids:
