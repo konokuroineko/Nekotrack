@@ -63,6 +63,45 @@ class TMDBEpisodeMatchingTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
         self.assertIn("first_air_date_year", request.call_args_list[0].args[1])
 
+    def test_tv_search_skips_duplicate_exact_title_queries(self):
+        payload = {
+            "results": [{
+                "id": 909,
+                "name": "Example Show",
+                "original_name": "Example Show",
+                "first_air_date": "2020-01-05",
+                "origin_country": ["JP"],
+                "popularity": 1,
+            }]
+        }
+        with patch("api._tmdb_get", return_value=payload) as request:
+            result = api._find_tmdb_series(
+                ["Example Show", "Example Show", " Example Show "],
+                datetime.date(2020, 1, 5),
+            )
+
+        self.assertEqual(result["id"], 909)
+        self.assertEqual(request.call_count, 1)
+
+    def test_movie_search_skips_duplicate_exact_title_queries(self):
+        payload = {
+            "results": [{
+                "id": 910,
+                "title": "Example OVA",
+                "original_title": "Example OVA",
+                "release_date": "2020-01-05",
+                "popularity": 1,
+            }]
+        }
+        with patch("api._tmdb_get", return_value=payload) as request:
+            result = api._find_tmdb_movie(
+                ["Example OVA", "Example OVA", " Example OVA "],
+                datetime.date(2020, 1, 5),
+            )
+
+        self.assertEqual(result["id"], 910)
+        self.assertEqual(request.call_count, 1)
+
     def test_tv_search_refuses_to_choose_a_popular_but_unrelated_series(self):
         unrelated = {
             "results": [{
