@@ -1,4 +1,5 @@
 from collections import OrderedDict, defaultdict, deque
+from threading import RLock
 import re
 import time
 
@@ -67,24 +68,73 @@ class _BoundedRelationCache(OrderedDict):
     def __init__(self, max_entries=RELATION_CACHE_MAX_ENTRIES):
         super().__init__()
         self.max_entries = max(1, int(max_entries))
+        self._lock = RLock()
+
+    def __contains__(self, key):
+        with self._lock:
+            return super().__contains__(key)
 
     def __getitem__(self, key):
-        value = super().__getitem__(key)
-        self.move_to_end(key)
-        return value
+        with self._lock:
+            value = super().__getitem__(key)
+            super().move_to_end(key)
+            return value
 
     def get(self, key, default=None):
-        if key not in self:
-            return default
-        return self[key]
+        # Membership, lookup and LRU promotion must be atomic: concurrent
+        # relation-enrichment workers can otherwise evict a key between them.
+        with self._lock:
+            try:
+                value = super().__getitem__(key)
+            except KeyError:
+                return default
+            super().move_to_end(key)
+            return value
 
     def __setitem__(self, key, value):
-        if key in self:
+        with self._lock:
+            super().__setitem__(key, value)
+            super().move_to_end(key)
+            while len(self) > self.max_entries:
+                super().popitem(last=False)
+
+    def __delitem__(self, key):
+        with self._lock:
             super().__delitem__(key)
-        super().__setitem__(key, value)
-        self.move_to_end(key)
-        while len(self) > self.max_entries:
-            self.popitem(last=False)
+
+    def __iter__(self):
+        # Iterating a live OrderedDict while a worker updates it raises
+        # RuntimeError. Iterate a stable key snapshot under the same lock.
+        with self._lock:
+            keys = tuple(super().__iter__())
+        return iter(keys)
+
+    def __len__(self):
+        with self._lock:
+            return super().__len__()
+
+    def clear(self):
+        with self._lock:
+            super().clear()
+
+    def pop(self, key, *default):
+        with self._lock:
+            return super().pop(key, *default)
+
+    def popitem(self, last=True):
+        with self._lock:
+            return super().popitem(last=last)
+
+    def move_to_end(self, key, last=True):
+        with self._lock:
+            return super().move_to_end(key, last=last)
+
+    def copy(self):
+        with self._lock:
+            duplicate = type(self)(self.max_entries)
+            for key, value in super().items():
+                duplicate[key] = value
+            return duplicate
 
 
 _relation_cache = _BoundedRelationCache()
@@ -688,12 +738,12 @@ def _apply_relation_details(item, details):
 def _cache_relation_details_batch(media_ids):
     """Fetch uncached relation graphs without fanning out failed provider batches."""
     ids = sorted({int(media_id) for media_id in media_ids if media_id is not None})
-    result_for_call = {
-        media_id: _relation_cache[media_id]
-        for media_id in ids
-        if media_id in _relation_cache
-    }
-    missing = [media_id for media_id in ids if media_id not in _relation_cache]
+    result_for_call = {}
+    for media_id in ids:
+        cached = _relation_cache.get(media_id)
+        if cached is not None:
+            result_for_call[media_id] = cached
+    missing = [media_id for media_id in ids if media_id not in result_for_call]
     if not missing:
         return result_for_call
 
