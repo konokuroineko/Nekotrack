@@ -1932,6 +1932,18 @@ def _tmdb_get(path, params=None):
         raise RuntimeError(f"TMDB returned an unexpected response for {path}.")
     return payload
 
+
+def _unique_title_variants(values):
+    """Remove exact duplicate query strings while preserving provider search order."""
+    unique = []
+    seen = set()
+    for value in values or []:
+        query = str(value or "").strip()
+        if query and query not in seen:
+            seen.add(query)
+            unique.append(query)
+    return unique
+
 def _parse_date(value):
     text = str(value or "").strip()
     if not text:
@@ -1972,11 +1984,7 @@ def _candidate_title_similarity(candidate, title_variants):
     if not isinstance(candidate, dict):
         return 0.0
     names = (candidate.get("name"), candidate.get("original_name"))
-    variants = [
-        str(value).strip()
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    ]
+    variants = _unique_title_variants(title_variants)
     return max(
         (
             _title_similarity(name, variant)
@@ -2009,11 +2017,7 @@ def _candidate_score(candidate, title_variants, target_date):
 
 
 def _find_tmdb_series(title_variants, target_date):
-    variants = [
-        str(value).strip()
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    ]
+    variants = _unique_title_variants(title_variants)
     if not variants:
         raise RuntimeError("No title is available for TMDB series search.")
 
@@ -2231,11 +2235,7 @@ def _candidate_movie_score(candidate, title_variants, target_date):
     return score, similarity, release_date
 
 def _find_tmdb_movie(title_variants, target_date):
-    variants = [
-        str(value).strip()
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    ]
+    variants = _unique_title_variants(title_variants)
     if not variants:
         raise RuntimeError("No title is available for TMDB movie search.")
 
@@ -2293,12 +2293,7 @@ def _find_tmdb_movie(title_variants, target_date):
 
 def _find_tmdb_ova_movies(title_variants, target_date, expected_episodes):
     """Resolve one TMDB movie per OVA episode using AniList alternate titles."""
-    variants = [
-        str(value).strip()
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    ]
-    variants = list(dict.fromkeys(value for value in variants if value))
+    variants = _unique_title_variants(title_variants)
     try:
         expected = max(1, int(expected_episodes or 1))
     except (TypeError, ValueError):
