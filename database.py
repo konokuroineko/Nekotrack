@@ -1915,23 +1915,21 @@ def get_reading_progress(work_id, item_type, total_hint=None):
     try:
         row = connection.execute(
             f"""
-            SELECT COALESCE(
-                (SELECT read_count FROM reading_progress
-                 WHERE work_id = ? AND item_type = ?),
-                (SELECT {progress_column} FROM user_library
-                 WHERE work_id = ?),
-                0
-            ) AS read_count
+            SELECT
+                COALESCE(
+                    (SELECT read_count FROM reading_progress
+                     WHERE work_id = ? AND item_type = ?),
+                    (SELECT {progress_column} FROM user_library
+                     WHERE work_id = ?),
+                    0
+                ) AS read_count,
+                (
+                    SELECT COALESCE(MAX(item_number), 0)
+                    FROM reading_items
+                    WHERE work_id = ? AND item_type = ?
+                ) AS highest_item
             """,
-            (safe_work_id, kind, safe_work_id),
-        ).fetchone()
-        item_row = connection.execute(
-            """
-            SELECT COALESCE(MAX(item_number), 0) AS highest_item
-            FROM reading_items
-            WHERE work_id = ? AND item_type = ?
-            """,
-            (safe_work_id, kind),
+            (safe_work_id, kind, safe_work_id, safe_work_id, kind),
         ).fetchone()
     finally:
         connection.close()
@@ -1940,7 +1938,7 @@ def get_reading_progress(work_id, item_type, total_hint=None):
         _safe_optional_integer(total_hint, 0, _MAX_TRACKED_EPISODE_NUMBER)
         if total_hint is not None else None
     )
-    stored_total = int(item_row["highest_item"] or 0) if item_row else 0
+    stored_total = int(row["highest_item"] or 0) if row else 0
     total = (
         hinted_total if hinted_total is not None and hinted_total > 0
         else stored_total
@@ -1949,7 +1947,7 @@ def get_reading_progress(work_id, item_type, total_hint=None):
 
 
 def set_reading_progress_count(work_id, item_type, read_count, total_hint=None):
-    """Save chapter/volume progress durably without generating per-item placeholders."""
+    """Save chapter/volume progress without reopening the database to read it back."""
     kind = _reading_item_type(item_type)
     try:
         safe_work_id = _validated_work_id(work_id)
@@ -1993,13 +1991,23 @@ def set_reading_progress_count(work_id, item_type, read_count, total_hint=None):
             (parsed_count, safe_work_id),
         )
         connection.commit()
+        if parsed_total is not None and parsed_total > 0:
+            saved_total = parsed_total
+        else:
+            saved_total = int(connection.execute(
+                """
+                SELECT COALESCE(MAX(item_number), 0)
+                FROM reading_items
+                WHERE work_id = ? AND item_type = ?
+                """,
+                (safe_work_id, kind),
+            ).fetchone()[0] or 0)
     except Exception:
         connection.rollback()
         raise
     finally:
         connection.close()
-    return get_reading_progress(safe_work_id, kind, parsed_total)
-
+    return parsed_count, saved_total
 
 def save_episode_thumbnail_path(work_id, episode_number, thumbnail_path):
     """Persist the local cached image path for one episode."""
