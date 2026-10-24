@@ -431,7 +431,7 @@ class RelationPendingQueueTests(unittest.TestCase):
             item["_relations_loaded"] = True
             frontier.append(item)
 
-        with patch.dict(series._relation_cache, {}, clear=True):
+        with patch.object(series, "_relation_cache", series._BoundedRelationCache()):
             expected = self._reference_has_pending(frontier)
             actual = series.has_pending_relation_enrichment(frontier)
 
@@ -452,7 +452,7 @@ class RelationPendingQueueTests(unittest.TestCase):
         ])
         root["_relations_loaded"] = True
 
-        with patch.dict(series._relation_cache, {}, clear=True):
+        with patch.object(series, "_relation_cache", series._BoundedRelationCache()):
             expected = self._reference_has_pending([root])
             actual = series.has_pending_relation_enrichment([root])
 
@@ -471,7 +471,7 @@ class RelationBatchFailureIsolationTests(unittest.TestCase):
             raise RuntimeError("AniList temporarily unavailable")
 
         with (
-            patch.dict(series._relation_cache, {}, clear=True),
+            patch.object(series, "_relation_cache", series._BoundedRelationCache()),
             patch("series.get_media_relations_batch", side_effect=fail_batch),
         ):
             result = series._cache_relation_details_batch(ids)
@@ -495,7 +495,7 @@ class RelationBatchFailureIsolationTests(unittest.TestCase):
             return {local_id: local_details}
 
         with (
-            patch.dict(series._relation_cache, {}, clear=True),
+            patch.object(series, "_relation_cache", series._BoundedRelationCache()),
             patch("series.get_media_relations_batch", side_effect=split_provider_fetch),
         ):
             result = series._cache_relation_details_batch([positive_id, local_id])
