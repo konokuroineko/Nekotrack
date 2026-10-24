@@ -341,3 +341,12 @@ and connection counts across synthetic libraries of 100, 1,000 and 5,000 works.
 Search relation graphs now use a 5,000-entry LRU cache rather than an unbounded process
 dictionary. An in-flight batch retains its fetched values until return, so cache
 eviction cannot truncate a result list. Tests cover LRU order and in-flight parity.
+
+## Batched Work Details provider metadata
+
+`experiments/benchmark_bundle_details.py` now includes saved MangaBaka work metadata,
+volume records and news payloads in the existing per-work versus batched Work Details
+benchmark. It compares the selected primary work and decoded payloads exactly, and the
+full-run timing/connection counts include the old per-member metadata queries versus the
+single-connection batched lookup. The benchmark uses only its temporary synthetic SQLite
+database and makes no network requests.
