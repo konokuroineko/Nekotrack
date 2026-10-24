@@ -2325,6 +2325,57 @@ def get_provider_metadata(work_id, provider="mangabaka"):
     return payload if isinstance(payload, (dict, list)) else None
 
 
+
+def get_provider_metadata_batch(work_ids, providers):
+    """Read selected provider payloads for many works with one SQLite connection.
+
+    Invalid IDs/providers are rejected before querying. The returned mapping is
+    keyed by work ID, then normalized provider name; malformed or non-object /
+    array JSON payloads are omitted just as in get_provider_metadata().
+    """
+    ids = _validated_work_ids(work_ids)
+    if ids is None or not ids:
+        return {}
+
+    if not isinstance(providers, (list, tuple, set, frozenset)):
+        return {}
+    normalized_providers = sorted({
+        provider.strip().lower()
+        for provider in providers
+        if isinstance(provider, str) and provider.strip()
+    })
+    if not normalized_providers:
+        return {}
+
+    result = {work_id: {} for work_id in ids}
+    connection = get_connection()
+    try:
+        provider_placeholders = ",".join("?" for _ in normalized_providers)
+        for chunk in _bundle_id_chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT work_id, provider, payload_json
+                FROM work_provider_metadata
+                WHERE work_id IN ({placeholders})
+                  AND provider IN ({provider_placeholders})
+                ORDER BY work_id, provider
+                """,
+                (*chunk, *normalized_providers),
+            ).fetchall()
+            for row in rows:
+                try:
+                    work_id = int(row["work_id"])
+                    provider = str(row["provider"]).strip().lower()
+                    payload = json.loads(row["payload_json"])
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if isinstance(payload, (dict, list)) and work_id in result:
+                    result[work_id][provider] = payload
+    finally:
+        connection.close()
+    return result
+
 def save_provider_metadata(work_id, provider, payload, provider_id=None):
     """Persist a JSON-compatible provider payload before opening a DB connection."""
     safe_work_id = _validated_work_id(work_id)
