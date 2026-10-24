@@ -2105,6 +2105,24 @@ class WorkDetailPage(QWidget):
                 "work_detail.cacheable_content_ready",
                 work_ids=list(content.property("_detail_cache_key") or []),
             )
+            opened_at = getattr(content, "_detail_open_started_at", None)
+            if (
+                opened_at is not None
+                and not bool(content.property("_detail_ready_timing_logged"))
+            ):
+                content.setProperty("_detail_ready_timing_logged", True)
+                log_event(
+                    "work_detail.content_ready",
+                    work_ids=list(content.property("_detail_cache_key") or []),
+                    cache_hit=False,
+                    elapsed_ms=round((time.perf_counter() - opened_at) * 1000, 2),
+                    detail_sections_ready=bool(
+                        getattr(content, "_detail_sections_ready", False)
+                    ),
+                    episode_section_ready=bool(
+                        getattr(content, "_episode_section_ready", False)
+                    ),
+                )
         return cacheable
 
     def _cache_detail_content(self, key, content):
@@ -2222,6 +2240,18 @@ class WorkDetailPage(QWidget):
             self._apply_detail_styles()
             self._queue_pending_episode_cards(cached)
             log_event(
+                "work_detail.content_ready",
+                work_ids=detail_ids,
+                cache_hit=True,
+                elapsed_ms=round((time.perf_counter() - open_started_at) * 1000, 2),
+                detail_sections_ready=bool(
+                    getattr(cached, "_detail_sections_ready", False)
+                ),
+                episode_section_ready=bool(
+                    getattr(cached, "_episode_section_ready", False)
+                ),
+            )
+            log_event(
                 "work_detail.open_completed",
                 work_ids=detail_ids,
                 cache_hit=True,
@@ -2234,6 +2264,8 @@ class WorkDetailPage(QWidget):
             detail_ids,
             defer_missing=True,
         )
+        content._detail_open_started_at = open_started_at
+        content.setProperty("_detail_ready_timing_logged", False)
         self.scroll_area.setWidget(content)
         self._apply_detail_styles()
         self._queue_pending_episode_cards(content)

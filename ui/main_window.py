@@ -568,7 +568,8 @@ class MainWindow(QMainWindow):
         self._release_reminder_timer.setInterval(60_000)
         self._release_reminder_timer.timeout.connect(self._check_release_reminders)
         self._release_reminder_timer.start()
-        self.setup_ui()
+        with log_operation("main_window.initial_ui_build"):
+            self.setup_ui()
         QTimer.singleShot(250, self._start_existing_library_episode_preload)
         QTimer.singleShot(5_000, self._check_release_reminders)
 
@@ -610,15 +611,23 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.navigation = NavigationController(self.stack)
-        self.library_page = LibraryPage()
-        self.search_page = SearchPage(self.add_to_library)
-        self.work_detail_page = WorkDetailPage()
-        self.entity_profile_page = EntityProfilePage()
-        self.settings_page = SettingsPage(background_manager=self.background_manager)
-        self.home_page = HomePage(self.add_to_library)
+        with log_operation("main_window.construct_page", page="library"):
+            self.library_page = LibraryPage()
+        with log_operation("main_window.construct_page", page="search"):
+            self.search_page = SearchPage(self.add_to_library)
+        with log_operation("main_window.construct_page", page="work_detail"):
+            self.work_detail_page = WorkDetailPage()
+        with log_operation("main_window.construct_page", page="entity_profile"):
+            self.entity_profile_page = EntityProfilePage()
+        with log_operation("main_window.construct_page", page="settings"):
+            self.settings_page = SettingsPage(background_manager=self.background_manager)
+        with log_operation("main_window.construct_page", page="home"):
+            self.home_page = HomePage(self.add_to_library)
         self.recommendations_page = self.home_page.recommendations_page
-        self.calendar_page = CalendarPage()
-        self.favorites_page = FavoritesPage()
+        with log_operation("main_window.construct_page", page="calendar"):
+            self.calendar_page = CalendarPage()
+        with log_operation("main_window.construct_page", page="favorites"):
+            self.favorites_page = FavoritesPage()
         pages = {
             "home": self.home_page,
             "collections": self.library_page,

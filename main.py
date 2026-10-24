@@ -1,8 +1,11 @@
 import os
 import shutil
 import sys
+import time
 import uuid
 from pathlib import Path
+
+_BOOTSTRAP_STARTED_AT = time.perf_counter()
 
 from PySide6.QtCore import QObject, QPointF, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen, QPolygonF
@@ -117,6 +120,12 @@ from updater import (
     _is_trusted_release_page_url,
     find_previous_update_backup,
     launch_update_helper,
+)
+
+
+log_event(
+    "startup.python_bootstrap_completed",
+    elapsed_ms=round((time.perf_counter() - _BOOTSTRAP_STARTED_AT) * 1000, 2),
 )
 
 

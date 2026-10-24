@@ -589,3 +589,12 @@ it. A multithreaded regression exercises writes, reads, eviction and iteration t
 The same CI review fixed two test-only defects: the new 401-work credit-profile fixture now uses
 unique person IDs instead of colliding with the shared fixture rows, and the thumbnail batching
 test no longer mocks the obsolete single-path writer that the worker no longer calls.
+
+
+## Thirty-fifth-pass cold-start and Work Details readiness profiling
+
+- Added a bootstrap elapsed-time event spanning the initial module-import/startup path, alongside the existing separately timed user-data preparation, QApplication creation, database initialization and MainWindow creation.
+- MainWindow now records the duration of the initial UI build and each major page constructor. These timings will show whether app startup is dominated by one expensive page or by the overall setup path before any lazy-loading changes are attempted.
+- Work Details now records when a newly opened view becomes fully ready, including elapsed time and whether the view came from the in-process detail cache. The existing shell timing remains separate, so a fast skeleton attachment cannot be mistaken for a fully loaded detail view.
+- The three-view detail-widget cache remains intentionally process-local; Qt widget trees are not persisted across launches. The new measurements will help distinguish this expected cold-cache rebuild from slow provider or database work.
+- This is profiling instrumentation only. It does not change loading order, persistence, cache policy or provider behavior, and it makes no whole-app speed claim. Validate the timings on the user's Windows source-mode run before selecting the next startup/detail optimization.
