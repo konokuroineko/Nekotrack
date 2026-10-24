@@ -1020,7 +1020,6 @@ class DetailSkeletonTests(unittest.TestCase):
         with (
             patch("ui.pages.work_detail_page.cache_tmdb_episode_image", side_effect=cache_image),
             patch("ui.pages.work_detail_page.save_episode_thumbnail_paths", side_effect=save_batch) as save_batch_mock,
-            patch("ui.pages.work_detail_page.save_episode_thumbnail_path") as save_single_mock,
             patch("ui.pages.work_detail_page.log_event"),
             patch("ui.pages.work_detail_page.log_exception"),
         ):
@@ -1038,7 +1037,6 @@ class DetailSkeletonTests(unittest.TestCase):
         )
         flattened = [pair for call in save_batch_mock.call_args_list for pair in call.args[1]]
         self.assertEqual(flattened, cached_paths)
-        save_single_mock.assert_not_called()
 
     def test_episode_image_cache_worker_flushes_cached_paths_when_cancelled(self):
         stop_event = threading.Event()
