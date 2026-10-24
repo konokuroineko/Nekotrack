@@ -1,5 +1,6 @@
 import random
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -517,6 +518,49 @@ class BoundedRelationCacheTests(unittest.TestCase):
 
         self.assertEqual(list(cache), [1, 3])
         self.assertNotIn(2, cache)
+
+    def test_cache_operations_are_safe_while_worker_threads_mutate_it(self):
+        cache = series._BoundedRelationCache(max_entries=64)
+        failures = []
+        start = threading.Barrier(4)
+
+        def writer(offset):
+            try:
+                start.wait()
+                for index in range(1500):
+                    key = offset * 10000 + index
+                    cache[key] = {"id": key}
+                    cache.get(key)
+                    if index % 7 == 0:
+                        cache.pop(key - 1, None)
+            except Exception as error:
+                failures.append(error)
+
+        def reader():
+            try:
+                start.wait()
+                for _ in range(1500):
+                    keys = list(cache)
+                    for key in keys[:8]:
+                        cache.get(key)
+                    if len(cache) > cache.max_entries:
+                        failures.append(AssertionError("LRU cache exceeded its configured limit"))
+            except Exception as error:
+                failures.append(error)
+
+        threads = [
+            threading.Thread(target=writer, args=(1,)),
+            threading.Thread(target=writer, args=(2,)),
+            threading.Thread(target=reader),
+            threading.Thread(target=reader),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(failures, [])
+        self.assertLessEqual(len(cache), cache.max_entries)
 
     def test_batch_returns_all_results_even_when_cache_limit_is_exceeded(self):
         cache = series._BoundedRelationCache(max_entries=2)
