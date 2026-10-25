@@ -280,7 +280,7 @@ def run_one_size(count, iterations):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--character-counts", nargs="+", type=int, default=[25, 100, 250])
+    parser.add_argument("--character-counts", nargs="+", type=int, default=[25, 100, 250, 500, 1000])
     parser.add_argument("--iterations", type=int, default=3)
     parser.add_argument("--json-out", type=Path)
     args = parser.parse_args()

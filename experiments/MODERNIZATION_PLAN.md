@@ -626,3 +626,9 @@ No speedup is claimed until a fresh Windows diagnostic trace measures this pass.
 Character, Staff and Relation cards previously allocated a `QNetworkAccessManager` in every card constructor, including cases where artwork was already available from a local cache path or there was no remote image URL. The managers now initialize only when a network request is actually needed. Request completion, image caching and widget-local signal handling remain unchanged.
 
 Added a focused Qt regression test that constructs cards with local cached artwork and verifies they do not allocate network managers. This is an object-allocation reduction only; a new Windows diagnostic run is required before claiming a measurable opening-time improvement.
+
+## Character-snapshot cleanup scale follow-up
+
+The 2026-10-25 Windows/Python 3.14 CI artifact showed exact output parity and reduced direct SQL calls from 2,752 to 13 for a 250-character cleanup, but the batched path's median was 56.429 ms versus 53.381 ms for the per-record reference (0.946×). That is not evidence of a speedup at this size, even though it substantially bounds query-call growth.
+
+Before changing this data-pruning implementation, extend the deterministic benchmark to 500 and 1,000 characters across the existing Windows/Linux and Python 3.11/3.12/3.14 matrix. Use the results to decide whether the set-based cleanup has a meaningful large-cast benefit; preserve its exact orphan/shared-credit semantics regardless of timing.

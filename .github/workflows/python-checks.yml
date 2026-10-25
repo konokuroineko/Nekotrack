@@ -110,7 +110,7 @@ jobs:
       - name: Benchmark batched episode catalog upserts
         run: python experiments/benchmark_episode_catalog_upserts.py --episode-counts 12 100 500 1500 --iterations 5 --json-out "${{ runner.temp }}/nekotrack-episode-catalog-upserts.json"
       - name: Benchmark batched character snapshot cleanup
-        run: python experiments/benchmark_character_snapshot_cleanup.py --character-counts 25 100 250 --iterations 3 --json-out "${{ runner.temp }}/nekotrack-character-snapshot-cleanup.json"
+        run: python experiments/benchmark_character_snapshot_cleanup.py --character-counts 25 100 250 500 1000 --iterations 3 --json-out "${{ runner.temp }}/nekotrack-character-snapshot-cleanup.json"
       - name: Benchmark batched Library grouping reads
         run: python experiments/benchmark_library_grouping_reads.py --work-counts 100 1000 5000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-library-grouping-reads.json"
       - name: Upload comparable backend benchmark results
