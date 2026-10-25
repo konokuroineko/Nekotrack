@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import shiboken6
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -932,6 +932,33 @@ class UiStartupTests(unittest.TestCase):
         save_episode_rows.assert_called_once_with(302, partial_episode_rows)
         prune.assert_not_called()
         self.assertFalse(save_metadata.call_args.args[2]["complete"])
+
+    def test_episode_preload_completion_refreshes_only_the_visible_schedule_view(self):
+        from types import SimpleNamespace
+        from ui.main_window import MainWindow
+
+        for current_page in ("calendar", "home", "collections"):
+            with self.subTest(current_page=current_page):
+                calendar_page = MagicMock()
+                home_page = MagicMock()
+                window = SimpleNamespace(
+                    _shutdown_event=SimpleNamespace(is_set=lambda: False),
+                    navigation=SimpleNamespace(current_name=lambda: current_page),
+                    calendar_page=calendar_page,
+                    home_page=home_page,
+                )
+
+                MainWindow._library_episode_preload_completed(window)
+
+                if current_page == "calendar":
+                    calendar_page.refresh.assert_called_once_with()
+                    home_page.refresh.assert_not_called()
+                elif current_page == "home":
+                    home_page.refresh.assert_called_once_with()
+                    calendar_page.refresh.assert_not_called()
+                else:
+                    home_page.refresh.assert_not_called()
+                    calendar_page.refresh.assert_not_called()
 
     def test_calendar_and_favorites_load_when_first_opened_not_at_startup(self):
         MemorySettings.stores = {
