@@ -665,3 +665,8 @@ Both Library import and background preload now record the same version, fetch ti
 
 Regression tests cover refresh-candidate selection, one-connection selection, old-policy re-resolution, missing-start-date handling, preserving catalogs when TMDB returns fewer episodes than expected, and refreshing the visible Calendar/Home once after the background batch finishes. CI should confirm this pass before claiming the Calendar refresh path is verified.
 
+## Forty-fifth-pass remove unused Library relation-graph scan
+
+Each Library refresh queried all distinct source/target IDs in work_relations only to write diagnostic counts and a sample. Those values did not participate in the pending-sync calculation, which depends on Library IDs plus the session's completed/failed sets. Removed that whole-table read and its unused log fields while retaining the Library ID query and the actual relation-sync selection. A regression test verifies the plan uses one query and does not touch work_relations merely for diagnostics.
+
+This reduces unnecessary database work; no whole-app speedup is claimed until a real Windows Library-refresh trace is compared.
