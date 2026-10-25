@@ -2370,6 +2370,95 @@ def get_provider_metadata(work_id, provider="mangabaka"):
 
 
 
+
+def get_library_episode_catalog_refresh_ids(
+    catalog_version,
+    refresh_interval_seconds,
+    now=None,
+):
+    """Return Library anime IDs whose cached TMDB episode catalog needs refresh.
+
+    Missing episode rows, outdated matching policies, incomplete catalogs and
+    missing/expired timestamps are refresh candidates. The freshness metadata
+    is read in one SQLite query so the startup worker does not open a separate
+    connection for every anime just to decide whether its cache is current.
+    """
+    import time
+
+    try:
+        required_version = int(catalog_version)
+        refresh_interval = float(refresh_interval_seconds)
+        current_time = float(time.time() if now is None else now)
+    except (TypeError, ValueError, OverflowError):
+        return []
+    if (
+        required_version < 0
+        or not math.isfinite(refresh_interval)
+        or refresh_interval < 0
+        or not math.isfinite(current_time)
+    ):
+        return []
+
+    connection = get_connection()
+    try:
+        rows = connection.execute(
+            """
+            SELECT
+                works.id,
+                EXISTS (
+                    SELECT 1
+                    FROM episodes
+                    WHERE episodes.work_id = works.id
+                ) AS has_episodes,
+                catalog.payload_json AS catalog_payload
+            FROM works
+            JOIN user_library ON user_library.work_id = works.id
+            LEFT JOIN work_provider_metadata AS catalog
+              ON catalog.work_id = works.id
+             AND catalog.provider = 'tmdb_episode_match_version'
+            WHERE COALESCE(works.episodes, 0) > 0
+              AND UPPER(COALESCE(works.type, '')) = 'ANIME'
+            ORDER BY user_library.added_date, works.id
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    refresh_ids = []
+    for row in rows:
+        if not bool(row["has_episodes"]):
+            refresh_ids.append(int(row["id"]))
+            continue
+
+        try:
+            metadata = json.loads(row["catalog_payload"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            metadata = None
+        if not isinstance(metadata, dict):
+            refresh_ids.append(int(row["id"]))
+            continue
+
+        try:
+            saved_version = max(0, int(metadata.get("version") or 0))
+        except (TypeError, ValueError, OverflowError):
+            saved_version = 0
+        try:
+            fetched_at = float(metadata.get("fetched_at") or 0)
+        except (TypeError, ValueError, OverflowError):
+            fetched_at = 0.0
+
+        stale = (
+            metadata.get("complete") is False
+            or not math.isfinite(fetched_at)
+            or fetched_at <= 0
+            or current_time - fetched_at >= refresh_interval
+        )
+        if saved_version < required_version or stale:
+            refresh_ids.append(int(row["id"]))
+
+    return refresh_ids
+
+
 def get_provider_metadata_batch(work_ids, providers):
     """Read selected provider payloads for many works with one SQLite connection.
 
