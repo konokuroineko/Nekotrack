@@ -656,3 +656,12 @@ Updated Home regression coverage verifies one batched call and the same visible 
 MainWindow previously constructed Calendar and Favorites with their full initial refresh even though neither is visible on startup; MainWindow refreshes each again when navigating to that destination. These two pages now support an opt-in deferred initial refresh. MainWindow builds only their themed page shells on startup and the existing `_page_changed` handlers load the contents on first open. Direct `CalendarPage()` and `FavoritesPage()` construction keeps its original eager-refresh default for standalone callers and tests.
 
 A UI regression test verifies neither page refreshes during Home startup and each refreshes when navigated to. This removes hidden initial database/render work; whole-startup timing still needs a fresh Windows diagnostics run before quantifying the user-visible benefit.
+
+## Forty-fourth-pass Calendar episode-catalog refresh
+
+The startup episode preloader previously selected only Library anime with zero cached episode rows. A partial, undated, outdated-policy or week-old catalog therefore remained unchanged unless Work Details happened to open that title. A single SQLite candidate query now selects missing catalogs and metadata that is absent, malformed, incomplete, on an old matching-policy version or at least one refresh interval old; fresh complete catalogs stay out of the queue.
+
+Both Library import and background preload now record the same version, fetch timestamp and completeness metadata used by Work Details. Old matching-policy mappings are re-resolved. A missing AniList start date no longer blocks TMDB lookup, which can use an existing mapping or attempt a title match without a date. Saved episode rows are upserted without overwriting watched state; stale rows/reminders are pruned only when the known expected episode count is met, so an incomplete provider result cannot erase existing progress.
+
+Regression tests cover refresh-candidate selection, one-connection selection, old-policy re-resolution, missing-start-date handling and preserving catalogs when TMDB returns fewer episodes than expected. CI should confirm this pass before claiming the Calendar refresh path is verified.
+
