@@ -20,8 +20,6 @@ from database import (
     characters_are_loaded,
     get_alternate_titles,
     get_bundle_character_voice_actors,
-    get_connection,
-    get_episodes,
     get_due_release_reminders,
     get_episode_section_snapshot,
     get_library_episode_catalog_refresh_ids,
