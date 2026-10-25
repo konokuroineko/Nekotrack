@@ -46,6 +46,7 @@ with patch.object(preferences, "QSettings", MemorySettings):
     from ui.widgets.work_card import WorkCard
     from ui.theme import card_stylesheet
     from ui.pages.library_page import (
+        LibraryPage,
         RelationSyncWorker,
         _backfill_automatic_bundle_memberships,
         pending_relation_sync_ids,
@@ -625,6 +626,44 @@ class UiStartupTests(unittest.TestCase):
             failed_ids=set(),
         )
         self.assertEqual(pending, [-148237, 21355])
+
+    def test_relation_sync_plan_does_not_scan_full_relation_graph_for_diagnostics(self):
+        from types import SimpleNamespace
+
+        class FakeCursor:
+            def fetchall(self):
+                return [{"id": 101}, {"id": 102}]
+
+        class FakeConnection:
+            def __init__(self):
+                self.queries = []
+                self.closed = False
+
+            def execute(self, query):
+                self.queries.append(query)
+                return FakeCursor()
+
+            def close(self):
+                self.closed = True
+
+        connection = FakeConnection()
+        page_state = SimpleNamespace(
+            _closing=False,
+            _sync_thread=None,
+            _sync_done_ids=set(),
+            _sync_failed_ids=set(),
+        )
+        with (
+            patch("ui.pages.library_page.get_connection", return_value=connection),
+            patch("ui.pages.library_page.pending_relation_sync_ids", return_value=[]),
+            patch("ui.pages.library_page.log_event"),
+        ):
+            LibraryPage._start_relation_sync(page_state)
+
+        self.assertTrue(connection.closed)
+        self.assertEqual(len(connection.queries), 1)
+        self.assertIn("JOIN user_library", connection.queries[0])
+        self.assertNotIn("work_relations", connection.queries[0])
 
     def test_relation_sync_worker_persists_full_relation_snapshots(self):
         details = {
