@@ -21,7 +21,6 @@ class HomeDashboardTests(unittest.TestCase):
             patch.object(HomePage, "_read_library", return_value=[]),
             patch.object(RecommendationsPage, "refresh", autospec=True),
             patch("ui.pages.home_page.get_upcoming_library_episodes", return_value=[]),
-            patch("ui.pages.home_page.get_upcoming_library_episodes", return_value=[]),
         ]
         for candidate in patches:
             candidate.start()
@@ -38,7 +37,6 @@ class HomeDashboardTests(unittest.TestCase):
         with (
             patch.object(HomePage, "_read_library", return_value=[]),
             patch.object(RecommendationsPage, "refresh", autospec=True) as refresh_mock,
-            patch("ui.pages.home_page.get_upcoming_library_episodes", return_value=[]),
             patch("ui.pages.home_page.get_upcoming_library_episodes", return_value=[]),
         ):
             page = HomePage()
