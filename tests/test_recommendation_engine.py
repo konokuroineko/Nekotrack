@@ -298,6 +298,31 @@ class RecommendationScoringTests(unittest.TestCase):
         self.assertGreater(staff_role_weight("Original story"), staff_role_weight("Background art"))
         self.assertLess(staff_role_weight("Assistant Director"), staff_role_weight("Director"))
 
+    def test_credit_signal_reason_ties_keep_lexicographic_max(self):
+        candidate = {
+            "characters": {"edges": [
+                {"role": "MAIN", "node": {"id": 1, "name": {"full": "Alpha"}}, "voiceActors": []},
+                {"role": "MAIN", "node": {"id": 2, "name": {"full": "Zebra"}}, "voiceActors": []},
+            ]},
+            "staff": {"edges": []},
+        }
+        index = recommendation_engine._build_credit_signal_index(
+            {},
+            [
+                {"entity_type": "character", "entity_id": 1},
+                {"entity_type": "character", "entity_id": 2},
+            ],
+            "ALL",
+        )
+
+        boost, reason = recommendation_engine._candidate_credit_signal(
+            candidate, index, "ALL"
+        )
+        self.assertEqual(boost, 44.0)
+        # max((boost, reason) for ...) historically resolves score ties by
+        # lexicographically greatest explanation text.
+        self.assertEqual(reason, "Features your favorite character: Zebra")
+
     def test_voice_actor_reason_names_the_person_and_title(self):
         candidate = {
             "id": 8801,

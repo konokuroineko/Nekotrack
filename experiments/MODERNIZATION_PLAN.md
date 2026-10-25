@@ -632,3 +632,9 @@ Added a focused Qt regression test that constructs cards with local cached artwo
 The 2026-10-25 Windows/Python 3.14 CI artifact showed exact output parity and reduced direct SQL calls from 2,752 to 13 for a 250-character cleanup, but the batched path's median was 56.429 ms versus 53.381 ms for the per-record reference (0.946×). That is not evidence of a speedup at this size, even though it substantially bounds query-call growth.
 
 Before changing this data-pruning implementation, extend the deterministic benchmark to 500 and 1,000 characters across the existing Windows/Linux and Python 3.11/3.12/3.14 matrix. Use the results to decide whether the set-based cleanup has a meaningful large-cast benefit; preserve its exact orphan/shared-credit semantics regardless of timing.
+
+## Fortieth-pass recommendation explanation selection
+
+Candidate credit scoring previously accumulated every matched-credit explanation into a list, even though only the maximum `(boost, explanation)` tuple is returned. It now tracks only the best tuple, builds explanation text only when a credit can match or beat the current best boost, and skips zero-valued entries in the score-aggregation map. The tuple comparison is retained deliberately so equal-score explanations still select the same lexicographically greatest text.
+
+A focused regression test protects that tie rule; existing ranking tests continue to cover candidate scores, saved-creator and favorite-credit explanations, language filtering and deduplication. The ranking benchmark will be checked after CI; no user-visible or end-to-end speedup is claimed without measurements.
