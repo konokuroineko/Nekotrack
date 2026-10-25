@@ -382,13 +382,6 @@ class LibraryPage(QWidget):
                     "JOIN user_library ON user_library.work_id=works.id"
                 ).fetchall()
             ]
-            connected = {
-                int(row["id"])
-                for row in connection.execute(
-                    "SELECT DISTINCT source_id AS id FROM work_relations "
-                    "UNION SELECT DISTINCT target_id AS id FROM work_relations"
-                ).fetchall()
-            }
         finally:
             connection.close()
         pending = pending_relation_sync_ids(
@@ -400,8 +393,6 @@ class LibraryPage(QWidget):
             "library.relation_sync.plan",
             library_work_count=len(ids),
             library_work_ids=ids[:100],
-            connected_work_count=len(connected),
-            connected_sample=sorted(connected)[:100],
             pending_relation_ids=pending[:100],
             pending_relation_count=len(pending),
             already_checked_ids=sorted(self._sync_done_ids)[:100],
