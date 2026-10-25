@@ -20,8 +20,8 @@ class HomeDashboardTests(unittest.TestCase):
         patches = [
             patch.object(HomePage, "_read_library", return_value=[]),
             patch.object(RecommendationsPage, "refresh", autospec=True),
-            patch("ui.pages.home_page.get_release_reminders", return_value=[]),
-            patch("ui.pages.home_page.get_episodes", return_value=[]),
+            patch("ui.pages.home_page.get_upcoming_library_episodes", return_value=[]),
+            patch("ui.pages.home_page.get_upcoming_library_episodes", return_value=[]),
         ]
         for candidate in patches:
             candidate.start()
@@ -38,8 +38,8 @@ class HomeDashboardTests(unittest.TestCase):
         with (
             patch.object(HomePage, "_read_library", return_value=[]),
             patch.object(RecommendationsPage, "refresh", autospec=True) as refresh_mock,
-            patch("ui.pages.home_page.get_release_reminders", return_value=[]),
-            patch("ui.pages.home_page.get_episodes", return_value=[]),
+            patch("ui.pages.home_page.get_upcoming_library_episodes", return_value=[]),
+            patch("ui.pages.home_page.get_upcoming_library_episodes", return_value=[]),
         ):
             page = HomePage()
 
@@ -69,37 +69,46 @@ class HomeDashboardTests(unittest.TestCase):
             page.deleteLater()
             self.app.processEvents()
 
-    def test_upcoming_release_preview_uses_cached_dates_and_saved_reminders(self):
+    def test_upcoming_release_preview_uses_one_batched_query(self):
         page = self._make_empty_home()
         today = datetime.date(2026, 10, 16)
-        library = [
-            {"id": 1, "type": "ANIME", "title": "Anime One"},
-            {"id": 2, "type": "ANIME", "title": "Anime Two"},
-            {"id": 3, "type": "MANGA", "title": "Manga is not an anime schedule"},
+        episode_rows = [
+            {
+                "work_id": 1, "episode_number": 2, "title": "Special episode",
+                "air_date": "2026-10-18", "work_title": "Anime One",
+                "reminder_enabled": 1,
+            },
+            {
+                "work_id": 1, "episode_number": 3, "title": "Episode 3",
+                "air_date": "2026-10-20", "work_title": "Anime One",
+                "reminder_enabled": 0,
+            },
+            {
+                "work_id": 1, "episode_number": 4, "title": "Old episode",
+                "air_date": "2026-10-15", "work_title": "Anime One",
+                "reminder_enabled": 0,
+            },
+            {
+                "work_id": 1, "episode_number": 5, "title": "Too far away",
+                "air_date": "2026-12-16", "work_title": "Anime One",
+                "reminder_enabled": 0,
+            },
+            {
+                "work_id": 1, "episode_number": 6, "title": "Bad date",
+                "air_date": "not-a-date", "work_title": "Anime One",
+                "reminder_enabled": 0,
+            },
+            {
+                "work_id": 2, "episode_number": 1, "title": None,
+                "air_date": "2026-10-16", "work_title": "Anime Two",
+                "reminder_enabled": 0,
+            },
         ]
-        episodes = {
-            1: [
-                {"episode_number": 2, "title": "Special episode", "air_date": "2026-10-18"},
-                {"episode_number": 3, "title": "Episode 3", "air_date": "2026-10-20"},
-                {"episode_number": 4, "title": "Old episode", "air_date": "2026-10-15"},
-                {"episode_number": 5, "title": "Too far away", "air_date": "2026-12-16"},
-                {"episode_number": 6, "title": "Bad date", "air_date": "not-a-date"},
-            ],
-            2: [
-                {"episode_number": 1, "title": None, "air_date": "2026-10-16"},
-            ],
-        }
-        with (
-            patch(
-                "ui.pages.home_page.get_release_reminders",
-                return_value=[{"work_id": 1, "episode_number": 2}],
-            ),
-            patch(
-                "ui.pages.home_page.get_episodes",
-                side_effect=lambda work_id: episodes.get(work_id, []),
-            ) as get_episodes_mock,
-        ):
-            events = page._upcoming_release_rows(library, today=today)
+        with patch(
+            "ui.pages.home_page.get_upcoming_library_episodes",
+            return_value=episode_rows,
+        ) as get_upcoming:
+            events = page._upcoming_release_rows(today=today)
 
         self.assertEqual(
             [(row["work_id"], row["episode_number"]) for row in events],
@@ -108,7 +117,7 @@ class HomeDashboardTests(unittest.TestCase):
         self.assertTrue(events[1]["_reminder_enabled"])
         self.assertEqual(events[0]["episode_title"], "Episode 1")
         self.assertEqual(events[2]["episode_title"], "Episode 3")
-        self.assertEqual(get_episodes_mock.call_count, 2)
+        get_upcoming.assert_called_once_with("2026-10-16", "2026-12-16")
 
     def test_reminder_toggle_saves_and_refreshes_home(self):
         page = self._make_empty_home()

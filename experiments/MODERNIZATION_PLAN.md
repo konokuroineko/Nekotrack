@@ -627,11 +627,11 @@ Character, Staff and Relation cards previously allocated a `QNetworkAccessManage
 
 Added a focused Qt regression test that constructs cards with local cached artwork and verifies they do not allocate network managers. This is an object-allocation reduction only; a new Windows diagnostic run is required before claiming a measurable opening-time improvement.
 
-## Character-snapshot cleanup scale follow-up
+## Character-snapshot cleanup scale results
 
-The 2026-10-25 Windows/Python 3.14 CI artifact showed exact output parity and reduced direct SQL calls from 2,752 to 13 for a 250-character cleanup, but the batched path's median was 56.429 ms versus 53.381 ms for the per-record reference (0.946×). That is not evidence of a speedup at this size, even though it substantially bounds query-call growth.
+The expanded deterministic CI benchmark confirms exact database-state parity while cutting direct SQL calls from 5,502 to 13 at 500 characters and from 11,002 to 13 at 1,000 characters. On Windows/Python 3.14, the 500-character median was 82.325 ms for the per-record reference versus 52.414 ms batched (1.57×); at 1,000, 165.132 ms versus 58.230 ms (2.84×). On Linux/Python 3.14, the corresponding medians were 27.551 ms versus 4.512 ms (6.11×) and 86.933 ms versus 7.977 ms (10.90×).
 
-Before changing this data-pruning implementation, extend the deterministic benchmark to 500 and 1,000 characters across the existing Windows/Linux and Python 3.11/3.12/3.14 matrix. Use the results to decide whether the set-based cleanup has a meaningful large-cast benefit; preserve its exact orphan/shared-credit semantics regardless of timing.
+Small Windows casts were near break-even, but the batched path clearly wins at larger sizes and bounds query-call growth. Keep the current set-based implementation and its exact shared-credit/orphan-cleanup semantics; no further rewrite is justified by this benchmark.
 
 ## Fortieth-pass recommendation explanation selection
 
@@ -644,3 +644,9 @@ A focused regression test protects that tie rule; existing ranking tests continu
 The Calendar page was loading the library, loading all enabled reminders, then opening another SQLite connection for every anime to fetch every cached episode before filtering to the next 60 days. It now retrieves only saved-anime episodes inside the calendar window in one joined query, with reminder state and work presentation fields included. An additive index on episode air date supports the bounded range query. Python still validates dates after retrieval and performs the same final date/title/episode sorting, so malformed provider dates do not become visible events.
 
 Regression coverage checks a single database connection, library/type/date filtering, reminder state and rejection of invalid ranges. This is a query-count reduction; validate full app startup/Calendar timing before making a whole-app speed claim.
+
+## Forty-second-pass shared Home release query
+
+The Home dashboard preview had the same N+1 episode read as Calendar: it fetched enabled reminders once and then opened a separate SQLite connection for every anime during Home refresh. Home now reuses `get_upcoming_library_episodes`, the same indexed, date-bounded joined query as Calendar. The preview retains its own title fallback, malformed-date guard, 60-day inclusive window, reminder flags and date/title/episode order.
+
+Updated Home regression coverage verifies one batched call and the same visible preview rows. This is a query-count reduction; startup-wide timing should be evaluated separately before claiming a measurable user-facing speedup.

@@ -14,12 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from database import (
-    get_all_library,
-    get_episodes,
-    get_release_reminders,
-    set_release_reminder,
-)
+from database import get_all_library, get_upcoming_library_episodes, set_release_reminder
 from diagnostics import log_exception
 from ui.theme import COLORS, surface_rgba
 from ui.widgets.work_card import WorkCard
@@ -201,7 +196,7 @@ class HomePage(QWidget):
         }
         self.content_layout.addWidget(self._continue_section(continue_items[:4]))
         self.content_layout.addWidget(
-            self._release_section(self._upcoming_release_rows(library))
+            self._release_section(self._upcoming_release_rows())
         )
         # Reuse the already-loaded local rows instead of querying SQLite a
         # second time just to seed recommendations.
@@ -222,59 +217,47 @@ class HomePage(QWidget):
         except (TypeError, ValueError):
             return None
 
-    def _upcoming_release_rows(self, library, today=None):
+    def _upcoming_release_rows(self, today=None):
         """Build a small Home preview from cached episode dates only."""
         today = today or datetime.date.today()
         last_date = today + datetime.timedelta(days=60)
+        end_exclusive = last_date + datetime.timedelta(days=1)
 
-        reminders = set()
         try:
-            for reminder in get_release_reminders() or []:
-                try:
-                    reminders.add((
-                        int(reminder["work_id"]),
-                        int(reminder["episode_number"]),
-                    ))
-                except (KeyError, TypeError, ValueError, OverflowError):
-                    continue
+            episode_rows = get_upcoming_library_episodes(
+                today.isoformat(),
+                end_exclusive.isoformat(),
+            ) or []
         except Exception as error:
-            log_exception("home.release_reminders_load_failed", error)
+            log_exception("home.release_episodes_load_failed", error)
+            return []
 
         events = []
-        for work in library:
-            if str(work.get("type") or "").strip().upper() != "ANIME":
+        for episode in episode_rows:
+            row = dict(episode)
+            air_date = self._parse_air_date(row.get("air_date"))
+            if air_date is None or air_date < today or air_date > last_date:
                 continue
-            work_id = self._integer(work.get("id"))
+
+            work_id = self._integer(row.get("work_id"))
             if work_id <= 0:
                 continue
+            episode_number = self._integer(row.get("episode_number"))
+            episode_title = row.get("title")
+            if not isinstance(episode_title, str):
+                episode_title = ""
+            episode_title = episode_title.strip()
+            if not episode_title or episode_title.casefold().startswith("episode "):
+                episode_title = f"Episode {episode_number}"
 
-            try:
-                episodes = get_episodes(work_id) or []
-            except Exception as error:
-                log_exception("home.release_episodes_load_failed", error, work_id=work_id)
-                continue
-
-            for episode in episodes:
-                row = dict(episode)
-                air_date = self._parse_air_date(row.get("air_date"))
-                if air_date is None or air_date < today or air_date > last_date:
-                    continue
-                episode_number = self._integer(row.get("episode_number"))
-                episode_title = row.get("title")
-                if not isinstance(episode_title, str):
-                    episode_title = ""
-                episode_title = episode_title.strip()
-                if not episode_title or episode_title.casefold().startswith("episode "):
-                    episode_title = f"Episode {episode_number}"
-
-                events.append({
-                    "work_id": work_id,
-                    "work_title": str(work.get("title") or f"Untitled · {work_id}"),
-                    "episode_number": episode_number,
-                    "episode_title": episode_title,
-                    "_release_date": air_date,
-                    "_reminder_enabled": (work_id, episode_number) in reminders,
-                })
+            events.append({
+                "work_id": work_id,
+                "work_title": str(row.get("work_title") or f"Untitled · {work_id}"),
+                "episode_number": episode_number,
+                "episode_title": episode_title,
+                "_release_date": air_date,
+                "_reminder_enabled": bool(row.get("reminder_enabled", False)),
+            })
 
         events.sort(key=lambda row: (
             row["_release_date"],
