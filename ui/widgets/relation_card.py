@@ -34,7 +34,7 @@ class RelationCard(QFrame):
     def __init__(self, relation, parent=None):
         super().__init__(parent)
         self.relation = relation
-        self._network_manager = QNetworkAccessManager(self)
+        self._network_manager = None
         self._cover_reply = None
 
         self.setObjectName("relationCard")
@@ -191,6 +191,11 @@ class RelationCard(QFrame):
         target_id = self._value("target_id")
         return f"Related work · {target_id}" if target_id else "Related work"
 
+    def _ensure_network_manager(self):
+        if self._network_manager is None:
+            self._network_manager = QNetworkAccessManager(self)
+        return self._network_manager
+
     def _load_cover(self):
         cover_path = self._value("cover_path")
         if cover_path:
@@ -216,7 +221,7 @@ class RelationCard(QFrame):
         if cover_url in self._cover_failures:
             return
 
-        self._cover_reply = self._network_manager.get(
+        self._cover_reply = self._ensure_network_manager().get(
             QNetworkRequest(QUrl(cover_url))
         )
         self._cover_reply.finished.connect(self._cover_finished)

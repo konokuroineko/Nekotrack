@@ -71,7 +71,7 @@ class PersonCard(QFrame):
         self.setFixedWidth(180)
         self.setMinimumHeight(215)
         self.setStyleSheet(card_stylesheet())
-        self._network_manager = QNetworkAccessManager(self)
+        self._network_manager = None
         self._image_reply = None
 
         layout = QVBoxLayout(self)
@@ -143,10 +143,15 @@ class PersonCard(QFrame):
         self.image.update()
         self.update()
 
+    def _ensure_network_manager(self):
+        if self._network_manager is None:
+            self._network_manager = QNetworkAccessManager(self)
+        return self._network_manager
+
     def _load_image_url(self, url):
         if not url:
             return
-        self._image_reply = self._network_manager.get(
+        self._image_reply = self._ensure_network_manager().get(
             QNetworkRequest(QUrl(str(url)))
         )
         self._image_reply.finished.connect(self._image_finished)

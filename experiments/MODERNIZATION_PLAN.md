@@ -620,3 +620,9 @@ The latest Windows diagnostic trace measured a cold Re:Zero Work Details open at
 Normal deferred navigation now uses lightweight section-heading placeholders and a text-only episode loading state. The explicit non-deferred fallback/preload path retains its full card-shaped placeholders. Final detail cards, section ordering, and theme styling are unchanged. A focused regression test verifies that the active path stays lightweight while the fallback path keeps its full skeletons.
 
 No speedup is claimed until a fresh Windows diagnostic trace measures this pass.
+
+## Thirty-ninth-pass lazy card network managers
+
+Character, Staff and Relation cards previously allocated a `QNetworkAccessManager` in every card constructor, including cases where artwork was already available from a local cache path or there was no remote image URL. The managers now initialize only when a network request is actually needed. Request completion, image caching and widget-local signal handling remain unchanged.
+
+Added a focused Qt regression test that constructs cards with local cached artwork and verifies they do not allocate network managers. This is an object-allocation reduction only; a new Windows diagnostic run is required before claiming a measurable opening-time improvement.
