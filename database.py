@@ -2383,12 +2383,14 @@ def get_library_episode_catalog_refresh_ids(
     is read in one SQLite query so the startup worker does not open a separate
     connection for every anime just to decide whether its cache is current.
     """
+    import datetime
     import time
 
     try:
         required_version = int(catalog_version)
         refresh_interval = float(refresh_interval_seconds)
         current_time = float(time.time() if now is None else now)
+        current_date = datetime.date.fromtimestamp(current_time).isoformat()
     except (TypeError, ValueError, OverflowError):
         return []
     if (
@@ -2410,6 +2412,17 @@ def get_library_episode_catalog_refresh_ids(
                     FROM episodes
                     WHERE episodes.work_id = works.id
                 ) AS has_episodes,
+                EXISTS (
+                    SELECT 1
+                    FROM episodes
+                    WHERE episodes.work_id = works.id
+                      AND (
+                          episodes.air_date IS NULL
+                          OR TRIM(episodes.air_date) = ''
+                          OR date(episodes.air_date) IS NULL
+                          OR date(episodes.air_date) >= date(?)
+                      )
+                ) AS has_calendar_relevant_episodes,
                 catalog.payload_json AS catalog_payload
             FROM works
             JOIN user_library ON user_library.work_id = works.id
@@ -2419,7 +2432,8 @@ def get_library_episode_catalog_refresh_ids(
             WHERE COALESCE(works.episodes, 0) > 0
               AND UPPER(COALESCE(works.type, '')) = 'ANIME'
             ORDER BY user_library.added_date, works.id
-            """
+            """,
+            (current_date,),
         ).fetchall()
     finally:
         connection.close()
@@ -2435,7 +2449,11 @@ def get_library_episode_catalog_refresh_ids(
         except (TypeError, ValueError, json.JSONDecodeError):
             metadata = None
         if not isinstance(metadata, dict):
-            refresh_ids.append(int(row["id"]))
+            # Older app versions did not record catalog timestamps. Avoid
+            # re-resolving every completed title on the first upgraded start;
+            # only legacy caches that could affect Calendar are useful targets.
+            if bool(row["has_calendar_relevant_episodes"]):
+                refresh_ids.append(int(row["id"]))
             continue
 
         try:
