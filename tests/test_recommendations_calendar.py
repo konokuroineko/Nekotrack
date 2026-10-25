@@ -348,10 +348,10 @@ class ReleaseReminderDatabaseTests(unittest.TestCase):
                 "VALUES (?, ?, ?, ?)",
                 (103, 1, "Not tracked", today.isoformat()),
             )
-            database.add_to_library(102, "Planning")
             connection.commit()
         finally:
             connection.close()
+        database.add_to_library(102, "Planning")
 
         original_factory = database.get_connection
         with patch.object(database, "get_connection", wraps=original_factory) as connection_factory:
