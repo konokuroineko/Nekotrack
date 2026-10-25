@@ -2931,41 +2931,74 @@ class WorkDetailPage(QWidget):
         if layout is None:
             return
 
-        loading = None
+        # All three metadata sections are independent database reads. Start
+        # them together so one section's Qt widget construction does not hold
+        # up the next query.
+        section_specs = (
+            (
+                "Characters", get_bundle_characters, CharacterCard,
+                self.character_selected, 4, "portrait",
+            ),
+            (
+                "Staff", get_bundle_staff, PersonCard,
+                self.person_selected, 6, "portrait",
+            ),
+            (
+                "Relations", get_bundle_relations, RelationCard,
+                self.relation_selected, 6, "poster",
+            ),
+        )
+        section_order = {
+            title: index for index, (title, *_rest) in enumerate(section_specs)
+        }
+        loading_by_title = {}
         for index in range(layout.count()):
             candidate = layout.itemAt(index).widget()
-            if (
-                candidate is not None
-                and candidate.property("_skeleton_section_title") == "Characters"
-            ):
-                loading = candidate
-                break
-        if loading is None:
-            loading = self._detail_section_skeleton("Characters", 4, "portrait")
-            layout.insertWidget(0, loading)
-            layout.insertWidget(
-                1, self._detail_section_skeleton("Staff", 6, "portrait")
-            )
-            layout.insertWidget(
-                2, self._detail_section_skeleton("Relations", 6, "poster")
-            )
+            if candidate is None:
+                continue
+            title = candidate.property("_skeleton_section_title")
+            if title in section_order:
+                loading_by_title[str(title)] = candidate
 
-        QTimer.singleShot(
-            0,
-            lambda token=token, page=content, target_layout=layout, label=loading, ids=list(detail_ids):
-                self._populate_detail_section(
-                    token,
-                    page,
-                    target_layout,
-                    label,
-                    ids,
-                    "Characters",
-                    get_bundle_characters,
-                    CharacterCard,
-                    self.character_selected,
-                    4,
-                ),
-        )
+        # Keep the deferred-loading path resilient if a partial host ever
+        # reaches this method without all expected placeholders.
+        for section_index, (
+            title, _getter, _card_class, _signal, card_count, variant
+        ) in enumerate(section_specs):
+            if title in loading_by_title:
+                continue
+            insert_position = layout.count()
+            for current_index in range(layout.count()):
+                candidate = layout.itemAt(current_index).widget()
+                if candidate is None:
+                    continue
+                candidate_title = candidate.property("_skeleton_section_title")
+                if (
+                    candidate_title in section_order
+                    and section_order[str(candidate_title)] > section_index
+                ):
+                    insert_position = current_index
+                    break
+            loading = self._detail_section_skeleton(title, card_count, variant)
+            layout.insertWidget(insert_position, loading)
+            loading_by_title[title] = loading
+
+        for title, data_getter, card_class, signal, columns, _variant in section_specs:
+            loading = loading_by_title.get(title)
+            if loading is None:
+                continue
+            self._populate_detail_section(
+                token,
+                content,
+                layout,
+                loading,
+                detail_ids,
+                title,
+                data_getter,
+                card_class,
+                signal,
+                columns,
+            )
 
 
     def _populate_detail_section(
@@ -3165,16 +3198,20 @@ class WorkDetailPage(QWidget):
         )
         self._last_ui_phase = "detail_page_idle"
 
-        next_specs = {
-            "Characters": (
-                "Staff", get_bundle_staff, PersonCard, self.person_selected, 6, "portrait",
-            ),
-            "Staff": (
-                "Relations", get_bundle_relations, RelationCard, self.relation_selected, 6, "poster",
-            ),
-        }
-        spec = next_specs.get(title)
-        if spec is None:
+        # A detail view is ready only when every independent section has
+        # replaced its skeleton. Failed sections still display their fallback
+        # frame, but _detail_sections_success keeps the view out of the cache.
+        remaining_skeletons = False
+        for index in range(layout.count()):
+            candidate = layout.itemAt(index).widget()
+            if (
+                candidate is not None
+                and candidate.property("_skeleton_section_title")
+            ):
+                remaining_skeletons = True
+                break
+
+        if not remaining_skeletons:
             content._detail_sections_ready = True
             self._update_detail_cacheable(content)
             log_event(
@@ -3182,35 +3219,7 @@ class WorkDetailPage(QWidget):
                 work_ids=list(detail_ids),
                 success=bool(content._detail_sections_success),
             )
-            self._detail_section_result_handled(key, job)
-            return
 
-        next_title, next_getter, next_class, next_signal, next_columns, variant = spec
-        next_loading = None
-        for index in range(layout.count()):
-            candidate = layout.itemAt(index).widget()
-            if (
-                candidate is not None
-                and candidate.property("_skeleton_section_title") == next_title
-            ):
-                next_loading = candidate
-                break
-        if next_loading is None:
-            section_index = layout.indexOf(section_widget)
-            next_loading = self._detail_section_skeleton(
-                next_title, next_columns, variant
-            )
-            layout.insertWidget(section_index + 1, next_loading)
-
-        QTimer.singleShot(
-            0,
-            lambda token=token, page=content, target_layout=layout, label=next_loading,
-                   ids=list(detail_ids), next_title=next_title, getter=next_getter,
-                   cls=next_class, slot=next_signal, cols=next_columns:
-                self._populate_detail_section(
-                    token, page, target_layout, label, ids, next_title, getter, cls, slot, cols
-                ),
-        )
         self._detail_section_result_handled(key, job)
 
     def _mangabaka_section(self):

@@ -604,3 +604,12 @@ test no longer mocks the obsolete single-path writer that the worker no longer c
 The Windows source-mode diagnostics showed complete Re:Zero detail readiness at about 543–696 ms on a cold open and about 80 ms on a cached repeat. Episode snapshot reads took about 2 ms and the section data workers were in the low single-digit millisecond range; GUI-side widget rendering remained the larger measured part of the detail path. The page also reapplied its large stylesheet on every cold or cached open.
 
 Work Details now applies its initial stylesheet while the page has no populated detail tree. Repeated open calls still check whether the generated stylesheet differs, but Qt's expensive `setStyleSheet`/child-repolish path is skipped when the theme has not changed. The existing theme-refresh path still updates styles when colors change. This is a targeted UI optimization; the next Windows diagnostic run should confirm the real-world gain.
+
+## Thirty-seventh-pass concurrent Work Details section loading
+
+The latest Windows source-mode trace measured the Re:Zero bundle at about 594 ms from open to complete detail readiness and about 57 ms on an in-process cached repeat. In that cold trace, the Characters, Staff and Relations widget builds took about 44 ms, 27 ms and 56 ms; the sections were queried serially, with each next query scheduled only after the previous section was rendered. Prior runs varied, so these numbers do not establish a repeatable speedup from the stylesheet pass.
+
+The deferred detail path now starts the three independent section-data workers together. Each result still replaces its own skeleton in its original layout position. Detail readiness is recorded only after all three skeletons are gone, and the cacheability checks still require successful section and episode completion. A focused UI regression test verifies all three jobs are scheduled together, run off the GUI thread, and leave the view cacheable only after rendering finishes.
+
+No real-world speed claim is made until a fresh Windows diagnostic run measures this change.
+

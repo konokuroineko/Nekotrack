@@ -674,6 +674,94 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
+    def test_bundle_detail_sections_load_concurrently_and_finish_together(self):
+        page = WorkDetailPage()
+        detail_ids = [12345, 12346]
+        page.work = {
+            "id": detail_ids[0],
+            "type": "ANIME",
+            "format": "TV",
+            "_series_members": [{"id": work_id} for work_id in detail_ids],
+        }
+        page._detail_build_token = 1
+
+        content = QWidget()
+        content.setProperty("_detail_cache_key", detail_ids)
+        content._detail_sections_ready = False
+        content._detail_sections_success = True
+        content._episode_section_ready = True
+        content._episode_section_success = True
+        layout = QVBoxLayout(content)
+        for title, count, variant in (
+            ("Characters", 4, "portrait"),
+            ("Staff", 6, "portrait"),
+            ("Relations", 6, "poster"),
+        ):
+            layout.addWidget(page._detail_section_skeleton(title, count, variant))
+        page.scroll_area.setWidget(content)
+
+        gui_thread_id = threading.get_ident()
+        query_thread_ids = {}
+
+        def reader_for(section):
+            def read(_work_ids):
+                query_thread_ids[section] = threading.get_ident()
+                return []
+            return read
+
+        expected_sections = {"Characters", "Staff", "Relations"}
+        with (
+            patch(
+                "ui.pages.work_detail_page.get_bundle_characters",
+                side_effect=reader_for("Characters"),
+            ),
+            patch(
+                "ui.pages.work_detail_page.get_bundle_staff",
+                side_effect=reader_for("Staff"),
+            ),
+            patch(
+                "ui.pages.work_detail_page.get_bundle_relations",
+                side_effect=reader_for("Relations"),
+            ),
+            patch.object(page, "_grid_section", side_effect=lambda *args, **kwargs: QFrame()),
+            patch.object(page, "_staff_section", side_effect=lambda *args, **kwargs: QFrame()),
+            patch.object(page, "_detail_empty_message", return_value="No test data"),
+        ):
+            page._populate_detail_sections(1, content, content, detail_ids)
+
+            # All three jobs should exist before the event loop handles any
+            # worker results, rather than queuing Staff behind Characters.
+            self.assertEqual(
+                {title for (_token, title) in page._detail_section_jobs},
+                expected_sections,
+            )
+            self.assertFalse(content._detail_sections_ready)
+
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and (
+                page._detail_section_jobs
+                or content.findChild(QFrame, "detailSkeletonSection") is not None
+            ):
+                self.app.processEvents()
+                time.sleep(0.005)
+            self.app.processEvents()
+
+        self.assertEqual(set(query_thread_ids), expected_sections)
+        self.assertTrue(all(thread_id != gui_thread_id for thread_id in query_thread_ids.values()))
+        self.assertFalse(page._detail_section_jobs)
+        self.assertFalse(
+            any(
+                frame.property("_skeleton_section_title")
+                for frame in content.findChildren(QFrame)
+            )
+        )
+        self.assertTrue(content._detail_sections_ready)
+        self.assertTrue(content._detail_sections_success)
+        self.assertTrue(content.property("_detail_cacheable"))
+
+        page.deleteLater()
+        self.app.processEvents()
+
     def test_anime_bundle_skips_unneeded_mangabaka_database_lookups(self):
         page = WorkDetailPage()
         page.work = {
