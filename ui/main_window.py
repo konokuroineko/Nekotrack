@@ -6,6 +6,8 @@ from pathlib import Path
 from api import (
     get_media_details,
     get_tmdb_episode_data,
+    TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS,
+    TMDB_EPISODE_CATALOG_VERSION,
     get_mangabaka_series_news,
     get_mangabaka_volume_records,
 )
@@ -21,10 +23,13 @@ from database import (
     get_connection,
     get_episodes,
     get_due_release_reminders,
+    get_episode_section_snapshot,
+    get_library_episode_catalog_refresh_ids,
     invalidate_character_snapshots,
     get_tmdb_mapping,
     get_work,
     initialize_database,
+    prune_episode_catalog,
     save_anime,
     save_automatic_bundle_membership,
     save_characters,
@@ -54,6 +59,52 @@ from ui.pages.search_page import SearchPage
 from ui.pages.settings_page import SettingsPage
 from ui.pages.work_detail_page import WorkDetailPage
 from ui.pages.entity_profile_page import EntityProfilePage
+
+
+
+def _persist_episode_catalog_snapshot(work_id, expected_episode_count, episode_data):
+    """Save episode rows and matching-policy freshness without losing progress."""
+    episodes = list(episode_data or [])
+    save_episodes(work_id, episodes)
+
+    def positive_integer(value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value > 0 else None
+        if isinstance(value, float):
+            return int(value) if value.is_integer() and value > 0 else None
+        if isinstance(value, str):
+            text = value.strip()
+            if text and text.isascii() and text.isdigit():
+                number = int(text)
+                return number if number > 0 else None
+        return None
+
+    expected_count = positive_integer(expected_episode_count)
+    episode_numbers = {
+        number
+        for episode in episodes
+        if isinstance(episode, dict)
+        for number in [positive_integer(episode.get("episodeNumber"))]
+        if number is not None
+    }
+    catalog_complete = (
+        expected_count is not None and len(episode_numbers) >= expected_count
+    )
+    if catalog_complete:
+        prune_episode_catalog(work_id, episodes)
+
+    save_provider_metadata(
+        work_id,
+        "tmdb_episode_match_version",
+        {
+            "version": TMDB_EPISODE_CATALOG_VERSION,
+            "fetched_at": int(time.time()),
+            "complete": catalog_complete if expected_count is not None else None,
+        },
+    )
+    return catalog_complete
 
 
 class ImageWorker(QObject):
@@ -295,8 +346,9 @@ class LibraryImportWorker(QObject):
                         resolved_tmdb_id,
                         resolved_season,
                     )
-                save_episodes(
+                _persist_episode_catalog_snapshot(
                     self.work_id,
+                    expected_episodes,
                     episode_payload.get("episodes") or [],
                 )
             except Exception as episode_error:
@@ -353,17 +405,26 @@ class LibraryEpisodePreloadWorker(QObject):
         for work_id in self.work_ids:
             if self.stop_event is not None and self.stop_event.is_set():
                 break
-            log_event("library.episode_preload.started", work_id=work_id)
             try:
-                connection_work = get_work(work_id)
+                snapshot = get_episode_section_snapshot(work_id)
+                connection_work = snapshot.get("work")
                 if connection_work is None:
                     continue
                 if str(connection_work["type"] or "").upper() != "ANIME":
                     continue
 
-                existing_episodes = get_episodes(work_id)
-                if existing_episodes:
-                    continue
+                if snapshot.get("catalog_metadata_error") is not None:
+                    log_exception(
+                        "library.episode_preload.catalog_metadata_read_failed",
+                        snapshot["catalog_metadata_error"],
+                        work_id=work_id,
+                    )
+
+                metadata = snapshot.get("catalog_metadata")
+                try:
+                    catalog_version = max(0, int(metadata.get("version") or 0))
+                except (AttributeError, TypeError, ValueError, OverflowError):
+                    catalog_version = 0
 
                 title_variants = [
                     str(connection_work["title"] or "").strip(),
@@ -377,15 +438,22 @@ class LibraryEpisodePreloadWorker(QObject):
 
                 year = connection_work["start_year"]
                 if year is None:
-                    continue
+                    start_date = None
+                else:
+                    month = connection_work["start_month"] or 1
+                    day = connection_work["start_day"] or 1
+                    start_date = (
+                        f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+                    )
 
-                month = connection_work["start_month"] or 1
-                day = connection_work["start_day"] or 1
-                start_date = (
-                    f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
-                )
+                # The current matching policy must re-resolve old mappings once.
+                if catalog_version < TMDB_EPISODE_CATALOG_VERSION:
+                    tmdb_id, tmdb_season_number = None, None
+                else:
+                    tmdb_id = connection_work["tmdb_id"]
+                    tmdb_season_number = connection_work["tmdb_season_number"]
 
-                tmdb_id, tmdb_season_number = get_tmdb_mapping(work_id)
+                log_event("library.episode_preload.started", work_id=work_id)
                 payload = get_tmdb_episode_data(
                     title_variants,
                     start_date,
@@ -405,13 +473,17 @@ class LibraryEpisodePreloadWorker(QObject):
                     )
 
                 episodes = payload.get("episodes") or []
-                if episodes:
-                    save_episodes(work_id, episodes)
+                catalog_complete = _persist_episode_catalog_snapshot(
+                    work_id,
+                    connection_work["episodes"],
+                    episodes,
+                )
 
                 log_event(
                     "library.episode_preload.completed",
                     work_id=work_id,
                     episode_count=len(episodes),
+                    catalog_complete=catalog_complete,
                     tmdb_id=resolved_tmdb_id,
                 )
                 self.finished.emit(work_id, episodes)
@@ -962,37 +1034,19 @@ class MainWindow(QMainWindow):
         ):
             return
 
-        connection = get_connection()
         try:
-            library_ids = [
-                int(row["id"])
-                for row in connection.execute(
-                    """
-                    SELECT works.id
-                    FROM works
-                    JOIN user_library ON user_library.work_id = works.id
-                    WHERE COALESCE(works.episodes, 0) > 0
-                      AND UPPER(COALESCE(works.type, '')) = 'ANIME'
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM episodes
-                          WHERE episodes.work_id = works.id
-                      )
-                    ORDER BY user_library.added_date
-                    """
-                ).fetchall()
-            ]
-        except Exception:
-            return
-        finally:
-            connection.close()
-
-        missing_ids = library_ids
-
-        if not missing_ids:
+            refresh_ids = get_library_episode_catalog_refresh_ids(
+                TMDB_EPISODE_CATALOG_VERSION,
+                TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS,
+            )
+        except Exception as error:
+            log_exception("library.episode_preload.candidate_query_failed", error)
             return
 
-        worker = LibraryEpisodePreloadWorker(missing_ids, self._shutdown_event)
+        if not refresh_ids:
+            return
+
+        worker = LibraryEpisodePreloadWorker(refresh_ids, self._shutdown_event)
         thread = QThread(self)
         worker.moveToThread(thread)
 
