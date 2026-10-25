@@ -663,5 +663,5 @@ The startup episode preloader previously selected only Library anime with zero c
 
 Both Library import and background preload now record the same version, fetch timestamp and completeness metadata used by Work Details. Old matching-policy mappings are re-resolved. A missing AniList start date no longer blocks TMDB lookup, which can use an existing mapping or attempt a title match without a date. Saved episode rows are upserted without overwriting watched state; stale rows/reminders are pruned only when the known expected episode count is met, so an incomplete provider result cannot erase existing progress.
 
-Regression tests cover refresh-candidate selection, one-connection selection, old-policy re-resolution, missing-start-date handling and preserving catalogs when TMDB returns fewer episodes than expected. CI should confirm this pass before claiming the Calendar refresh path is verified.
+Regression tests cover refresh-candidate selection, one-connection selection, old-policy re-resolution, missing-start-date handling, preserving catalogs when TMDB returns fewer episodes than expected, and refreshing the visible Calendar/Home once after the background batch finishes. CI should confirm this pass before claiming the Calendar refresh path is verified.
 
