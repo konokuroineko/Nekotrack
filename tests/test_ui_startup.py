@@ -39,7 +39,7 @@ class MemorySettings:
 # in-memory settings backend even at import time so this smoke test never edits
 # the developer's real NekoTrack preferences.
 with patch.object(preferences, "QSettings", MemorySettings):
-    from ui.main_window import MainWindow
+    from ui.main_window import MainWindow, LibraryEpisodePreloadWorker
     from ui.widgets.person_card import PersonCard
     from ui.pages.entity_profile_page import EntityProfilePage, MediaCreditCard, ProfileWorkCreditCard
     from ui.widgets.character_card import CharacterCard, CharacterArtwork
@@ -806,6 +806,132 @@ class UiStartupTests(unittest.TestCase):
                     settings_page.deleteLater()
                 self.app.processEvents()
                 os.chdir(old_cwd)
+
+    def test_episode_preloader_refreshes_an_old_catalog_and_accepts_missing_start_date(self):
+        from ui.main_window import TMDB_EPISODE_CATALOG_VERSION
+
+        work = {
+            "id": 301,
+            "type": "ANIME",
+            "title": "Example Anime",
+            "start_year": None,
+            "start_month": None,
+            "start_day": None,
+            "episodes": 1,
+            "format": "TV",
+            "tmdb_id": 91,
+            "tmdb_season_number": 2,
+        }
+        snapshot = {
+            "work": work,
+            "episodes": [{"episode_number": 1, "air_date": None}],
+            "catalog_metadata": {
+                "version": TMDB_EPISODE_CATALOG_VERSION - 1,
+                "fetched_at": 1,
+                "complete": True,
+            },
+            "catalog_metadata_error": None,
+        }
+        episode_rows = [{
+            "episodeNumber": 1,
+            "title": "Episode One",
+            "description": "Synopsis",
+            "airdate": "2030-01-01",
+            "thumbnail": None,
+        }]
+        worker = LibraryEpisodePreloadWorker([301])
+        completed = []
+        worker.finished.connect(lambda work_id, rows: completed.append((work_id, rows)))
+
+        with (
+            patch("ui.main_window.get_episode_section_snapshot", return_value=snapshot),
+            patch("ui.main_window.get_alternate_titles", return_value=["Alias"]),
+            patch(
+                "ui.main_window.get_tmdb_episode_data",
+                return_value={
+                    "tmdb_id": 92,
+                    "tmdb_season_number": 1,
+                    "episodes": episode_rows,
+                },
+            ) as fetch_episodes,
+            patch("ui.main_window.save_tmdb_mapping") as save_mapping,
+            patch("ui.main_window.save_episodes") as save_episode_rows,
+            patch("ui.main_window.prune_episode_catalog", return_value=0) as prune,
+            patch("ui.main_window.save_provider_metadata") as save_metadata,
+            patch("ui.main_window.log_event"),
+            patch("ui.main_window.log_exception"),
+        ):
+            worker.run()
+
+        fetch_episodes.assert_called_once_with(
+            ["Example Anime", "Alias"], None, None, 1, None, None, "TV"
+        )
+        save_mapping.assert_called_once_with(301, 92, 1)
+        save_episode_rows.assert_called_once_with(301, episode_rows)
+        prune.assert_called_once_with(301, episode_rows)
+        self.assertEqual(completed, [(301, episode_rows)])
+        saved_metadata = save_metadata.call_args.args[2]
+        self.assertEqual(saved_metadata["version"], TMDB_EPISODE_CATALOG_VERSION)
+        self.assertTrue(saved_metadata["complete"])
+        self.assertGreater(saved_metadata["fetched_at"], 0)
+
+    def test_episode_preloader_does_not_prune_an_incomplete_catalog(self):
+        from ui.main_window import TMDB_EPISODE_CATALOG_VERSION
+
+        work = {
+            "id": 302,
+            "type": "ANIME",
+            "title": "Ongoing Anime",
+            "start_year": 2024,
+            "start_month": 1,
+            "start_day": 1,
+            "episodes": 12,
+            "format": "TV",
+            "tmdb_id": 92,
+            "tmdb_season_number": 1,
+        }
+        snapshot = {
+            "work": work,
+            "episodes": [{"episode_number": 1, "air_date": "2024-01-01"}],
+            "catalog_metadata": {
+                "version": TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": 1,
+                "complete": False,
+            },
+            "catalog_metadata_error": None,
+        }
+        partial_episode_rows = [{
+            "episodeNumber": 1,
+            "title": "Episode One",
+            "description": "",
+            "airdate": "2024-01-01",
+            "thumbnail": None,
+        }]
+        worker = LibraryEpisodePreloadWorker([302])
+
+        with (
+            patch("ui.main_window.get_episode_section_snapshot", return_value=snapshot),
+            patch("ui.main_window.get_alternate_titles", return_value=[]),
+            patch(
+                "ui.main_window.get_tmdb_episode_data",
+                return_value={
+                    "tmdb_id": 92,
+                    "tmdb_season_number": 1,
+                    "episodes": partial_episode_rows,
+                },
+            ),
+            patch("ui.main_window.save_tmdb_mapping"),
+            patch("ui.main_window.save_episodes") as save_episode_rows,
+            patch("ui.main_window.prune_episode_catalog") as prune,
+            patch("ui.main_window.save_provider_metadata") as save_metadata,
+            patch("ui.main_window.log_event"),
+            patch("ui.main_window.log_exception"),
+        ):
+            worker.run()
+
+        save_episode_rows.assert_called_once_with(302, partial_episode_rows)
+        prune.assert_not_called()
+        self.assertFalse(save_metadata.call_args.args[2]["complete"])
 
     def test_calendar_and_favorites_load_when_first_opened_not_at_startup(self):
         MemorySettings.stores = {
