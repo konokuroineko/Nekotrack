@@ -391,6 +391,7 @@ class LibraryImportWorker(QObject):
 
 class LibraryEpisodePreloadWorker(QObject):
     finished = Signal(int, object)
+    completed = Signal()
     error = Signal(int, str)
     skipped = Signal(int)
 
@@ -500,6 +501,7 @@ class LibraryEpisodePreloadWorker(QObject):
                 else:
                     log_exception("library.episode_preload.failed", error, work_id=work_id)
                     self.error.emit(work_id, str(error))
+        self.completed.emit()
 
 
 class NavigationButton(QPushButton):
@@ -1057,9 +1059,8 @@ class MainWindow(QMainWindow):
                     f"{work_id}: {message}"
                 )
         )
-        worker.finished.connect(thread.quit)
-        worker.error.connect(thread.quit)
-        worker.skipped.connect(thread.quit)
+        worker.completed.connect(thread.quit)
+        worker.completed.connect(self._library_episode_preload_completed)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(
@@ -1100,6 +1101,15 @@ class MainWindow(QMainWindow):
                 f"Existing library preload failed for work {work_id}: "
                 f"{error}"
             )
+
+    def _library_episode_preload_completed(self):
+        if self._shutdown_event.is_set():
+            return
+        current_page = self.navigation.current_name()
+        if current_page == "calendar":
+            self.calendar_page.refresh()
+        elif current_page == "home":
+            self.home_page.refresh()
 
     def _library_episode_preload_thread_finished(self, thread):
         if self._library_episode_preload_thread is thread:
