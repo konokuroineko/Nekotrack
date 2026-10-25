@@ -421,3 +421,114 @@ class ReleaseReminderDatabaseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EpisodeCatalogRefreshDatabaseTests(unittest.TestCase):
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self._database_path = Path(self._directory.name) / "episode-catalog-refresh.db"
+        self._patcher = patch.object(database, "DATABASE_NAME", str(self._database_path))
+        self._patcher.start()
+        database.initialize_database()
+
+        connection = database.get_connection()
+        try:
+            works = [
+                (101, "Legacy cached anime", "ANIME", "TV", 12),
+                (102, "Fresh cached anime", "ANIME", "TV", 12),
+                (103, "Stale cached anime", "ANIME", "TV", 12),
+                (104, "Incomplete cached anime", "ANIME", "TV", 12),
+                (105, "Old-policy cached anime", "ANIME", "TV", 12),
+                (106, "Missing episode rows", "ANIME", "TV", 12),
+                (107, "Manga entry", "MANGA", "MANGA", 0),
+                (108, "Anime outside Library", "ANIME", "TV", 12),
+            ]
+            connection.executemany(
+                "INSERT INTO works (id, title, type, format, episodes) VALUES (?, ?, ?, ?, ?)",
+                works,
+            )
+            connection.executemany(
+                "INSERT INTO user_library (work_id, status) VALUES (?, 'Planning')",
+                [(work_id,) for work_id in range(101, 108)],
+            )
+            connection.executemany(
+                "INSERT INTO episodes (work_id, episode_number, title, air_date) VALUES (?, 1, 'Episode 1', ?)",
+                [
+                    (101, "2030-01-01"),
+                    (102, "2030-01-01"),
+                    (103, "2030-01-01"),
+                    (104, "2030-01-01"),
+                    (105, "2030-01-01"),
+                ],
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        self._now = 2_000_000.0
+        self._interval = 7 * 24 * 60 * 60
+        database.save_provider_metadata(
+            102,
+            "tmdb_episode_match_version",
+            {
+                "version": api.TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": self._now - 100,
+                "complete": True,
+            },
+        )
+        database.save_provider_metadata(
+            103,
+            "tmdb_episode_match_version",
+            {
+                "version": api.TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": self._now - self._interval - 1,
+                "complete": True,
+            },
+        )
+        database.save_provider_metadata(
+            104,
+            "tmdb_episode_match_version",
+            {
+                "version": api.TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": self._now - 100,
+                "complete": False,
+            },
+        )
+        database.save_provider_metadata(
+            105,
+            "tmdb_episode_match_version",
+            {
+                "version": api.TMDB_EPISODE_CATALOG_VERSION - 1,
+                "fetched_at": self._now - 100,
+                "complete": True,
+            },
+        )
+        database.save_provider_metadata(
+            106,
+            "tmdb_episode_match_version",
+            {
+                "version": api.TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": self._now - 100,
+                "complete": True,
+            },
+        )
+
+    def tearDown(self):
+        self._patcher.stop()
+        self._directory.cleanup()
+
+    def test_refresh_candidates_include_legacy_stale_incomplete_and_missing_rows(self):
+        original_factory = database.get_connection
+        with patch.object(database, "get_connection", wraps=original_factory) as factory:
+            work_ids = database.get_library_episode_catalog_refresh_ids(
+                api.TMDB_EPISODE_CATALOG_VERSION,
+                self._interval,
+                now=self._now,
+            )
+
+        factory.assert_called_once()
+        self.assertEqual(work_ids, [101, 103, 104, 105, 106])
+        self.assertNotIn(102, work_ids, "A fresh complete catalog should stay cached")
+        self.assertNotIn(107, work_ids, "Manga entries do not use episode catalogs")
+        self.assertNotIn(108, work_ids, "Only works saved in Library are eligible")
+
