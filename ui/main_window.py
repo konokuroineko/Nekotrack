@@ -625,9 +625,9 @@ class MainWindow(QMainWindow):
             self.home_page = HomePage(self.add_to_library)
         self.recommendations_page = self.home_page.recommendations_page
         with log_operation("main_window.construct_page", page="calendar"):
-            self.calendar_page = CalendarPage()
+            self.calendar_page = CalendarPage(defer_initial_refresh=True)
         with log_operation("main_window.construct_page", page="favorites"):
-            self.favorites_page = FavoritesPage()
+            self.favorites_page = FavoritesPage(defer_initial_refresh=True)
         pages = {
             "home": self.home_page,
             "collections": self.library_page,

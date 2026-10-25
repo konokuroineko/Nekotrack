@@ -51,6 +51,8 @@ with patch.object(preferences, "QSettings", MemorySettings):
         pending_relation_sync_ids,
     )
     from ui.pages.home_page import HomePage
+    from ui.pages.calendar_page import CalendarPage
+    from ui.pages.favorites_page import FavoritesPage
     from ui.pages.settings_page import SettingsPage
     from ui.pages.work_detail_page import WorkDetailPage
     from ui.setup_wizard import SetupWizard
@@ -803,6 +805,43 @@ class UiStartupTests(unittest.TestCase):
                     settings_page.close()
                     settings_page.deleteLater()
                 self.app.processEvents()
+                os.chdir(old_cwd)
+
+    def test_calendar_and_favorites_load_when_first_opened_not_at_startup(self):
+        MemorySettings.stores = {
+            ("NekoTrack", "NekoTrack"): {
+                preferences._MIGRATION_KEY: True,
+                "_theme_palette_version": preferences._THEME_PALETTE_VERSION,
+                "theme_preset": "Neko",
+                "setup_complete": True,
+            },
+            ("AniTrack", "AniTrack"): {},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                with (
+                    patch.object(preferences, "QSettings", MemorySettings),
+                    patch.object(CalendarPage, "refresh", autospec=True) as calendar_refresh,
+                    patch.object(FavoritesPage, "refresh", autospec=True) as favorites_refresh,
+                ):
+                    window = MainWindow()
+                    try:
+                        calendar_refresh.assert_not_called()
+                        favorites_refresh.assert_not_called()
+
+                        window.navigation.show("calendar")
+                        calendar_refresh.assert_called_once_with(window.calendar_page)
+                        favorites_refresh.assert_not_called()
+
+                        window.navigation.show("favorites")
+                        favorites_refresh.assert_called_once_with(window.favorites_page)
+                    finally:
+                        window.close()
+                        window.deleteLater()
+                        self.app.processEvents()
+            finally:
                 os.chdir(old_cwd)
 
     def test_main_window_builds_with_only_registered_pages(self):

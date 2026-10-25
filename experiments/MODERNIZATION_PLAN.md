@@ -650,3 +650,9 @@ Regression coverage checks a single database connection, library/type/date filte
 The Home dashboard preview had the same N+1 episode read as Calendar: it fetched enabled reminders once and then opened a separate SQLite connection for every anime during Home refresh. Home now reuses `get_upcoming_library_episodes`, the same indexed, date-bounded joined query as Calendar. The preview retains its own title fallback, malformed-date guard, 60-day inclusive window, reminder flags and date/title/episode order.
 
 Updated Home regression coverage verifies one batched call and the same visible preview rows. This is a query-count reduction; startup-wide timing should be evaluated separately before claiming a measurable user-facing speedup.
+
+## Forty-third-pass defer hidden Calendar and Favorites refreshes
+
+MainWindow previously constructed Calendar and Favorites with their full initial refresh even though neither is visible on startup; MainWindow refreshes each again when navigating to that destination. These two pages now support an opt-in deferred initial refresh. MainWindow builds only their themed page shells on startup and the existing `_page_changed` handlers load the contents on first open. Direct `CalendarPage()` and `FavoritesPage()` construction keeps its original eager-refresh default for standalone callers and tests.
+
+A UI regression test verifies neither page refreshes during Home startup and each refreshes when navigated to. This removes hidden initial database/render work; whole-startup timing still needs a fresh Windows diagnostics run before quantifying the user-visible benefit.

@@ -15,7 +15,7 @@ from ui.theme import COLORS, surface_rgba
 class CalendarPage(QWidget):
     HORIZON_DAYS = 60
 
-    def __init__(self):
+    def __init__(self, defer_initial_refresh=False):
         super().__init__()
         self.setObjectName("calendarPage")
         self._events = []
@@ -33,7 +33,10 @@ class CalendarPage(QWidget):
         self.layout.setSpacing(15)
         self.scroll.setWidget(self.content)
         outer.addWidget(self.scroll)
-        self.refresh()
+        if defer_initial_refresh:
+            self._apply_theme()
+        else:
+            self.refresh()
 
     @staticmethod
     def _parse_date(value):
