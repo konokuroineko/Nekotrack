@@ -613,3 +613,10 @@ The deferred detail path now starts the three independent section-data workers t
 
 No real-world speed claim is made until a fresh Windows diagnostic run measures this change.
 
+## Thirty-eighth-pass lightweight cold-open placeholders
+
+The latest Windows diagnostic trace measured a cold Re:Zero Work Details open at about 324 ms to full readiness, with the visible shell attached after about 177 ms; a cached repeat took about 54 ms. The active path was synchronously constructing 16 detailed metadata placeholder cards plus four episode placeholder cards before attaching the page, and the metadata placeholders were then replaced by the real sections.
+
+Normal deferred navigation now uses lightweight section-heading placeholders and a text-only episode loading state. The explicit non-deferred fallback/preload path retains its full card-shaped placeholders. Final detail cards, section ordering, and theme styling are unchanged. A focused regression test verifies that the active path stays lightweight while the fallback path keeps its full skeletons.
+
+No speedup is claimed until a fresh Windows diagnostic trace measures this pass.

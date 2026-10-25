@@ -1560,7 +1560,7 @@ class WorkDetailPage(QWidget):
         grid.setVerticalSpacing(14)
         cover_height = 88 if variant == "poster" else 112
         columns = 4
-        for index in range(max(1, int(card_count))):
+        for index in range(max(0, int(card_count))):
             card = QFrame()
             card.setObjectName("detailSkeletonCard")
             card.setFixedWidth(145)
@@ -1982,7 +1982,11 @@ class WorkDetailPage(QWidget):
             episode_host = ready_episode_frame
         else:
             episode_host.deleteLater()
-            episode_host = self._episode_section_loading_frame()
+            # Keep the active navigation shell cheap to construct; rich episode
+            # placeholders are reserved for the explicit non-deferred path.
+            episode_host = self._episode_section_loading_frame(
+                include_skeleton=not defer_missing
+            )
         root.addWidget(episode_host)
 
         mangabaka_section = self._mangabaka_section()
@@ -2005,15 +2009,22 @@ class WorkDetailPage(QWidget):
             detail_layout = QVBoxLayout(detail_host)
             detail_layout.setContentsMargins(0, 0, 0, 0)
             detail_layout.setSpacing(22)
-            detail_layout.addWidget(
-                self._detail_section_skeleton("Characters", 4, "portrait")
+            # During normal navigation, show only lightweight section headings.
+            # Building every decorative card placeholder here delays the page
+            # transition, and the async section workers replace them shortly after.
+            skeleton_specs = (
+                ("Characters", 4, "portrait"),
+                ("Staff", 6, "portrait"),
+                ("Relations", 6, "poster"),
             )
-            detail_layout.addWidget(
-                self._detail_section_skeleton("Staff", 6, "portrait")
-            )
-            detail_layout.addWidget(
-                self._detail_section_skeleton("Relations", 6, "poster")
-            )
+            for title, full_card_count, variant in skeleton_specs:
+                detail_layout.addWidget(
+                    self._detail_section_skeleton(
+                        title,
+                        0 if defer_missing else full_card_count,
+                        variant,
+                    )
+                )
         root.addWidget(detail_host)
         root.addStretch()
 

@@ -63,6 +63,42 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
+    def test_active_cold_open_uses_lightweight_section_placeholders(self):
+        page = WorkDetailPage()
+        with (
+            patch.object(page, "_hero", return_value=QFrame()),
+            patch.object(page, "_mangabaka_section", return_value=None),
+            patch.object(page, "_is_reading_media", return_value=False),
+            patch("ui.pages.work_detail_page.QTimer.singleShot") as schedule,
+        ):
+            content, ready = page._build_detail_content(
+                [12345],
+                defer_missing=True,
+            )
+
+        self.assertFalse(ready)
+        section_skeletons = content.findChildren(QFrame, "detailSkeletonSection")
+        self.assertEqual(
+            {
+                frame.property("_skeleton_section_title")
+                for frame in section_skeletons
+            },
+            {"Characters", "Staff", "Relations"},
+        )
+        self.assertEqual(len(content.findChildren(QFrame, "detailSkeletonCard")), 0)
+        self.assertEqual(
+            len(content.findChildren(QFrame, "detailSkeletonEpisodeCard")),
+            0,
+        )
+        self.assertIsNotNone(
+            content.findChild(QLabel, "detailEpisodeLoadingLabel")
+        )
+        self.assertEqual(schedule.call_count, 2)
+
+        content.deleteLater()
+        page.deleteLater()
+        self.app.processEvents()
+
     def test_missing_catalog_work_is_not_treated_as_an_empty_season(self):
         page = WorkDetailPage()
         page.work = {
