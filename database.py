@@ -333,6 +333,10 @@ def initialize_database():
             FOREIGN KEY (work_id) REFERENCES works(id)
         )
     """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_episodes_air_date_work_episode "
+        "ON episodes(air_date, work_id, episode_number)"
+    )
     episode_columns = cursor.execute("PRAGMA table_info(episodes)").fetchall()
     episode_column_names = {column["name"] for column in episode_columns}
     if "thumbnail_url" not in episode_column_names:
@@ -1815,6 +1819,46 @@ def get_episodes(work_id):
         return connection.execute(
             "SELECT * FROM episodes WHERE work_id = ? ORDER BY episode_number",
             (safe_work_id,),
+        ).fetchall()
+    finally:
+        connection.close()
+
+
+def get_upcoming_library_episodes(start_date, end_date_exclusive):
+    """Read scheduled episodes for saved anime in one indexed, date-bounded query."""
+    import datetime
+
+    try:
+        start = datetime.date.fromisoformat(str(start_date)).isoformat()
+        end = datetime.date.fromisoformat(str(end_date_exclusive)).isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return []
+    if end <= start:
+        return []
+
+    connection = get_connection()
+    try:
+        return connection.execute(
+            """
+            SELECT
+                episodes.*,
+                works.title AS work_title,
+                works.cover_path AS work_cover_path,
+                works.cover_url AS work_cover_url,
+                CASE WHEN reminders.work_id IS NULL THEN 0 ELSE 1 END
+                    AS reminder_enabled
+            FROM episodes
+            JOIN works ON works.id = episodes.work_id
+            JOIN user_library ON user_library.work_id = works.id
+            LEFT JOIN release_reminders AS reminders
+              ON reminders.work_id = episodes.work_id
+             AND reminders.episode_number = episodes.episode_number
+            WHERE UPPER(COALESCE(works.type, '')) = 'ANIME'
+              AND episodes.air_date >= ?
+              AND episodes.air_date < ?
+            ORDER BY episodes.air_date, works.title, episodes.episode_number
+            """,
+            (start, end),
         ).fetchall()
     finally:
         connection.close()

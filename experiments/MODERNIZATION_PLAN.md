@@ -638,3 +638,9 @@ Before changing this data-pruning implementation, extend the deterministic bench
 Candidate credit scoring previously accumulated every matched-credit explanation into a list, even though only the maximum `(boost, explanation)` tuple is returned. It now tracks only the best tuple, builds explanation text only when a credit can match or beat the current best boost, and skips zero-valued entries in the score-aggregation map. The tuple comparison is retained deliberately so equal-score explanations still select the same lexicographically greatest text.
 
 A focused regression test protects that tie rule; existing ranking tests continue to cover candidate scores, saved-creator and favorite-credit explanations, language filtering and deduplication. The ranking benchmark will be checked after CI; no user-visible or end-to-end speedup is claimed without measurements.
+
+## Forty-first-pass batched Release Calendar reads
+
+The Calendar page was loading the library, loading all enabled reminders, then opening another SQLite connection for every anime to fetch every cached episode before filtering to the next 60 days. It now retrieves only saved-anime episodes inside the calendar window in one joined query, with reminder state and work presentation fields included. An additive index on episode air date supports the bounded range query. Python still validates dates after retrieval and performs the same final date/title/episode sorting, so malformed provider dates do not become visible events.
+
+Regression coverage checks a single database connection, library/type/date filtering, reminder state and rejection of invalid ranges. This is a query-count reduction; validate full app startup/Calendar timing before making a whole-app speed claim.

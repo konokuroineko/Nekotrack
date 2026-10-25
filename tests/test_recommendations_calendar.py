@@ -312,6 +312,67 @@ class ReleaseReminderDatabaseTests(unittest.TestCase):
             database.mark_release_reminder_notified(101, 5, "not-a-date")
 
 
+    def test_calendar_episode_query_is_single_connection_and_filters_library_scope(self):
+        today = datetime.date.today()
+        tomorrow = today + datetime.timedelta(days=1)
+        day_after_tomorrow = tomorrow + datetime.timedelta(days=1)
+
+        database.add_to_library(101, "Watching")
+        database.set_release_reminder(101, 5, True)
+        connection = database.get_connection()
+        try:
+            connection.execute(
+                "UPDATE episodes SET air_date = ? WHERE work_id = ? AND episode_number = ?",
+                (tomorrow.isoformat(), 101, 6),
+            )
+            connection.execute(
+                "INSERT INTO episodes (work_id, episode_number, title, air_date) "
+                "VALUES (?, ?, ?, ?)",
+                (101, 7, "Outside window", day_after_tomorrow.isoformat()),
+            )
+            connection.execute(
+                "INSERT INTO works (id, title, type, format, episodes) VALUES (?, ?, ?, ?, ?)",
+                (102, "Not anime", "MANGA", "MANGA", 0),
+            )
+            connection.execute(
+                "INSERT INTO episodes (work_id, episode_number, title, air_date) "
+                "VALUES (?, ?, ?, ?)",
+                (102, 1, "Manga row", today.isoformat()),
+            )
+            connection.execute(
+                "INSERT INTO works (id, title, type, format, episodes) VALUES (?, ?, ?, ?, ?)",
+                (103, "Anime not in library", "ANIME", "TV", 12),
+            )
+            connection.execute(
+                "INSERT INTO episodes (work_id, episode_number, title, air_date) "
+                "VALUES (?, ?, ?, ?)",
+                (103, 1, "Not tracked", today.isoformat()),
+            )
+            database.add_to_library(102, "Planning")
+            connection.commit()
+        finally:
+            connection.close()
+
+        original_factory = database.get_connection
+        with patch.object(database, "get_connection", wraps=original_factory) as connection_factory:
+            rows = database.get_upcoming_library_episodes(
+                today.isoformat(),
+                day_after_tomorrow.isoformat(),
+            )
+
+        connection_factory.assert_called_once()
+        self.assertEqual(
+            [(row["work_id"], row["episode_number"]) for row in rows],
+            [(101, 5), (101, 6)],
+        )
+        self.assertEqual([bool(row["reminder_enabled"]) for row in rows], [True, False])
+        self.assertTrue(all(row["work_title"] == "Reminder Test" for row in rows))
+
+    def test_upcoming_library_episode_query_rejects_invalid_or_empty_date_ranges(self):
+        self.assertEqual(database.get_upcoming_library_episodes("not-a-date", "2026-01-01"), [])
+        self.assertEqual(database.get_upcoming_library_episodes("2026-01-02", "2026-01-02"), [])
+        self.assertEqual(database.get_upcoming_library_episodes("2026-01-03", "2026-01-02"), [])
+
     def test_calendar_page_shows_cached_upcoming_events_and_persists_toggle(self):
         from PySide6.QtWidgets import QApplication, QPushButton
         from ui.pages.calendar_page import CalendarPage
