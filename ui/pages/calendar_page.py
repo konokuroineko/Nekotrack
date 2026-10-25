@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from database import get_upcoming_library_episodes, set_release_reminder
+from database import get_release_reminders, get_upcoming_library_episodes, set_release_reminder
 from diagnostics import log_exception
 from ui.theme import COLORS, surface_rgba
 
