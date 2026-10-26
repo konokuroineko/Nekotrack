@@ -676,3 +676,28 @@ This reduces unnecessary database work; no whole-app speedup is claimed until a 
 A full Library grouping could open separate SQLite connections for saved manual/exclusion/membership state, cached relation edges, and bundle appearance overrides. The read helpers now accept an optional existing connection, and `get_library_series()` uses one connection for all three. The relation query itself is unchanged, including the <=400-ID single-query path and the large-library rowid-based de-duplication path; standalone helper callers keep their previous self-contained behavior. The grouping method closes the shared connection in `finally`, including when a read or override application fails.
 
 Regression coverage checks grouped title/cover and progress output while asserting one connection for the entire nonempty grouping pass. A separate large-ID test verifies that the relation reader returns the same rows when supplied a connection and leaves that connection open for its owner. This reduces connection churn from up to three connections to one for a populated grouped Library refresh; actual end-to-end timing still needs a Windows diagnostic run.
+
+
+## Forty-sixth-pass Library grouping read measurements
+
+The green CI matrix's deterministic SQLite benchmark tested 100, 1,000 and 5,000
+synthetic Library works on Windows and Linux with Python 3.11 and 3.14. All four
+environments returned exactly the same rows. For the state-reader path, connection
+factory calls fell from three to one. Median speedup ratios were 1.57–1.77× at 100
+works, 1.21–1.42× at 1,000 works, and 1.23–1.36× at 5,000 works. On Windows/Python
+3.14, for example, the median at 5,000 works fell from 15.956 ms to 12.043 ms.
+
+These measurements isolate only the three grouping-state reads in a synthetic
+database. They do not measure full `get_library_series()`, painting, or a real user
+Library, so they are not an end-to-end UI speed claim.
+
+## Forty-seventh-pass bounded series-title normalization cache
+
+`_series_key()` applies several regular-expression substitutions and is invoked from
+multiple parts of the relation/grouping path. A bounded 8,192-entry LRU now memoizes
+the normalized string while preserving the previous coercion behavior for `None` and
+non-string inputs. This avoids unbounded growth if the application sees many distinct
+provider titles. Added regression coverage for normalization, cache hits and the
+fixed memory bound, plus a deterministic benchmark against the former uncached regex
+implementation. Review the Windows and Linux benchmark artifacts before keeping this
+pass as a performance win; no speedup is claimed until the run results are inspected.

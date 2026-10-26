@@ -1,4 +1,5 @@
 from collections import OrderedDict, defaultdict, deque
+from functools import lru_cache
 from threading import RLock
 import re
 import time
@@ -273,28 +274,35 @@ def _auto_bundleable(item):
 
 
 def _series_key(title):
-    value = str(title or "").lower().strip()
-    value = re.sub(
-        r"\s*[:\-–—]?\s*(?:the\s+)?final\s+season(?:\s+part\s+\d+)?(?:\s+\([^)]*\))?\s*$",
-        "",
-        value,
-    )
-    value = re.sub(
-        r"\s*[:\-–—]?\s*(?:\d+(?:st|nd|rd|th)|season\s*\d+|series\s*\d+|season\s*[ivx]+|series\s*[ivx]+)(?:\s+part\s+\d+)?\s*$",
-        "",
-        value,
-    )
-    value = re.sub(r"(?:^|\s)(?:ii|iii|iv|v|vi)\s*[:\-–—]\s*", " ", value)
-    value = re.sub(
-        r"\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\s*(?:season)?\s*$",
-        "",
-        value,
-    )
-    value = re.sub(r"\s*[:\-–—]?\s*(?:part|cour)\s*\d+\s*$", "", value)
-    value = re.sub(r"\s+\d+$", "", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    return re.sub(r"[^a-z0-9]+", " ", value).strip()
+    """Return the normalized title-family key using a bounded process-local cache."""
+    # Preserve the old coercion semantics for None and malformed provider values.
+    return _cached_series_key(str(title or ""))
 
+
+@lru_cache(maxsize=8192)
+def _cached_series_key(value):
+    """Normalize one title; the bounded cache avoids repeating regex work on graph edges."""
+    value = value.lower().strip()
+    value = re.sub(
+        r"\\s*[:\\-–—]?\\s*(?:the\\s+)?final\\s+season(?:\\s+part\\s+\\d+)?(?:\\s+\\([^)]*\\))?\\s*$",
+        "",
+        value,
+    )
+    value = re.sub(
+        r"\\s*[:\\-–—]?\\s*(?:\\d+(?:st|nd|rd|th)|season\\s*\\d+|series\\s*\\d+|season\\s*[ivx]+|series\\s*[ivx]+)(?:\\s+part\\s+\\d+)?\\s*$",
+        "",
+        value,
+    )
+    value = re.sub(r"(?:^|\\s)(?:ii|iii|iv|v|vi)\\s*[:\\-–—]\\s*", " ", value)
+    value = re.sub(
+        r"\\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\\s*(?:season)?\\s*$",
+        "",
+        value,
+    )
+    value = re.sub(r"\\s*[:\\-–—]?\\s*(?:part|cour)\\s*\\d+\\s*$", "", value)
+    value = re.sub(r"\\s+\\d+$", "", value)
+    value = re.sub(r"\\s+", " ", value).strip()
+    return re.sub(r"[^a-z0-9]+", " ", value).strip()
 
 def _prefix_related_tv_candidate_indices(keys):
     """Index title-prefix candidates without comparing every pair of TV titles.

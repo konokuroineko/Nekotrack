@@ -22,6 +22,42 @@ def edge(relation_type, node):
     return {"relationType": relation_type, "node": node}
 
 
+class SeriesKeyCacheTests(unittest.TestCase):
+    def tearDown(self):
+        series._cached_series_key.cache_clear()
+
+    def test_cached_key_preserves_normalization_and_input_coercion(self):
+        series._cached_series_key.cache_clear()
+        cases = [
+            (None, ""),
+            ("Example Series Season 2", "example series"),
+            ("Example Series - Final Season", "example series"),
+            ("Sword Art Online: Alicization - War of Underworld",
+             "sword art online alicization war of underworld"),
+            (["Odd Title"], "odd title"),
+        ]
+        for title, expected in cases:
+            with self.subTest(title=title):
+                self.assertEqual(series._series_key(title), expected)
+
+        series._cached_series_key.cache_clear()
+        title = "Repeatable Series Season 2"
+        first = series._series_key(title)
+        first_info = series._cached_series_key.cache_info()
+        second = series._series_key(title)
+        second_info = series._cached_series_key.cache_info()
+        self.assertEqual(first, second)
+        self.assertEqual(second_info.hits, first_info.hits + 1)
+
+    def test_title_key_cache_has_a_fixed_memory_bound(self):
+        series._cached_series_key.cache_clear()
+        for index in range(8200):
+            series._series_key(f"Synthetic Cache Bound {index} Season 2")
+        info = series._cached_series_key.cache_info()
+        self.assertEqual(info.maxsize, 8192)
+        self.assertLessEqual(info.currsize, info.maxsize)
+
+
 class SeriesPrefixIndexTests(unittest.TestCase):
     @staticmethod
     def _reference_indices(keys):

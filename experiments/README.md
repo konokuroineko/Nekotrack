@@ -60,6 +60,18 @@ pending; no speedup claim is made yet.
 - New tests cover exact series-candidate parity, normalizer-cache hits, short-title
   matching parity and long-string autojunk compatibility.
 
+## Bounded series-title normalization cache
+
+Run from the repository root:
+
+    python experiments/benchmark_series_key_cache.py --unique-title-counts 100 1000 5000 10000 --calls 30000 --iterations 5 --json-out "$env:TEMP\nekotrack-series-key-cache.json"
+
+This compares the former uncached regex normalization with the production 8,192-entry
+LRU cache over repeatable synthetic title cycles. It validates exact normalized-output
+parity and reports median/p95 time and the final bounded cache size. The workload is
+synthetic and measures title normalization only, not end-to-end Library or Search speed.
+The benchmark runs in CI and uploads its JSON alongside the existing backend reports.
+
 ## Indexed bundle-exclusion benchmark
 
 Run from the repository root:
