@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+from collections import defaultdict
 import statistics
 import sys
 import time
@@ -49,11 +50,11 @@ def reference_logical_season_count(members):
         if left_root != right_root:
             parent[right_root] = left_root
 
-    by_marker = {}
+    by_marker = defaultdict(list)
     for media_id, member in by_id.items():
         marker = series._season_marker(series._title_text(member))
         if marker:
-            by_marker.setdefault(marker, []).append(media_id)
+            by_marker[marker].append(media_id)
     for members_for_marker in by_marker.values():
         for media_id in members_for_marker[1:]:
             union(members_for_marker[0], media_id)
