@@ -28,8 +28,11 @@ class HomePage(QWidget):
     work_selected = Signal(object)
     calendar_requested = Signal()
 
-    def __init__(self, add_callback=None):
+    def __init__(self, add_callback=None, defer_initial_recommendations=False):
         super().__init__()
+        self._defer_initial_recommendations = bool(defer_initial_recommendations)
+        self._initial_recommendations_started = False
+        self._pending_recommendation_library_rows = None
         self.setObjectName("homePage")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -201,12 +204,31 @@ class HomePage(QWidget):
         # Reuse the already-loaded local rows instead of querying SQLite a
         # second time just to seed recommendations.
         self.content_layout.addWidget(self.recommendations_page)
-        # A new Home visit starts a new recommendation cycle. Feedback and
-        # exposure history are loaded by the worker, and the discovery sort
-        # rotates so the same first page is not shown forever.
-        self.recommendations_page.refresh(force=True, library_rows=library)
+        if self._defer_initial_recommendations and not self._initial_recommendations_started:
+            # Let MainWindow paint its first frame before starting the network
+            # worker. Startup should not launch provider traffic during widget construction.
+            self._pending_recommendation_library_rows = library
+        else:
+            # A new Home visit starts a new recommendation cycle. Feedback and
+            # exposure history are loaded by the worker, and the discovery sort
+            # rotates so the same first page is not shown forever.
+            self.recommendations_page.refresh(force=True, library_rows=library)
         self.content_layout.addStretch(1)
         self._apply_theme_styles()
+
+    def start_initial_recommendations_load(self):
+        """Start the first recommendation fetch after the window has appeared."""
+        if self._initial_recommendations_started:
+            return
+        self._initial_recommendations_started = True
+        self._defer_initial_recommendations = False
+        if getattr(self.recommendations_page, "_shutting_down", False):
+            return
+        library = self._pending_recommendation_library_rows
+        self._pending_recommendation_library_rows = None
+        if library is None:
+            library = self._read_library()
+        self.recommendations_page.refresh(force=True, library_rows=library)
 
     @staticmethod
     def _parse_air_date(value):
