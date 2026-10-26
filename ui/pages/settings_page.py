@@ -1,7 +1,8 @@
 import os
+import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot, QUrl
+from PySide6.QtCore import QObject, Qt, Signal, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -148,27 +149,28 @@ class ThemePresetCard(QFrame):
         super().mousePressEvent(event)
 
 
-class _DiagnosticsExportWorker(QObject):
-    """Build the potentially large diagnostics report on a dedicated thread."""
-
+class _DiagnosticsExportSignals(QObject):
     succeeded = Signal(str)
     failed = Signal(object)
-    finished = Signal()
+    completed = Signal()
+
+
+class _DiagnosticsExportWorker:
+    """Build a large diagnostics report without blocking or owning a Qt thread."""
 
     def __init__(self, destination):
-        super().__init__()
         self.destination = Path(destination)
+        self.signals = _DiagnosticsExportSignals()
 
-    @Slot()
     def run(self):
         try:
             output = export_diagnostics(output_path=self.destination)
         except Exception as error:
-            self.failed.emit(error)
+            self.signals.failed.emit(error)
         else:
-            self.succeeded.emit(str(output))
+            self.signals.succeeded.emit(str(output))
         finally:
-            self.finished.emit()
+            self.signals.completed.emit()
 
 
 class SettingsPage(QWidget):
@@ -1183,21 +1185,17 @@ class SettingsPage(QWidget):
         destination = default_app_data_dir() / "nekotrack_diagnostics.txt"
         log_event("diagnostics.export_started", report_name=destination.name)
 
-        thread = QThread(self)
         worker = _DiagnosticsExportWorker(destination)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.succeeded.connect(self._diagnostics_export_succeeded)
-        worker.failed.connect(self._diagnostics_export_failed)
-        worker.finished.connect(
-            thread.quit,
-            Qt.ConnectionType.DirectConnection,
+        worker.signals.succeeded.connect(self._diagnostics_export_succeeded)
+        worker.signals.failed.connect(self._diagnostics_export_failed)
+        worker.signals.completed.connect(self._diagnostics_export_worker_finished)
+        thread = threading.Thread(
+            target=worker.run,
+            name="NekoTrack-Diagnostics-Export",
+            daemon=False,
         )
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(self._diagnostics_export_worker_finished)
-        thread.finished.connect(thread.deleteLater)
-        self._diagnostics_export_thread = thread
         self._diagnostics_export_worker = worker
+        self._diagnostics_export_thread = thread
 
         button = self._diagnostics_export_button_widget
         if button is not None:
