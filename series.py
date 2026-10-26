@@ -640,6 +640,17 @@ def _search_relation_edges(item):
     return [edge for edge in edges if isinstance(edge, dict)]
 
 
+def _has_search_relation_edges(item):
+    """Check for any valid relation edge without allocating a filtered list."""
+    relations = _get(item, "relations")
+    if not isinstance(relations, dict):
+        return False
+    edges = relations.get("edges")
+    if not isinstance(edges, (list, tuple)):
+        return False
+    return any(isinstance(edge, dict) for edge in edges)
+
+
 def _relation_edge_allowed(item, edge):
     if not isinstance(edge, dict) or edge.get("relationType") not in SERIES_RELATIONS:
         return False
@@ -872,7 +883,7 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
                 continue
 
             if not hydrate_existing_nodes and (
-                _search_relation_edges(item) or item_id in _relation_cache
+                _has_search_relation_edges(item) or item_id in _relation_cache
             ):
                 continue
 
@@ -919,7 +930,7 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
                 if cached is not None:
                     _apply_relation_details(item, cached)
 
-            if not _get(item, "_relations_loaded") and not _search_relation_edges(item):
+            if not _get(item, "_relations_loaded") and not _has_search_relation_edges(item):
                 if fetch_failures[item_id] < MAX_NODE_FETCH_RETRIES and can_fetch:
                     unresolved_remaining.append(item)
                 continue

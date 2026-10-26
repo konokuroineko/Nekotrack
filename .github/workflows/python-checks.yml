@@ -103,6 +103,8 @@ jobs:
         run: python experiments/benchmark_series_union_by_size.py --member-counts 500 1000 2000 --iterations 5 --json-out "${{ runner.temp }}/nekotrack-series-union-by-size.json"
       - name: Benchmark Search relation readiness queue
         run: python experiments/benchmark_relation_pending_queue.py --sizes 1000 5000 10000 20000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-relation-pending-queue.json"
+      - name: Benchmark relation edge presence checks
+        run: python experiments/benchmark_relation_edge_presence.py --edge-counts 0 3 10 50 --calls 30000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-relation-edge-presence.json"
       - name: Benchmark batched bundle Work Details reads
         run: python experiments/benchmark_bundle_details.py --work-counts 5 20 50 --iterations 5 --json-out "${{ runner.temp }}/nekotrack-bundle-details.json"
       - name: Benchmark Work Details episode snapshot reads

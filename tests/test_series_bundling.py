@@ -365,6 +365,27 @@ class ComponentUnionBySizeTests(unittest.TestCase):
 
 
 
+class RelationEdgePresenceTests(unittest.TestCase):
+    def test_presence_check_matches_filtered_edge_list_truthiness(self):
+        samples = [
+            None,
+            {},
+            {"relations": None},
+            {"relations": {"edges": None}},
+            {"relations": {"edges": []}},
+            {"relations": {"edges": [None, 1, "bad"]}},
+            {"relations": {"edges": [{"relationType": "SEQUEL", "node": {"id": 2}}]}},
+            {"relations": {"edges": [None, "bad", {"relationType": "SEQUEL", "node": {"id": 2}}]}},
+            {"relations": {"edges": (None, {"relationType": "PREQUEL", "node": {"id": 3})}},
+        ]
+        for item in samples:
+            with self.subTest(item=item):
+                self.assertEqual(
+                    series._has_search_relation_edges(item),
+                    bool(series._search_relation_edges(item)),
+                )
+
+
 class BundlePreferenceSnapshotTests(unittest.TestCase):
     def test_search_grouping_reuses_its_bundle_preference_snapshot(self):
         ova = media(2, "Example Series OVA", "OVA")

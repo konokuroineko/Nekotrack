@@ -748,3 +748,18 @@ checks that one Search grouping operation reads each preference exactly once. Th
 Python test matrix (Windows/Linux, Python 3.11/3.12/3.14), Rust parity jobs and
 adversarial stress run all passed for this change. The evidence is a bounded getter-call
 count, not an end-to-end timing result, so no wall-clock speedup is claimed.
+
+
+## Fifty-first-pass allocation-free relation-edge presence checks
+
+Two branches in relation discovery only need the boolean answer to “does this item
+have any valid relation edges?” They previously built a filtered list via
+`_search_relation_edges()` and discarded it immediately. A separate
+`_has_search_relation_edges()` now short-circuits on the first valid edge while
+preserving the old truthiness for missing, empty and malformed edge data. The main
+traversal still uses the filtered list where it actually needs to iterate edges.
+
+Added parity tests and a synthetic benchmark for empty, valid, invalid-only and mixed
+edge lists, and included the results in the existing backend benchmark artifact.
+Retain this only if CI remains green and the measurements show a useful improvement;
+no end-to-end speedup is claimed.

@@ -72,6 +72,16 @@ parity and reports median/p95 time and the final bounded cache size. The workloa
 synthetic and measures title normalization only, not end-to-end Library or Search speed.
 The benchmark runs in CI and uploads its JSON alongside the existing backend reports.
 
+## Relation edge presence benchmark
+
+Run from the repository root:
+
+    python experiments/benchmark_relation_edge_presence.py --edge-counts 0 3 10 50 --calls 30000 --iterations 7 --json-out "$env:TEMP\nekotrack-relation-edge-presence.json"
+
+This compares checking whether any valid relation edge exists with the former filtered
+list construction. It checks parity for empty, valid, malformed and mixed synthetic
+edge lists and reports median/p95 timing. No application database or network is used.
+
 ## Indexed bundle-exclusion benchmark
 
 Run from the repository root:
