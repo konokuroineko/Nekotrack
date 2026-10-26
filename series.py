@@ -304,6 +304,7 @@ def _cached_series_key(value):
     value = re.sub(r"\s+", " ", value).strip()
     return re.sub(r"[^a-z0-9]+", " ", value).strip()
 
+
 def _prefix_related_tv_candidate_indices(keys):
     """Index title-prefix candidates without comparing every pair of TV titles.
 

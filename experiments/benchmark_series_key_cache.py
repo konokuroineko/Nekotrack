@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import re
 import statistics
 import sys
 import time
@@ -23,8 +24,6 @@ import series  # noqa: E402
 def reference_series_key(title):
     """Original uncached implementation, retained here as a correctness baseline."""
     value = str(title or "").lower().strip()
-    import re
-
     value = re.sub(
         r"\s*[:\-–—]?\s*(?:the\s+)?final\s+season(?:\s+part\s+\d+)?(?:\s+\([^)]*\))?\s*$",
         "",
