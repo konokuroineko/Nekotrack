@@ -654,10 +654,9 @@ def _has_search_relation_edges(item):
     # fall through to a complete type check to preserve filtered-list semantics.
     if isinstance(edges[0], dict):
         return True
-    for index in range(1, len(edges)):
-        if isinstance(edges[index], dict):
-            return True
-    return False
+    # If the first edge is malformed, use the legacy filtered comprehension.
+    # Malformed provider payloads are rare, and this avoids slowing their full scan.
+    return bool([edge for edge in edges if isinstance(edge, dict)])
 
 
 def _relation_edge_allowed(item, edge):

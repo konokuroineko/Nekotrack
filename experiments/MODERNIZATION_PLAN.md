@@ -761,6 +761,11 @@ arrays directly and checks the first edge before falling back to a loop over mal
 prefixes, preserving the old truthiness for missing, empty and malformed edge data.
 The main traversal still uses the filtered list where it needs to iterate edges.
 
+The first-edge fast path speeds common empty and valid-first arrays. For an
+array whose first element is malformed, the helper falls back to the original filtered
+list comprehension rather than a Python indexing loop; this keeps unusual malformed
+payloads from regressing while preserving the exact truth value.
+
 Parity tests and a synthetic benchmark cover empty, valid, invalid-only and mixed edge
 lists; CI uploads the JSON results. Keep this only if the fast-path revision remains
 green and improves representative common cases. No end-to-end speedup is claimed.
