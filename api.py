@@ -5,6 +5,7 @@ from email.utils import parsedate_to_datetime
 import hashlib
 import math
 import os
+import queue
 import re
 import requests
 import tempfile
@@ -36,6 +37,9 @@ __all__ = [
     "get_anime_discovery_page",
     "get_media_details",
     "get_entity_profile",
+    "request_api_shutdown",
+    "reset_api_shutdown",
+    "cancellable_network_call",
     "TMDB_EPISODE_CATALOG_VERSION",
     "TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS",
     "get_tmdb_access_token",
@@ -74,6 +78,99 @@ MAX_RETRY_BACKOFF_SECONDS = 4
 # Keep retry sleeps independently patchable in tests; patching time.sleep
 # itself would affect every module because the time module is shared globally.
 _retry_sleep = time.sleep
+_DEFAULT_RETRY_SLEEP = _retry_sleep
+_api_shutdown_event = threading.Event()
+
+
+def request_api_shutdown():
+    """Tell provider calls to abandon network waits during application exit."""
+    _api_shutdown_event.set()
+
+
+def reset_api_shutdown():
+    """Reset shutdown state after every Qt worker has stopped (also used in tests)."""
+    _api_shutdown_event.clear()
+
+
+def _api_stop_requested(stop_event=None):
+    return _api_shutdown_event.is_set() or (
+        stop_event is not None and stop_event.is_set()
+    )
+
+
+def cancellable_network_call(request_callable, stop_event=None):
+    """Run one blocking HTTP call so the caller can abandon it during shutdown.
+
+    The HTTP operation lives in a daemon thread. If shutdown is requested while
+    the socket is blocked, the application worker returns immediately; the
+    isolated thread can only return/close the response, never write app data.
+    """
+    if _api_stop_requested(stop_event):
+        raise InterruptedError("Network request cancelled during shutdown.")
+
+    results = queue.Queue(maxsize=1)
+    abandoned = threading.Event()
+    publish_lock = threading.Lock()
+
+    def close_response(value):
+        close = getattr(value, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+    def invoke_request():
+        try:
+            result = (True, request_callable())
+        except Exception as error:
+            result = (False, error)
+        with publish_lock:
+            if abandoned.is_set() or _api_stop_requested(stop_event):
+                if result[0]:
+                    close_response(result[1])
+                return
+            try:
+                results.put_nowait(result)
+            except queue.Full:
+                if result[0]:
+                    close_response(result[1])
+
+    request_thread = threading.Thread(
+        target=invoke_request,
+        name="NekoTrack-Cancellable-HTTP",
+        daemon=True,
+    )
+    request_thread.start()
+
+    while True:
+        try:
+            succeeded, value = results.get(timeout=0.025)
+        except queue.Empty:
+            if not _api_stop_requested(stop_event):
+                continue
+            with publish_lock:
+                abandoned.set()
+                try:
+                    succeeded, value = results.get_nowait()
+                except queue.Empty:
+                    pass
+                else:
+                    if succeeded:
+                        close_response(value)
+            raise InterruptedError("Network request cancelled during shutdown.")
+
+        if _api_stop_requested(stop_event):
+            with publish_lock:
+                abandoned.set()
+                if succeeded:
+                    close_response(value)
+            raise InterruptedError("Network request cancelled during shutdown.")
+        if succeeded:
+            return value
+        raise value
+
+
 MAX_ANILIST_MEDIA_ID = (1 << 31) - 1
 MIN_LOCAL_MEDIA_ID = -((1 << 63) - 1)
 
@@ -89,7 +186,7 @@ def _wait_for_anilist_slot(stop_event=None):
     """Reserve a paced request slot, but let shutdown interrupt a pending wait."""
     global _anilist_next_request_at
     while True:
-        if stop_event is not None and stop_event.is_set():
+        if _api_stop_requested(stop_event):
             raise InterruptedError("AniList request cancelled during shutdown.")
         with _anilist_rate_lock:
             now = time.monotonic()
@@ -98,18 +195,39 @@ def _wait_for_anilist_slot(stop_event=None):
                 _anilist_next_request_at = now + ANILIST_MIN_REQUEST_INTERVAL
                 return
             wait_time = ready_at - now
-        if stop_event is None:
-            time.sleep(wait_time)
-        elif stop_event.wait(wait_time):
+        cancellation_event = (
+            stop_event if stop_event is not None else _api_shutdown_event
+        )
+        # When a worker has its own cancellation event, also poll the global
+        # shutdown flag; normal waits remain efficient when no local event exists.
+        wait_slice = min(wait_time, 0.05) if stop_event is not None else wait_time
+        if cancellation_event.wait(wait_slice):
             raise InterruptedError("AniList request cancelled during shutdown.")
 
 
 def _wait_for_anilist_retry(wait_time, stop_event=None):
     """Wait before a retry, unless shutdown was requested in the meantime."""
-    if stop_event is None:
-        _retry_sleep(wait_time)
-    elif stop_event.wait(max(0.0, wait_time)):
-        raise InterruptedError("AniList request cancelled during shutdown.")
+    delay = max(0.0, float(wait_time))
+    # Retain the independently patchable sleep hook used by retry unit tests.
+    if _retry_sleep is not _DEFAULT_RETRY_SLEEP:
+        _retry_sleep(delay)
+        if _api_stop_requested(stop_event):
+            raise InterruptedError("AniList request cancelled during shutdown.")
+        return
+
+    cancellation_event = (
+        stop_event if stop_event is not None else _api_shutdown_event
+    )
+    deadline = time.monotonic() + delay
+    while True:
+        if _api_stop_requested(stop_event):
+            raise InterruptedError("AniList request cancelled during shutdown.")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        wait_slice = min(remaining, 0.05) if stop_event is not None else remaining
+        if cancellation_event.wait(wait_slice):
+            raise InterruptedError("AniList request cancelled during shutdown.")
 
 
 def _extend_anilist_cooldown(seconds):
@@ -210,7 +328,7 @@ def anilist_request(query, variables=None, stop_event=None):
         return str(fallback or "AniList returned an unreadable error response.")
 
     for attempt in range(MAX_RETRIES):
-        if stop_event is not None and stop_event.is_set():
+        if _api_stop_requested(stop_event):
             raise InterruptedError("AniList request cancelled during shutdown.")
         try:
             _wait_for_anilist_slot(stop_event)
@@ -221,10 +339,13 @@ def anilist_request(query, variables=None, stop_event=None):
                 attempt=attempt + 1,
                 variable_names=sorted(str(name) for name in (variables or {}).keys())[:20],
             ):
-                response = requests.post(
-                    ANILIST_URL,
-                    json={"query": query, "variables": variables or {}},
-                    timeout=ANILIST_REQUEST_TIMEOUT,
+                response = cancellable_network_call(
+                    lambda: requests.post(
+                        ANILIST_URL,
+                        json={"query": query, "variables": variables or {}},
+                        timeout=ANILIST_REQUEST_TIMEOUT,
+                    ),
+                    stop_event=stop_event,
                 )
             log_event(
                 "api.response",
@@ -317,7 +438,7 @@ def anilist_request(query, variables=None, stop_event=None):
             requests.exceptions.ChunkedEncodingError,
         ) as error:
             last_error = error
-            if stop_event is not None and stop_event.is_set():
+            if _api_stop_requested(stop_event):
                 raise InterruptedError(
                     "AniList request cancelled during shutdown."
                 ) from error
@@ -1484,7 +1605,7 @@ def get_media_episodes(media_id):
 def get_media_details(media_id, stop_event=None):
     """Fetch provider-aware details, stopping optional pagination during shutdown."""
     def shutdown_requested():
-        return stop_event is not None and stop_event.is_set()
+        return _api_stop_requested(stop_event)
 
     def request_anilist(query, variables):
         if stop_event is None:
