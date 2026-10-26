@@ -83,20 +83,42 @@ def _seed_library(path: Path, count: int) -> None:
 
 def _validate(groups: list[dict], work_count: int) -> dict:
     expected_groups = work_count // 4
+    expected_member_sets = {
+        frozenset(range(start, start + 4))
+        for start in range(1, work_count + 1, 4)
+    }
+    actual_member_sets = {
+        frozenset(int(member["id"]) for member in (group.get("_series_members") or []))
+        for group in groups
+    }
+    flattened_ids = [
+        int(member["id"])
+        for group in groups
+        for member in (group.get("_series_members") or [])
+    ]
     group_count = len(groups)
-    member_count = sum(int(group.get("_series_count", 0)) for group in groups)
+    member_count = len(flattened_ids)
+    member_ids_match = (
+        len(flattened_ids) == work_count
+        and set(flattened_ids) == set(range(1, work_count + 1))
+    )
+    groups_match_exactly = actual_member_sets == expected_member_sets
     valid = (
         group_count == expected_groups
         and member_count == work_count
+        and member_ids_match
+        and groups_match_exactly
         and all(int(group.get("_series_count", 0)) == 4 for group in groups)
     )
     if not valid:
         raise AssertionError(
-            f"Unexpected grouping shape: groups={group_count}, members={member_count}, "
-            f"expected_groups={expected_groups}, expected_members={work_count}"
+            f"Unexpected grouping: groups={group_count}/{expected_groups}, "
+            f"members={member_count}/{work_count}, unique_ids={len(set(flattened_ids))}, "
+            f"exact_member_sets={groups_match_exactly}"
         )
     return {
         "results_match_expected_shape": True,
+        "exact_group_membership_matches": True,
         "group_count": group_count,
         "member_count": member_count,
         "members_per_group": 4,
