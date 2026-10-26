@@ -79,10 +79,11 @@ Run from the repository root:
     python experiments/benchmark_library_grouping_full.py --work-counts 100 1000 5000 --iterations 7 --json-out "$env:TEMP\nekotrack-library-grouping-full.json"
 
 This runs the actual `series.get_library_series()` function against disposable synthetic
-SQLite Libraries. It checks bundle counts/member coverage and expected connection
-factory calls, and reports cold/warm title-cache median and p95 time. It includes the
-function's database reads and Python grouping logic, but excludes UI painting, network
-requests and any user database. CI uploads the JSON report with the other benchmarks.
+SQLite Libraries. It verifies exact bundle membership, checks expected connection
+factory calls, and reports cold/warm title-cache median/p95 time. For the largest
+requested library size it also records the top 15 cumulative `cProfile` functions to
+identify the next optimization target. It includes database reads and Python grouping,
+but excludes UI painting, network requests and any user database. CI uploads the JSON.
 
 ## Relation edge presence benchmark
 

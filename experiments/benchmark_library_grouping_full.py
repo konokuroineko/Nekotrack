@@ -8,8 +8,10 @@ normalized-title-cache timings.
 from __future__ import annotations
 
 import argparse
+import cProfile
 import json
 import platform
+import pstats
 import statistics
 import sys
 import tempfile
@@ -125,7 +127,7 @@ def _validate(groups: list[dict], work_count: int) -> dict:
     }
 
 
-def _measure_current(count: int, iterations: int) -> dict:
+def _measure_current(count: int, iterations: int, include_profile: bool = False) -> dict:
     previous_database_name = database.DATABASE_NAME
     try:
         with tempfile.TemporaryDirectory(prefix="nekotrack-full-library-grouping-") as tmp:
@@ -174,6 +176,31 @@ def _measure_current(count: int, iterations: int) -> dict:
             if calls.count("database") != 1 or calls.count("series") != 1 or len(calls) != 2:
                 raise AssertionError(f"Unexpected connection factory calls: {calls}")
 
+            profile_hotspots = []
+            if include_profile:
+                series._cached_series_key.cache_clear()
+                profiler = cProfile.Profile()
+                with patch.object(series, "get", return_value=False):
+                    profiler.enable()
+                    profiled_groups = series.get_library_series()
+                    profiler.disable()
+                _validate(profiled_groups, count)
+                profile_stats = pstats.Stats(profiler)
+                ranked_stats = sorted(
+                    profile_stats.stats.items(),
+                    key=lambda entry: entry[1][3],
+                    reverse=True,
+                )[:15]
+                for (filename, line_number, function), stat in ranked_stats:
+                    primitive_calls, total_calls, self_seconds, cumulative_seconds, _callers = stat
+                    profile_hotspots.append({
+                        "function": f"{Path(filename).name}:{line_number} {function}",
+                        "primitive_calls": primitive_calls,
+                        "calls": total_calls,
+                        "self_ms": round(self_seconds * 1000, 3),
+                        "cumulative_ms": round(cumulative_seconds * 1000, 3),
+                    })
+
             return {
                 "library_work_count": count,
                 **shape,
@@ -190,6 +217,7 @@ def _measure_current(count: int, iterations: int) -> dict:
                     "median_ms": round(statistics.median(warm_samples), 3),
                     "p95_ms": round(percentile(warm_samples, 0.95), 3),
                 },
+                "cprofile_top_cumulative_functions": profile_hotspots,
             }
     finally:
         database.DATABASE_NAME = previous_database_name
@@ -215,7 +243,14 @@ def main() -> int:
             "Qt painting or user database"
         ),
         "iterations_per_mode": args.iterations,
-        "results": [_measure_current(count, args.iterations) for count in args.work_counts],
+        "results": [
+            _measure_current(
+                count,
+                args.iterations,
+                include_profile=(count == max(args.work_counts)),
+            )
+            for count in args.work_counts
+        ],
     }
     print(json.dumps(payload, indent=2))
     if args.json_out:

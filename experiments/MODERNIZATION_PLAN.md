@@ -798,9 +798,12 @@ Added a repeatable CI benchmark for the complete `series.get_library_series()` p
 Unlike the existing SQLite state-reader benchmark, it seeds a temporary synthetic
 Library and measures the real grouping function through its row fetch, grouping-state
 snapshot, relation reads, component unions, summaries and presentation overrides.
-It validates the expected four-member bundle shape and two connection factories per
-refresh (one Library row fetch, one shared grouping snapshot), and reports cold and
-warm title-cache median/p95 timings at 100, 1,000 and 5,000 works.
+It validates the exact expected four-member bundle sets, every work ID's unique
+coverage and two connection factories per refresh (one Library row fetch, one shared
+grouping snapshot), and reports cold/warm title-cache median/p95 timings at 100, 1,000
+and 5,000 works. It also records the top 15 cumulative `cProfile` functions at the
+largest requested size, giving the next pass evidence about where grouping CPU time
+is actually spent.
 
 The benchmark excludes Qt card painting, actual user data and provider APIs, so its
 results are a grouping-path baseline rather than an end-to-end UI refresh claim. Windows
