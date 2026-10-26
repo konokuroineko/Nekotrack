@@ -222,6 +222,45 @@ class UiStartupTests(unittest.TestCase):
             else:
                 os.environ["QT_SCALE_FACTOR"] = previous_factor
 
+    def test_settings_page_build_is_deferred_until_requested(self):
+        previous_stores = MemorySettings.stores
+        MemorySettings.stores = {}
+        try:
+            with (
+                patch.object(preferences, "QSettings", MemorySettings),
+                patch("ui.pages.settings_page.get_all_library", return_value=[]),
+            ):
+                settings_page = SettingsPage(defer_initial_build=True)
+                self.assertFalse(settings_page._built)
+                self.assertIsNone(settings_page.layout())
+                self.assertFalse(
+                    any(
+                        item.accessibleName() == "Export NekoTrack diagnostics"
+                        for item in settings_page.findChildren(QPushButton)
+                    )
+                )
+
+                settings_page.ensure_built()
+                self.assertTrue(settings_page._built)
+                self.assertIsNotNone(settings_page.layout())
+                self.assertTrue(
+                    any(
+                        item.accessibleName() == "Export NekoTrack diagnostics"
+                        for item in settings_page.findChildren(QPushButton)
+                    )
+                )
+
+                # Re-entering Settings must not duplicate the widget tree.
+                child_count = len(settings_page.findChildren(QWidget))
+                settings_page.ensure_built()
+                self.assertEqual(len(settings_page.findChildren(QWidget)), child_count)
+
+                settings_page.close()
+                settings_page.deleteLater()
+                self.app.processEvents()
+        finally:
+            MemorySettings.stores = previous_stores
+
     def test_settings_exports_diagnostics_in_background_without_blocking_ui(self):
         previous_stores = MemorySettings.stores
         MemorySettings.stores = {}
