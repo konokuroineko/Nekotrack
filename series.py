@@ -1637,7 +1637,7 @@ def get_library_series(rows=None):
         return True
 
     row_by_id = {int(row["id"]): row for row in rows}
-    grouping_state = get_library_bundle_grouping_state(ids)
+    grouping_state = get_library_bundle_grouping_state(ids, relation_types=SERIES_RELATIONS)
     excluded_links = {
         tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
         for link in grouping_state["exclusions"]
@@ -1665,7 +1665,7 @@ def get_library_series(rows=None):
             for work_id in bundleable_ids[1:]:
                 union(anchor_id, work_id)
 
-    for relation in _relation_data_for(ids):
+    for relation in grouping_state["relations"]:
         source_id = int(relation["source_id"])
         target_id = int(relation["target_id"])
         source = row_by_id.get(source_id)
