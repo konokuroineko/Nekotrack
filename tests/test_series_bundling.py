@@ -52,13 +52,13 @@ class SeriesKeyCacheTests(unittest.TestCase):
 
     def test_compiled_patterns_match_the_previous_re_sub_sequence(self):
         pattern_specs = (
-            (r"\\s*[:\\-–—]?\\s*(?:the\\s+)?final\\s+season(?:\\s+part\\s+\\d+)?(?:\\s+\\([^)]*\\))?\\s*$", ""),
-            (r"\\s*[:\\-–—]?\\s*(?:\\d+(?:st|nd|rd|th)|season\\s*\\d+|series\\s*\\d+|season\\s*[ivx]+|series\\s*[ivx]+)(?:\\s+part\\s+\\d+)?\\s*$", ""),
-            (r"(?:^|\\s)(?:ii|iii|iv|v|vi)\\s*[:\\-–—]\\s*", " "),
-            (r"\\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\\s*(?:season)?\\s*$", ""),
-            (r"\\s*[:\\-–—]?\\s*(?:part|cour)\\s*\\d+\\s*$", ""),
-            (r"\\s+\\d+$", ""),
-            (r"\\s+", " "),
+            (r"\s*[:\-–—]?\s*(?:the\s+)?final\s+season(?:\s+part\s+\d+)?(?:\s+\([^)]*\))?\s*$", ""),
+            (r"\s*[:\-–—]?\s*(?:\d+(?:st|nd|rd|th)|season\s*\d+|series\s*\d+|season\s*[ivx]+|series\s*[ivx]+)(?:\s+part\s+\d+)?\s*$", ""),
+            (r"(?:^|\s)(?:ii|iii|iv|v|vi)\s*[:\-–—]\s*", " "),
+            (r"\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\s*(?:season)?\s*$", ""),
+            (r"\s*[:\-–—]?\s*(?:part|cour)\s*\d+\s*$", ""),
+            (r"\s+\d+$", ""),
+            (r"\s+", " "),
         )
 
         def previous_normalizer(title):
