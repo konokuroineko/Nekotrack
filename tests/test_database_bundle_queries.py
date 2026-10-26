@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import database
+import series
 
 
 def reference_bundle_characters(work_ids):
@@ -765,6 +766,54 @@ class BundleDetailBatchingTests(unittest.TestCase):
             ],
         }
         self.assertEqual(actual, expected)
+
+    def test_library_grouping_reuses_one_connection_for_state_relations_and_overrides(self):
+        connection = database.get_connection()
+        try:
+            connection.execute(
+                "INSERT INTO bundle_overrides "
+                "(bundle_anchor_id, custom_title, cover_work_id) VALUES (?, ?, ?)",
+                (1, "My Custom Series", 2),
+            )
+            # Exercise a relation crossing the 400-ID chunk boundary too; the
+            # production grouping path must preserve the legacy relation reader's
+            # de-duplication and result order when reusing the same connection.
+            connection.execute(
+                "INSERT INTO work_relations VALUES (?, ?, ?)",
+                (400, 401, "SEQUEL"),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        rows = [
+            {
+                "id": 1, "title": "Alpha Series", "type": "ANIME", "format": "TV",
+                "cover_url": "cover-1", "cover_path": None, "episodes": 12,
+                "start_year": 2020, "status": "Watching", "progress_episodes": 3,
+            },
+            {
+                "id": 2, "title": "Alpha Series Season 2", "type": "ANIME", "format": "TV",
+                "cover_url": "cover-2", "cover_path": None, "episodes": 12,
+                "start_year": 2021, "status": "Planning", "progress_episodes": 0,
+            },
+        ]
+
+        original_factory = database.get_connection
+        with (
+            patch.object(series, "get", return_value=False),
+            patch.object(series, "get_connection", wraps=original_factory) as series_factory,
+            patch.object(database, "get_connection", wraps=original_factory) as database_factory,
+        ):
+            groups = series.get_library_series(rows)
+
+        self.assertEqual(series_factory.call_count, 1)
+        database_factory.assert_not_called()
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["title"], "My Custom Series")
+        self.assertEqual(groups[0]["_bundle_cover_work_id"], 2)
+        self.assertEqual(groups[0]["_series_episode_total"], 24)
+        self.assertEqual(groups[0]["_series_progress"], 3)
 
     def test_provider_metadata_batch_reads_multiple_providers_with_one_connection(self):
         con = database.get_connection()
