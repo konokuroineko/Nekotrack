@@ -982,7 +982,7 @@ def _apply_bundle_override(group, members, overrides_by_anchor=None):
     return group
 
 
-def _apply_bundle_overrides(groups):
+def _apply_bundle_overrides(groups, connection=None):
     """Apply all bundle appearance overrides with one batched database read."""
     entries = []
     work_ids = set()
@@ -1002,7 +1002,7 @@ def _apply_bundle_overrides(groups):
         return groups
 
     try:
-        override_rows = get_bundle_overrides(sorted(work_ids))
+        override_rows = get_bundle_overrides(sorted(work_ids), connection=connection)
     except Exception as error:
         if "no such table: bundle_overrides" not in str(error).casefold():
             log_exception(
@@ -1371,7 +1371,7 @@ def has_pending_relation_enrichment(results):
     return False
 
 
-def _relation_data_for(ids):
+def _relation_data_for(ids, connection=None):
     if not ids:
         return []
 
@@ -1379,7 +1379,9 @@ def _relation_data_for(ids):
     if not member_ids:
         return []
     relation_types = ",".join(repr(value) for value in SERIES_RELATIONS)
-    connection = get_connection()
+    owns_connection = connection is None
+    if owns_connection:
+        connection = get_connection()
     try:
         # Keep the single-query path unchanged for typical library sizes. Large
         # libraries are chunked because this predicate binds every ID twice.
@@ -1422,7 +1424,8 @@ def _relation_data_for(ids):
             )
         ]
     finally:
-        connection.close()
+        if owns_connection:
+            connection.close()
 
 
 def sync_library_relations(force_ids=None):
@@ -1637,114 +1640,119 @@ def get_library_series(rows=None):
         return True
 
     row_by_id = {int(row["id"]): row for row in rows}
-    grouping_state = get_library_bundle_grouping_state(ids, relation_types=SERIES_RELATIONS)
-    excluded_links = {
-        tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
-        for link in grouping_state["exclusions"]
-    }
-    excluded_neighbors = _build_exclusion_neighbors(excluded_links)
-
-    # Search already computed these bundles using the full discovered relation
-    # graph. Preserve that exact grouping in Library while honoring current
-    # format preferences and explicit pair exclusions.
-    saved_groups = defaultdict(set)
-    for membership in grouping_state["automatic_memberships"]:
-        bundle_id = int(membership["bundle_id"])
-        work_id = int(membership["work_id"])
-        if work_id in ids:
-            saved_groups[bundle_id].add(work_id)
-            component_snapshot_ids[work_id].add(bundle_id)
-
-    for member_ids in saved_groups.values():
-        bundleable_ids = sorted(
-            work_id for work_id in member_ids
-            if work_id in row_by_id and _auto_bundleable(row_by_id[work_id])
-        )
-        if len(bundleable_ids) > 1:
-            anchor_id = bundleable_ids[0]
-            for work_id in bundleable_ids[1:]:
-                union(anchor_id, work_id)
-
-    for relation in grouping_state["relations"]:
-        source_id = int(relation["source_id"])
-        target_id = int(relation["target_id"])
-        source = row_by_id.get(source_id)
-        target = row_by_id.get(target_id)
-
-        if source is None or target is None:
-            continue
-
-        # Use the same conservative relation policy as Search. In particular,
-        # don't let stored franchise-level relations bypass the cross-format
-        # compatibility rules used during search enrichment.
-        edge = {
-            "relationType": relation["relation_type"],
-            "node": target,
+    connection = get_connection()
+    try:
+        grouping_state = get_library_bundle_grouping_state(ids, connection=connection)
+        relation_rows = _relation_data_for(ids, connection=connection)
+        excluded_links = {
+            tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
+            for link in grouping_state["exclusions"]
         }
-        if tuple(sorted((source_id, target_id))) in excluded_links:
-            continue
-        if _relation_group_compatible(source, edge, target):
-            union(source_id, target_id)
-
-    # Manual bundle links are explicit user overrides and may join works
-    # even when AniList relations or formats would not allow automatic bundling.
-    for link in grouping_state["manual_links"]:
-        source_id = int(link["work_a"])
-        target_id = int(link["work_b"])
-        if source_id in ids and target_id in ids:
-            # Explicit user-created manual links may combine automatic
-            # snapshots, but the exclusion check inside union remains active.
-            union(source_id, target_id, allow_snapshot_merge=True)
-
-    by_key = {}
-    for row in rows:
-        if not _auto_bundleable(row):
-            continue
-
-        key = _series_group_key(row)
-        if key[1]:
-            work_id = int(row["id"])
-            if key in by_key:
-                partner_id = by_key[key]
-                if tuple(sorted((work_id, partner_id))) not in excluded_links:
-                    union(work_id, partner_id)
-            else:
-                by_key[key] = work_id
-
-    groups = defaultdict(list)
-    for row in rows:
-        groups[find(int(row["id"]))].append(row)
-
-    result = []
-    for members in groups.values():
-        members.sort(
-            key=lambda row: (
-                row["start_year"] is None,
-                row["start_year"] or 9999,
-                row["id"],
+        excluded_neighbors = _build_exclusion_neighbors(excluded_links)
+    
+        # Search already computed these bundles using the full discovered relation
+        # graph. Preserve that exact grouping in Library while honoring current
+        # format preferences and explicit pair exclusions.
+        saved_groups = defaultdict(set)
+        for membership in grouping_state["automatic_memberships"]:
+            bundle_id = int(membership["bundle_id"])
+            work_id = int(membership["work_id"])
+            if work_id in ids:
+                saved_groups[bundle_id].add(work_id)
+                component_snapshot_ids[work_id].add(bundle_id)
+    
+        for member_ids in saved_groups.values():
+            bundleable_ids = sorted(
+                work_id for work_id in member_ids
+                if work_id in row_by_id and _auto_bundleable(row_by_id[work_id])
             )
-        )
-
-        group = dict(members[0])
-        statuses = {row["status"] for row in members}
-        group["status"] = (
-            "Watching"
-            if "Watching" in statuses
-            else "Completed"
-            if statuses and statuses == {"Completed"}
-            else "Planning"
-        )
-        group["_series_count"] = len(members)
-        group["_series_members"] = members
-        group["_series_episode_total"] = sum(
-            int(row["episodes"] or 0) for row in members
-        )
-        group["_series_progress"] = sum(
-            int(row["progress_episodes"] or 0) for row in members
-        )
-        group["_bundle_summary"] = _bundle_summary(members)
-
-        group["_bundle_default_member_id"] = int(members[0]["id"])
-        result.append(group)
-
-    return _apply_bundle_overrides(result)
+            if len(bundleable_ids) > 1:
+                anchor_id = bundleable_ids[0]
+                for work_id in bundleable_ids[1:]:
+                    union(anchor_id, work_id)
+    
+        for relation in relation_rows:
+            source_id = int(relation["source_id"])
+            target_id = int(relation["target_id"])
+            source = row_by_id.get(source_id)
+            target = row_by_id.get(target_id)
+    
+            if source is None or target is None:
+                continue
+    
+            # Use the same conservative relation policy as Search. In particular,
+            # don't let stored franchise-level relations bypass the cross-format
+            # compatibility rules used during search enrichment.
+            edge = {
+                "relationType": relation["relation_type"],
+                "node": target,
+            }
+            if tuple(sorted((source_id, target_id))) in excluded_links:
+                continue
+            if _relation_group_compatible(source, edge, target):
+                union(source_id, target_id)
+    
+        # Manual bundle links are explicit user overrides and may join works
+        # even when AniList relations or formats would not allow automatic bundling.
+        for link in grouping_state["manual_links"]:
+            source_id = int(link["work_a"])
+            target_id = int(link["work_b"])
+            if source_id in ids and target_id in ids:
+                # Explicit user-created manual links may combine automatic
+                # snapshots, but the exclusion check inside union remains active.
+                union(source_id, target_id, allow_snapshot_merge=True)
+    
+        by_key = {}
+        for row in rows:
+            if not _auto_bundleable(row):
+                continue
+    
+            key = _series_group_key(row)
+            if key[1]:
+                work_id = int(row["id"])
+                if key in by_key:
+                    partner_id = by_key[key]
+                    if tuple(sorted((work_id, partner_id))) not in excluded_links:
+                        union(work_id, partner_id)
+                else:
+                    by_key[key] = work_id
+    
+        groups = defaultdict(list)
+        for row in rows:
+            groups[find(int(row["id"]))].append(row)
+    
+        result = []
+        for members in groups.values():
+            members.sort(
+                key=lambda row: (
+                    row["start_year"] is None,
+                    row["start_year"] or 9999,
+                    row["id"],
+                )
+            )
+    
+            group = dict(members[0])
+            statuses = {row["status"] for row in members}
+            group["status"] = (
+                "Watching"
+                if "Watching" in statuses
+                else "Completed"
+                if statuses and statuses == {"Completed"}
+                else "Planning"
+            )
+            group["_series_count"] = len(members)
+            group["_series_members"] = members
+            group["_series_episode_total"] = sum(
+                int(row["episodes"] or 0) for row in members
+            )
+            group["_series_progress"] = sum(
+                int(row["progress_episodes"] or 0) for row in members
+            )
+            group["_bundle_summary"] = _bundle_summary(members)
+    
+            group["_bundle_default_member_id"] = int(members[0]["id"])
+            result.append(group)
+    
+        return _apply_bundle_overrides(result, connection=connection)
+    finally:
+        connection.close()
