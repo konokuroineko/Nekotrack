@@ -15,6 +15,8 @@ from urllib.parse import urljoin, urlsplit
 import requests
 from PySide6.QtCore import QThread, Signal
 
+from api import cancellable_network_call
+
 
 REPO_API_URL = "https://api.github.com/repos/konokuroineko/Nekotrack/releases"
 REQUEST_TIMEOUT = 8
@@ -254,15 +256,29 @@ class UpdateChecker(QThread):
         self.current_version = current_version
         self.include_prereleases = bool(include_prereleases)
         self.preferred_asset = "portable" if str(preferred_asset).casefold() == "portable" else "setup"
+        self._cancel_event = threading.Event()
+
+    def cancel(self):
+        """Interrupt a pending release-list request when the app is closing."""
+        self._cancel_event.set()
+        self.requestInterruption()
 
     def run(self):
         try:
-            response = requests.get(
-                REPO_API_URL,
-                params={"per_page": 10},
-                headers={"Accept": "application/vnd.github+json"},
-                timeout=REQUEST_TIMEOUT,
+            if self._cancel_event.is_set():
+                return
+            response = cancellable_network_call(
+                lambda: requests.get(
+                    REPO_API_URL,
+                    params={"per_page": 10},
+                    headers={"Accept": "application/vnd.github+json"},
+                    timeout=REQUEST_TIMEOUT,
+                ),
+                stop_event=self._cancel_event,
             )
+            if self._cancel_event.is_set():
+                response.close()
+                return
             response.raise_for_status()
             releases = response.json()
             if not isinstance(releases, list):
@@ -334,8 +350,11 @@ class UpdateChecker(QThread):
             else:
                 self.no_update_available.emit()
 
+        except InterruptedError:
+            return
         except Exception as exc:
-            self.check_failed.emit(str(exc))
+            if not self._cancel_event.is_set():
+                self.check_failed.emit(str(exc))
 
 
 def _sha256_file(path):
