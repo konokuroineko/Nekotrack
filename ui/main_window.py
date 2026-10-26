@@ -614,6 +614,8 @@ class MainWindow(QMainWindow):
         self._library_import_queue = LibraryImportQueue(max_concurrent=2)
         self._shutdown_event = threading.Event()
         self._shutdown_requested = False
+        self._shutdown_started_at = None
+        self._shutdown_window_hidden = False
         self._shutdown_timer = QTimer(self)
         self._shutdown_timer.setInterval(100)
         self._shutdown_timer.timeout.connect(self._poll_shutdown_workers)
@@ -694,7 +696,12 @@ class MainWindow(QMainWindow):
         with log_operation("main_window.construct_page", page="entity_profile"):
             self.entity_profile_page = EntityProfilePage()
         with log_operation("main_window.construct_page", page="settings"):
-            self.settings_page = SettingsPage(background_manager=self.background_manager)
+            # Keep startup focused on the initial Home page. Build the full
+            # settings controls the first time the user visits Settings.
+            self.settings_page = SettingsPage(
+                background_manager=self.background_manager,
+                defer_initial_build=True,
+            )
         with log_operation("main_window.construct_page", page="home"):
             self.home_page = HomePage(self.add_to_library)
         self.recommendations_page = self.home_page.recommendations_page
@@ -803,6 +810,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.library_page.refresh)
 
     def _page_changed(self, page_name):
+        if page_name == "settings":
+            self.settings_page.ensure_built()
         previous_page = self._last_navigation_page
         if page_name == "home" and previous_page not in (None, "home"):
             # Refresh the local snapshot only when returning to the dashboard;
@@ -1818,15 +1827,19 @@ class MainWindow(QMainWindow):
                     episode_number=item.get("episode_number"),
                 )
 
-    def _has_running_worker_threads(self):
-        # Includes nested Search, Library, recommendation, and detail QThreads.
+    def _running_worker_threads(self):
+        """Return the active page/update QThreads without blocking the GUI."""
+        running = []
         for thread in self.findChildren(QThread):
             try:
                 if thread.isRunning():
-                    return True
+                    running.append(thread)
             except RuntimeError:
                 continue
-        return False
+        return running
+
+    def _has_running_worker_threads(self):
+        return bool(self._running_worker_threads())
 
     def _launch_restarted_application(self):
         app = QApplication.instance()
@@ -1858,6 +1871,13 @@ class MainWindow(QMainWindow):
         app.quit()
 
     def closeEvent(self, event):
+        if not self._shutdown_requested:
+            self._shutdown_started_at = time.monotonic()
+            log_event("app.shutdown_requested")
+            self._release_reminder_timer.stop()
+            if self._release_reminder_tray.isVisible():
+                self._release_reminder_tray.hide()
+
         self._shutdown_requested = True
         self._shutdown_event.set()
         self._library_import_queue.close()
@@ -1872,29 +1892,59 @@ class MainWindow(QMainWindow):
             profile_page.request_shutdown()
         for recommendations_page in self.findChildren(RecommendationsPage):
             recommendations_page.request_shutdown()
-        # Stop each event loop; blocking provider requests still need to return.
-        # This window stays alive until every QThread has actually stopped.
+        # Stop event loops; a worker inside a provider request still must return.
+        # Never destroy a running QThread: hide the main window immediately and
+        # allow the existing shutdown poll to finish the safe teardown.
         for thread in self.findChildren(QThread):
             try:
                 thread.quit()
             except RuntimeError:
                 continue
 
-        if self._has_running_worker_threads():
+        running_threads = self._running_worker_threads()
+        if running_threads:
+            elapsed_ms = (
+                round((time.monotonic() - self._shutdown_started_at) * 1000, 2)
+                if self._shutdown_started_at is not None else 0.0
+            )
+            log_event(
+                "app.shutdown_waiting_for_workers",
+                elapsed_ms=elapsed_ms,
+                running_thread_count=len(running_threads),
+                running_thread_names=[
+                    thread.objectName() or "<unnamed QThread>"
+                    for thread in running_threads
+                ],
+            )
             self.setEnabled(False)
             event.ignore()
             if not self._shutdown_timer.isActive():
                 self._shutdown_timer.start()
+            if self.isVisible():
+                self._shutdown_window_hidden = True
+                self.hide()
             return
 
         self._shutdown_timer.stop()
-        self._release_reminder_timer.stop()
+        elapsed_ms = (
+            round((time.monotonic() - self._shutdown_started_at) * 1000, 2)
+            if self._shutdown_started_at is not None else 0.0
+        )
+        log_event(
+            "app.shutdown_completed",
+            elapsed_ms=elapsed_ms,
+            waited_for_workers=self._shutdown_window_hidden,
+        )
         if self._release_reminder_tray.isVisible():
             self._release_reminder_tray.hide()
         event.accept()
         if self._restart_requested and not self._restart_launch_scheduled:
             self._restart_launch_scheduled = True
             QTimer.singleShot(250, self._launch_restarted_application)
+        if self._shutdown_window_hidden:
+            # Hiding the window above keeps Qt alive while the active requests
+            # finish. Explicitly quit once all owned QThreads have stopped.
+            QTimer.singleShot(0, QApplication.quit)
 
     def _poll_shutdown_workers(self):
         if self._has_running_worker_threads():
