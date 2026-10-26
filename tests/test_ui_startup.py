@@ -1,5 +1,7 @@
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -220,9 +222,16 @@ class UiStartupTests(unittest.TestCase):
             else:
                 os.environ["QT_SCALE_FACTOR"] = previous_factor
 
-    def test_settings_exports_diagnostics_to_app_data_with_one_click(self):
+    def test_settings_exports_diagnostics_in_background_without_blocking_ui(self):
         previous_stores = MemorySettings.stores
         MemorySettings.stores = {}
+        started = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        worker_thread_ids = []
+        main_thread_id = threading.get_ident()
+        settings_page = None
+
         try:
             with (
                 patch.object(preferences, "QSettings", MemorySettings),
@@ -231,6 +240,15 @@ class UiStartupTests(unittest.TestCase):
             ):
                 data_dir = Path(directory)
                 expected_report = data_dir / "nekotrack_diagnostics.txt"
+
+                def fake_export(*, output_path):
+                    worker_thread_ids.append(threading.get_ident())
+                    started.set()
+                    if not release.wait(timeout=5):
+                        raise TimeoutError("Test did not release the background export.")
+                    finished.set()
+                    return expected_report
+
                 with (
                     patch(
                         "ui.pages.settings_page.default_app_data_dir",
@@ -238,7 +256,7 @@ class UiStartupTests(unittest.TestCase):
                     ),
                     patch(
                         "ui.pages.settings_page.export_diagnostics",
-                        return_value=expected_report,
+                        side_effect=fake_export,
                     ) as export_report,
                     patch("ui.pages.settings_page.QMessageBox") as message_box,
                     patch("ui.pages.settings_page.QDesktopServices") as desktop_services,
@@ -252,16 +270,67 @@ class UiStartupTests(unittest.TestCase):
                         ),
                         None,
                     )
-                    self.assertIsNotNone(button, "Settings needs an accessible diagnostics export button")
-                    button.click()
+                    self.assertIsNotNone(
+                        button,
+                        "Settings needs an accessible diagnostics export button",
+                    )
 
-                    export_report.assert_called_once_with(output_path=expected_report)
-                    message_box.information.assert_called_once()
-                    desktop_services.openUrl.assert_called_once()
-                    settings_page.close()
-                    settings_page.deleteLater()
-                    self.app.processEvents()
+                    try:
+                        button.click()
+                        self.assertFalse(button.isEnabled())
+                        self.assertEqual(button.text(), "Exporting…")
+
+                        start_deadline = time.monotonic() + 2.0
+                        while not started.is_set() and time.monotonic() < start_deadline:
+                            self.app.processEvents()
+                            QTest.qWait(10)
+                        self.assertTrue(
+                            started.is_set(),
+                            "The report export should start promptly in the worker.",
+                        )
+                        self.assertTrue(worker_thread_ids)
+                        self.assertNotEqual(
+                            worker_thread_ids[0],
+                            main_thread_id,
+                            "Diagnostics file processing must not run on the GUI thread.",
+                        )
+
+                        # Keep the simulated export blocked while Qt processes events.
+                        QTest.qWait(50)
+                        self.assertFalse(finished.is_set())
+                        self.assertFalse(message_box.information.called)
+                        self.assertFalse(button.isEnabled())
+
+                        release.set()
+                        finish_deadline = time.monotonic() + 3.0
+                        while (
+                            settings_page._diagnostics_export_worker is not None
+                            and time.monotonic() < finish_deadline
+                        ):
+                            self.app.processEvents()
+                            QTest.qWait(10)
+                        self.app.processEvents()
+
+                        self.assertIsNone(settings_page._diagnostics_export_worker)
+                        export_report.assert_called_once_with(output_path=expected_report)
+                        message_box.information.assert_called_once()
+                        desktop_services.openUrl.assert_called_once()
+                        self.assertTrue(button.isEnabled())
+                        self.assertEqual(button.text(), "Export diagnostics")
+                    finally:
+                        release.set()
+                        finish_deadline = time.monotonic() + 3.0
+                        while (
+                            settings_page._diagnostics_export_worker is not None
+                            and time.monotonic() < finish_deadline
+                        ):
+                            self.app.processEvents()
+                            QTest.qWait(10)
+                        settings_page.close()
+                        settings_page.deleteLater()
+                        self.app.processEvents()
         finally:
+            release.set()
             MemorySettings.stores = previous_stores
 
     def test_brand_assets_and_switch_rendering_on_dark_and_white_surfaces(self):
