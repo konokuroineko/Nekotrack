@@ -242,11 +242,6 @@ def main():
                         help="Starting seed. Each soak iteration gets a different seed.")
     parser.add_argument("--report", default="nekotrack_stress_report.json",
                         help="JSON report path (written under the repository if relative).")
-    parser.add_argument(
-        "--skip-regression",
-        action="store_true",
-        help="Skip the full suite when a separate CI job already runs it.",
-    )
     parser.add_argument("--iteration-worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
@@ -289,33 +284,21 @@ def main():
     print(f"Starting seed: {args.seed}")
     print("Live API access: disabled")
     print("Application database: never accessed")
-    if args.skip_regression:
+    print("\nRunning the full regression suite first...")
+
+    try:
+        baseline = run_full_regression_suite()
+        report["results"].append({"name": "Full regression suite", **baseline})
+        print(baseline["output"])
+        print(f"\nFull regression suite: {baseline['status']}")
+    except Exception:
         baseline = {
-            "status": "SKIPPED",
-            "exit_code": 0,
-            "tests_run": 0,
-            "output": (
-                "Skipped because a dedicated CI job is responsible for the "
-                "full regression suite."
-            ),
+            "status": "FAIL",
+            "exit_code": -1,
+            "output": traceback.format_exc()[-24000:],
         }
         report["results"].append({"name": "Full regression suite", **baseline})
-        print("\nFull regression suite: SKIPPED (--skip-regression)")
-    else:
-        print("\nRunning the full regression suite first...")
-        try:
-            baseline = run_full_regression_suite()
-            report["results"].append({"name": "Full regression suite", **baseline})
-            print(baseline["output"])
-            print(f"\nFull regression suite: {baseline['status']}")
-        except Exception:
-            baseline = {
-                "status": "FAIL",
-                "exit_code": -1,
-                "output": traceback.format_exc()[-24000:],
-            }
-            report["results"].append({"name": "Full regression suite", **baseline})
-            print(baseline["output"])
+        print(baseline["output"])
 
     rng = random.Random(args.seed)
     started = time.monotonic()

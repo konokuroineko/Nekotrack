@@ -1,9 +1,5 @@
 name: Adversarial stress
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 on:
   pull_request:
     branches:
@@ -38,16 +34,16 @@ jobs:
   stress:
     name: Adversarial fuzz and soak
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 15 || 360 }}
+    timeout-minutes: 360
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
       - name: Install Qt runtime libraries
         run: |
           sudo apt-get update
           sudo apt-get install --yes libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
@@ -60,16 +56,10 @@ jobs:
         env:
           STRESS_MINUTES: ${{ github.event_name == 'pull_request' && '1' || inputs.minutes || '10' }}
           STRESS_SEED: ${{ inputs.seed || github.run_number }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            # Full regression tests already run in the Python checks workflow.
-            python stress_test.py --minutes "$STRESS_MINUTES" --seed "$STRESS_SEED" --skip-regression
-          else
-            python stress_test.py --minutes "$STRESS_MINUTES" --seed "$STRESS_SEED"
-          fi
+        run: python stress_test.py --minutes "$STRESS_MINUTES" --seed "$STRESS_SEED"
       - name: Upload stress report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: nekotrack-stress-report
           path: nekotrack_stress_report.json
