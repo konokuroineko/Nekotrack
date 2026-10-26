@@ -80,11 +80,42 @@ MAX_RETRY_BACKOFF_SECONDS = 4
 _retry_sleep = time.sleep
 _DEFAULT_RETRY_SLEEP = _retry_sleep
 _api_shutdown_event = threading.Event()
+_api_active_stream_lock = threading.Lock()
+_api_active_stream_responses = set()
+
+
+def _register_active_stream_response(response):
+    with _api_active_stream_lock:
+        if _api_shutdown_event.is_set():
+            should_close = True
+        else:
+            _api_active_stream_responses.add(response)
+            should_close = False
+    if should_close:
+        try:
+            response.close()
+        except Exception:
+            pass
+        raise InterruptedError("Network response cancelled during shutdown.")
+    return response
+
+
+def _unregister_active_stream_response(response):
+    with _api_active_stream_lock:
+        _api_active_stream_responses.discard(response)
 
 
 def request_api_shutdown():
-    """Tell provider calls to abandon network waits during application exit."""
+    """Tell provider calls and active streaming responses to stop on exit."""
     _api_shutdown_event.set()
+    with _api_active_stream_lock:
+        responses = list(_api_active_stream_responses)
+        _api_active_stream_responses.clear()
+    for response in responses:
+        try:
+            response.close()
+        except Exception:
+            pass
 
 
 def reset_api_shutdown():
@@ -2766,7 +2797,7 @@ def _get_tmdb_episode_image_response(url):
         except Exception:
             response.close()
             raise
-        return response
+        return _register_active_stream_response(response)
 
     raise ValueError("TMDB image exceeded the redirect limit.")
 
@@ -2787,6 +2818,8 @@ def _read_bounded_tmdb_image_response(response):
     chunks = []
     total_bytes = 0
     for chunk in response.iter_content(chunk_size=64 * 1024):
+        if _api_shutdown_event.is_set():
+            raise InterruptedError("TMDB image download cancelled during shutdown.")
         if not chunk:
             continue
         total_bytes += len(chunk)
@@ -2860,6 +2893,7 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
     try:
         data = _read_bounded_tmdb_image_response(response)
     finally:
+        _unregister_active_stream_response(response)
         response.close()
 
     if not _valid_image_data(data):
@@ -3363,11 +3397,17 @@ def _request(path, params=None, use_cache=True, api_version=2):
                         _cache.pop(oldest, None)
                     _cache[key] = (time.monotonic() + _CACHE_TTL, copy.deepcopy(payload))
             return payload
+        except InterruptedError:
+            raise
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
                 requests.exceptions.ChunkedEncodingError) as error:
             last_error = error
+            if _api_shutdown_event.is_set():
+                raise InterruptedError(
+                    "MangaBaka request cancelled during shutdown."
+                ) from error
             if attempt < MANGABAKA_MAX_RETRIES - 1:
-                time.sleep(0.5 * (2 ** attempt))
+                _wait_for_anilist_retry(0.5 * (2 ** attempt))
         except requests.exceptions.RequestException as error:
             raise MangaBakaAPIError(str(error)) from error
     raise MangaBakaAPIError(f"Could not reach MangaBaka: {last_error}")
