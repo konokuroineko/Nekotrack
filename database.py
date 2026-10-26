@@ -3907,38 +3907,28 @@ def get_bundle_exclusions(work_ids=None):
         connection.close()
 
 
-def get_library_bundle_grouping_state(work_ids, relation_types=None):
-    """Read Library bundle state, and optionally relation rows, on one connection."""
+def get_library_bundle_grouping_state(work_ids, connection=None):
+    """Read manual links, exclusions and saved Search memberships on one connection.
+
+    Callers doing several related grouping reads can pass their existing
+    connection; standalone callers retain the original self-contained behavior.
+    """
     ids = _validated_work_ids(work_ids)
     empty = {
         "manual_links": [],
         "exclusions": [],
         "automatic_memberships": [],
     }
-    if relation_types is not None:
-        empty["relations"] = []
     if ids is None or not ids:
         return empty
-
-    normalized_relation_types = []
-    if relation_types is not None:
-        try:
-            relation_type_values = list(relation_types)
-        except TypeError:
-            relation_type_values = []
-        normalized_relation_types = list(dict.fromkeys(
-            value.strip()
-            for value in relation_type_values
-            if isinstance(value, str) and value.strip()
-        ))
 
     manual_by_pair = {}
     exclusions_by_pair = {}
     bundle_ids = set()
     memberships_by_pair = {}
-    relation_by_identity = {}
-    small_library_relations = []
-    connection = get_connection()
+    owns_connection = connection is None
+    if owns_connection:
+        connection = get_connection()
     try:
         for chunk in _bundle_id_chunks(ids):
             placeholders = ",".join("?" for _ in chunk)
@@ -3980,51 +3970,6 @@ def get_library_bundle_grouping_state(work_ids, relation_types=None):
                 ).fetchall()
             )
 
-            if normalized_relation_types:
-                type_placeholders = ",".join("?" for _ in normalized_relation_types)
-                if len(ids) <= 400:
-                    # Keep the old single-query path (including result ordering)
-                    # for ordinary Library sizes.
-                    small_library_relations = connection.execute(
-                        f"""
-                        SELECT source_id, target_id, relation_type
-                        FROM work_relations
-                        WHERE relation_type IN ({type_placeholders})
-                          AND (
-                              source_id IN ({placeholders})
-                              OR target_id IN ({placeholders})
-                          )
-                        """,
-                        [*normalized_relation_types, *chunk, *chunk],
-                    ).fetchall()
-                else:
-                    rows = connection.execute(
-                        f"""
-                        SELECT rowid AS _relation_rowid, source_id, target_id, relation_type
-                        FROM work_relations
-                        WHERE relation_type IN ({type_placeholders})
-                          AND (
-                              source_id IN ({placeholders})
-                              OR target_id IN ({placeholders})
-                          )
-                        """,
-                        [*normalized_relation_types, *chunk, *chunk],
-                    ).fetchall()
-                    for row in rows:
-                        identity = (
-                            int(row["source_id"]),
-                            int(row["target_id"]),
-                            str(row["relation_type"]),
-                        )
-                        relation_by_identity[identity] = (
-                            int(row["_relation_rowid"]),
-                            {
-                                "source_id": identity[0],
-                                "target_id": identity[1],
-                                "relation_type": identity[2],
-                            },
-                        )
-
         for chunk in _bundle_id_chunks(sorted(bundle_ids)):
             placeholders = ",".join("?" for _ in chunk)
             for row in connection.execute(
@@ -4039,25 +3984,16 @@ def get_library_bundle_grouping_state(work_ids, relation_types=None):
                 pair = (int(row["bundle_id"]), int(row["work_id"]))
                 memberships_by_pair[pair] = row
     finally:
-        connection.close()
+        if owns_connection:
+            connection.close()
 
-    result = {
+    return {
         "manual_links": [manual_by_pair[pair] for pair in sorted(manual_by_pair)],
         "exclusions": [exclusions_by_pair[pair] for pair in sorted(exclusions_by_pair)],
         "automatic_memberships": [
             memberships_by_pair[pair] for pair in sorted(memberships_by_pair)
         ],
     }
-    if relation_types is not None:
-        if not normalized_relation_types or len(ids) <= 400:
-            result["relations"] = list(small_library_relations)
-        else:
-            result["relations"] = [
-                row for _rowid, row in sorted(
-                    relation_by_identity.values(), key=lambda item: item[0]
-                )
-            ]
-    return result
 
 def get_manual_bundle_partners(work_id):
     """Return the works explicitly manually linked to one work."""
@@ -4087,14 +4023,21 @@ def get_manual_bundle_partners(work_id):
 
 
 
-def get_bundle_overrides(work_ids):
-    """Return all stored bundle overrides matching a set of possible anchors."""
+def get_bundle_overrides(work_ids, connection=None):
+    """Return all stored bundle overrides matching a set of possible anchors.
+
+    An optional connection lets Library grouping read overrides alongside its
+    relation and saved-membership snapshots without opening another SQLite
+    connection.
+    """
     ids = _validated_work_ids(work_ids)
     if ids is None or not ids:
         return []
 
     by_anchor = {}
-    connection = get_connection()
+    owns_connection = connection is None
+    if owns_connection:
+        connection = get_connection()
     try:
         for chunk in _bundle_id_chunks(ids):
             placeholders = ",".join("?" for _ in chunk)
@@ -4110,7 +4053,8 @@ def get_bundle_overrides(work_ids):
             for row in rows:
                 by_anchor[int(row["bundle_anchor_id"])] = row
     finally:
-        connection.close()
+        if owns_connection:
+            connection.close()
     return [by_anchor[work_id] for work_id in ids if work_id in by_anchor]
 
 
