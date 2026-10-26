@@ -376,7 +376,7 @@ class RelationEdgePresenceTests(unittest.TestCase):
             {"relations": {"edges": [None, 1, "bad"]}},
             {"relations": {"edges": [{"relationType": "SEQUEL", "node": {"id": 2}}]}},
             {"relations": {"edges": [None, "bad", {"relationType": "SEQUEL", "node": {"id": 2}}]}},
-            {"relations": {"edges": (None, {"relationType": "PREQUEL", "node": {"id": 3})}},
+            {"relations": {"edges": (None, {"relationType": "PREQUEL", "node": {"id": 3}})}},
         ]
         for item in samples:
             with self.subTest(item=item):
