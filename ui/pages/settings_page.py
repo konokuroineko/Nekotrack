@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, QUrl
+from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from diagnostics import default_app_data_dir, export_diagnostics, log_event, log_exception
+from diagnostics import default_app_data_dir, export_diagnostics, log_event, log_exception, log_operation
 from database import get_all_library
 from ui.bundle_options import BUNDLE_OPTION_GROUPS, BUNDLE_OPTION_KEYS
 from ui.preferences import (
@@ -148,29 +148,27 @@ class ThemePresetCard(QFrame):
         super().mousePressEvent(event)
 
 
-class _DiagnosticsExportSignals(QObject):
+class _DiagnosticsExportWorker(QObject):
+    """Build the potentially large diagnostics report on a dedicated thread."""
+
     succeeded = Signal(str)
     failed = Signal(object)
-    completed = Signal()
-
-
-class _DiagnosticsExportWorker(QRunnable):
-    """Build the potentially large diagnostics report away from the UI thread."""
+    finished = Signal()
 
     def __init__(self, destination):
         super().__init__()
         self.destination = Path(destination)
-        self.signals = _DiagnosticsExportSignals()
 
+    @Slot()
     def run(self):
         try:
             output = export_diagnostics(output_path=self.destination)
         except Exception as error:
-            self.signals.failed.emit(error)
+            self.failed.emit(error)
         else:
-            self.signals.succeeded.emit(str(output))
+            self.succeeded.emit(str(output))
         finally:
-            self.signals.completed.emit()
+            self.finished.emit()
 
 
 class SettingsPage(QWidget):
@@ -180,11 +178,14 @@ class SettingsPage(QWidget):
     update_check_requested = Signal()
     rollback_requested = Signal()
 
-    def __init__(self, background_manager=None):
+    def __init__(self, background_manager=None, defer_initial_build=False):
         super().__init__()
         self.background_manager = background_manager
+        self._diagnostics_export_thread = None
         self._diagnostics_export_worker = None
         self._diagnostics_export_button_widget = None
+        self._built = False
+        self._defer_initial_build = bool(defer_initial_build)
         self._active_ui_scale = self._read_active_ui_scale()
         self._ui_scale_combo = None
         self._ui_scale_restart_action = None
@@ -194,7 +195,20 @@ class SettingsPage(QWidget):
         self._background_overlay_slider = None
         self._background_overlay_value = None
         self.setMinimumSize(0, 0)
-        self._build()
+        if not self._defer_initial_build:
+            self.ensure_built()
+
+    def ensure_built(self):
+        """Construct Settings only when first opened, keeping startup work focused."""
+        if self._built:
+            return
+        self._built = True
+        try:
+            with log_operation("settings.build"):
+                self._build()
+        except Exception:
+            self._built = False
+            raise
 
     def _build(self):
         outer = QVBoxLayout(self)
@@ -1163,16 +1177,26 @@ class SettingsPage(QWidget):
         return button
 
     def _export_diagnostics(self, _checked=False):
-        if self._diagnostics_export_worker is not None:
+        if self._diagnostics_export_thread is not None:
             return
 
         destination = default_app_data_dir() / "nekotrack_diagnostics.txt"
         log_event("diagnostics.export_started", report_name=destination.name)
 
+        thread = QThread(self)
         worker = _DiagnosticsExportWorker(destination)
-        worker.signals.succeeded.connect(self._diagnostics_export_succeeded)
-        worker.signals.failed.connect(self._diagnostics_export_failed)
-        worker.signals.completed.connect(self._diagnostics_export_worker_finished)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.succeeded.connect(self._diagnostics_export_succeeded)
+        worker.failed.connect(self._diagnostics_export_failed)
+        worker.finished.connect(
+            thread.quit,
+            Qt.ConnectionType.DirectConnection,
+        )
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._diagnostics_export_worker_finished)
+        thread.finished.connect(thread.deleteLater)
+        self._diagnostics_export_thread = thread
         self._diagnostics_export_worker = worker
 
         button = self._diagnostics_export_button_widget
@@ -1180,7 +1204,8 @@ class SettingsPage(QWidget):
             button.setEnabled(False)
             button.setText("Exporting…")
 
-        QThreadPool.globalInstance().start(worker)
+        log_event("diagnostics.export_worker_started")
+        thread.start()
 
     def _diagnostics_export_succeeded(self, output_path):
         output = Path(output_path)
@@ -1211,6 +1236,7 @@ class SettingsPage(QWidget):
 
     def _diagnostics_export_worker_finished(self):
         self._diagnostics_export_worker = None
+        self._diagnostics_export_thread = None
         button = self._diagnostics_export_button_widget
         if button is not None:
             button.setText("Export diagnostics")
