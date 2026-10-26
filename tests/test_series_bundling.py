@@ -190,6 +190,54 @@ class LargeLibraryRelationQueryTests(unittest.TestCase):
         ])
 
 
+    def test_relation_lookup_reuses_a_supplied_connection_without_closing_it(self):
+        with tempfile.TemporaryDirectory(prefix="nekotrack-relations-shared-") as temporary:
+            with patch.object(database, "DATABASE_NAME", str(Path(temporary) / "relations.sqlite3")):
+                connection = database.get_connection()
+                try:
+                    connection.execute("""
+                        CREATE TABLE work_relations (
+                            source_id INTEGER NOT NULL,
+                            target_id INTEGER NOT NULL,
+                            relation_type TEXT NOT NULL,
+                            PRIMARY KEY (source_id, target_id, relation_type)
+                        )
+                    """)
+                    connection.executemany(
+                        "INSERT INTO work_relations VALUES (?, ?, ?)",
+                        [
+                            (10, 900, "SEQUEL"),
+                            (400, 401, "PREQUEL"),
+                            (1200, 1100, "PREQUEL"),
+                            (1500, 10, "SIDE_STORY"),
+                        ],
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+
+                ids = set(range(1, 1201))
+                expected = [
+                    dict(row) for row in series._relation_data_for(ids)
+                ]
+                connection = database.get_connection()
+                try:
+                    with patch.object(
+                        series,
+                        "get_connection",
+                        wraps=database.get_connection,
+                    ) as connection_factory:
+                        actual = [
+                            dict(row)
+                            for row in series._relation_data_for(ids, connection=connection)
+                        ]
+                    connection_factory.assert_not_called()
+                    self.assertEqual(actual, expected)
+                    self.assertEqual(connection.execute("SELECT 1").fetchone()[0], 1)
+                finally:
+                    connection.close()
+
+
 
 
 class ComponentUnionBySizeTests(unittest.TestCase):
