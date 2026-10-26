@@ -744,5 +744,7 @@ and grouping stage read them again for candidate entries and graph edges. The sa
 snapshot is now passed through those stages. If an individual preference lookup
 failed during snapshot creation, its `None` value still falls back to the original
 getter behavior rather than silently disabling the option. A relation-walk regression
-checks that one Search grouping operation reads each preference exactly once. CI
-must validate this pass; no wall-clock claim is made until benchmarked.
+checks that one Search grouping operation reads each preference exactly once. The
+Python test matrix (Windows/Linux, Python 3.11/3.12/3.14), Rust parity jobs and
+adversarial stress run all passed for this change. The evidence is a bounded getter-call
+count, not an end-to-end timing result, so no wall-clock speedup is claimed.
