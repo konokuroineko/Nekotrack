@@ -6,6 +6,23 @@ import api
 
 
 class ProviderPaginationShutdownTests(unittest.TestCase):
+    def test_anilist_slot_wait_stops_immediately_when_shutdown_is_set(self):
+        stop_event = threading.Event()
+        stop_event.set()
+
+        with self.assertRaisesRegex(InterruptedError, "cancelled during shutdown"):
+            api._wait_for_anilist_slot(stop_event)
+
+    def test_anilist_request_does_not_start_after_shutdown(self):
+        stop_event = threading.Event()
+        stop_event.set()
+
+        with patch.object(api.requests, "post") as post:
+            with self.assertRaisesRegex(InterruptedError, "cancelled during shutdown"):
+                api.anilist_request("query Example { Viewer { id } }", stop_event=stop_event)
+
+        post.assert_not_called()
+
     def test_media_details_stops_optional_pages_after_shutdown(self):
         stop_event = threading.Event()
         initial_media = {
@@ -59,7 +76,7 @@ class ProviderPaginationShutdownTests(unittest.TestCase):
             "relations": {"edges": []},
         }
 
-        def initial_response(_query, _variables=None):
+        def initial_response(_query, _variables=None, stop_event=None):
             # Simulate the user closing the app while the first provider request
             # is in flight. No further pages should be requested afterward.
             stop_event.set()
