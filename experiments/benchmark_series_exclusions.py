@@ -45,17 +45,34 @@ def run_one_size(size: int, iterations: int) -> dict:
             for right_id in right
         )
 
+    def previous_indexed() -> bool:
+        # Reproduce the former default-set allocation for every missing ID.
+        if not neighbors:
+            return False
+        left_members, right_members = left, right
+        if len(left_members) > len(right_members):
+            left_members, right_members = right_members, left_members
+        return any(
+            not neighbors.get(member_id, set()).isdisjoint(right_members)
+            for member_id in left_members
+        )
+
     def indexed() -> bool:
         return series._components_have_excluded_pair(left, right, neighbors)
 
     expected = reference()
-    if expected != indexed():
+    if expected != previous_indexed() or expected != indexed():
         raise AssertionError("indexed exclusion result differs from reference")
 
     reference_samples = []
+    previous_indexed_samples = []
     indexed_samples = []
     for iteration in range(iterations):
-        modes = (("reference", reference), ("indexed", indexed))
+        modes = (
+            ("reference", reference),
+            ("previous_indexed", previous_indexed),
+            ("indexed", indexed),
+        )
         if iteration % 2:
             modes = tuple(reversed(modes))
         for name, operation in modes:
@@ -64,9 +81,15 @@ def run_one_size(size: int, iterations: int) -> dict:
             elapsed_ms = (time.perf_counter() - started) * 1000
             if actual != expected:
                 raise AssertionError(f"{name} exclusion result changed")
-            (reference_samples if name == "reference" else indexed_samples).append(elapsed_ms)
+            if name == "reference":
+                reference_samples.append(elapsed_ms)
+            elif name == "previous_indexed":
+                previous_indexed_samples.append(elapsed_ms)
+            else:
+                indexed_samples.append(elapsed_ms)
 
     reference_median = statistics.median(reference_samples)
+    previous_indexed_median = statistics.median(previous_indexed_samples)
     indexed_median = statistics.median(indexed_samples)
     return {
         "component_members_each_side": size,
@@ -77,10 +100,17 @@ def run_one_size(size: int, iterations: int) -> dict:
             "median_ms": round(reference_median, 3),
             "p95_ms": round(percentile(reference_samples, 0.95), 3),
         },
-        "indexed_neighbor_lookup": {
+        "previous_indexed_neighbor_lookup": {
+            "median_ms": round(previous_indexed_median, 3),
+            "p95_ms": round(percentile(previous_indexed_samples, 0.95), 3),
+        },
+        "allocation_free_indexed_neighbor_lookup": {
             "median_ms": round(indexed_median, 3),
             "p95_ms": round(percentile(indexed_samples, 0.95), 3),
         },
+        "allocation_free_speedup_vs_previous_helper": round(
+            previous_indexed_median / indexed_median, 3
+        ) if indexed_median > 0 else None,
         "median_speedup_ratio": round(reference_median / indexed_median, 3)
         if indexed_median > 0 else None,
     }

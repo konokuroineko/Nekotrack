@@ -51,10 +51,11 @@ def _components_have_excluded_pair(left_members, right_members, excluded_neighbo
         return False
     if len(left_members) > len(right_members):
         left_members, right_members = right_members, left_members
-    return any(
-        not excluded_neighbors.get(member_id, set()).isdisjoint(right_members)
-        for member_id in left_members
-    )
+    for member_id in left_members:
+        neighbors = excluded_neighbors.get(member_id)
+        if neighbors and not neighbors.isdisjoint(right_members):
+            return True
+    return False
 ANIME_BUNDLE_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL"}
 RELATION_BATCH_SIZE = 10
 MAX_NODE_FETCH_RETRIES = 3

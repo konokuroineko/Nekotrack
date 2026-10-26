@@ -155,6 +155,18 @@ class SeriesExclusionIndexTests(unittest.TestCase):
         self.assertFalse(series._components_have_excluded_pair({12}, {98}, neighbors))
         self.assertFalse(series._components_have_excluded_pair({12}, {98}, {}))
 
+    def test_missing_or_empty_neighbor_sets_do_not_create_false_exclusions(self):
+        self.assertFalse(
+            series._components_have_excluded_pair(
+                {1, 2}, {3, 4}, {1: set(), 2: set()}
+            )
+        )
+        self.assertTrue(
+            series._components_have_excluded_pair(
+                {1, 2}, {3, 4}, {1: {4}}
+            )
+        )
+
 
 class BundleOverrideBatchingTests(unittest.TestCase):
     def test_search_grouping_applies_override_from_one_bulk_read(self):

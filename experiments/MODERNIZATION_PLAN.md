@@ -694,10 +694,28 @@ Library, so they are not an end-to-end UI speed claim.
 ## Forty-seventh-pass bounded series-title normalization cache
 
 `_series_key()` applies several regular-expression substitutions and is invoked from
-multiple parts of the relation/grouping path. A bounded 16,384-entry LRU now memoizes
-the normalized string while preserving the previous coercion behavior for `None` and
-non-string inputs. This avoids unbounded growth if the application sees many distinct
-provider titles. The prior 8,192-entry trial showed capacity churn on a synthetic 10,000-title working set, so the bound was raised to 16,384 to retain that set while remaining bounded. Added regression coverage for normalization, cache hits and the
-fixed memory bound, plus a deterministic benchmark against the former uncached regex
-implementation. Review the Windows and Linux benchmark artifacts before keeping this
-pass as a performance win; no speedup is claimed until the run results are inspected.
+multiple parts of the relation/grouping path. A bounded 16,384-entry LRU memoizes
+the normalized string while preserving prior coercion behavior for `None` and
+non-string inputs. The earlier 8,192-entry trial churned on a synthetic 10,000-title
+working set, so the bound was raised to fit that case while remaining fixed.
+
+The green Windows/Linux CI matrix (Python 3.11 and 3.14) ran 30,000 normalization
+calls for each of 100, 1,000, 5,000 and 10,000 unique titles. Normalized outputs matched
+exactly in every case. Observed speedups were 74.1–81.2×, 22.6–23.3×, 5.50–5.57× and
+2.83–2.89×, respectively. On Windows/Python 3.14, the 10,000-title median fell from
+388.868 ms to 135.904 ms. This measures title normalization only, not full Library,
+Search or application speed.
+
+## Forty-eighth-pass allocation-free exclusion neighbor misses
+
+`_components_have_excluded_pair()` previously called `get(member_id, set())` for each
+member even when most IDs had no exclusion neighbors, allocating a temporary empty
+set for every miss. It now checks the returned neighbor set directly and only calls
+`isdisjoint()` for a non-empty set. This preserves exclusion decisions while avoiding
+those repeated allocations. The existing randomized cross-product parity tests remain,
+with an additional empty-neighbor regression.
+
+The existing CI benchmark now measures the old cartesian baseline, the previous
+indexed helper and the allocation-free helper side by side on the same deterministic
+absence workload. Wait for those results before claiming a measurable gain; no
+end-to-end application speed claim is made.

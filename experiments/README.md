@@ -78,11 +78,11 @@ Run from the repository root:
 
     python experiments/benchmark_series_exclusions.py --component-sizes 100 250 500 1000 --iterations 7 --json-out "$env:TEMP\nekotrack-series-exclusions.json"
 
-This compares the prior component cross-product exclusion scan with an undirected
-neighbor-index check when the tested components have no matching excluded pair. It
-verifies identical decisions before timing and reports median/p95 and speedup ratio.
-The fixture is intentionally a worst-case absence check for the old scan, uses only
-synthetic member sets, and does not read the user's database. CI results are pending.
+This compares the prior component cross-product exclusion scan, the former indexed
+helper and the allocation-free neighbor lookup when the tested components have no
+matching excluded pair. It verifies identical decisions and reports median/p95 timing.
+The fixture uses synthetic sets only; it does not read the user's database or call APIs.
+
 
 ## Third-pass Python audit
 
