@@ -1,4 +1,5 @@
 import random
+import re
 import tempfile
 import threading
 import unittest
@@ -48,6 +49,47 @@ class SeriesKeyCacheTests(unittest.TestCase):
         second_info = series._cached_series_key.cache_info()
         self.assertEqual(first, second)
         self.assertEqual(second_info.hits, first_info.hits + 1)
+
+    def test_compiled_patterns_match_the_previous_re_sub_sequence(self):
+        pattern_specs = (
+            (r"\\s*[:\\-–—]?\\s*(?:the\\s+)?final\\s+season(?:\\s+part\\s+\\d+)?(?:\\s+\\([^)]*\\))?\\s*$", ""),
+            (r"\\s*[:\\-–—]?\\s*(?:\\d+(?:st|nd|rd|th)|season\\s*\\d+|series\\s*\\d+|season\\s*[ivx]+|series\\s*[ivx]+)(?:\\s+part\\s+\\d+)?\\s*$", ""),
+            (r"(?:^|\\s)(?:ii|iii|iv|v|vi)\\s*[:\\-–—]\\s*", " "),
+            (r"\\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\\s*(?:season)?\\s*$", ""),
+            (r"\\s*[:\\-–—]?\\s*(?:part|cour)\\s*\\d+\\s*$", ""),
+            (r"\\s+\\d+$", ""),
+            (r"\\s+", " "),
+        )
+
+        def previous_normalizer(title):
+            value = str(title or "").lower().strip()
+            for pattern, replacement in pattern_specs:
+                value = re.sub(pattern, replacement, value)
+            value = value.strip()
+            return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+        titles = [
+            None,
+            "",
+            0,
+            ["Odd Title"],
+            "Example Series Season 2",
+            "Example Series - Final Season",
+            "Sword Art Online: Alicization - War of Underworld",
+            "Example IV: The Return",
+            "Example II — The Return",
+            "Example Series: Part 2",
+            "Example Series Cour 3",
+            "Example Series 4",
+            "Space__The Final Season (TV)",
+            "The 4th Season Part 2",
+            "Re:Zero Season 2 Part 2",
+            "A/B: C—D…E!",
+        ]
+        for title in titles:
+            with self.subTest(title=title):
+                series._cached_series_key.cache_clear()
+                self.assertEqual(series._series_key(title), previous_normalizer(title))
 
     def test_title_key_cache_has_a_fixed_memory_bound(self):
         series._cached_series_key.cache_clear()

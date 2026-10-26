@@ -914,12 +914,21 @@ This is not an end-to-end Library/UI refresh speed claim. Full regression and
 adversarial stress were green on the runtime-change commit; the corrected-reference
 benchmark-only commit is running the final full matrix now.
 
-## Sixtieth-pass compiled series-title regex experiment
+## Sixtieth-pass compiled series-title regex production change
 
-The full Library profile puts _cached_series_key() among the main cumulative costs:
-normalization uses several module-level re.sub(pattern, ...) calls for every distinct
-title. Added a paired benchmark that compares those exact substitution rules with
-precompiled regex objects, alternating order and checking exact normalized output on
-1,000, 5,000 and 10,000 unique synthetic titles. It is included in the existing CI
-benchmark job on Windows/Linux and Python 3.11/3.14. This is measurement-only; production
-code stays unchanged until the benchmark demonstrates a meaningful improvement.
+The paired benchmark found that reusing compiled regex objects reduces elapsed time
+for the isolated title-normalization sequence while producing exactly the same keys.
+Production _cached_series_key() now uses module-level compiled patterns for all seven
+substitutions and the final character cleanup. The bounded cache, input coercion,
+pattern order and replacement strings remain unchanged.
+
+A regression test compares the production output against the previous re.sub()-based
+sequence across season, final-season, Roman-numeral, Part/Cour, punctuation, unusual
+input-type and empty-value cases. The benchmark matrix measured the 5,000-title
+workload at 47.044–74.972 ms with compiled patterns versus 56.117–94.558 ms with
+re.sub(), corresponding to about 16–23% less elapsed time across Windows/Linux and
+Python 3.11/3.14. At 10,000 titles the reduction was about 15–23%.
+
+This is an isolated normalization result, not an end-to-end app speedup. The regular
+Python regression matrix and adversarial stress tests must pass before Phase A is
+considered ready.

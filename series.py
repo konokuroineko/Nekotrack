@@ -321,30 +321,35 @@ def _series_key(title):
     return _cached_series_key(str(title or ""))
 
 
+# Compile these patterns once rather than looking them up through re.sub() for every title.
+_SERIES_KEY_FINAL_SEASON_RE = re.compile(
+    r"\\s*[:\\-–—]?\\s*(?:the\\s+)?final\\s+season(?:\\s+part\\s+\\d+)?(?:\\s+\\([^)]*\\))?\\s*$"
+)
+_SERIES_KEY_SEASON_SUFFIX_RE = re.compile(
+    r"\\s*[:\\-–—]?\\s*(?:\\d+(?:st|nd|rd|th)|season\\s*\\d+|series\\s*\\d+|season\\s*[ivx]+|series\\s*[ivx]+)(?:\\s+part\\s+\\d+)?\\s*$"
+)
+_SERIES_KEY_ROMAN_PREFIX_RE = re.compile(r"(?:^|\\s)(?:ii|iii|iv|v|vi)\\s*[:\\-–—]\\s*")
+_SERIES_KEY_ROMAN_SUFFIX_RE = re.compile(
+    r"\\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\\s*(?:season)?\\s*$"
+)
+_SERIES_KEY_PART_COUR_SUFFIX_RE = re.compile(r"\\s*[:\\-–—]?\\s*(?:part|cour)\\s*\\d+\\s*$")
+_SERIES_KEY_NUMBER_SUFFIX_RE = re.compile(r"\\s+\\d+$")
+_SERIES_KEY_WHITESPACE_RE = re.compile(r"\\s+")
+_SERIES_KEY_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
 @lru_cache(maxsize=16384)
 def _cached_series_key(value):
-    """Normalize one title; the bounded cache avoids repeating regex work on graph edges."""
+    """Normalize a title with reusable patterns and a bounded process-local cache."""
     value = value.lower().strip()
-    value = re.sub(
-        r"\s*[:\-–—]?\s*(?:the\s+)?final\s+season(?:\s+part\s+\d+)?(?:\s+\([^)]*\))?\s*$",
-        "",
-        value,
-    )
-    value = re.sub(
-        r"\s*[:\-–—]?\s*(?:\d+(?:st|nd|rd|th)|season\s*\d+|series\s*\d+|season\s*[ivx]+|series\s*[ivx]+)(?:\s+part\s+\d+)?\s*$",
-        "",
-        value,
-    )
-    value = re.sub(r"(?:^|\s)(?:ii|iii|iv|v|vi)\s*[:\-–—]\s*", " ", value)
-    value = re.sub(
-        r"\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\s*(?:season)?\s*$",
-        "",
-        value,
-    )
-    value = re.sub(r"\s*[:\-–—]?\s*(?:part|cour)\s*\d+\s*$", "", value)
-    value = re.sub(r"\s+\d+$", "", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    return re.sub(r"[^a-z0-9]+", " ", value).strip()
+    value = _SERIES_KEY_FINAL_SEASON_RE.sub("", value)
+    value = _SERIES_KEY_SEASON_SUFFIX_RE.sub("", value)
+    value = _SERIES_KEY_ROMAN_PREFIX_RE.sub(" ", value)
+    value = _SERIES_KEY_ROMAN_SUFFIX_RE.sub("", value)
+    value = _SERIES_KEY_PART_COUR_SUFFIX_RE.sub("", value)
+    value = _SERIES_KEY_NUMBER_SUFFIX_RE.sub("", value)
+    value = _SERIES_KEY_WHITESPACE_RE.sub(" ", value).strip()
+    return _SERIES_KEY_NON_ALNUM_RE.sub(" ", value).strip()
 
 
 def _prefix_related_tv_candidate_indices(keys):
