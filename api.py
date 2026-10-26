@@ -85,10 +85,12 @@ _anilist_next_request_at = 0.0
 _anilist_cooldown_until = 0.0
 
 
-def _wait_for_anilist_slot():
-    """Reserve a paced request slot, respecting cooldowns announced by any thread."""
+def _wait_for_anilist_slot(stop_event=None):
+    """Reserve a paced request slot, but let shutdown interrupt a pending wait."""
     global _anilist_next_request_at
     while True:
+        if stop_event is not None and stop_event.is_set():
+            raise InterruptedError("AniList request cancelled during shutdown.")
         with _anilist_rate_lock:
             now = time.monotonic()
             ready_at = max(_anilist_next_request_at, _anilist_cooldown_until)
@@ -96,7 +98,18 @@ def _wait_for_anilist_slot():
                 _anilist_next_request_at = now + ANILIST_MIN_REQUEST_INTERVAL
                 return
             wait_time = ready_at - now
-        time.sleep(wait_time)
+        if stop_event is None:
+            time.sleep(wait_time)
+        elif stop_event.wait(wait_time):
+            raise InterruptedError("AniList request cancelled during shutdown.")
+
+
+def _wait_for_anilist_retry(wait_time, stop_event=None):
+    """Wait before a retry, unless shutdown was requested in the meantime."""
+    if stop_event is None:
+        _wait_for_anilist_retry(wait_time, stop_event)
+    elif stop_event.wait(max(0.0, wait_time)):
+        raise InterruptedError("AniList request cancelled during shutdown.")
 
 
 def _extend_anilist_cooldown(seconds):
@@ -181,8 +194,8 @@ def _normalize_anilist_description_fields(value):
     return value
 
 
-def anilist_request(query, variables=None):
-    """Make a request to AniList GraphQL API with retry logic."""
+def anilist_request(query, variables=None, stop_event=None):
+    """Make an AniList request with retry waits that can be interrupted on shutdown."""
     last_error = None
 
     def error_message(payload, fallback):
@@ -197,8 +210,10 @@ def anilist_request(query, variables=None):
         return str(fallback or "AniList returned an unreadable error response.")
 
     for attempt in range(MAX_RETRIES):
+        if stop_event is not None and stop_event.is_set():
+            raise InterruptedError("AniList request cancelled during shutdown.")
         try:
-            _wait_for_anilist_slot()
+            _wait_for_anilist_slot(stop_event)
             with log_operation(
                 "api.request",
                 provider="AniList",
@@ -240,7 +255,7 @@ def anilist_request(query, variables=None):
                         f"AniList rate limited the request (attempt {attempt + 1}/{MAX_RETRIES}). "
                         f"Retrying in {wait_time:g}s..."
                     )
-                    _retry_sleep(wait_time)
+                    _wait_for_anilist_retry(wait_time, stop_event)
                     continue
 
                 message = error_message(data, getattr(response, "reason", None))
@@ -269,7 +284,7 @@ def anilist_request(query, variables=None):
                         f"AniList server error (attempt {attempt + 1}/{MAX_RETRIES}). "
                         f"Retrying in {wait_time:g}s..."
                     )
-                    _retry_sleep(wait_time)
+                    _wait_for_anilist_retry(wait_time, stop_event)
                     continue
                 raise last_error
 
@@ -302,6 +317,10 @@ def anilist_request(query, variables=None):
             requests.exceptions.ChunkedEncodingError,
         ) as error:
             last_error = error
+            if stop_event is not None and stop_event.is_set():
+                raise InterruptedError(
+                    "AniList request cancelled during shutdown."
+                ) from error
             if attempt < MAX_RETRIES - 1:
                 wait_time = min(
                     MAX_RETRY_BACKOFF_SECONDS,
@@ -325,7 +344,7 @@ def anilist_request(query, variables=None):
                     f"AniList connection failed (attempt {attempt + 1}/{MAX_RETRIES}: "
                     f"{type(error).__name__}). Retrying in {wait_time:g}s..."
                 )
-                _retry_sleep(wait_time)
+                _wait_for_anilist_retry(wait_time, stop_event)
             else:
                 print(f"Failed after {MAX_RETRIES} attempts: {error}")
         except requests.exceptions.RequestException:
@@ -1467,6 +1486,11 @@ def get_media_details(media_id, stop_event=None):
     def shutdown_requested():
         return stop_event is not None and stop_event.is_set()
 
+    def request_anilist(query, variables):
+        if stop_event is None:
+            return anilist_request(query, variables)
+        return anilist_request(query, variables, stop_event=stop_event)
+
     numeric_id = _validated_media_id(media_id)
     media_id = numeric_id
 
@@ -1632,7 +1656,7 @@ def get_media_details(media_id, stop_event=None):
         }
     }
     """ % _media_fields(include_details=True)
-    data = anilist_request(query, {"id": media_id})
+    data = request_anilist(query, {"id": media_id})
     media = data.get("Media") if isinstance(data, dict) else None
     if not isinstance(media, dict):
         raise RuntimeError(f"AniList returned no media details for ID {media_id}.")
@@ -1742,7 +1766,7 @@ def get_media_details(media_id, stop_event=None):
             )
             break
         requested_page = page + 1
-        page_data = anilist_request(
+        page_data = request_anilist(
             characters_query, {"id": media_id, "page": requested_page}
         )
         page_media = page_data.get("Media") if isinstance(page_data, dict) else None
@@ -1831,7 +1855,7 @@ def get_media_details(media_id, stop_event=None):
             )
             break
         requested_page = schedule_page + 1
-        schedule_data = anilist_request(
+        schedule_data = request_anilist(
             schedule_query, {"id": media_id, "page": requested_page}
         )
         schedule_media = (
