@@ -57,6 +57,17 @@ def _components_have_excluded_pair(left_members, right_members, excluded_neighbo
             return True
     return False
 ANIME_BUNDLE_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL"}
+_BUNDLE_OPTION_BY_FORMAT = {
+    "MOVIE": "bundle_include_movies",
+    "OVA": "bundle_include_ovas",
+    "ONA": "bundle_include_onas",
+    "SPECIAL": "bundle_include_specials",
+}
+_BUNDLE_OPTION_BY_FAMILY = {
+    "MANGA": "bundle_include_manga",
+    "NOVEL": "bundle_include_novels",
+    "ONE_SHOT": "bundle_include_one_shots",
+}
 RELATION_BATCH_SIZE = 10
 MAX_NODE_FETCH_RETRIES = 3
 
@@ -239,13 +250,45 @@ def _is_bundleable(item):
         return True
     return False
 
-def _auto_bundleable(item):
+def _bundle_option_key(item):
+    """Return the opt-in setting key required by a bundleable media item, if any."""
+    media_family = _media_family(item)
+    media_format = str(_get(item, "format") or "").upper()
+    if media_family == "ANIME":
+        return _BUNDLE_OPTION_BY_FORMAT.get(media_format)
+    return _BUNDLE_OPTION_BY_FAMILY.get(media_family)
+
+
+def _bundle_options_for_items(items):
+    """Read each relevant opt-in preference once for one grouping operation."""
+    option_keys = []
+    seen = set()
+    for item in items or ():
+        if not _is_bundleable(item):
+            continue
+        option = _bundle_option_key(item)
+        if option and option not in seen:
+            seen.add(option)
+            option_keys.append(option)
+    return {option: bool(get(option)) for option in option_keys}
+
+
+def _bundle_option_enabled(option, bundle_options):
+    if bundle_options is not None and option in bundle_options:
+        value = bundle_options[option]
+        if value is not None:
+            return bool(value)
+    return bool(get(option))
+
+
+def _auto_bundleable(item, bundle_options=None):
     """Return whether an entry is eligible for automatic series bundling.
 
     TV seasons and TV shorts are always part of the main series chain.
     Related formats outside that chain are opt-in individually so users can,
     for example, include OVAs without pulling every movie, special, or manga
-    entry into the same automatic bundle.
+    entry into the same automatic bundle. A grouping operation can pass a
+    settings snapshot to avoid repeating QSettings migration checks per item.
     """
     if not _is_bundleable(item):
         return False
@@ -256,23 +299,11 @@ def _auto_bundleable(item):
     if media_family == "ANIME":
         if media_format in {"TV", "TV_SHORT"}:
             return True
-        option_by_format = {
-            "MOVIE": "bundle_include_movies",
-            "OVA": "bundle_include_ovas",
-            "ONA": "bundle_include_onas",
-            "SPECIAL": "bundle_include_specials",
-        }
-        option = option_by_format.get(media_format)
-        return bool(get(option)) if option else False
+        option = _BUNDLE_OPTION_BY_FORMAT.get(media_format)
+    else:
+        option = _BUNDLE_OPTION_BY_FAMILY.get(media_family)
 
-    option_by_family = {
-        "MANGA": "bundle_include_manga",
-        "NOVEL": "bundle_include_novels",
-        "ONE_SHOT": "bundle_include_one_shots",
-    }
-    option = option_by_family.get(media_family)
-    return bool(get(option)) if option else False
-
+    return _bundle_option_enabled(option, bundle_options) if option else False
 
 def _series_key(title):
     """Return the normalized title-family key using a bounded process-local cache."""
@@ -626,7 +657,7 @@ def _bundle_edge_allowed(item, edge):
     return _is_bundleable(item) and _is_bundleable(edge.get("node") or {})
 
 
-def _relation_group_compatible(item, edge, target):
+def _relation_group_compatible(item, edge, target, bundle_options=None):
     """Avoid pulling unrelated cross-format works into a series bundle.
 
     AniList can use PREQUEL/SEQUEL/SIDE_STORY for franchise-level connections
@@ -637,7 +668,10 @@ def _relation_group_compatible(item, edge, target):
     """
     if not _relation_edge_allowed(item, edge):
         return False
-    if not _auto_bundleable(item) or not _auto_bundleable(target):
+    if bundle_options is None:
+        if not _auto_bundleable(item) or not _auto_bundleable(target):
+            return False
+    elif not _auto_bundleable(item, bundle_options) or not _auto_bundleable(target, bundle_options):
         return False
 
     source_format = str(_get(item, "format") or "").upper()
@@ -1659,6 +1693,7 @@ def get_library_series(rows=None):
     try:
         grouping_state = get_library_bundle_grouping_state(ids, connection=connection)
         relation_rows = _relation_data_for(ids, connection=connection)
+        bundle_options = _bundle_options_for_items(rows)
         excluded_links = {
             tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
             for link in grouping_state["exclusions"]
@@ -1679,7 +1714,7 @@ def get_library_series(rows=None):
         for member_ids in saved_groups.values():
             bundleable_ids = sorted(
                 work_id for work_id in member_ids
-                if work_id in row_by_id and _auto_bundleable(row_by_id[work_id])
+                if work_id in row_by_id and _auto_bundleable(row_by_id[work_id], bundle_options)
             )
             if len(bundleable_ids) > 1:
                 anchor_id = bundleable_ids[0]
@@ -1704,7 +1739,7 @@ def get_library_series(rows=None):
             }
             if tuple(sorted((source_id, target_id))) in excluded_links:
                 continue
-            if _relation_group_compatible(source, edge, target):
+            if _relation_group_compatible(source, edge, target, bundle_options=bundle_options):
                 union(source_id, target_id)
     
         # Manual bundle links are explicit user overrides and may join works
@@ -1719,7 +1754,7 @@ def get_library_series(rows=None):
     
         by_key = {}
         for row in rows:
-            if not _auto_bundleable(row):
+            if not _auto_bundleable(row, bundle_options):
                 continue
     
             key = _series_group_key(row)

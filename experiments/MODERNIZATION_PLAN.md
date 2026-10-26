@@ -722,3 +722,15 @@ sizes of 100–1,000 members per side. At 1,000 members, Windows/Python 3.14 fel
 0.090 ms to 0.039 ms and Linux/Python 3.14 from 0.117 ms to 0.047 ms. These are tiny
 per-call savings on a synthetic absence workload; they justify removing the needless
 allocations but do not indicate an end-to-end app speedup.
+
+
+## Forty-ninth-pass Library bundle-preference snapshot
+
+Library grouping now reads only the opt-in bundle settings required by the actual
+bundleable formats present in that Library snapshot, and reads each relevant setting
+once. The same option snapshot is reused by saved membership, relation compatibility,
+and title-grouping checks. TV/TV_SHORT entries still need no opt-in preference, and
+calls to `_auto_bundleable()` outside this Library operation retain their original
+one-item behavior. A regression test covers Manga, Novel, One Shot, OVA and TV rows
+and checks that each relevant preference is read exactly once. CI needs to pass before
+this remains; no wall-clock speedup is claimed yet.

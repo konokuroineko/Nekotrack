@@ -134,6 +134,46 @@ class LibrarySeriesSnapshotTests(unittest.TestCase):
         self.assertEqual(actual, expected)
         self.assertNotIn(frozenset({85737, -148237}), actual)
 
+    def test_library_grouping_reads_each_relevant_bundle_preference_once(self):
+        self._save_group([
+            (1, "Novel bundle", "NOVEL", 2014),
+            (2, "Novel bundle", "NOVEL", 2015),
+        ], 1)
+        self._save_group([
+            (3, "Manga bundle", "MANGA", 2014),
+            (4, "Manga bundle", "MANGA", 2015),
+        ], 3)
+        self._save_group([
+            (5, "One-shot bundle", "ONE_SHOT", 2014),
+            (6, "One-shot bundle", "ONE_SHOT", 2015),
+        ], 5)
+        self._save_group([
+            (7, "OVA bundle", "OVA", 2018),
+            (8, "OVA bundle", "OVA", 2019),
+        ], 7)
+        self._save_group([
+            (9, "TV bundle", "TV", 2020),
+            (10, "TV bundle", "TV", 2021),
+        ], 9)
+
+        preference_reads = []
+
+        def enabled(key):
+            preference_reads.append(key)
+            return True
+
+        with patch("series.get", side_effect=enabled):
+            groups = series.get_library_series()
+
+        self.assertTrue(groups)
+        self.assertCountEqual(preference_reads, [
+            "bundle_include_novels",
+            "bundle_include_manga",
+            "bundle_include_one_shots",
+            "bundle_include_ovas",
+        ])
+        self.assertEqual(len(preference_reads), 4)
+
     def test_exclusion_still_splits_members_of_a_saved_search_snapshot(self):
         records = [
             (1, "Example novel", "NOVEL", 2014),
