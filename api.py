@@ -2081,13 +2081,15 @@ def test_tmdb_connection(token):
         raise ValueError("TMDB API token is required.")
 
     with log_operation("api.request", provider="TMDB", endpoint="configuration"):
-        response = requests.get(
-            f"{TMDB_BASE_URL}/configuration",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "accept": "application/json",
-            },
-            timeout=10,
+        response = cancellable_network_call(
+            lambda: requests.get(
+                f"{TMDB_BASE_URL}/configuration",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "accept": "application/json",
+                },
+                timeout=10,
+            )
         )
     log_event("api.response", provider="TMDB", endpoint="configuration",
               status_code=getattr(response, "status_code", None))
@@ -2107,14 +2109,16 @@ def _tmdb_get(path, params=None):
 
     endpoint = str(path).lstrip("/")
     with log_operation("api.request", provider="TMDB", endpoint=endpoint):
-        response = requests.get(
-            f"{TMDB_BASE_URL}/{endpoint}",
-            params=params or {},
-            headers={
-                "Authorization": f"Bearer {token}",
-                "accept": "application/json",
-            },
-            timeout=20,
+        response = cancellable_network_call(
+            lambda: requests.get(
+                f"{TMDB_BASE_URL}/{endpoint}",
+                params=params or {},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "accept": "application/json",
+                },
+                timeout=20,
+            )
         )
     log_event("api.response", provider="TMDB", endpoint=endpoint,
               status_code=getattr(response, "status_code", None))
@@ -2727,11 +2731,13 @@ def _get_tmdb_episode_image_response(url):
 
         with log_operation("api.request", provider="TMDB", endpoint="episode-image",
                            redirect_attempt=redirect_count + 1):
-            response = requests.get(
-                current_url,
-                timeout=20,
-                stream=True,
-                allow_redirects=False,
+            response = cancellable_network_call(
+                lambda: requests.get(
+                    current_url,
+                    timeout=20,
+                    stream=True,
+                    allow_redirects=False,
+                )
             )
         status_code = getattr(response, "status_code", 200)
         log_event("api.response", provider="TMDB", endpoint="episode-image",
@@ -3300,14 +3306,16 @@ def _request(path, params=None, use_cache=True, api_version=2):
                 attempt=attempt + 1,
                 parameter_names=sorted(str(name) for name in (params or {}).keys())[:30],
             ):
-                response = requests.get(
-                    url,
-                    params=params or {},
-                    headers={
-                        "Accept": "application/json",
-                        "User-Agent": "NekoTrack/0.1 (desktop media tracker)",
-                    },
-                    timeout=REQUEST_TIMEOUT,
+                response = cancellable_network_call(
+                    lambda: requests.get(
+                        url,
+                        params=params or {},
+                        headers={
+                            "Accept": "application/json",
+                            "User-Agent": "NekoTrack/0.1 (desktop media tracker)",
+                        },
+                        timeout=REQUEST_TIMEOUT,
+                    )
                 )
             log_event(
                 "api.response",
@@ -3327,7 +3335,10 @@ def _request(path, params=None, use_cache=True, api_version=2):
                         wait = min(8.0, max(0.5, float(retry_after)))
                     except (TypeError, ValueError):
                         wait = 0.75 * (2 ** attempt)
-                    time.sleep(wait)
+                    if _api_shutdown_event.wait(max(0.0, wait)):
+                        raise InterruptedError(
+                            "MangaBaka request cancelled during shutdown."
+                        )
                     continue
             if response.status_code >= 400:
                 detail = response.text[:240].strip()
