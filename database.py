@@ -2375,6 +2375,7 @@ def get_library_episode_catalog_refresh_ids(
     catalog_version,
     refresh_interval_seconds,
     now=None,
+    attempt_cooldown_seconds=24 * 60 * 60,
 ):
     """Return Library anime IDs whose cached TMDB episode catalog needs refresh.
 
@@ -2382,6 +2383,10 @@ def get_library_episode_catalog_refresh_ids(
     missing/expired timestamps are refresh candidates. The freshness metadata
     is read in one SQLite query so the startup worker does not open a separate
     connection for every anime just to decide whether its cache is current.
+
+    Failed or interrupted lookups record a separate attempt timestamp. A recent
+    attempt for the current matching-policy version suppresses repeat requests
+    for a day, while a newer policy version always gets a chance to run.
     """
     import datetime
     import time
@@ -2389,6 +2394,7 @@ def get_library_episode_catalog_refresh_ids(
     try:
         required_version = int(catalog_version)
         refresh_interval = float(refresh_interval_seconds)
+        attempt_cooldown = float(attempt_cooldown_seconds)
         current_time = float(time.time() if now is None else now)
         current_date = datetime.date.fromtimestamp(current_time).isoformat()
     except (TypeError, ValueError, OverflowError):
@@ -2397,6 +2403,8 @@ def get_library_episode_catalog_refresh_ids(
         required_version < 0
         or not math.isfinite(refresh_interval)
         or refresh_interval < 0
+        or not math.isfinite(attempt_cooldown)
+        or attempt_cooldown < 0
         or not math.isfinite(current_time)
     ):
         return []
@@ -2423,12 +2431,16 @@ def get_library_episode_catalog_refresh_ids(
                           OR date(episodes.air_date) >= date(?)
                       )
                 ) AS has_calendar_relevant_episodes,
-                catalog.payload_json AS catalog_payload
+                catalog.payload_json AS catalog_payload,
+                attempt.payload_json AS attempt_payload
             FROM works
             JOIN user_library ON user_library.work_id = works.id
             LEFT JOIN work_provider_metadata AS catalog
               ON catalog.work_id = works.id
              AND catalog.provider = 'tmdb_episode_match_version'
+            LEFT JOIN work_provider_metadata AS attempt
+              ON attempt.work_id = works.id
+             AND attempt.provider = 'tmdb_episode_match_attempt'
             WHERE COALESCE(works.episodes, 0) > 0
               AND UPPER(COALESCE(works.type, '')) = 'ANIME'
             ORDER BY user_library.added_date, works.id
@@ -2440,6 +2452,27 @@ def get_library_episode_catalog_refresh_ids(
 
     refresh_ids = []
     for row in rows:
+        try:
+            attempt_metadata = json.loads(row["attempt_payload"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            attempt_metadata = None
+        if isinstance(attempt_metadata, dict) and attempt_cooldown > 0:
+            try:
+                attempted_version = max(0, int(attempt_metadata.get("version") or 0))
+            except (TypeError, ValueError, OverflowError):
+                attempted_version = 0
+            try:
+                attempted_at = float(attempt_metadata.get("attempted_at") or 0)
+            except (TypeError, ValueError, OverflowError):
+                attempted_at = 0.0
+            if (
+                attempted_version >= required_version
+                and math.isfinite(attempted_at)
+                and attempted_at > 0
+                and 0 <= current_time - attempted_at < attempt_cooldown
+            ):
+                continue
+
         if not bool(row["has_episodes"]):
             refresh_ids.append(int(row["id"]))
             continue
