@@ -2,7 +2,7 @@
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import database
 import series
@@ -148,7 +148,7 @@ class LibrarySeriesSnapshotTests(unittest.TestCase):
         ):
             groups = series.get_library_series()
 
-        grouping_state.assert_called_once_with({1, 2, 3})
+        grouping_state.assert_called_once_with({1, 2, 3}, connection=ANY)
         member_sets = {
             frozenset(int(member["id"]) for member in group["_series_members"])
             for group in groups
