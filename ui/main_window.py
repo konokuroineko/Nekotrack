@@ -684,7 +684,9 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.navigation = NavigationController(self.stack)
         with log_operation("main_window.construct_page", page="library"):
-            self.library_page = LibraryPage()
+            # Library data is not needed to display Home. Defer its synchronous
+            # grouping and card construction until the Library is first opened.
+            self.library_page = LibraryPage(defer_initial_refresh=True)
         with log_operation("main_window.construct_page", page="search"):
             self.search_page = SearchPage(self.add_to_library)
         with log_operation("main_window.construct_page", page="work_detail"):

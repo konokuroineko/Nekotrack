@@ -914,6 +914,28 @@ This is not an end-to-end Library/UI refresh speed claim. Full regression and
 adversarial stress were green on the runtime-change commit; the corrected-reference
 benchmark-only commit is running the final full matrix now.
 
+## Sixty-first-pass defer Library database grouping until first use
+
+The October 25 diagnostics file contains nine measured MainWindow UI builds. Their
+initial UI-build duration was 286.23–401.92 ms (median 345.26 ms). The Library page
+constructor alone took 46.85–155.68 ms (median 83.18 ms) across those runs. Inspection
+showed that constructing LibraryPage immediately called refresh(), which synchronously
+queries and groups all saved works, creates the Library cards, and starts relation sync
+even though the app initially displays Home.
+
+MainWindow now builds the Library's lightweight shell without refreshing its data.
+The existing navigation callback refreshes it when Library is first opened; later visits
+keep their existing refresh behavior, and direct LibraryPage callers still default to
+the original eager refresh unless they explicitly request deferral. This removes the
+Library's database grouping and card creation from initial window construction without
+changing the default opening page or the normal Library refresh path.
+
+A UI regression test verifies Library is not refreshed during startup or Calendar/Favorites
+navigation, and is refreshed when Library is opened. The timings above are the pre-change
+baseline from the user's diagnostic export; a new local diagnostic export is still needed
+to quantify actual startup improvement. Automated CI must pass before this change is
+considered verified.
+
 ## Sixtieth-pass compiled series-title regex production change
 
 The paired benchmark found that reusing compiled regex objects reduces elapsed time

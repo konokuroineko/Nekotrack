@@ -249,13 +249,21 @@ class FlowLayout(QLayout):
 class LibraryPage(QWidget):
     work_selected = Signal(object)
 
-    def __init__(self):
+    def __init__(self, defer_initial_refresh=False):
         super().__init__()
         self.all_anime = []; self.anime_list = []; self.current_filter = "All"; self._cards = []; self._empty_label = None
         self._sync_thread = None; self._sync_worker = None; self._sync_done_ids = set(); self._sync_failed_ids = set()
         self._sync_threads = []; self._shutdown_event = threading.Event(); self._closing = False
         self._resize_timer = QTimer(self); self._resize_timer.setSingleShot(True); self._resize_timer.setInterval(140); self._resize_timer.timeout.connect(self._finish_resize)
-        self._resize_layout_was_enabled = True; self._last_target_positions = None; self._animations = []; self._build_shell(); self.refresh()
+        self._resize_layout_was_enabled = True; self._last_target_positions = None; self._animations = []; self._build_shell()
+        if defer_initial_refresh:
+            # MainWindow opens on Home. Do not query/group the entire Library or
+            # create all its cards before the first frame; _page_changed refreshes
+            # the Library as soon as the user navigates to it.
+            log_event("library.initial_refresh_deferred")
+        else:
+            # Standalone LibraryPage callers retain the original eager behavior.
+            self.refresh()
 
     def _build_shell(self):
         root = QVBoxLayout(self); root.setContentsMargins(38, 32, 38, 30); root.setSpacing(18)

@@ -1017,18 +1017,25 @@ class UiStartupTests(unittest.TestCase):
                     patch.object(preferences, "QSettings", MemorySettings),
                     patch.object(CalendarPage, "refresh", autospec=True) as calendar_refresh,
                     patch.object(FavoritesPage, "refresh", autospec=True) as favorites_refresh,
+                    patch.object(LibraryPage, "refresh", autospec=True) as library_refresh,
                 ):
                     window = MainWindow()
                     try:
                         calendar_refresh.assert_not_called()
                         favorites_refresh.assert_not_called()
+                        library_refresh.assert_not_called()
 
                         window.navigation.show("calendar")
                         calendar_refresh.assert_called_once_with(window.calendar_page)
                         favorites_refresh.assert_not_called()
+                        library_refresh.assert_not_called()
 
                         window.navigation.show("favorites")
                         favorites_refresh.assert_called_once_with(window.favorites_page)
+                        library_refresh.assert_not_called()
+
+                        window.navigation.show("collections")
+                        library_refresh.assert_called_once_with(window.library_page)
                     finally:
                         window.close()
                         window.deleteLater()
