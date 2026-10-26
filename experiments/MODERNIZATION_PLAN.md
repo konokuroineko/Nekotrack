@@ -808,3 +808,20 @@ is actually spent.
 The benchmark excludes Qt card painting, actual user data and provider APIs, so its
 results are a grouping-path baseline rather than an end-to-end UI refresh claim. Windows
 and Linux results are pending for this first full-path run.
+
+
+## Fifty-fourth-pass bounded season-marker cache
+
+The full Library profile shows `logical_season_count()` and its
+`_season_marker()` calls are among the largest cumulative costs during a synthetic
+5,000-work refresh. The season-marker parser now memoizes normalized lowercase title
+strings in a bounded 16,384-entry LRU. The original parser body and rule precedence
+are unchanged, including final/ordinal/word-number/explicit-season/Roman/continuation
+handling; coercion still occurs before cache lookup so non-string title-like values
+retain the previous behavior.
+
+Regression coverage compares representative marker outputs, checks that differently
+cased inputs share a cache entry, and checks the fixed memory bound. The full Library
+benchmark already reports cold and warm refresh times, so CI can show whether the
+cache provides a repeat-refresh benefit. Keep it only if the matrix passes and cold
+behavior does not show a meaningful regression; no speedup is claimed in advance.

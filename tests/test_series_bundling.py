@@ -58,6 +58,46 @@ class SeriesKeyCacheTests(unittest.TestCase):
         self.assertLessEqual(info.currsize, info.maxsize)
 
 
+class SeasonMarkerCacheTests(unittest.TestCase):
+    def tearDown(self):
+        series._cached_season_marker.cache_clear()
+
+    def test_cached_markers_match_existing_season_identity_rules(self):
+        cases = [
+            ("Example Final Season", "final"),
+            ("Example 2nd Season", "season-2"),
+            ("Example Second Season", "season-2"),
+            ("Example Season 3", "season-3"),
+            ("Example Series IV", "season-4"),
+            ("Example II: The Return", "season-2"),
+            ("Example Cour 2", None),
+            ("Example Part 2", None),
+            ("Example 7", "season-7"),
+            ("Example Season 2 Part 2", "season-2"),
+            (None, None),
+            (["Example Season 2"], "season-2"),
+        ]
+        for title, expected in cases:
+            with self.subTest(title=title):
+                self.assertEqual(series._season_marker(title), expected)
+
+    def test_case_normalization_uses_the_same_cache_entry(self):
+        series._cached_season_marker.cache_clear()
+        self.assertEqual(series._season_marker("Example Season 2"), "season-2")
+        first = series._cached_season_marker.cache_info()
+        self.assertEqual(series._season_marker("EXAMPLE SEASON 2"), "season-2")
+        second = series._cached_season_marker.cache_info()
+        self.assertEqual(second.hits, first.hits + 1)
+
+    def test_season_marker_cache_has_a_fixed_memory_bound(self):
+        series._cached_season_marker.cache_clear()
+        for index in range(16392):
+            series._season_marker(f"Synthetic Title {index} Season {index % 6 + 1}")
+        info = series._cached_season_marker.cache_info()
+        self.assertEqual(info.maxsize, 16384)
+        self.assertLessEqual(info.currsize, info.maxsize)
+
+
 class SeriesPrefixIndexTests(unittest.TestCase):
     @staticmethod
     def _reference_indices(keys):

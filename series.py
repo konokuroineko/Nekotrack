@@ -422,8 +422,13 @@ def _title_family_compatible(left, right):
 
 
 def _season_marker(title):
-    """Return only an explicit season identity, never a bare Part/Cour number."""
-    title = str(title or "").lower()
+    """Return the cached explicit season identity for any title-like value."""
+    return _cached_season_marker(str(title or "").lower())
+
+
+@lru_cache(maxsize=16384)
+def _cached_season_marker(title):
+    """Parse a lowercase string into an explicit season marker."""
 
     if re.search(r"\bfinal\s+season\b", title):
         return "final"
