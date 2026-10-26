@@ -134,7 +134,7 @@ def _measure_current(count: int, iterations: int, include_profile: bool = False)
             _seed_library(Path(tmp) / "library.sqlite3", count)
             with patch.object(series, "get", return_value=False):
                 # Prime module/import and SQLite statement paths, then measure both
-                # retained and cleared title-normalization caches separately.
+                # retained and cleared title-analysis caches separately.
                 series._cached_series_key.cache_clear()
                 series._cached_season_marker.cache_clear()
                 series._cached_is_continuation.cache_clear()
@@ -153,8 +153,8 @@ def _measure_current(count: int, iterations: int, include_profile: bool = False)
                 for _ in range(iterations):
                     series._cached_series_key.cache_clear()
                     series._cached_season_marker.cache_clear()
-                series._cached_is_continuation.cache_clear()
-                series._cached_is_arc.cache_clear()
+                    series._cached_is_continuation.cache_clear()
+                    series._cached_is_arc.cache_clear()
                     started = time.perf_counter()
                     groups = series.get_library_series()
                     cold_samples.append((time.perf_counter() - started) * 1000)
