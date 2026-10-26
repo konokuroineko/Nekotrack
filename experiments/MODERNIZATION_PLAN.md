@@ -847,3 +847,19 @@ bundle-option lookup, while existing tests cover TV, TV_SHORT, movie, OVA, ONA,
 special, manga, novel, one-shot and ineligible types. The full synthetic Library
 benchmark measures cold/warm timing and a refreshed profile; keep this only if the
 full test matrix passes without a grouping performance regression.
+
+## Fifty-sixth-pass single-pass Library bundle-option snapshot
+
+The Library settings snapshot previously called the ordinary eligibility helper and
+then the option-key helper separately for each row. Even after the media-family
+refactor, that normalized type/format twice per row. The snapshot now normalizes
+once and passes the normalized parts to small pure helpers, so every Library row is
+classified once while building the set of required preferences. A new test counts
+field reads across eligible, always-on, and ineligible formats and confirms the
+preference values and keys are unchanged.
+
+The media-family refactor passed the full matrix and adversarial stress. Its call
+counts fell from 35,000 to 25,000 family classifications and from 161,250 to 111,250
+field reads in the synthetic 5,000-work profile. Wall-clock timings varied by CI
+runner, so no cross-platform speedup is claimed from that pass. The full synthetic
+Library benchmark will measure this additional one-pass snapshot change.

@@ -494,6 +494,36 @@ class MediaFamilyLookupTests(unittest.TestCase):
         self.assertEqual(item.read_counts.get("format"), 1)
 
 
+    def test_bundle_options_snapshot_reads_type_and_format_once_per_item(self):
+        class CountingMedia(dict):
+            def __init__(self, values):
+                super().__init__(values)
+                self.read_counts = {}
+
+            def get(self, key, default=None):
+                self.read_counts[key] = self.read_counts.get(key, 0) + 1
+                return super().get(key, default)
+
+        items = [
+            CountingMedia({"id": 1, "type": "MANGA", "format": "NOVEL"}),
+            CountingMedia({"id": 2, "type": "ANIME", "format": "OVA"}),
+            CountingMedia({"id": 3, "type": "ANIME", "format": "TV"}),
+            CountingMedia({"id": 4, "type": "ANIME", "format": "MUSIC"}),
+        ]
+        with patch("series.get", side_effect=lambda key: key in {
+            "bundle_include_novels", "bundle_include_ovas"
+        }):
+            options = series._bundle_options_for_items(items)
+
+        self.assertEqual(options, {
+            "bundle_include_novels": True,
+            "bundle_include_ovas": True,
+        })
+        for item in items:
+            self.assertEqual(item.read_counts.get("type"), 1)
+            self.assertEqual(item.read_counts.get("format"), 1)
+
+
 class BundleOptionTests(unittest.TestCase):
     def test_tv_and_tv_short_are_always_bundleable(self):
         with patch("series.get", return_value=False):

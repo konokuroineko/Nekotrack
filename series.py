@@ -258,12 +258,16 @@ def _is_bundleable(item):
     family, media_format = _media_family_and_format(item)
     return _is_bundleable_parts(family, media_format)
 
-def _bundle_option_key(item):
-    """Return the opt-in setting key required by a bundleable media item, if any."""
-    media_family, media_format = _media_family_and_format(item)
+def _bundle_option_key_parts(media_family, media_format):
     if media_family == "ANIME":
         return _BUNDLE_OPTION_BY_FORMAT.get(media_format)
     return _BUNDLE_OPTION_BY_FAMILY.get(media_family)
+
+
+def _bundle_option_key(item):
+    """Return the opt-in setting key required by a bundleable media item, if any."""
+    media_family, media_format = _media_family_and_format(item)
+    return _bundle_option_key_parts(media_family, media_format)
 
 
 def _bundle_options_for_items(items):
@@ -271,9 +275,10 @@ def _bundle_options_for_items(items):
     option_keys = []
     seen = set()
     for item in items or ():
-        if not _is_bundleable(item):
+        media_family, media_format = _media_family_and_format(item)
+        if not _is_bundleable_parts(media_family, media_format):
             continue
-        option = _bundle_option_key(item)
+        option = _bundle_option_key_parts(media_family, media_format)
         if option and option not in seen:
             seen.add(option)
             option_keys.append(option)
