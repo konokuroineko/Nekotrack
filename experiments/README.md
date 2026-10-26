@@ -72,6 +72,18 @@ parity and reports median/p95 time and the final bounded cache size. The workloa
 synthetic and measures title normalization only, not end-to-end Library or Search speed.
 The benchmark runs in CI and uploads its JSON alongside the existing backend reports.
 
+## Complete Library grouping benchmark
+
+Run from the repository root:
+
+    python experiments/benchmark_library_grouping_full.py --work-counts 100 1000 5000 --iterations 7 --json-out "$env:TEMP\nekotrack-library-grouping-full.json"
+
+This runs the actual `series.get_library_series()` function against disposable synthetic
+SQLite Libraries. It checks bundle counts/member coverage and expected connection
+factory calls, and reports cold/warm title-cache median and p95 time. It includes the
+function's database reads and Python grouping logic, but excludes UI painting, network
+requests and any user database. CI uploads the JSON report with the other benchmarks.
+
 ## Relation edge presence benchmark
 
 Run from the repository root:

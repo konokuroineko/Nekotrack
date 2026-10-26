@@ -790,3 +790,18 @@ Regression tests assert that a completed migration opens only the current settin
 store and that a pending migration still opens both stores, copies legacy values and
 sets the migration marker. This is a deterministic construction-count improvement;
 no wall-clock gain is claimed without measurement.
+
+
+## Fifty-third-pass full synthetic Library grouping benchmark
+
+Added a repeatable CI benchmark for the complete `series.get_library_series()` path.
+Unlike the existing SQLite state-reader benchmark, it seeds a temporary synthetic
+Library and measures the real grouping function through its row fetch, grouping-state
+snapshot, relation reads, component unions, summaries and presentation overrides.
+It validates the expected four-member bundle shape and two connection factories per
+refresh (one Library row fetch, one shared grouping snapshot), and reports cold and
+warm title-cache median/p95 timings at 100, 1,000 and 5,000 works.
+
+The benchmark excludes Qt card painting, actual user data and provider APIs, so its
+results are a grouping-path baseline rather than an end-to-end UI refresh claim. Windows
+and Linux results are pending for this first full-path run.
