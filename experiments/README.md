@@ -72,6 +72,17 @@ parity and reports median/p95 time and the final bounded cache size. The workloa
 synthetic and measures title normalization only, not end-to-end Library or Search speed.
 The benchmark runs in CI and uploads its JSON alongside the existing backend reports.
 
+## Compiled series-title pattern benchmark
+
+Run from the repository root:
+
+    python experiments/benchmark_series_key_compiled.py --title-counts 1000 5000 10000 --iterations 7 --json-out "$env:TEMP\nekotrack-series-key-compiled.json"
+
+This pairs the existing module-level re.sub(pattern, ...) normalization with the same
+rules using precompiled regular expressions. It alternates order, checks exact output
+parity, and reports median/p95 time for unique synthetic titles. No cache, database,
+network or user data is involved. CI runs it on Windows and Linux.
+
 ## Complete Library grouping benchmark
 
 Run from the repository root:

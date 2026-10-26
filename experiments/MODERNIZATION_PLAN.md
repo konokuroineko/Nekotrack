@@ -913,3 +913,13 @@ The paired result supports keeping the snapshot: about 6.2–8.3% faster cold an
 This is not an end-to-end Library/UI refresh speed claim. Full regression and
 adversarial stress were green on the runtime-change commit; the corrected-reference
 benchmark-only commit is running the final full matrix now.
+
+## Sixtieth-pass compiled series-title regex experiment
+
+The full Library profile puts _cached_series_key() among the main cumulative costs:
+normalization uses several module-level re.sub(pattern, ...) calls for every distinct
+title. Added a paired benchmark that compares those exact substitution rules with
+precompiled regex objects, alternating order and checking exact normalized output on
+1,000, 5,000 and 10,000 unique synthetic titles. It is included in the existing CI
+benchmark job on Windows/Linux and Python 3.11/3.14. This is measurement-only; production
+code stays unchanged until the benchmark demonstrates a meaningful improvement.

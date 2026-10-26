@@ -97,6 +97,8 @@ jobs:
         run: python experiments/benchmark_series_prefix.py --candidate-sizes 100 500 1000 2000 --iterations 5 --json-out "${{ runner.temp }}/nekotrack-series-prefix.json"
       - name: Benchmark cached series-title normalization
         run: python experiments/benchmark_series_key_cache.py --unique-title-counts 100 1000 5000 10000 --calls 30000 --iterations 5 --json-out "${{ runner.temp }}/nekotrack-series-key-cache.json"
+      - name: Compare compiled title normalization patterns
+        run: python experiments/benchmark_series_key_compiled.py --title-counts 1000 5000 10000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-series-key-compiled.json"
       - name: Benchmark indexed bundle exclusion checks
         run: python experiments/benchmark_series_exclusions.py --component-sizes 100 250 500 1000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-series-exclusions.json"
       - name: Benchmark small-to-large component merges
