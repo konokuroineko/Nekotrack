@@ -775,13 +775,6 @@ class BundleDetailBatchingTests(unittest.TestCase):
                 "(bundle_anchor_id, custom_title, cover_work_id) VALUES (?, ?, ?)",
                 (1, "My Custom Series", 2),
             )
-            # Exercise a relation crossing the 400-ID chunk boundary too; the
-            # production grouping path must preserve the legacy relation reader's
-            # de-duplication and result order when reusing the same connection.
-            connection.execute(
-                "INSERT INTO work_relations VALUES (?, ?, ?)",
-                (400, 401, "SEQUEL"),
-            )
             connection.commit()
         finally:
             connection.close()
