@@ -1462,8 +1462,11 @@ def get_media_episodes(media_id):
     return output
 
 
-def get_media_details(media_id):
-    """Fetch the complete provider-aware media record used by detail/import workflows."""
+def get_media_details(media_id, stop_event=None):
+    """Fetch provider-aware details, stopping optional pagination during shutdown."""
+    def shutdown_requested():
+        return stop_event is not None and stop_event.is_set()
+
     numeric_id = _validated_media_id(media_id)
     media_id = numeric_id
 
@@ -1524,9 +1527,22 @@ def get_media_details(media_id):
         # existing negative local work ID. Never guess a link from similar titles.
         linked_anilist_id = get_mangabaka_external_id(record, "anilist")
         anilist_relation_edges = []
-        if linked_anilist_id is not None:
+        if linked_anilist_id is not None and shutdown_requested():
+            # Keep the primary MangaBaka record, but do not start another
+            # provider chain while the user is closing the application.
+            media["_characters_snapshot_valid"] = False
+            media["_staff_snapshot_valid"] = False
+            log_event(
+                "library.import.optional_enrichment_skipped_shutdown",
+                work_id=numeric_id,
+                enrichment="linked_anilist",
+            )
+        elif linked_anilist_id is not None:
             try:
-                linked_details = get_media_details(linked_anilist_id)
+                linked_details = get_media_details(
+                    linked_anilist_id,
+                    stop_event=stop_event,
+                )
                 characters = linked_details.get("characters")
                 staff = linked_details.get("staff")
                 relations = linked_details.get("relations")
@@ -1561,11 +1577,18 @@ def get_media_details(media_id):
                 )
 
         mangabaka_relation_edges = []
-        try:
-            related_payload = get_mangabaka_related_series(abs(numeric_id))
-            mangabaka_relation_edges = _normalize_mangabaka_related_edges(related_payload)
-        except Exception as error:
-            print(f"MangaBaka related-series lookup skipped: {error}")
+        if shutdown_requested():
+            log_event(
+                "library.import.optional_enrichment_skipped_shutdown",
+                work_id=numeric_id,
+                enrichment="mangabaka_relations",
+            )
+        else:
+            try:
+                related_payload = get_mangabaka_related_series(abs(numeric_id))
+                mangabaka_relation_edges = _normalize_mangabaka_related_edges(related_payload)
+            except Exception as error:
+                print(f"MangaBaka related-series lookup skipped: {error}")
 
         # Merge both providers, retaining distinct relation types but avoiding
         # duplicate edges to the same target with the same relationship label.
@@ -1585,7 +1608,11 @@ def get_media_details(media_id):
                 continue
             seen_relation_keys.add(relation_key)
             combined_relation_edges.append(edge)
-        media["relations"] = {"edges": combined_relation_edges}
+        # An interrupted enrichment must not reconcile an incomplete relation
+        # graph against previously saved relationships.
+        media["relations"] = {
+            "edges": None if shutdown_requested() else combined_relation_edges
+        }
         return media
     query = """
     query ($id: Int) {
@@ -1705,6 +1732,15 @@ def get_media_details(media_id):
     }
     """
     while page_info.get("hasNextPage") is True and page < _page_limit(page_info):
+        if shutdown_requested():
+            characters_snapshot_valid = False
+            log_event(
+                "library.import.pagination_stopped_shutdown",
+                work_id=media_id,
+                connection="characters",
+                next_page=page + 1,
+            )
+            break
         requested_page = page + 1
         page_data = anilist_request(
             characters_query, {"id": media_id, "page": requested_page}
@@ -1786,6 +1822,14 @@ def get_media_details(media_id):
         schedule_page_info.get("hasNextPage") is True
         and schedule_page < _page_limit(schedule_page_info)
     ):
+        if shutdown_requested():
+            log_event(
+                "library.import.pagination_stopped_shutdown",
+                work_id=media_id,
+                connection="airing_schedule",
+                next_page=schedule_page + 1,
+            )
+            break
         requested_page = schedule_page + 1
         schedule_data = anilist_request(
             schedule_query, {"id": media_id, "page": requested_page}
@@ -1840,7 +1884,14 @@ def get_media_details(media_id):
     # Add MangaBaka's complete series payload for reading-media details. The
     # lookup is best-effort and the AniList record remains the canonical one.
     if str(media.get("type") or "").upper() == "MANGA":
-        enrich_anilist_media(media, fetch_full=True)
+        if shutdown_requested():
+            log_event(
+                "library.import.optional_enrichment_skipped_shutdown",
+                work_id=media_id,
+                enrichment="mangabaka_full_payload",
+            )
+        else:
+            enrich_anilist_media(media, fetch_full=True)
 
     return media
 
