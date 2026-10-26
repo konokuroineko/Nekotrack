@@ -98,6 +98,65 @@ class SeasonMarkerCacheTests(unittest.TestCase):
         self.assertLessEqual(info.currsize, info.maxsize)
 
 
+class TitleFlagCacheTests(unittest.TestCase):
+    def tearDown(self):
+        series._cached_is_continuation.cache_clear()
+        series._cached_is_arc.cache_clear()
+
+    def test_continuation_and_arc_flags_preserve_existing_rules(self):
+        continuation_cases = [
+            ("Example Part 2", True),
+            ("Example Cour IV", True),
+            ("Example Final Season", True),
+            ("Example Season 2", False),
+            (None, False),
+            (["Example Part 2"], True),
+        ]
+        for title, expected in continuation_cases:
+            with self.subTest(predicate="continuation", title=title):
+                self.assertEqual(series._is_continuation(title), expected)
+
+        arc_cases = [
+            ("Example Arc", True),
+            ("Arc Zero", True),
+            ("Arcadia", False),
+            ("Example Season 2", False),
+            (None, False),
+            (["Example Arc"], True),
+        ]
+        for title, expected in arc_cases:
+            with self.subTest(predicate="arc", title=title):
+                self.assertEqual(series._is_arc(title), expected)
+
+    def test_case_normalization_reuses_each_title_flag_cache_entry(self):
+        series._cached_is_continuation.cache_clear()
+        self.assertTrue(series._is_continuation("Example Part 2"))
+        first_continuation = series._cached_is_continuation.cache_info()
+        self.assertTrue(series._is_continuation("EXAMPLE PART 2"))
+        second_continuation = series._cached_is_continuation.cache_info()
+        self.assertEqual(second_continuation.hits, first_continuation.hits + 1)
+
+        series._cached_is_arc.cache_clear()
+        self.assertTrue(series._is_arc("Example Arc"))
+        first_arc = series._cached_is_arc.cache_info()
+        self.assertTrue(series._is_arc("EXAMPLE ARC"))
+        second_arc = series._cached_is_arc.cache_info()
+        self.assertEqual(second_arc.hits, first_arc.hits + 1)
+
+    def test_title_flag_caches_have_fixed_memory_bounds(self):
+        series._cached_is_continuation.cache_clear()
+        series._cached_is_arc.cache_clear()
+        for index in range(16392):
+            series._is_continuation(f"Synthetic Title {index} Part 2")
+            series._is_arc(f"Synthetic Title {index} Arc")
+        continuation_info = series._cached_is_continuation.cache_info()
+        arc_info = series._cached_is_arc.cache_info()
+        self.assertEqual(continuation_info.maxsize, 16384)
+        self.assertLessEqual(continuation_info.currsize, continuation_info.maxsize)
+        self.assertEqual(arc_info.maxsize, 16384)
+        self.assertLessEqual(arc_info.currsize, arc_info.maxsize)
+
+
 class SeriesPrefixIndexTests(unittest.TestCase):
     @staticmethod
     def _reference_indices(keys):

@@ -487,7 +487,11 @@ def _cached_season_marker(title):
 
 
 def _is_continuation(title):
-    title = str(title or "").lower()
+    return _cached_is_continuation(str(title or "").lower())
+
+
+@lru_cache(maxsize=16384)
+def _cached_is_continuation(title):
     return bool(
         re.search(r"\b(?:part|cour)\s*(?:\d+|i|ii|iii|iv|v|vi)\b", title)
         or re.search(r"\bfinal\s+season\b", title)
@@ -495,7 +499,12 @@ def _is_continuation(title):
 
 
 def _is_arc(title):
-    return bool(re.search(r"\barc\b", str(title or "").lower()))
+    return _cached_is_arc(str(title or "").lower())
+
+
+@lru_cache(maxsize=16384)
+def _cached_is_arc(title):
+    return bool(re.search(r"\barc\b", title))
 
 
 def _air_period(member):

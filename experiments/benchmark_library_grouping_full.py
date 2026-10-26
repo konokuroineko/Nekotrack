@@ -137,6 +137,8 @@ def _measure_current(count: int, iterations: int, include_profile: bool = False)
                 # retained and cleared title-normalization caches separately.
                 series._cached_series_key.cache_clear()
                 series._cached_season_marker.cache_clear()
+                series._cached_is_continuation.cache_clear()
+                series._cached_is_arc.cache_clear()
                 warmup_groups = series.get_library_series()
                 _validate(warmup_groups, count)
 
@@ -151,6 +153,8 @@ def _measure_current(count: int, iterations: int, include_profile: bool = False)
                 for _ in range(iterations):
                     series._cached_series_key.cache_clear()
                     series._cached_season_marker.cache_clear()
+                series._cached_is_continuation.cache_clear()
+                series._cached_is_arc.cache_clear()
                     started = time.perf_counter()
                     groups = series.get_library_series()
                     cold_samples.append((time.perf_counter() - started) * 1000)
@@ -182,6 +186,8 @@ def _measure_current(count: int, iterations: int, include_profile: bool = False)
             if include_profile:
                 series._cached_series_key.cache_clear()
                 series._cached_season_marker.cache_clear()
+                series._cached_is_continuation.cache_clear()
+                series._cached_is_arc.cache_clear()
                 profiler = cProfile.Profile()
                 with patch.object(series, "get", return_value=False):
                     profiler.enable()
@@ -212,11 +218,11 @@ def _measure_current(count: int, iterations: int, include_profile: bool = False)
                     "series_grouping_snapshot": calls.count("series"),
                     "total": len(calls),
                 },
-                "cold_normalization_caches": {
+                "cold_title_analysis_caches": {
                     "median_ms": round(statistics.median(cold_samples), 3),
                     "p95_ms": round(percentile(cold_samples, 0.95), 3),
                 },
-                "warm_normalization_caches": {
+                "warm_title_analysis_caches": {
                     "median_ms": round(statistics.median(warm_samples), 3),
                     "p95_ms": round(percentile(warm_samples, 0.95), 3),
                 },

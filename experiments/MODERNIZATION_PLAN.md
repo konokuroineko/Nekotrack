@@ -863,3 +863,18 @@ counts fell from 35,000 to 25,000 family classifications and from 161,250 to 111
 field reads in the synthetic 5,000-work profile. Wall-clock timings varied by CI
 runner, so no cross-platform speedup is claimed from that pass. The full synthetic
 Library benchmark will measure this additional one-pass snapshot change.
+
+## Fifty-seventh-pass bounded continuation and arc title flags
+
+The 5,000-work profile shows repeated continuation/arc regex predicates inside
+logical-season counting. Both checks now normalize the input title once and delegate
+to bounded 16,384-entry LRU caches. The predicates and their matching rules are
+unchanged; repeated logical-season summaries can reuse the flags, including the
+duplicate continuation check that occurs within one summary operation.
+
+Regression tests cover continuation/arc matches and non-matches, None and non-string
+coercion, case-normalized cache hits, and each cache's fixed bound. The complete
+Library benchmark now clears the series-key, season-marker, continuation and arc
+caches before every cold sample and before profiling, with output fields renamed to
+title-analysis caches. CI will determine whether the warm path improves enough to keep
+this change; no timing gain is claimed in advance.
