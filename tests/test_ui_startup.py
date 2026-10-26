@@ -1080,6 +1080,53 @@ class UiStartupTests(unittest.TestCase):
         prune.assert_not_called()
         self.assertFalse(save_metadata.call_args.args[2]["complete"])
 
+    def test_episode_preloader_persists_confirmed_no_match_outcome(self):
+        from ui.main_window import TMDB_EPISODE_CATALOG_VERSION
+
+        work = {
+            "id": 304,
+            "type": "ANIME",
+            "title": "Example ONA",
+            "start_year": None,
+            "start_month": None,
+            "start_day": None,
+            "episodes": 12,
+            "format": "ONA",
+            "tmdb_id": None,
+            "tmdb_season_number": None,
+        }
+        snapshot = {
+            "work": work,
+            "catalog_metadata": {"version": TMDB_EPISODE_CATALOG_VERSION - 1},
+            "catalog_metadata_error": None,
+        }
+        worker = LibraryEpisodePreloadWorker([304])
+
+        with (
+            patch("ui.main_window.get_episode_section_snapshot", return_value=snapshot),
+            patch("ui.main_window.get_alternate_titles", return_value=[]),
+            patch(
+                "ui.main_window.get_tmdb_episode_data",
+                side_effect=RuntimeError("TMDB could not find a matching TV series."),
+            ),
+            patch("ui.main_window.save_provider_metadata") as save_metadata,
+            patch("ui.main_window.log_event"),
+            patch("ui.main_window.log_exception") as log_exception,
+        ):
+            worker.run()
+
+        attempt_calls = [
+            call.args[2]
+            for call in save_metadata.call_args_list
+            if len(call.args) >= 3
+            and call.args[1] == "tmdb_episode_match_attempt"
+        ]
+        self.assertEqual(len(attempt_calls), 2)
+        self.assertEqual(attempt_calls[-1]["version"], TMDB_EPISODE_CATALOG_VERSION)
+        self.assertEqual(attempt_calls[-1]["status"], "no_series_match")
+        self.assertGreater(attempt_calls[-1]["attempted_at"], 0)
+        log_exception.assert_not_called()
+
     def test_episode_preloader_treats_shutdown_cancellation_as_normal_exit(self):
         import threading
 
