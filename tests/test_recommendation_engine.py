@@ -1,4 +1,5 @@
 import sqlite3
+import recommendation_engine
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +22,67 @@ from recommendation_engine import (
 
 
 class RecommendationScoringTests(unittest.TestCase):
+    def test_credit_signal_index_is_built_once_for_many_candidates(self):
+        candidates = [
+            {
+                "id": candidate_id,
+                "type": "ANIME",
+                "title": {"english": f"Candidate {candidate_id}"},
+                "genres": ["Fantasy"],
+                "characters": {
+                    "edges": [{
+                        "role": "MAIN",
+                        "node": {"id": 101, "name": {"full": "Shared Character"}},
+                        "voiceActors": [{
+                            "id": 201, "language": "Japanese",
+                            "name": {"full": "Shared Voice Actor"},
+                        }],
+                    }]
+                },
+                "staff": {"edges": []},
+            }
+            for candidate_id in (1, 2, 3)
+        ]
+        credit_profile = {
+            50: {
+                "_source_title": "Saved source",
+                "_source_weight": 1.0,
+                "characters": [{"id": 101, "role": "MAIN", "name": "Shared Character"}],
+                "voice_actors": [{
+                    "id": 201, "language": "Japanese",
+                    "character_role": "MAIN", "name": "Shared Voice Actor",
+                }],
+                "staff": [],
+            }
+        }
+        kwargs = {
+            "credit_profile": credit_profile,
+            "favorite_entities": [],
+            "voice_language": "ALL",
+        }
+        expected = rank_candidates(candidates, **kwargs)
+
+        with patch.object(
+            recommendation_engine,
+            "_build_credit_signal_index",
+            wraps=recommendation_engine._build_credit_signal_index,
+        ) as build_index:
+            reference = rank_candidates(
+                candidates, _precompute_credit_index=False, **kwargs
+            )
+        self.assertEqual(reference, expected)
+        self.assertEqual(build_index.call_count, len(candidates))
+
+        with patch.object(
+            recommendation_engine,
+            "_build_credit_signal_index",
+            wraps=recommendation_engine._build_credit_signal_index,
+        ) as build_index:
+            actual = rank_candidates(candidates, **kwargs)
+
+        self.assertEqual(actual, expected)
+        self.assertEqual(build_index.call_count, 1)
+
     def test_exposure_penalty_diminishes_but_never_reaches_zero(self):
         values = [exposure_multiplier(count) for count in (0, 1, 10, 100, 1000000)]
         self.assertEqual(values[0], 1.0)
@@ -235,6 +297,31 @@ class RecommendationScoringTests(unittest.TestCase):
         self.assertGreater(staff_role_weight("Series Composition"), staff_role_weight("Production Assistant"))
         self.assertGreater(staff_role_weight("Original story"), staff_role_weight("Background art"))
         self.assertLess(staff_role_weight("Assistant Director"), staff_role_weight("Director"))
+
+    def test_credit_signal_reason_ties_keep_lexicographic_max(self):
+        candidate = {
+            "characters": {"edges": [
+                {"role": "MAIN", "node": {"id": 1, "name": {"full": "Alpha"}}, "voiceActors": []},
+                {"role": "MAIN", "node": {"id": 2, "name": {"full": "Zebra"}}, "voiceActors": []},
+            ]},
+            "staff": {"edges": []},
+        }
+        index = recommendation_engine._build_credit_signal_index(
+            {},
+            [
+                {"entity_type": "character", "entity_id": 1},
+                {"entity_type": "character", "entity_id": 2},
+            ],
+            "ALL",
+        )
+
+        boost, reason = recommendation_engine._candidate_credit_signal(
+            candidate, index, "ALL"
+        )
+        self.assertEqual(boost, 44.0)
+        # max((boost, reason) for ...) historically resolves score ties by
+        # lexicographically greatest explanation text.
+        self.assertEqual(reason, "Features your favorite character: Zebra")
 
     def test_voice_actor_reason_names_the_person_and_title(self):
         candidate = {

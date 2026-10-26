@@ -1,10 +1,13 @@
 import os
+import tempfile
 import unittest
+from collections import OrderedDict
 import time
 import threading
 from unittest.mock import patch
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPixmap
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -19,7 +22,8 @@ from api import (
 )
 from ui.pages.work_detail_page import (
     EpisodeArtwork, EpisodeCard, StaffFlowLayout,
-    EpisodeImageCacheWorker, EpisodeSyncWorker, WorkDetailPage,
+    EpisodeImageCacheWorker, EpisodeSyncWorker, EpisodeSectionDataWorker,
+    EpisodeProgressWorker, WorkDetailPage, EPISODE_IMAGE_PATH_DB_BATCH_SIZE,
 )
 
 
@@ -59,6 +63,42 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
+    def test_active_cold_open_uses_lightweight_section_placeholders(self):
+        page = WorkDetailPage()
+        with (
+            patch.object(page, "_hero", return_value=QFrame()),
+            patch.object(page, "_mangabaka_section", return_value=None),
+            patch.object(page, "_is_reading_media", return_value=False),
+            patch("ui.pages.work_detail_page.QTimer.singleShot") as schedule,
+        ):
+            content, ready = page._build_detail_content(
+                [12345],
+                defer_missing=True,
+            )
+
+        self.assertFalse(ready)
+        section_skeletons = content.findChildren(QFrame, "detailSkeletonSection")
+        self.assertEqual(
+            {
+                frame.property("_skeleton_section_title")
+                for frame in section_skeletons
+            },
+            {"Characters", "Staff", "Relations"},
+        )
+        self.assertEqual(len(content.findChildren(QFrame, "detailSkeletonCard")), 0)
+        self.assertEqual(
+            len(content.findChildren(QFrame, "detailSkeletonEpisodeCard")),
+            0,
+        )
+        self.assertIsNotNone(
+            content.findChild(QLabel, "detailEpisodeLoadingLabel")
+        )
+        self.assertEqual(schedule.call_count, 2)
+
+        content.deleteLater()
+        page.deleteLater()
+        self.app.processEvents()
+
     def test_missing_catalog_work_is_not_treated_as_an_empty_season(self):
         page = WorkDetailPage()
         page.work = {
@@ -67,15 +107,192 @@ class DetailSkeletonTests(unittest.TestCase):
             "format": "TV",
         }
 
-        with (
-            patch("ui.pages.work_detail_page.characters_are_loaded", return_value=False),
-            patch("ui.pages.work_detail_page.get_work", return_value=None),
-            patch("ui.pages.work_detail_page.get_episodes", return_value=[]),
+        with patch(
+            "ui.pages.work_detail_page.get_bundle_detail_readiness",
+            return_value={
+                12345: {
+                    "work_exists": False,
+                    "characters_loaded": False,
+                    "expected_episodes": 0,
+                    "episodes_saved": False,
+                }
+            },
         ):
             self.assertEqual(page._local_detail_ready([12345]), (False, False))
 
         page.deleteLater()
         self.app.processEvents()
+
+    def test_prepare_detail_state_batches_mangabaka_metadata_for_bundle(self):
+        page = WorkDetailPage()
+        work = {
+            "id": 101,
+            "type": "MANGA",
+            "format": "NOVEL",
+            "_series_members": [
+                {"id": 101},
+                {"id": 102},
+            ],
+        }
+        values = {
+            101: {
+                "mangabaka": {"id": 1001, "title": "First member"},
+                "mangabaka_volumes": [{"number": 1, "title": "Volume One"}],
+                "mangabaka_news": [{"title": "Latest news"}],
+            },
+            102: {
+                "mangabaka": {"id": 1002, "title": "Second member"},
+                "mangabaka_volumes": [{"number": 2, "title": "Volume Two"}],
+            },
+        }
+
+        with (
+            patch.object(page, "_is_reading_media", return_value=True),
+            patch(
+                "ui.pages.work_detail_page.get_provider_metadata_batch",
+                return_value=values,
+            ) as batch,
+            patch("ui.pages.work_detail_page.get_provider_metadata") as per_work,
+        ):
+            detail_ids = page._prepare_detail_state(work)
+
+        self.assertEqual(detail_ids, [101, 102])
+        batch.assert_called_once_with(
+            [101, 102],
+            ("mangabaka", "mangabaka_volumes", "mangabaka_news"),
+        )
+        per_work.assert_not_called()
+        self.assertEqual(
+            page.mangabaka_metadata,
+            {"id": 1001, "title": "First member"},
+        )
+        self.assertEqual(
+            page.mangabaka_volume_records,
+            [{"number": 1, "title": "Volume One"}],
+        )
+        self.assertEqual(page.mangabaka_news, [{"title": "Latest news"}])
+
+        page.deleteLater()
+        self.app.processEvents()
+
+    def test_staff_page_requests_use_one_batched_read_and_preserve_pagination_rules(self):
+        page = WorkDetailPage()
+        page._staff_next_pages[123] = 4
+        page._staff_next_pages[-123] = 5
+        states = {
+            123: {"saved_staff_count": 20, "anilist_media_id": None, "page_info": None},
+            456: {"saved_staff_count": 14, "anilist_media_id": None, "page_info": None},
+            789: {"saved_staff_count": 30, "anilist_media_id": None,
+                  "page_info": {"hasNextPage": False, "currentPage": 4}},
+            -123: {"saved_staff_count": 1, "anilist_media_id": {"id": 9910},
+                   "page_info": {"hasNextPage": True, "currentPage": 2}},
+        }
+
+        with (
+            patch("ui.pages.work_detail_page.get_bundle_staff_page_state", return_value=states) as batch,
+            patch("ui.pages.work_detail_page.get_staff") as per_work_staff,
+            patch("ui.pages.work_detail_page.get_provider_metadata") as per_work_metadata,
+        ):
+            requests = page._staff_page_requests([123, 456, 789, -123, 123])
+
+        self.assertEqual(requests, [(123, 123, 4), (-123, 9910, 5)])
+        batch.assert_called_once_with([123, 456, 789, -123])
+        per_work_staff.assert_not_called()
+        per_work_metadata.assert_not_called()
+        self.assertIn(789, page._staff_exhausted_ids)
+
+        page.deleteLater()
+        self.app.processEvents()
+
+    def test_episode_progress_worker_uses_counts_returned_by_write(self):
+        worker = EpisodeProgressWorker(
+            work_id=12345,
+            episode_number=7,
+            watched=True,
+        )
+        emitted = []
+        worker.data_ready.connect(
+            lambda work_id, watched_count, total_count, error:
+                emitted.append((work_id, watched_count, total_count, error))
+        )
+        with (
+            patch("ui.pages.work_detail_page.set_episode_watched", return_value=(7, 12)) as write_progress,
+            patch("ui.pages.work_detail_page.get_episodes") as read_episodes,
+        ):
+            worker.run()
+
+        self.assertEqual(emitted, [(12345, 7, 12, "")])
+        write_progress.assert_called_once_with(12345, 7, True)
+        read_episodes.assert_not_called()
+
+    def test_episode_section_worker_consumes_one_database_snapshot(self):
+        worker = EpisodeSectionDataWorker(
+            token=41,
+            work_id=12345,
+            members=[{
+                "id": 12345,
+                "title": {"english": "Example Series", "romaji": "Example Series"},
+                "startDate": {"year": 2020, "month": 1, "day": 1},
+            }],
+            attempt=0,
+        )
+        saved_work = {
+            "id": 12345,
+            "title": "Example Series",
+            "type": "ANIME",
+            "format": "TV",
+            "episodes": 1,
+            "tmdb_id": 77,
+            "tmdb_season_number": 2,
+        }
+        saved_episodes = [{
+            "work_id": 12345,
+            "episode_number": 1,
+            "title": "Episode 1",
+            "description": "Example description",
+            "air_date": "2020-01-01",
+            "thumbnail_url": None,
+            "watched": 0,
+        }]
+        snapshot = {
+            "work": saved_work,
+            "episodes": saved_episodes,
+            "catalog_metadata": {
+                "version": TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": time.time() - TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS - 1,
+                "complete": True,
+            },
+            "catalog_metadata_error": None,
+        }
+        emitted = []
+        worker.data_ready.connect(
+            lambda token, work_id, payload: emitted.append((token, work_id, payload))
+        )
+
+        with (
+            patch("ui.pages.work_detail_page.get_episode_section_snapshot", return_value=snapshot) as read_snapshot,
+            patch("ui.pages.work_detail_page.get_work") as read_work,
+            patch("ui.pages.work_detail_page.get_episodes") as read_episodes,
+            patch("ui.pages.work_detail_page.get_provider_metadata") as read_metadata,
+            patch("ui.pages.work_detail_page.get_tmdb_mapping") as read_mapping,
+            patch("ui.pages.work_detail_page.get_alternate_titles", return_value=[]) as read_alternates,
+        ):
+            worker.run()
+
+        self.assertEqual(len(emitted), 1)
+        token, work_id, payload = emitted[0]
+        self.assertEqual((token, work_id), (41, 12345))
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["episodes"][0]["episode_number"], 1)
+        self.assertTrue(payload["needs_catalog_refresh"])
+        self.assertEqual(payload["tmdb_context"]["tmdb_id"], 77)
+        self.assertEqual(payload["tmdb_context"]["tmdb_season_number"], 2)
+        read_snapshot.assert_called_once_with(12345)
+        read_work.assert_not_called()
+        read_episodes.assert_not_called()
+        read_metadata.assert_not_called()
+        read_mapping.assert_not_called()
+        read_alternates.assert_called_once_with(12345)
 
     def test_episode_section_waits_when_selected_season_row_is_missing(self):
         page = WorkDetailPage()
@@ -130,7 +347,10 @@ class DetailSkeletonTests(unittest.TestCase):
         callbacks = []
 
         with (
-            patch("ui.pages.work_detail_page.get_work", return_value=None),
+            patch("ui.pages.work_detail_page.get_episode_section_snapshot", return_value={
+                "work": None, "episodes": [], "catalog_metadata": None,
+                "catalog_metadata_error": None,
+            }),
             patch(
                 "ui.pages.work_detail_page.QTimer.singleShot",
                 side_effect=lambda delay, callback: callbacks.append((delay, callback)),
@@ -167,7 +387,10 @@ class DetailSkeletonTests(unittest.TestCase):
         layout.addWidget(host)
         page.scroll_area.setWidget(content)
 
-        with patch("ui.pages.work_detail_page.get_work", return_value=None):
+        with patch("ui.pages.work_detail_page.get_episode_section_snapshot", return_value={
+                "work": None, "episodes": [], "catalog_metadata": None,
+                "catalog_metadata_error": None,
+            }):
             page._populate_episode_section(9, content, host, attempt=120)
             deadline = time.monotonic() + 4.0
             while (
@@ -271,25 +494,23 @@ class DetailSkeletonTests(unittest.TestCase):
             "watched": 0,
         }]
 
-        def read_work(_work_id):
-            database_threads.append(("work", threading.get_ident()))
-            return work_row
-
-        def read_episodes(_work_id):
-            database_threads.append(("episodes", threading.get_ident()))
-            return episode_rows
-
-        def read_metadata(_work_id, _provider):
-            database_threads.append(("metadata", threading.get_ident()))
-            return {
+        snapshot = {
+            "work": work_row,
+            "episodes": episode_rows,
+            "catalog_metadata": {
                 "version": TMDB_EPISODE_CATALOG_VERSION,
                 "fetched_at": time.time(),
-            }
+                "complete": True,
+            },
+            "catalog_metadata_error": None,
+        }
+
+        def read_snapshot(_work_id):
+            database_threads.append(("snapshot", threading.get_ident()))
+            return snapshot
 
         with (
-            patch("ui.pages.work_detail_page.get_work", side_effect=read_work),
-            patch("ui.pages.work_detail_page.get_episodes", side_effect=read_episodes),
-            patch("ui.pages.work_detail_page.get_provider_metadata", side_effect=read_metadata),
+            patch("ui.pages.work_detail_page.get_episode_section_snapshot", side_effect=read_snapshot),
             patch.object(page, "_start_episode_image_cache"),
         ):
             page._populate_episode_section(17, content, host)
@@ -306,7 +527,7 @@ class DetailSkeletonTests(unittest.TestCase):
 
         self.assertEqual(
             {name for name, _thread_id in database_threads},
-            {"work", "episodes", "metadata"},
+            {"snapshot"},
         )
         self.assertTrue(database_threads)
         self.assertTrue(
@@ -485,6 +706,94 @@ class DetailSkeletonTests(unittest.TestCase):
             1,
         )
         self.assertFalse(page._detail_section_jobs)
+
+        page.deleteLater()
+        self.app.processEvents()
+
+    def test_bundle_detail_sections_load_concurrently_and_finish_together(self):
+        page = WorkDetailPage()
+        detail_ids = [12345, 12346]
+        page.work = {
+            "id": detail_ids[0],
+            "type": "ANIME",
+            "format": "TV",
+            "_series_members": [{"id": work_id} for work_id in detail_ids],
+        }
+        page._detail_build_token = 1
+
+        content = QWidget()
+        content.setProperty("_detail_cache_key", detail_ids)
+        content._detail_sections_ready = False
+        content._detail_sections_success = True
+        content._episode_section_ready = True
+        content._episode_section_success = True
+        layout = QVBoxLayout(content)
+        for title, count, variant in (
+            ("Characters", 4, "portrait"),
+            ("Staff", 6, "portrait"),
+            ("Relations", 6, "poster"),
+        ):
+            layout.addWidget(page._detail_section_skeleton(title, count, variant))
+        page.scroll_area.setWidget(content)
+
+        gui_thread_id = threading.get_ident()
+        query_thread_ids = {}
+
+        def reader_for(section):
+            def read(_work_ids):
+                query_thread_ids[section] = threading.get_ident()
+                return []
+            return read
+
+        expected_sections = {"Characters", "Staff", "Relations"}
+        with (
+            patch(
+                "ui.pages.work_detail_page.get_bundle_characters",
+                side_effect=reader_for("Characters"),
+            ),
+            patch(
+                "ui.pages.work_detail_page.get_bundle_staff",
+                side_effect=reader_for("Staff"),
+            ),
+            patch(
+                "ui.pages.work_detail_page.get_bundle_relations",
+                side_effect=reader_for("Relations"),
+            ),
+            patch.object(page, "_grid_section", side_effect=lambda *args, **kwargs: QFrame()),
+            patch.object(page, "_staff_section", side_effect=lambda *args, **kwargs: QFrame()),
+            patch.object(page, "_detail_empty_message", return_value="No test data"),
+        ):
+            page._populate_detail_sections(1, content, content, detail_ids)
+
+            # All three jobs should exist before the event loop handles any
+            # worker results, rather than queuing Staff behind Characters.
+            self.assertEqual(
+                {title for (_token, title) in page._detail_section_jobs},
+                expected_sections,
+            )
+            self.assertFalse(content._detail_sections_ready)
+
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and (
+                page._detail_section_jobs
+                or content.findChild(QFrame, "detailSkeletonSection") is not None
+            ):
+                self.app.processEvents()
+                time.sleep(0.005)
+            self.app.processEvents()
+
+        self.assertEqual(set(query_thread_ids), expected_sections)
+        self.assertTrue(all(thread_id != gui_thread_id for thread_id in query_thread_ids.values()))
+        self.assertFalse(page._detail_section_jobs)
+        self.assertFalse(
+            any(
+                frame.property("_skeleton_section_title")
+                for frame in content.findChildren(QFrame)
+            )
+        )
+        self.assertTrue(content._detail_sections_ready)
+        self.assertTrue(content._detail_sections_success)
+        self.assertTrue(content.property("_detail_cacheable"))
 
         page.deleteLater()
         self.app.processEvents()
@@ -681,6 +990,74 @@ class DetailSkeletonTests(unittest.TestCase):
         page.deleteLater()
         self.app.processEvents()
 
+    def test_episode_artwork_reuses_pre_cropped_pixmap_without_rereading_or_recropping(self):
+        with tempfile.TemporaryDirectory(prefix="nekotrack-artwork-cache-") as directory:
+            image_path = os.path.join(directory, "episode.png")
+            source = QPixmap(640, 360)
+            source.fill(Qt.GlobalColor.red)
+            self.assertTrue(source.save(image_path))
+            EpisodeArtwork._cache.pop(image_path, None)
+
+            first = EpisodeArtwork()
+            second = EpisodeArtwork()
+            try:
+                with patch.object(
+                    EpisodeArtwork, "_cropped", wraps=first._cropped
+                ) as crop:
+                    first.load(image_path)
+                    self.assertEqual(crop.call_count, 1)
+                    first_pixmap = first.pixmap()
+                    self.assertIsNotNone(first_pixmap)
+                    self.assertFalse(first_pixmap.isNull())
+
+                    second.load(image_path)
+                    self.assertEqual(crop.call_count, 1)
+                    second_pixmap = second.pixmap()
+                    self.assertIsNotNone(second_pixmap)
+                    self.assertFalse(second_pixmap.isNull())
+                    self.assertEqual(second_pixmap.size().width(), 220)
+                    self.assertEqual(second_pixmap.size().height(), 124)
+            finally:
+                EpisodeArtwork._cache.pop(image_path, None)
+                first.deleteLater()
+                second.deleteLater()
+                self.app.processEvents()
+
+    def test_episode_artwork_cache_evicts_least_recently_used_entry(self):
+        with tempfile.TemporaryDirectory(prefix="nekotrack-artwork-lru-") as directory:
+            image_paths = []
+            for index in range(3):
+                path = os.path.join(directory, f"episode-{index}.png")
+                source = QPixmap(320, 180)
+                source.fill(Qt.GlobalColor.red)
+                self.assertTrue(source.save(path))
+                image_paths.append(path)
+
+            with (
+                patch.object(EpisodeArtwork, "_cache", OrderedDict()),
+                patch.object(EpisodeArtwork, "CACHE_LIMIT", 2),
+            ):
+                cards = []
+                try:
+                    for path in image_paths[:2]:
+                        card = EpisodeArtwork()
+                        cards.append(card)
+                        card.load(path)
+                    self.assertEqual(list(EpisodeArtwork._cache.keys()), image_paths[:2])
+
+                    # Make the oldest entry hot, so the other one should leave.
+                    cards[0].load(image_paths[0])
+                    third = EpisodeArtwork()
+                    cards.append(third)
+                    third.load(image_paths[2])
+
+                    self.assertEqual(list(EpisodeArtwork._cache.keys()), [image_paths[0], image_paths[2]])
+                    self.assertEqual(len(EpisodeArtwork._cache), 2)
+                finally:
+                    for card in cards:
+                        card.deleteLater()
+                    self.app.processEvents()
+
     def test_episode_image_plan_logs_missing_and_stale_local_artwork(self):
         page = WorkDetailPage()
         with patch("ui.pages.work_detail_page.log_event") as logged:
@@ -719,7 +1096,7 @@ class DetailSkeletonTests(unittest.TestCase):
                 "ui.pages.work_detail_page.cache_tmdb_episode_image",
                 return_value=None,
             ),
-            patch("ui.pages.work_detail_page.save_episode_thumbnail_path") as save_path,
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_paths") as save_path,
             patch("ui.pages.work_detail_page.log_event") as log_event,
             patch("ui.pages.work_detail_page.log_exception") as log_exception,
         ):
@@ -739,6 +1116,92 @@ class DetailSkeletonTests(unittest.TestCase):
             and call.kwargs.get("failed_count") == 1
             for call in log_event.call_args_list
         ))
+
+    def test_episode_image_cache_worker_batches_database_path_writes(self):
+        episode_count = EPISODE_IMAGE_PATH_DB_BATCH_SIZE + 5
+        episodes = [
+            {
+                "episodeNumber": number,
+                "thumbnail": f"https://image.tmdb.org/t/p/w500/{number}.jpg",
+            }
+            for number in range(1, episode_count + 1)
+        ]
+        cached_paths, failures, successes = [], [], []
+
+        def cache_image(_url, work_id, episode_number):
+            self.assertEqual(work_id, 12345)
+            path = f"cache/episode-{episode_number}.jpg"
+            cached_paths.append((episode_number, path))
+            return path
+
+        def save_batch(work_id, paths):
+            self.assertEqual(work_id, 12345)
+            return {number for number, _path in paths}
+
+        worker = EpisodeImageCacheWorker(12345, episodes)
+        worker.error.connect(lambda work_id, message: failures.append((work_id, message)))
+        worker.finished.connect(lambda work_id: successes.append(work_id))
+        with (
+            patch("ui.pages.work_detail_page.cache_tmdb_episode_image", side_effect=cache_image),
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_paths", side_effect=save_batch) as save_batch_mock,
+            patch("ui.pages.work_detail_page.log_event"),
+            patch("ui.pages.work_detail_page.log_exception"),
+        ):
+            worker.run()
+
+        self.assertEqual(worker.attempted_count, episode_count)
+        self.assertEqual(worker.cached_count, episode_count)
+        self.assertEqual(worker.failed_episode_numbers, [])
+        self.assertEqual(successes, [12345])
+        self.assertEqual(failures, [])
+        self.assertEqual(save_batch_mock.call_count, 2)
+        self.assertEqual(
+            [len(call.args[1]) for call in save_batch_mock.call_args_list],
+            [EPISODE_IMAGE_PATH_DB_BATCH_SIZE, 5],
+        )
+        flattened = [pair for call in save_batch_mock.call_args_list for pair in call.args[1]]
+        self.assertEqual(flattened, cached_paths)
+
+    def test_episode_image_cache_worker_flushes_cached_paths_when_cancelled(self):
+        stop_event = threading.Event()
+        episodes = [
+            {
+                "episodeNumber": number,
+                "thumbnail": f"https://image.tmdb.org/t/p/w500/{number}.jpg",
+            }
+            for number in range(1, 10)
+        ]
+        cached_paths, failures, successes = [], [], []
+
+        def cache_image(_url, _work_id, episode_number):
+            path = f"cache/episode-{episode_number}.jpg"
+            cached_paths.append((episode_number, path))
+            if episode_number == 3:
+                stop_event.set()
+            return path
+
+        worker = EpisodeImageCacheWorker(12345, episodes, stop_event)
+        worker.error.connect(lambda work_id, message: failures.append((work_id, message)))
+        worker.finished.connect(lambda work_id: successes.append(work_id))
+        with (
+            patch("ui.pages.work_detail_page.cache_tmdb_episode_image", side_effect=cache_image),
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_paths", side_effect=lambda _work, paths: {number for number, _path in paths}) as save_batch,
+            patch("ui.pages.work_detail_page.log_event"),
+            patch("ui.pages.work_detail_page.log_exception"),
+        ):
+            worker.run()
+
+        self.assertTrue(worker.cancelled)
+        self.assertEqual(
+            cached_paths,
+            [(1, "cache/episode-1.jpg"), (2, "cache/episode-2.jpg"), (3, "cache/episode-3.jpg")],
+        )
+        self.assertEqual(save_batch.call_count, 1)
+        self.assertEqual(save_batch.call_args.args[1], cached_paths)
+        self.assertEqual(worker.cached_count, 3)
+        self.assertEqual(worker.failed_episode_numbers, [])
+        self.assertEqual(successes, [12345])
+        self.assertEqual(failures, [])
 
     def test_episode_sync_thread_quits_without_gui_event_pump(self):
         page = WorkDetailPage()
@@ -853,7 +1316,7 @@ class DetailSkeletonTests(unittest.TestCase):
                 "ui.pages.work_detail_page.cache_tmdb_episode_image",
                 side_effect=lambda *args: (time.sleep(0.05), "cached-episode.jpg")[1],
             ),
-            patch("ui.pages.work_detail_page.save_episode_thumbnail_path", return_value=True),
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_paths", side_effect=lambda work_id, paths: {number for number, _path in paths}),
             patch(
                 "ui.pages.work_detail_page.log_event",
                 side_effect=lambda event, **fields: events.append((event, fields)),
@@ -905,7 +1368,7 @@ class DetailSkeletonTests(unittest.TestCase):
                 "ui.pages.work_detail_page.cache_tmdb_episode_image",
                 return_value=None,
             ),
-            patch("ui.pages.work_detail_page.save_episode_thumbnail_path") as save_path,
+            patch("ui.pages.work_detail_page.save_episode_thumbnail_paths") as save_path,
             patch(
                 "ui.pages.work_detail_page.log_event",
                 side_effect=lambda event, **fields: events.append((event, fields)),

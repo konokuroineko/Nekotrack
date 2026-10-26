@@ -5,12 +5,14 @@ from email.utils import parsedate_to_datetime
 import hashlib
 import math
 import os
+import queue
 import re
 import requests
 import tempfile
 import threading
 import time
-from difflib import SequenceMatcher
+from functools import lru_cache
+from native_acceleration import sequence_match_ratio, sequence_match_ratio_default
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from ui.preferences import get
@@ -35,6 +37,9 @@ __all__ = [
     "get_anime_discovery_page",
     "get_media_details",
     "get_entity_profile",
+    "request_api_shutdown",
+    "reset_api_shutdown",
+    "cancellable_network_call",
     "TMDB_EPISODE_CATALOG_VERSION",
     "TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS",
     "get_tmdb_access_token",
@@ -73,6 +78,130 @@ MAX_RETRY_BACKOFF_SECONDS = 4
 # Keep retry sleeps independently patchable in tests; patching time.sleep
 # itself would affect every module because the time module is shared globally.
 _retry_sleep = time.sleep
+_DEFAULT_RETRY_SLEEP = _retry_sleep
+_api_shutdown_event = threading.Event()
+_api_active_stream_lock = threading.Lock()
+_api_active_stream_responses = set()
+
+
+def _register_active_stream_response(response):
+    with _api_active_stream_lock:
+        if _api_shutdown_event.is_set():
+            should_close = True
+        else:
+            _api_active_stream_responses.add(response)
+            should_close = False
+    if should_close:
+        try:
+            response.close()
+        except Exception:
+            pass
+        raise InterruptedError("Network response cancelled during shutdown.")
+    return response
+
+
+def _unregister_active_stream_response(response):
+    with _api_active_stream_lock:
+        _api_active_stream_responses.discard(response)
+
+
+def request_api_shutdown():
+    """Tell provider calls and active streaming responses to stop on exit."""
+    _api_shutdown_event.set()
+    with _api_active_stream_lock:
+        responses = list(_api_active_stream_responses)
+        _api_active_stream_responses.clear()
+    for response in responses:
+        try:
+            response.close()
+        except Exception:
+            pass
+
+
+def reset_api_shutdown():
+    """Reset shutdown state after every Qt worker has stopped (also used in tests)."""
+    _api_shutdown_event.clear()
+
+
+def _api_stop_requested(stop_event=None):
+    return _api_shutdown_event.is_set() or (
+        stop_event is not None and stop_event.is_set()
+    )
+
+
+def cancellable_network_call(request_callable, stop_event=None):
+    """Run one blocking HTTP call so the caller can abandon it during shutdown.
+
+    The HTTP operation lives in a daemon thread. If shutdown is requested while
+    the socket is blocked, the application worker returns immediately; the
+    isolated thread can only return/close the response, never write app data.
+    """
+    if _api_stop_requested(stop_event):
+        raise InterruptedError("Network request cancelled during shutdown.")
+
+    results = queue.Queue(maxsize=1)
+    abandoned = threading.Event()
+    publish_lock = threading.Lock()
+
+    def close_response(value):
+        close = getattr(value, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+    def invoke_request():
+        try:
+            result = (True, request_callable())
+        except Exception as error:
+            result = (False, error)
+        with publish_lock:
+            if abandoned.is_set() or _api_stop_requested(stop_event):
+                if result[0]:
+                    close_response(result[1])
+                return
+            try:
+                results.put_nowait(result)
+            except queue.Full:
+                if result[0]:
+                    close_response(result[1])
+
+    request_thread = threading.Thread(
+        target=invoke_request,
+        name="NekoTrack-Cancellable-HTTP",
+        daemon=True,
+    )
+    request_thread.start()
+
+    while True:
+        try:
+            succeeded, value = results.get(timeout=0.025)
+        except queue.Empty:
+            if not _api_stop_requested(stop_event):
+                continue
+            with publish_lock:
+                abandoned.set()
+                try:
+                    succeeded, value = results.get_nowait()
+                except queue.Empty:
+                    pass
+                else:
+                    if succeeded:
+                        close_response(value)
+            raise InterruptedError("Network request cancelled during shutdown.")
+
+        if _api_stop_requested(stop_event):
+            with publish_lock:
+                abandoned.set()
+                if succeeded:
+                    close_response(value)
+            raise InterruptedError("Network request cancelled during shutdown.")
+        if succeeded:
+            return value
+        raise value
+
+
 MAX_ANILIST_MEDIA_ID = (1 << 31) - 1
 MIN_LOCAL_MEDIA_ID = -((1 << 63) - 1)
 
@@ -84,10 +213,12 @@ _anilist_next_request_at = 0.0
 _anilist_cooldown_until = 0.0
 
 
-def _wait_for_anilist_slot():
-    """Reserve a paced request slot, respecting cooldowns announced by any thread."""
+def _wait_for_anilist_slot(stop_event=None):
+    """Reserve a paced request slot, but let shutdown interrupt a pending wait."""
     global _anilist_next_request_at
     while True:
+        if _api_stop_requested(stop_event):
+            raise InterruptedError("AniList request cancelled during shutdown.")
         with _anilist_rate_lock:
             now = time.monotonic()
             ready_at = max(_anilist_next_request_at, _anilist_cooldown_until)
@@ -95,7 +226,39 @@ def _wait_for_anilist_slot():
                 _anilist_next_request_at = now + ANILIST_MIN_REQUEST_INTERVAL
                 return
             wait_time = ready_at - now
-        time.sleep(wait_time)
+        cancellation_event = (
+            stop_event if stop_event is not None else _api_shutdown_event
+        )
+        # When a worker has its own cancellation event, also poll the global
+        # shutdown flag; normal waits remain efficient when no local event exists.
+        wait_slice = min(wait_time, 0.05) if stop_event is not None else wait_time
+        if cancellation_event.wait(wait_slice):
+            raise InterruptedError("AniList request cancelled during shutdown.")
+
+
+def _wait_for_anilist_retry(wait_time, stop_event=None):
+    """Wait before a retry, unless shutdown was requested in the meantime."""
+    delay = max(0.0, float(wait_time))
+    # Retain the independently patchable sleep hook used by retry unit tests.
+    if _retry_sleep is not _DEFAULT_RETRY_SLEEP:
+        _retry_sleep(delay)
+        if _api_stop_requested(stop_event):
+            raise InterruptedError("AniList request cancelled during shutdown.")
+        return
+
+    cancellation_event = (
+        stop_event if stop_event is not None else _api_shutdown_event
+    )
+    deadline = time.monotonic() + delay
+    while True:
+        if _api_stop_requested(stop_event):
+            raise InterruptedError("AniList request cancelled during shutdown.")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        wait_slice = min(remaining, 0.05) if stop_event is not None else remaining
+        if cancellation_event.wait(wait_slice):
+            raise InterruptedError("AniList request cancelled during shutdown.")
 
 
 def _extend_anilist_cooldown(seconds):
@@ -180,8 +343,8 @@ def _normalize_anilist_description_fields(value):
     return value
 
 
-def anilist_request(query, variables=None):
-    """Make a request to AniList GraphQL API with retry logic."""
+def anilist_request(query, variables=None, stop_event=None):
+    """Make an AniList request with retry waits that can be interrupted on shutdown."""
     last_error = None
 
     def error_message(payload, fallback):
@@ -196,8 +359,10 @@ def anilist_request(query, variables=None):
         return str(fallback or "AniList returned an unreadable error response.")
 
     for attempt in range(MAX_RETRIES):
+        if _api_stop_requested(stop_event):
+            raise InterruptedError("AniList request cancelled during shutdown.")
         try:
-            _wait_for_anilist_slot()
+            _wait_for_anilist_slot(stop_event)
             with log_operation(
                 "api.request",
                 provider="AniList",
@@ -205,10 +370,13 @@ def anilist_request(query, variables=None):
                 attempt=attempt + 1,
                 variable_names=sorted(str(name) for name in (variables or {}).keys())[:20],
             ):
-                response = requests.post(
-                    ANILIST_URL,
-                    json={"query": query, "variables": variables or {}},
-                    timeout=ANILIST_REQUEST_TIMEOUT,
+                response = cancellable_network_call(
+                    lambda: requests.post(
+                        ANILIST_URL,
+                        json={"query": query, "variables": variables or {}},
+                        timeout=ANILIST_REQUEST_TIMEOUT,
+                    ),
+                    stop_event=stop_event,
                 )
             log_event(
                 "api.response",
@@ -239,7 +407,7 @@ def anilist_request(query, variables=None):
                         f"AniList rate limited the request (attempt {attempt + 1}/{MAX_RETRIES}). "
                         f"Retrying in {wait_time:g}s..."
                     )
-                    _retry_sleep(wait_time)
+                    _wait_for_anilist_retry(wait_time, stop_event)
                     continue
 
                 message = error_message(data, getattr(response, "reason", None))
@@ -268,7 +436,7 @@ def anilist_request(query, variables=None):
                         f"AniList server error (attempt {attempt + 1}/{MAX_RETRIES}). "
                         f"Retrying in {wait_time:g}s..."
                     )
-                    _retry_sleep(wait_time)
+                    _wait_for_anilist_retry(wait_time, stop_event)
                     continue
                 raise last_error
 
@@ -301,6 +469,10 @@ def anilist_request(query, variables=None):
             requests.exceptions.ChunkedEncodingError,
         ) as error:
             last_error = error
+            if _api_stop_requested(stop_event):
+                raise InterruptedError(
+                    "AniList request cancelled during shutdown."
+                ) from error
             if attempt < MAX_RETRIES - 1:
                 wait_time = min(
                     MAX_RETRY_BACKOFF_SECONDS,
@@ -324,7 +496,7 @@ def anilist_request(query, variables=None):
                     f"AniList connection failed (attempt {attempt + 1}/{MAX_RETRIES}: "
                     f"{type(error).__name__}). Retrying in {wait_time:g}s..."
                 )
-                _retry_sleep(wait_time)
+                _wait_for_anilist_retry(wait_time, stop_event)
             else:
                 print(f"Failed after {MAX_RETRIES} attempts: {error}")
         except requests.exceptions.RequestException:
@@ -1461,8 +1633,16 @@ def get_media_episodes(media_id):
     return output
 
 
-def get_media_details(media_id):
-    """Fetch the complete provider-aware media record used by detail/import workflows."""
+def get_media_details(media_id, stop_event=None):
+    """Fetch provider-aware details, stopping optional pagination during shutdown."""
+    def shutdown_requested():
+        return _api_stop_requested(stop_event)
+
+    def request_anilist(query, variables):
+        if stop_event is None:
+            return anilist_request(query, variables)
+        return anilist_request(query, variables, stop_event=stop_event)
+
     numeric_id = _validated_media_id(media_id)
     media_id = numeric_id
 
@@ -1523,9 +1703,22 @@ def get_media_details(media_id):
         # existing negative local work ID. Never guess a link from similar titles.
         linked_anilist_id = get_mangabaka_external_id(record, "anilist")
         anilist_relation_edges = []
-        if linked_anilist_id is not None:
+        if linked_anilist_id is not None and shutdown_requested():
+            # Keep the primary MangaBaka record, but do not start another
+            # provider chain while the user is closing the application.
+            media["_characters_snapshot_valid"] = False
+            media["_staff_snapshot_valid"] = False
+            log_event(
+                "library.import.optional_enrichment_skipped_shutdown",
+                work_id=numeric_id,
+                enrichment="linked_anilist",
+            )
+        elif linked_anilist_id is not None:
             try:
-                linked_details = get_media_details(linked_anilist_id)
+                linked_details = get_media_details(
+                    linked_anilist_id,
+                    stop_event=stop_event,
+                )
                 characters = linked_details.get("characters")
                 staff = linked_details.get("staff")
                 relations = linked_details.get("relations")
@@ -1560,11 +1753,18 @@ def get_media_details(media_id):
                 )
 
         mangabaka_relation_edges = []
-        try:
-            related_payload = get_mangabaka_related_series(abs(numeric_id))
-            mangabaka_relation_edges = _normalize_mangabaka_related_edges(related_payload)
-        except Exception as error:
-            print(f"MangaBaka related-series lookup skipped: {error}")
+        if shutdown_requested():
+            log_event(
+                "library.import.optional_enrichment_skipped_shutdown",
+                work_id=numeric_id,
+                enrichment="mangabaka_relations",
+            )
+        else:
+            try:
+                related_payload = get_mangabaka_related_series(abs(numeric_id))
+                mangabaka_relation_edges = _normalize_mangabaka_related_edges(related_payload)
+            except Exception as error:
+                print(f"MangaBaka related-series lookup skipped: {error}")
 
         # Merge both providers, retaining distinct relation types but avoiding
         # duplicate edges to the same target with the same relationship label.
@@ -1584,7 +1784,11 @@ def get_media_details(media_id):
                 continue
             seen_relation_keys.add(relation_key)
             combined_relation_edges.append(edge)
-        media["relations"] = {"edges": combined_relation_edges}
+        # An interrupted enrichment must not reconcile an incomplete relation
+        # graph against previously saved relationships.
+        media["relations"] = {
+            "edges": None if shutdown_requested() else combined_relation_edges
+        }
         return media
     query = """
     query ($id: Int) {
@@ -1604,7 +1808,7 @@ def get_media_details(media_id):
         }
     }
     """ % _media_fields(include_details=True)
-    data = anilist_request(query, {"id": media_id})
+    data = request_anilist(query, {"id": media_id})
     media = data.get("Media") if isinstance(data, dict) else None
     if not isinstance(media, dict):
         raise RuntimeError(f"AniList returned no media details for ID {media_id}.")
@@ -1704,8 +1908,17 @@ def get_media_details(media_id):
     }
     """
     while page_info.get("hasNextPage") is True and page < _page_limit(page_info):
+        if shutdown_requested():
+            characters_snapshot_valid = False
+            log_event(
+                "library.import.pagination_stopped_shutdown",
+                work_id=media_id,
+                connection="characters",
+                next_page=page + 1,
+            )
+            break
         requested_page = page + 1
-        page_data = anilist_request(
+        page_data = request_anilist(
             characters_query, {"id": media_id, "page": requested_page}
         )
         page_media = page_data.get("Media") if isinstance(page_data, dict) else None
@@ -1785,8 +1998,16 @@ def get_media_details(media_id):
         schedule_page_info.get("hasNextPage") is True
         and schedule_page < _page_limit(schedule_page_info)
     ):
+        if shutdown_requested():
+            log_event(
+                "library.import.pagination_stopped_shutdown",
+                work_id=media_id,
+                connection="airing_schedule",
+                next_page=schedule_page + 1,
+            )
+            break
         requested_page = schedule_page + 1
-        schedule_data = anilist_request(
+        schedule_data = request_anilist(
             schedule_query, {"id": media_id, "page": requested_page}
         )
         schedule_media = (
@@ -1839,7 +2060,14 @@ def get_media_details(media_id):
     # Add MangaBaka's complete series payload for reading-media details. The
     # lookup is best-effort and the AniList record remains the canonical one.
     if str(media.get("type") or "").upper() == "MANGA":
-        enrich_anilist_media(media, fetch_full=True)
+        if shutdown_requested():
+            log_event(
+                "library.import.optional_enrichment_skipped_shutdown",
+                work_id=media_id,
+                enrichment="mangabaka_full_payload",
+            )
+        else:
+            enrich_anilist_media(media, fetch_full=True)
 
     return media
 
@@ -1884,13 +2112,15 @@ def test_tmdb_connection(token):
         raise ValueError("TMDB API token is required.")
 
     with log_operation("api.request", provider="TMDB", endpoint="configuration"):
-        response = requests.get(
-            f"{TMDB_BASE_URL}/configuration",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "accept": "application/json",
-            },
-            timeout=10,
+        response = cancellable_network_call(
+            lambda: requests.get(
+                f"{TMDB_BASE_URL}/configuration",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "accept": "application/json",
+                },
+                timeout=10,
+            )
         )
     log_event("api.response", provider="TMDB", endpoint="configuration",
               status_code=getattr(response, "status_code", None))
@@ -1910,14 +2140,16 @@ def _tmdb_get(path, params=None):
 
     endpoint = str(path).lstrip("/")
     with log_operation("api.request", provider="TMDB", endpoint=endpoint):
-        response = requests.get(
-            f"{TMDB_BASE_URL}/{endpoint}",
-            params=params or {},
-            headers={
-                "Authorization": f"Bearer {token}",
-                "accept": "application/json",
-            },
-            timeout=20,
+        response = cancellable_network_call(
+            lambda: requests.get(
+                f"{TMDB_BASE_URL}/{endpoint}",
+                params=params or {},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "accept": "application/json",
+                },
+                timeout=20,
+            )
         )
     log_event("api.response", provider="TMDB", endpoint=endpoint,
               status_code=getattr(response, "status_code", None))
@@ -1931,6 +2163,18 @@ def _tmdb_get(path, params=None):
         raise RuntimeError(f"TMDB returned an unexpected response for {path}.")
     return payload
 
+
+def _unique_title_variants(values):
+    """Remove exact duplicate query strings while preserving provider search order."""
+    unique = []
+    seen = set()
+    for value in values or []:
+        query = str(value or "").strip()
+        if query and query not in seen:
+            seen.add(query)
+            unique.append(query)
+    return unique
+
 def _parse_date(value):
     text = str(value or "").strip()
     if not text:
@@ -1941,10 +2185,16 @@ def _parse_date(value):
         return None
 
 
+@lru_cache(maxsize=8192)
+def _normalize_title_text(value: str):
+    """Cache pure title normalization because the same aliases score many candidates."""
+    return re.sub(r"[\W_]+", "", value.casefold(), flags=re.UNICODE)
+
+
 def _normalize_title(value):
     # Keep Unicode letters and digits so Japanese native titles can match
     # TMDB's original_name field instead of normalizing to an empty string.
-    return re.sub(r"[\W_]+", "", str(value or "").casefold(), flags=re.UNICODE)
+    return _normalize_title_text(str(value or ""))
 
 
 def _title_similarity(left, right):
@@ -1958,18 +2208,14 @@ def _title_similarity(left, right):
     if name in query or query in name:
         containment = min(len(name), len(query)) / max(len(name), len(query))
         return 0.72 + 0.28 * containment
-    return SequenceMatcher(None, name, query, autojunk=False).ratio()
+    return sequence_match_ratio(name, query)
 
 
 def _candidate_title_similarity(candidate, title_variants):
     if not isinstance(candidate, dict):
         return 0.0
     names = (candidate.get("name"), candidate.get("original_name"))
-    variants = [
-        str(value).strip()
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    ]
+    variants = _unique_title_variants(title_variants)
     return max(
         (
             _title_similarity(name, variant)
@@ -2002,11 +2248,7 @@ def _candidate_score(candidate, title_variants, target_date):
 
 
 def _find_tmdb_series(title_variants, target_date):
-    variants = [
-        str(value).strip()
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    ]
+    variants = _unique_title_variants(title_variants)
     if not variants:
         raise RuntimeError("No title is available for TMDB series search.")
 
@@ -2224,11 +2466,7 @@ def _candidate_movie_score(candidate, title_variants, target_date):
     return score, similarity, release_date
 
 def _find_tmdb_movie(title_variants, target_date):
-    variants = [
-        str(value).strip()
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    ]
+    variants = _unique_title_variants(title_variants)
     if not variants:
         raise RuntimeError("No title is available for TMDB movie search.")
 
@@ -2286,12 +2524,7 @@ def _find_tmdb_movie(title_variants, target_date):
 
 def _find_tmdb_ova_movies(title_variants, target_date, expected_episodes):
     """Resolve one TMDB movie per OVA episode using AniList alternate titles."""
-    variants = [
-        str(value).strip()
-        for value in (title_variants or [])
-        if str(value or "").strip()
-    ]
-    variants = list(dict.fromkeys(value for value in variants if value))
+    variants = _unique_title_variants(title_variants)
     try:
         expected = max(1, int(expected_episodes or 1))
     except (TypeError, ValueError):
@@ -2529,11 +2762,13 @@ def _get_tmdb_episode_image_response(url):
 
         with log_operation("api.request", provider="TMDB", endpoint="episode-image",
                            redirect_attempt=redirect_count + 1):
-            response = requests.get(
-                current_url,
-                timeout=20,
-                stream=True,
-                allow_redirects=False,
+            response = cancellable_network_call(
+                lambda: requests.get(
+                    current_url,
+                    timeout=20,
+                    stream=True,
+                    allow_redirects=False,
+                )
             )
         status_code = getattr(response, "status_code", 200)
         log_event("api.response", provider="TMDB", endpoint="episode-image",
@@ -2562,7 +2797,7 @@ def _get_tmdb_episode_image_response(url):
         except Exception:
             response.close()
             raise
-        return response
+        return _register_active_stream_response(response)
 
     raise ValueError("TMDB image exceeded the redirect limit.")
 
@@ -2583,6 +2818,8 @@ def _read_bounded_tmdb_image_response(response):
     chunks = []
     total_bytes = 0
     for chunk in response.iter_content(chunk_size=64 * 1024):
+        if _api_shutdown_event.is_set():
+            raise InterruptedError("TMDB image download cancelled during shutdown.")
         if not chunk:
             continue
         total_bytes += len(chunk)
@@ -2656,6 +2893,7 @@ def cache_tmdb_episode_image(url, work_id, episode_number):
     try:
         data = _read_bounded_tmdb_image_response(response)
     finally:
+        _unregister_active_stream_response(response)
         response.close()
 
     if not _valid_image_data(data):
@@ -3102,14 +3340,16 @@ def _request(path, params=None, use_cache=True, api_version=2):
                 attempt=attempt + 1,
                 parameter_names=sorted(str(name) for name in (params or {}).keys())[:30],
             ):
-                response = requests.get(
-                    url,
-                    params=params or {},
-                    headers={
-                        "Accept": "application/json",
-                        "User-Agent": "NekoTrack/0.1 (desktop media tracker)",
-                    },
-                    timeout=REQUEST_TIMEOUT,
+                response = cancellable_network_call(
+                    lambda: requests.get(
+                        url,
+                        params=params or {},
+                        headers={
+                            "Accept": "application/json",
+                            "User-Agent": "NekoTrack/0.1 (desktop media tracker)",
+                        },
+                        timeout=REQUEST_TIMEOUT,
+                    )
                 )
             log_event(
                 "api.response",
@@ -3129,7 +3369,10 @@ def _request(path, params=None, use_cache=True, api_version=2):
                         wait = min(8.0, max(0.5, float(retry_after)))
                     except (TypeError, ValueError):
                         wait = 0.75 * (2 ** attempt)
-                    time.sleep(wait)
+                    if _api_shutdown_event.wait(max(0.0, wait)):
+                        raise InterruptedError(
+                            "MangaBaka request cancelled during shutdown."
+                        )
                     continue
             if response.status_code >= 400:
                 detail = response.text[:240].strip()
@@ -3154,11 +3397,17 @@ def _request(path, params=None, use_cache=True, api_version=2):
                         _cache.pop(oldest, None)
                     _cache[key] = (time.monotonic() + _CACHE_TTL, copy.deepcopy(payload))
             return payload
+        except InterruptedError:
+            raise
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
                 requests.exceptions.ChunkedEncodingError) as error:
             last_error = error
+            if _api_shutdown_event.is_set():
+                raise InterruptedError(
+                    "MangaBaka request cancelled during shutdown."
+                ) from error
             if attempt < MANGABAKA_MAX_RETRIES - 1:
-                time.sleep(0.5 * (2 ** attempt))
+                _wait_for_anilist_retry(0.5 * (2 ** attempt))
         except requests.exceptions.RequestException as error:
             raise MangaBakaAPIError(str(error)) from error
     raise MangaBakaAPIError(f"Could not reach MangaBaka: {last_error}")
@@ -4015,10 +4264,15 @@ def normalize_mangabaka_series(series, preferred_id=None):
     }
 
 
-def _mangabaka_normalize_title(value):
-    value = str(value or "").casefold()
+@lru_cache(maxsize=8192)
+def _normalize_mangabaka_title_text(value: str):
+    value = value.casefold()
     value = re.sub(r"[\W_]+", " ", value, flags=re.UNICODE)
     return " ".join(value.split())
+
+
+def _mangabaka_normalize_title(value):
+    return _normalize_mangabaka_title_text(str(value or ""))
 
 
 def _series_title_candidates(series):
@@ -4061,7 +4315,7 @@ def match_series_for_anilist(anilist_media, candidates):
         candidate_titles.discard("")
         exact = bool(normalized_aliases.intersection(candidate_titles))
         score = 1.0 if exact else max(
-            (SequenceMatcher(None, left, right).ratio()
+            (sequence_match_ratio_default(left, right)
              for left in normalized_aliases for right in candidate_titles),
             default=0.0,
         )

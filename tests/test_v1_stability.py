@@ -185,8 +185,7 @@ class V1StabilityTests(unittest.TestCase):
             patch.object(HomePage, "_read_library", return_value=[member_a, member_b]),
             patch("ui.pages.home_page.get_library_series", return_value=[group]) as grouper,
             patch.object(RecommendationsPage, "refresh", autospec=True),
-            patch("ui.pages.home_page.get_release_reminders", return_value=[]),
-            patch("ui.pages.home_page.get_episodes", return_value=[]),
+            patch("ui.pages.home_page.get_upcoming_library_episodes", return_value=[]),
         ):
             page = HomePage()
         try:
@@ -418,8 +417,7 @@ class V1StabilityTests(unittest.TestCase):
             patch.object(HomePage, "_read_library", return_value=library),
             patch("ui.pages.home_page.get_library_series", side_effect=lambda rows: rows),
             patch.object(RecommendationsPage, "refresh", autospec=True),
-            patch("ui.pages.home_page.get_release_reminders", return_value=[]),
-            patch("ui.pages.home_page.get_episodes", return_value=[]),
+            patch("ui.pages.home_page.get_upcoming_library_episodes", return_value=[]),
         ):
             page = HomePage()
         try:

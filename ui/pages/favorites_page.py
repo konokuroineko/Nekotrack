@@ -14,7 +14,7 @@ class FavoritesPage(QWidget):
     entity_selected = Signal(str, object)
     search_requested = Signal()
 
-    def __init__(self):
+    def __init__(self, defer_initial_refresh=False):
         super().__init__()
         self._favorites = []
         self.setObjectName("favoritesPage")
@@ -32,7 +32,10 @@ class FavoritesPage(QWidget):
         self.content_layout.setSpacing(18)
         self.scroll.setWidget(self.content)
         outer.addWidget(self.scroll)
-        self.refresh()
+        if defer_initial_refresh:
+            self._apply_theme()
+        else:
+            self.refresh()
 
     def refresh(self):
         self._clear()

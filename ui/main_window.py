@@ -5,7 +5,11 @@ from pathlib import Path
 
 from api import (
     get_media_details,
+    request_api_shutdown,
+    reset_api_shutdown,
     get_tmdb_episode_data,
+    TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS,
+    TMDB_EPISODE_CATALOG_VERSION,
     get_mangabaka_series_news,
     get_mangabaka_volume_records,
 )
@@ -18,13 +22,14 @@ from database import (
     characters_are_loaded,
     get_alternate_titles,
     get_bundle_character_voice_actors,
-    get_connection,
-    get_episodes,
     get_due_release_reminders,
+    get_episode_section_snapshot,
+    get_library_episode_catalog_refresh_ids,
     invalidate_character_snapshots,
     get_tmdb_mapping,
     get_work,
     initialize_database,
+    prune_episode_catalog,
     save_anime,
     save_automatic_bundle_membership,
     save_characters,
@@ -54,6 +59,52 @@ from ui.pages.search_page import SearchPage
 from ui.pages.settings_page import SettingsPage
 from ui.pages.work_detail_page import WorkDetailPage
 from ui.pages.entity_profile_page import EntityProfilePage
+
+
+
+def _persist_episode_catalog_snapshot(work_id, expected_episode_count, episode_data):
+    """Save episode rows and matching-policy freshness without losing progress."""
+    episodes = list(episode_data or [])
+    save_episodes(work_id, episodes)
+
+    def positive_integer(value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value > 0 else None
+        if isinstance(value, float):
+            return int(value) if value.is_integer() and value > 0 else None
+        if isinstance(value, str):
+            text = value.strip()
+            if text and text.isascii() and text.isdigit():
+                number = int(text)
+                return number if number > 0 else None
+        return None
+
+    expected_count = positive_integer(expected_episode_count)
+    episode_numbers = {
+        number
+        for episode in episodes
+        if isinstance(episode, dict)
+        for number in [positive_integer(episode.get("episodeNumber"))]
+        if number is not None
+    }
+    catalog_complete = (
+        expected_count is not None and len(episode_numbers) >= expected_count
+    )
+    if catalog_complete:
+        prune_episode_catalog(work_id, episodes)
+
+    save_provider_metadata(
+        work_id,
+        "tmdb_episode_match_version",
+        {
+            "version": TMDB_EPISODE_CATALOG_VERSION,
+            "fetched_at": int(time.time()),
+            "complete": catalog_complete if expected_count is not None else None,
+        },
+    )
+    return catalog_complete
 
 
 class ImageWorker(QObject):
@@ -100,7 +151,15 @@ class LibraryImportWorker(QObject):
 
     def _run_import(self):
         try:
-            details = get_media_details(self.work_id)
+            # Pass the shared shutdown signal into paginated provider reads so
+            # an active import stops optional follow-up requests between pages.
+            if self.stop_event is None:
+                details = get_media_details(self.work_id)
+            else:
+                details = get_media_details(
+                    self.work_id,
+                    stop_event=self.stop_event,
+                )
             if not details:
                 raise RuntimeError("AniList returned no details for this work.")
 
@@ -295,8 +354,9 @@ class LibraryImportWorker(QObject):
                         resolved_tmdb_id,
                         resolved_season,
                     )
-                save_episodes(
+                _persist_episode_catalog_snapshot(
                     self.work_id,
+                    expected_episodes,
                     episode_payload.get("episodes") or [],
                 )
             except Exception as episode_error:
@@ -341,6 +401,7 @@ class LibraryImportWorker(QObject):
 
 class LibraryEpisodePreloadWorker(QObject):
     finished = Signal(int, object)
+    completed = Signal()
     error = Signal(int, str)
     skipped = Signal(int)
 
@@ -353,17 +414,26 @@ class LibraryEpisodePreloadWorker(QObject):
         for work_id in self.work_ids:
             if self.stop_event is not None and self.stop_event.is_set():
                 break
-            log_event("library.episode_preload.started", work_id=work_id)
             try:
-                connection_work = get_work(work_id)
+                snapshot = get_episode_section_snapshot(work_id)
+                connection_work = snapshot.get("work")
                 if connection_work is None:
                     continue
                 if str(connection_work["type"] or "").upper() != "ANIME":
                     continue
 
-                existing_episodes = get_episodes(work_id)
-                if existing_episodes:
-                    continue
+                if snapshot.get("catalog_metadata_error") is not None:
+                    log_exception(
+                        "library.episode_preload.catalog_metadata_read_failed",
+                        snapshot["catalog_metadata_error"],
+                        work_id=work_id,
+                    )
+
+                metadata = snapshot.get("catalog_metadata")
+                try:
+                    catalog_version = max(0, int(metadata.get("version") or 0))
+                except (AttributeError, TypeError, ValueError, OverflowError):
+                    catalog_version = 0
 
                 title_variants = [
                     str(connection_work["title"] or "").strip(),
@@ -377,15 +447,42 @@ class LibraryEpisodePreloadWorker(QObject):
 
                 year = connection_work["start_year"]
                 if year is None:
-                    continue
+                    start_date = None
+                else:
+                    month = connection_work["start_month"] or 1
+                    day = connection_work["start_day"] or 1
+                    start_date = (
+                        f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+                    )
 
-                month = connection_work["start_month"] or 1
-                day = connection_work["start_day"] or 1
-                start_date = (
-                    f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
-                )
+                # The current matching policy must re-resolve old mappings once.
+                if catalog_version < TMDB_EPISODE_CATALOG_VERSION:
+                    tmdb_id, tmdb_season_number = None, None
+                else:
+                    tmdb_id = connection_work["tmdb_id"]
+                    tmdb_season_number = connection_work["tmdb_season_number"]
 
-                tmdb_id, tmdb_season_number = get_tmdb_mapping(work_id)
+                # Record the attempt before the network call. Failed, unmatched,
+                # or shutdown-interrupted lookups otherwise remain stale and
+                # get retried every time the app starts.
+                try:
+                    save_provider_metadata(
+                        work_id,
+                        "tmdb_episode_match_attempt",
+                        {
+                            "version": TMDB_EPISODE_CATALOG_VERSION,
+                            "attempted_at": int(time.time()),
+                            "status": "pending",
+                        },
+                    )
+                except Exception as metadata_error:
+                    log_exception(
+                        "library.episode_preload.attempt_marker_failed",
+                        metadata_error,
+                        work_id=work_id,
+                    )
+
+                log_event("library.episode_preload.started", work_id=work_id)
                 payload = get_tmdb_episode_data(
                     title_variants,
                     start_date,
@@ -405,21 +502,67 @@ class LibraryEpisodePreloadWorker(QObject):
                     )
 
                 episodes = payload.get("episodes") or []
-                if episodes:
-                    save_episodes(work_id, episodes)
+                catalog_complete = _persist_episode_catalog_snapshot(
+                    work_id,
+                    connection_work["episodes"],
+                    episodes,
+                )
 
                 log_event(
                     "library.episode_preload.completed",
                     work_id=work_id,
                     episode_count=len(episodes),
+                    catalog_complete=catalog_complete,
                     tmdb_id=resolved_tmdb_id,
                 )
                 self.finished.emit(work_id, episodes)
+            except InterruptedError as error:
+                if self.stop_event is not None and self.stop_event.is_set():
+                    try:
+                        save_provider_metadata(
+                            work_id,
+                            "tmdb_episode_match_attempt",
+                            {
+                                "version": TMDB_EPISODE_CATALOG_VERSION,
+                                "attempted_at": int(time.time()),
+                                "status": "cancelled",
+                            },
+                        )
+                    except Exception as metadata_error:
+                        log_exception(
+                            "library.episode_preload.attempt_marker_failed",
+                            metadata_error,
+                            work_id=work_id,
+                        )
+                    log_event(
+                        "library.episode_preload.cancelled",
+                        work_id=work_id,
+                        reason="shutdown",
+                    )
+                    break
+                log_exception("library.episode_preload.failed", error, work_id=work_id)
+                self.error.emit(work_id, str(error))
             except Exception as error:
                 if (
                     isinstance(error, RuntimeError)
                     and str(error) == "TMDB could not find a matching TV series."
                 ):
+                    try:
+                        save_provider_metadata(
+                            work_id,
+                            "tmdb_episode_match_attempt",
+                            {
+                                "version": TMDB_EPISODE_CATALOG_VERSION,
+                                "attempted_at": int(time.time()),
+                                "status": "no_series_match",
+                            },
+                        )
+                    except Exception as metadata_error:
+                        log_exception(
+                            "library.episode_preload.attempt_marker_failed",
+                            metadata_error,
+                            work_id=work_id,
+                        )
                     log_event(
                         "library.episode_preload.unavailable",
                         work_id=work_id,
@@ -428,8 +571,25 @@ class LibraryEpisodePreloadWorker(QObject):
                     )
                     self.skipped.emit(work_id)
                 else:
+                    try:
+                        save_provider_metadata(
+                            work_id,
+                            "tmdb_episode_match_attempt",
+                            {
+                                "version": TMDB_EPISODE_CATALOG_VERSION,
+                                "attempted_at": int(time.time()),
+                                "status": "failed",
+                            },
+                        )
+                    except Exception as metadata_error:
+                        log_exception(
+                            "library.episode_preload.attempt_marker_failed",
+                            metadata_error,
+                            work_id=work_id,
+                        )
                     log_exception("library.episode_preload.failed", error, work_id=work_id)
                     self.error.emit(work_id, str(error))
+        self.completed.emit()
 
 
 class NavigationButton(QPushButton):
@@ -542,6 +702,9 @@ class MainWindow(QMainWindow):
         self._library_import_queue = LibraryImportQueue(max_concurrent=2)
         self._shutdown_event = threading.Event()
         self._shutdown_requested = False
+        self._shutdown_started_at = None
+        self._shutdown_waited_for_workers = False
+        self._startup_preload_scheduled = False
         self._shutdown_timer = QTimer(self)
         self._shutdown_timer.setInterval(100)
         self._shutdown_timer.timeout.connect(self._poll_shutdown_workers)
@@ -568,8 +731,10 @@ class MainWindow(QMainWindow):
         self._release_reminder_timer.setInterval(60_000)
         self._release_reminder_timer.timeout.connect(self._check_release_reminders)
         self._release_reminder_timer.start()
-        self.setup_ui()
-        QTimer.singleShot(250, self._start_existing_library_episode_preload)
+        with log_operation("main_window.initial_ui_build"):
+            self.setup_ui()
+        # Initial API work is started after the first frame, not while pages are
+        # being constructed. This reduces startup contention and close-time waits.
         QTimer.singleShot(5_000, self._check_release_reminders)
 
     def setup_ui(self, initial_page="home"):
@@ -610,15 +775,30 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.navigation = NavigationController(self.stack)
-        self.library_page = LibraryPage()
-        self.search_page = SearchPage(self.add_to_library)
-        self.work_detail_page = WorkDetailPage()
-        self.entity_profile_page = EntityProfilePage()
-        self.settings_page = SettingsPage(background_manager=self.background_manager)
-        self.home_page = HomePage(self.add_to_library)
+        with log_operation("main_window.construct_page", page="library"):
+            # Library data is not needed to display Home. Defer its synchronous
+            # grouping and card construction until the Library is first opened.
+            self.library_page = LibraryPage(defer_initial_refresh=True)
+        with log_operation("main_window.construct_page", page="search"):
+            self.search_page = SearchPage(self.add_to_library)
+        with log_operation("main_window.construct_page", page="work_detail"):
+            self.work_detail_page = WorkDetailPage()
+        with log_operation("main_window.construct_page", page="entity_profile"):
+            self.entity_profile_page = EntityProfilePage()
+        with log_operation("main_window.construct_page", page="settings"):
+            # Keep startup focused on the initial Home page. Build the full
+            # settings controls the first time the user visits Settings.
+            self.settings_page = SettingsPage(background_manager=self.background_manager, defer_initial_build=True)
+        with log_operation("main_window.construct_page", page="home"):
+            self.home_page = HomePage(
+                self.add_to_library,
+                defer_initial_recommendations=True,
+            )
         self.recommendations_page = self.home_page.recommendations_page
-        self.calendar_page = CalendarPage()
-        self.favorites_page = FavoritesPage()
+        with log_operation("main_window.construct_page", page="calendar"):
+            self.calendar_page = CalendarPage(defer_initial_refresh=True)
+        with log_operation("main_window.construct_page", page="favorites"):
+            self.favorites_page = FavoritesPage(defer_initial_refresh=True)
         pages = {
             "home": self.home_page,
             "collections": self.library_page,
@@ -709,10 +889,23 @@ class MainWindow(QMainWindow):
         # replacement is being built. Only switch once the new tree exists.
         self._ui_root_stack.addWidget(root)
         self._ui_root_stack.setCurrentWidget(root)
+        if self.isVisible():
+            QTimer.singleShot(150, self.start_initial_background_work)
 
         # Do not eagerly build/cache a full Qt widget tree for every Library
         # entry on the GUI thread. Detail views are rendered when selected and
         # episode cards are created in bounded event-loop batches.
+
+    def start_initial_background_work(self):
+        """Start optional API work after Home has had a chance to paint."""
+        if self._shutdown_requested or self._shutdown_event.is_set():
+            return
+        home = getattr(self, "home_page", None)
+        if home is not None:
+            home.start_initial_recommendations_load()
+        if not self._startup_preload_scheduled:
+            self._startup_preload_scheduled = True
+            QTimer.singleShot(1_000, self._start_existing_library_episode_preload)
 
     def _refresh_library_after_bundle_change(self):
         # Wait until the detail-page deletion/link change has fully returned to
@@ -720,6 +913,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.library_page.refresh)
 
     def _page_changed(self, page_name):
+        if page_name == "settings":
+            self.settings_page.ensure_built()
         previous_page = self._last_navigation_page
         if page_name == "home" and previous_page not in (None, "home"):
             # Refresh the local snapshot only when returning to the dashboard;
@@ -953,37 +1148,24 @@ class MainWindow(QMainWindow):
         ):
             return
 
-        connection = get_connection()
         try:
-            library_ids = [
-                int(row["id"])
-                for row in connection.execute(
-                    """
-                    SELECT works.id
-                    FROM works
-                    JOIN user_library ON user_library.work_id = works.id
-                    WHERE COALESCE(works.episodes, 0) > 0
-                      AND UPPER(COALESCE(works.type, '')) = 'ANIME'
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM episodes
-                          WHERE episodes.work_id = works.id
-                      )
-                    ORDER BY user_library.added_date
-                    """
-                ).fetchall()
-            ]
-        except Exception:
-            return
-        finally:
-            connection.close()
-
-        missing_ids = library_ids
-
-        if not missing_ids:
+            refresh_ids = get_library_episode_catalog_refresh_ids(
+                TMDB_EPISODE_CATALOG_VERSION,
+                TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS,
+            )
+        except Exception as error:
+            log_exception("library.episode_preload.candidate_query_failed", error)
             return
 
-        worker = LibraryEpisodePreloadWorker(missing_ids, self._shutdown_event)
+        log_event(
+            "library.episode_preload.plan",
+            candidate_count=len(refresh_ids),
+            candidate_ids=refresh_ids[:100],
+        )
+        if not refresh_ids:
+            return
+
+        worker = LibraryEpisodePreloadWorker(refresh_ids, self._shutdown_event)
         thread = QThread(self)
         worker.moveToThread(thread)
 
@@ -996,9 +1178,8 @@ class MainWindow(QMainWindow):
                     f"{work_id}: {message}"
                 )
         )
-        worker.finished.connect(thread.quit)
-        worker.error.connect(thread.quit)
-        worker.skipped.connect(thread.quit)
+        worker.completed.connect(thread.quit)
+        worker.completed.connect(self._library_episode_preload_completed)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(
@@ -1039,6 +1220,15 @@ class MainWindow(QMainWindow):
                 f"Existing library preload failed for work {work_id}: "
                 f"{error}"
             )
+
+    def _library_episode_preload_completed(self):
+        if self._shutdown_event.is_set():
+            return
+        current_page = self.navigation.current_name()
+        if current_page == "calendar":
+            self.calendar_page.refresh()
+        elif current_page == "home":
+            self.home_page.refresh()
 
     def _library_episode_preload_thread_finished(self, thread):
         if self._library_episode_preload_thread is thread:
@@ -1745,15 +1935,19 @@ class MainWindow(QMainWindow):
                     episode_number=item.get("episode_number"),
                 )
 
-    def _has_running_worker_threads(self):
-        # Includes nested Search, Library, recommendation, and detail QThreads.
+    def _running_worker_threads(self):
+        """Return the active page/update QThreads without blocking the GUI."""
+        running = []
         for thread in self.findChildren(QThread):
             try:
                 if thread.isRunning():
-                    return True
+                    running.append(thread)
             except RuntimeError:
                 continue
-        return False
+        return running
+
+    def _has_running_worker_threads(self):
+        return bool(self._running_worker_threads())
 
     def _launch_restarted_application(self):
         app = QApplication.instance()
@@ -1785,8 +1979,16 @@ class MainWindow(QMainWindow):
         app.quit()
 
     def closeEvent(self, event):
+        if not self._shutdown_requested:
+            self._shutdown_started_at = time.monotonic()
+            log_event("app.shutdown_requested")
+            self._release_reminder_timer.stop()
+            if self._release_reminder_tray.isVisible():
+                self._release_reminder_tray.hide()
+
         self._shutdown_requested = True
         self._shutdown_event.set()
+        request_api_shutdown()
         self._library_import_queue.close()
 
         for search_page in self.findChildren(SearchPage):
@@ -1799,15 +2001,39 @@ class MainWindow(QMainWindow):
             profile_page.request_shutdown()
         for recommendations_page in self.findChildren(RecommendationsPage):
             recommendations_page.request_shutdown()
-        # Stop each event loop; blocking provider requests still need to return.
-        # This window stays alive until every QThread has actually stopped.
+        # Stop event loops; an in-flight provider request must still return.
+        # Keep the disabled window present until workers finish, so "closed"
+        # never means a hidden process is still using the database in the back.
         for thread in self.findChildren(QThread):
             try:
+                cancel = getattr(thread, "cancel", None)
+                if callable(cancel):
+                    try:
+                        cancel()
+                    except TypeError:
+                        thread.requestInterruption()
+                else:
+                    thread.requestInterruption()
                 thread.quit()
-            except RuntimeError:
+            except (RuntimeError, TypeError):
                 continue
 
-        if self._has_running_worker_threads():
+        running_threads = self._running_worker_threads()
+        if running_threads:
+            self._shutdown_waited_for_workers = True
+            elapsed_ms = (
+                round((time.monotonic() - self._shutdown_started_at) * 1000, 2)
+                if self._shutdown_started_at is not None else 0.0
+            )
+            log_event(
+                "app.shutdown_waiting_for_workers",
+                elapsed_ms=elapsed_ms,
+                running_thread_count=len(running_threads),
+                running_thread_names=[
+                    thread.objectName() or "<unnamed QThread>"
+                    for thread in running_threads
+                ],
+            )
             self.setEnabled(False)
             event.ignore()
             if not self._shutdown_timer.isActive():
@@ -1815,9 +2041,18 @@ class MainWindow(QMainWindow):
             return
 
         self._shutdown_timer.stop()
-        self._release_reminder_timer.stop()
+        elapsed_ms = (
+            round((time.monotonic() - self._shutdown_started_at) * 1000, 2)
+            if self._shutdown_started_at is not None else 0.0
+        )
+        log_event(
+            "app.shutdown_completed",
+            elapsed_ms=elapsed_ms,
+            waited_for_workers=self._shutdown_waited_for_workers,
+        )
         if self._release_reminder_tray.isVisible():
             self._release_reminder_tray.hide()
+        reset_api_shutdown()
         event.accept()
         if self._restart_requested and not self._restart_launch_scheduled:
             self._restart_launch_scheduled = True

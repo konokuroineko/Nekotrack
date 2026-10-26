@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import database
 
@@ -147,6 +148,101 @@ class CharacterVoiceActorScopeTests(unittest.TestCase):
         self.assertEqual(database.invalidate_character_snapshots([101]), 1)
         self.assertFalse(database.characters_are_loaded(101))
         self.assertEqual(len(database.get_characters(101)), 1)
+
+
+    def test_complete_snapshot_cleanup_batches_queries_and_preserves_shared_references(self):
+        self._add_two_adaptations()
+        shared_actor = self._actor(7001, "Shared Voice Actor")
+        first_cast = [self._character([shared_actor])]
+
+        for offset in range(40):
+            character = self._character([
+                self._actor(7100 + offset, f"Private Actor {offset}")
+            ])
+            character["node"]["id"] = 600 + offset
+            character["node"]["name"] = {"full": f"Private Character {offset}"}
+            first_cast.append(character)
+
+        database.save_characters(101, first_cast)
+        database.save_characters(102, [self._character([shared_actor])])
+        # Keep the first private actor alive through a separate staff credit.
+        database.save_staff(101, [{
+            "role": "Storyboard",
+            "node": {
+                "id": 7100,
+                "name": {"full": "Private Actor 0"},
+                "image": {"large": "https://example.invalid/7100.jpg"},
+            },
+        }])
+
+        real_get_connection = database.get_connection
+        connections = []
+
+        class CountingConnection:
+            def __init__(self, connection):
+                self._connection = connection
+                self.execute_calls = 0
+                self.executemany_calls = 0
+
+            def execute(self, *args, **kwargs):
+                self.execute_calls += 1
+                return self._connection.execute(*args, **kwargs)
+
+            def executemany(self, *args, **kwargs):
+                self.executemany_calls += 1
+                return self._connection.executemany(*args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._connection, name)
+
+        def counted_connection():
+            wrapped = CountingConnection(real_get_connection())
+            connections.append(wrapped)
+            return wrapped
+
+        with patch.object(database, "get_connection", side_effect=counted_connection):
+            database.save_characters(101, [])
+
+        self.assertEqual(len(connections), 1)
+        # The old loop performed repeated SELECT/DELETE calls for each stale
+        # character and actor. The set-based cleanup keeps direct calls bounded.
+        self.assertLessEqual(connections[0].execute_calls, 25)
+        self.assertGreaterEqual(connections[0].executemany_calls, 5)
+
+        self.assertEqual(database.get_characters(101), [])
+        self.assertEqual(len(database.get_characters(102)), 1)
+        self.assertEqual(dict(database.get_characters(102)[0])["person_id"], 7001)
+
+        connection = database.get_connection()
+        try:
+            characters = {
+                int(row["id"])
+                for row in connection.execute(
+                    "SELECT id FROM characters WHERE id BETWEEN 600 AND 639"
+                ).fetchall()
+            }
+            actor_ids = {
+                int(row["id"])
+                for row in connection.execute(
+                    "SELECT id FROM people WHERE id BETWEEN 7100 AND 7139"
+                ).fetchall()
+            }
+            scoped_credits = connection.execute(
+                "SELECT work_id, character_id, person_id "
+                "FROM work_character_voice_actors WHERE character_id = 501 "
+                "ORDER BY work_id"
+            ).fetchall()
+        finally:
+            connection.close()
+
+        self.assertEqual(characters, set())
+        self.assertEqual(actor_ids, {7100})
+        self.assertEqual(
+            [(int(row["work_id"]), int(row["character_id"]), int(row["person_id"]))
+             for row in scoped_credits],
+            [(102, 501, 7001)],
+        )
+
 
     def test_legacy_global_actor_rows_migrate_and_mark_cast_for_refresh(self):
         self._add_two_adaptations()

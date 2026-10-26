@@ -1,8 +1,10 @@
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import shiboken6
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -11,7 +13,7 @@ from PySide6.QtCore import Qt, QBuffer, QIODevice
 from PySide6.QtTest import QTest
 from PySide6.QtGui import QPixmap
 from PySide6.QtNetwork import QNetworkReply
-from PySide6.QtWidgets import QApplication, QLabel, QFrame, QTextBrowser, QCheckBox, QComboBox, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QFrame, QTextBrowser, QCheckBox, QComboBox, QPushButton, QWidget
 
 import ui.preferences as preferences
 
@@ -39,18 +41,21 @@ class MemorySettings:
 # in-memory settings backend even at import time so this smoke test never edits
 # the developer's real NekoTrack preferences.
 with patch.object(preferences, "QSettings", MemorySettings):
-    from ui.main_window import MainWindow
+    from ui.main_window import MainWindow, LibraryEpisodePreloadWorker
     from ui.widgets.person_card import PersonCard
     from ui.pages.entity_profile_page import EntityProfilePage, MediaCreditCard, ProfileWorkCreditCard
     from ui.widgets.character_card import CharacterCard, CharacterArtwork
     from ui.widgets.work_card import WorkCard
     from ui.theme import card_stylesheet
     from ui.pages.library_page import (
+        LibraryPage,
         RelationSyncWorker,
         _backfill_automatic_bundle_memberships,
         pending_relation_sync_ids,
     )
     from ui.pages.home_page import HomePage
+    from ui.pages.calendar_page import CalendarPage
+    from ui.pages.favorites_page import FavoritesPage
     from ui.pages.settings_page import SettingsPage
     from ui.pages.work_detail_page import WorkDetailPage
     from ui.setup_wizard import SetupWizard
@@ -217,9 +222,55 @@ class UiStartupTests(unittest.TestCase):
             else:
                 os.environ["QT_SCALE_FACTOR"] = previous_factor
 
-    def test_settings_exports_diagnostics_to_app_data_with_one_click(self):
+    def test_settings_page_build_is_deferred_until_requested(self):
         previous_stores = MemorySettings.stores
         MemorySettings.stores = {}
+        try:
+            with (
+                patch.object(preferences, "QSettings", MemorySettings),
+                patch("ui.pages.settings_page.get_all_library", return_value=[]),
+            ):
+                settings_page = SettingsPage(defer_initial_build=True)
+                self.assertFalse(settings_page._built)
+                self.assertIsNone(settings_page.layout())
+                self.assertFalse(
+                    any(
+                        item.accessibleName() == "Export NekoTrack diagnostics"
+                        for item in settings_page.findChildren(QPushButton)
+                    )
+                )
+
+                settings_page.ensure_built()
+                self.assertTrue(settings_page._built)
+                self.assertIsNotNone(settings_page.layout())
+                self.assertTrue(
+                    any(
+                        item.accessibleName() == "Export NekoTrack diagnostics"
+                        for item in settings_page.findChildren(QPushButton)
+                    )
+                )
+
+                # Re-entering Settings must not duplicate the widget tree.
+                child_count = len(settings_page.findChildren(QWidget))
+                settings_page.ensure_built()
+                self.assertEqual(len(settings_page.findChildren(QWidget)), child_count)
+
+                settings_page.close()
+                settings_page.deleteLater()
+                self.app.processEvents()
+        finally:
+            MemorySettings.stores = previous_stores
+
+    def test_settings_exports_diagnostics_in_background_without_blocking_ui(self):
+        previous_stores = MemorySettings.stores
+        MemorySettings.stores = {}
+        started = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        worker_thread_ids = []
+        main_thread_id = threading.get_ident()
+        settings_page = None
+
         try:
             with (
                 patch.object(preferences, "QSettings", MemorySettings),
@@ -228,6 +279,15 @@ class UiStartupTests(unittest.TestCase):
             ):
                 data_dir = Path(directory)
                 expected_report = data_dir / "nekotrack_diagnostics.txt"
+
+                def fake_export(*, output_path):
+                    worker_thread_ids.append(threading.get_ident())
+                    started.set()
+                    if not release.wait(timeout=5):
+                        raise TimeoutError("Test did not release the background export.")
+                    finished.set()
+                    return expected_report
+
                 with (
                     patch(
                         "ui.pages.settings_page.default_app_data_dir",
@@ -235,7 +295,7 @@ class UiStartupTests(unittest.TestCase):
                     ),
                     patch(
                         "ui.pages.settings_page.export_diagnostics",
-                        return_value=expected_report,
+                        side_effect=fake_export,
                     ) as export_report,
                     patch("ui.pages.settings_page.QMessageBox") as message_box,
                     patch("ui.pages.settings_page.QDesktopServices") as desktop_services,
@@ -249,16 +309,67 @@ class UiStartupTests(unittest.TestCase):
                         ),
                         None,
                     )
-                    self.assertIsNotNone(button, "Settings needs an accessible diagnostics export button")
-                    button.click()
+                    self.assertIsNotNone(
+                        button,
+                        "Settings needs an accessible diagnostics export button",
+                    )
 
-                    export_report.assert_called_once_with(output_path=expected_report)
-                    message_box.information.assert_called_once()
-                    desktop_services.openUrl.assert_called_once()
-                    settings_page.close()
-                    settings_page.deleteLater()
-                    self.app.processEvents()
+                    try:
+                        button.click()
+                        self.assertFalse(button.isEnabled())
+                        self.assertEqual(button.text(), "Exporting…")
+
+                        start_deadline = time.monotonic() + 2.0
+                        while not started.is_set() and time.monotonic() < start_deadline:
+                            self.app.processEvents()
+                            QTest.qWait(10)
+                        self.assertTrue(
+                            started.is_set(),
+                            "The report export should start promptly in the worker.",
+                        )
+                        self.assertTrue(worker_thread_ids)
+                        self.assertNotEqual(
+                            worker_thread_ids[0],
+                            main_thread_id,
+                            "Diagnostics file processing must not run on the GUI thread.",
+                        )
+
+                        # Keep the simulated export blocked while Qt processes events.
+                        QTest.qWait(50)
+                        self.assertFalse(finished.is_set())
+                        self.assertFalse(message_box.information.called)
+                        self.assertFalse(button.isEnabled())
+
+                        release.set()
+                        finish_deadline = time.monotonic() + 3.0
+                        while (
+                            settings_page._diagnostics_export_worker is not None
+                            and time.monotonic() < finish_deadline
+                        ):
+                            self.app.processEvents()
+                            QTest.qWait(10)
+                        self.app.processEvents()
+
+                        self.assertIsNone(settings_page._diagnostics_export_worker)
+                        export_report.assert_called_once_with(output_path=expected_report)
+                        message_box.information.assert_called_once()
+                        desktop_services.openUrl.assert_called_once()
+                        self.assertTrue(button.isEnabled())
+                        self.assertEqual(button.text(), "Export diagnostics")
+                    finally:
+                        release.set()
+                        finish_deadline = time.monotonic() + 3.0
+                        while (
+                            settings_page._diagnostics_export_worker is not None
+                            and time.monotonic() < finish_deadline
+                        ):
+                            self.app.processEvents()
+                            QTest.qWait(10)
+                        settings_page.close()
+                        settings_page.deleteLater()
+                        self.app.processEvents()
         finally:
+            release.set()
             MemorySettings.stores = previous_stores
 
     def test_brand_assets_and_switch_rendering_on_dark_and_white_surfaces(self):
@@ -624,6 +735,44 @@ class UiStartupTests(unittest.TestCase):
         )
         self.assertEqual(pending, [-148237, 21355])
 
+    def test_relation_sync_plan_does_not_scan_full_relation_graph_for_diagnostics(self):
+        from types import SimpleNamespace
+
+        class FakeCursor:
+            def fetchall(self):
+                return [{"id": 101}, {"id": 102}]
+
+        class FakeConnection:
+            def __init__(self):
+                self.queries = []
+                self.closed = False
+
+            def execute(self, query):
+                self.queries.append(query)
+                return FakeCursor()
+
+            def close(self):
+                self.closed = True
+
+        connection = FakeConnection()
+        page_state = SimpleNamespace(
+            _closing=False,
+            _sync_thread=None,
+            _sync_done_ids=set(),
+            _sync_failed_ids=set(),
+        )
+        with (
+            patch("ui.pages.library_page.get_connection", return_value=connection),
+            patch("ui.pages.library_page.pending_relation_sync_ids", return_value=[]),
+            patch("ui.pages.library_page.log_event"),
+        ):
+            LibraryPage._start_relation_sync(page_state)
+
+        self.assertTrue(connection.closed)
+        self.assertEqual(len(connection.queries), 1)
+        self.assertIn("JOIN user_library", connection.queries[0])
+        self.assertNotIn("work_relations", connection.queries[0])
+
     def test_relation_sync_worker_persists_full_relation_snapshots(self):
         details = {
             "id": 21355,
@@ -803,6 +952,304 @@ class UiStartupTests(unittest.TestCase):
                     settings_page.close()
                     settings_page.deleteLater()
                 self.app.processEvents()
+                os.chdir(old_cwd)
+
+    def test_episode_preloader_refreshes_an_old_catalog_and_accepts_missing_start_date(self):
+        from ui.main_window import TMDB_EPISODE_CATALOG_VERSION
+
+        work = {
+            "id": 301,
+            "type": "ANIME",
+            "title": "Example Anime",
+            "start_year": None,
+            "start_month": None,
+            "start_day": None,
+            "episodes": 1,
+            "format": "TV",
+            "tmdb_id": 91,
+            "tmdb_season_number": 2,
+        }
+        snapshot = {
+            "work": work,
+            "episodes": [{"episode_number": 1, "air_date": None}],
+            "catalog_metadata": {
+                "version": TMDB_EPISODE_CATALOG_VERSION - 1,
+                "fetched_at": 1,
+                "complete": True,
+            },
+            "catalog_metadata_error": None,
+        }
+        episode_rows = [{
+            "episodeNumber": 1,
+            "title": "Episode One",
+            "description": "Synopsis",
+            "airdate": "2030-01-01",
+            "thumbnail": None,
+        }]
+        worker = LibraryEpisodePreloadWorker([301])
+        completed = []
+        worker.finished.connect(lambda work_id, rows: completed.append((work_id, rows)))
+
+        with (
+            patch("ui.main_window.get_episode_section_snapshot", return_value=snapshot),
+            patch("ui.main_window.get_alternate_titles", return_value=["Alias"]),
+            patch(
+                "ui.main_window.get_tmdb_episode_data",
+                return_value={
+                    "tmdb_id": 92,
+                    "tmdb_season_number": 1,
+                    "episodes": episode_rows,
+                },
+            ) as fetch_episodes,
+            patch("ui.main_window.save_tmdb_mapping") as save_mapping,
+            patch("ui.main_window.save_episodes") as save_episode_rows,
+            patch("ui.main_window.prune_episode_catalog", return_value=0) as prune,
+            patch("ui.main_window.save_provider_metadata") as save_metadata,
+            patch("ui.main_window.log_event"),
+            patch("ui.main_window.log_exception"),
+        ):
+            worker.run()
+
+        fetch_episodes.assert_called_once_with(
+            ["Example Anime", "Alias"], None, None, 1, None, None, "TV"
+        )
+        save_mapping.assert_called_once_with(301, 92, 1)
+        save_episode_rows.assert_called_once_with(301, episode_rows)
+        prune.assert_called_once_with(301, episode_rows)
+        self.assertEqual(completed, [(301, episode_rows)])
+        saved_metadata = save_metadata.call_args.args[2]
+        self.assertEqual(saved_metadata["version"], TMDB_EPISODE_CATALOG_VERSION)
+        self.assertTrue(saved_metadata["complete"])
+        self.assertGreater(saved_metadata["fetched_at"], 0)
+
+    def test_episode_preloader_does_not_prune_an_incomplete_catalog(self):
+        from ui.main_window import TMDB_EPISODE_CATALOG_VERSION
+
+        work = {
+            "id": 302,
+            "type": "ANIME",
+            "title": "Ongoing Anime",
+            "start_year": 2024,
+            "start_month": 1,
+            "start_day": 1,
+            "episodes": 12,
+            "format": "TV",
+            "tmdb_id": 92,
+            "tmdb_season_number": 1,
+        }
+        snapshot = {
+            "work": work,
+            "episodes": [{"episode_number": 1, "air_date": "2024-01-01"}],
+            "catalog_metadata": {
+                "version": TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": 1,
+                "complete": False,
+            },
+            "catalog_metadata_error": None,
+        }
+        partial_episode_rows = [{
+            "episodeNumber": 1,
+            "title": "Episode One",
+            "description": "",
+            "airdate": "2024-01-01",
+            "thumbnail": None,
+        }]
+        worker = LibraryEpisodePreloadWorker([302])
+
+        with (
+            patch("ui.main_window.get_episode_section_snapshot", return_value=snapshot),
+            patch("ui.main_window.get_alternate_titles", return_value=[]),
+            patch(
+                "ui.main_window.get_tmdb_episode_data",
+                return_value={
+                    "tmdb_id": 92,
+                    "tmdb_season_number": 1,
+                    "episodes": partial_episode_rows,
+                },
+            ),
+            patch("ui.main_window.save_tmdb_mapping"),
+            patch("ui.main_window.save_episodes") as save_episode_rows,
+            patch("ui.main_window.prune_episode_catalog") as prune,
+            patch("ui.main_window.save_provider_metadata") as save_metadata,
+            patch("ui.main_window.log_event"),
+            patch("ui.main_window.log_exception"),
+        ):
+            worker.run()
+
+        save_episode_rows.assert_called_once_with(302, partial_episode_rows)
+        prune.assert_not_called()
+        self.assertFalse(save_metadata.call_args.args[2]["complete"])
+
+    def test_episode_preloader_persists_confirmed_no_match_outcome(self):
+        from ui.main_window import TMDB_EPISODE_CATALOG_VERSION
+
+        work = {
+            "id": 304,
+            "type": "ANIME",
+            "title": "Example ONA",
+            "start_year": None,
+            "start_month": None,
+            "start_day": None,
+            "episodes": 12,
+            "format": "ONA",
+            "tmdb_id": None,
+            "tmdb_season_number": None,
+        }
+        snapshot = {
+            "work": work,
+            "catalog_metadata": {"version": TMDB_EPISODE_CATALOG_VERSION - 1},
+            "catalog_metadata_error": None,
+        }
+        worker = LibraryEpisodePreloadWorker([304])
+
+        with (
+            patch("ui.main_window.get_episode_section_snapshot", return_value=snapshot),
+            patch("ui.main_window.get_alternate_titles", return_value=[]),
+            patch(
+                "ui.main_window.get_tmdb_episode_data",
+                side_effect=RuntimeError("TMDB could not find a matching TV series."),
+            ),
+            patch("ui.main_window.save_provider_metadata") as save_metadata,
+            patch("ui.main_window.log_event"),
+            patch("ui.main_window.log_exception") as log_exception,
+        ):
+            worker.run()
+
+        attempt_calls = [
+            call.args[2]
+            for call in save_metadata.call_args_list
+            if len(call.args) >= 3
+            and call.args[1] == "tmdb_episode_match_attempt"
+        ]
+        self.assertEqual(len(attempt_calls), 2)
+        self.assertEqual(attempt_calls[-1]["version"], TMDB_EPISODE_CATALOG_VERSION)
+        self.assertEqual(attempt_calls[-1]["status"], "no_series_match")
+        self.assertGreater(attempt_calls[-1]["attempted_at"], 0)
+        log_exception.assert_not_called()
+
+    def test_episode_preloader_treats_shutdown_cancellation_as_normal_exit(self):
+        import threading
+
+        stop_event = threading.Event()
+        work = {
+            "id": 303,
+            "type": "ANIME",
+            "title": "Example ONA",
+            "start_year": None,
+            "start_month": None,
+            "start_day": None,
+            "episodes": 12,
+            "format": "ONA",
+            "tmdb_id": None,
+            "tmdb_season_number": None,
+        }
+        snapshot = {
+            "work": work,
+            "catalog_metadata": {"version": 0},
+            "catalog_metadata_error": None,
+        }
+
+        def record_attempt(*_args, **_kwargs):
+            stop_event.set()
+
+        errors = []
+        completed = []
+        worker = LibraryEpisodePreloadWorker([303], stop_event)
+        worker.error.connect(lambda work_id, message: errors.append((work_id, message)))
+        worker.completed.connect(lambda: completed.append(True))
+
+        with (
+            patch("ui.main_window.get_episode_section_snapshot", return_value=snapshot),
+            patch("ui.main_window.get_alternate_titles", return_value=[]),
+            patch("ui.main_window.save_provider_metadata", side_effect=record_attempt),
+            patch(
+                "ui.main_window.get_tmdb_episode_data",
+                side_effect=InterruptedError("Network request cancelled during shutdown."),
+            ) as get_episode_data,
+            patch("ui.main_window.log_event") as log_event,
+            patch("ui.main_window.log_exception") as log_exception,
+        ):
+            worker.run()
+
+        get_episode_data.assert_called_once()
+        self.assertEqual(errors, [])
+        self.assertEqual(completed, [True])
+        log_event.assert_any_call(
+            "library.episode_preload.cancelled",
+            work_id=303,
+            reason="shutdown",
+        )
+        log_exception.assert_not_called()
+
+    def test_episode_preload_completion_refreshes_only_the_visible_schedule_view(self):
+        from types import SimpleNamespace
+        from ui.main_window import MainWindow
+
+        for current_page in ("calendar", "home", "collections"):
+            with self.subTest(current_page=current_page):
+                calendar_page = MagicMock()
+                home_page = MagicMock()
+                window = SimpleNamespace(
+                    _shutdown_event=SimpleNamespace(is_set=lambda: False),
+                    navigation=SimpleNamespace(current_name=lambda: current_page),
+                    calendar_page=calendar_page,
+                    home_page=home_page,
+                )
+
+                MainWindow._library_episode_preload_completed(window)
+
+                if current_page == "calendar":
+                    calendar_page.refresh.assert_called_once_with()
+                    home_page.refresh.assert_not_called()
+                elif current_page == "home":
+                    home_page.refresh.assert_called_once_with()
+                    calendar_page.refresh.assert_not_called()
+                else:
+                    home_page.refresh.assert_not_called()
+                    calendar_page.refresh.assert_not_called()
+
+    def test_calendar_and_favorites_load_when_first_opened_not_at_startup(self):
+        MemorySettings.stores = {
+            ("NekoTrack", "NekoTrack"): {
+                preferences._MIGRATION_KEY: True,
+                "_theme_palette_version": preferences._THEME_PALETTE_VERSION,
+                "theme_preset": "Neko",
+                "setup_complete": True,
+            },
+            ("AniTrack", "AniTrack"): {},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(directory)
+                with (
+                    patch.object(preferences, "QSettings", MemorySettings),
+                    patch.object(CalendarPage, "refresh", autospec=True) as calendar_refresh,
+                    patch.object(FavoritesPage, "refresh", autospec=True) as favorites_refresh,
+                    patch.object(LibraryPage, "refresh", autospec=True) as library_refresh,
+                ):
+                    window = MainWindow()
+                    try:
+                        calendar_refresh.assert_not_called()
+                        favorites_refresh.assert_not_called()
+                        library_refresh.assert_not_called()
+
+                        window.navigation.show("calendar")
+                        calendar_refresh.assert_called_once_with(window.calendar_page)
+                        favorites_refresh.assert_not_called()
+                        library_refresh.assert_not_called()
+
+                        window.navigation.show("favorites")
+                        favorites_refresh.assert_called_once_with(window.favorites_page)
+                        library_refresh.assert_not_called()
+
+                        window.navigation.show("collections")
+                        library_refresh.assert_called_once_with(window.library_page)
+                    finally:
+                        window.close()
+                        window.deleteLater()
+                        self.app.processEvents()
+            finally:
                 os.chdir(old_cwd)
 
     def test_main_window_builds_with_only_registered_pages(self):

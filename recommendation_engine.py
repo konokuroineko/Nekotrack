@@ -439,7 +439,8 @@ def credit_profile_from_media_record(work):
     }
 
 
-def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_language):
+def _build_credit_signal_index(credit_profile, favorite_entities, voice_language):
+    """Precompute source contributor weights once for an entire ranking pass."""
     source_weights = Counter()
     source_context = {}
     for payload in (credit_profile or {}).values():
@@ -492,8 +493,14 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
         if kind in {"character", "voice_actor", "staff"} and entity_id is not None:
             favorites.add((kind, entity_id))
 
+    return source_weights, source_context, favorites
+
+
+def _candidate_credit_signal(work, credit_signal_index, voice_language):
+    """Score candidate credits without retaining every explanation candidate."""
+    source_weights, source_context, favorites = credit_signal_index
     strongest_by_entity = {}
-    reasons = []
+    best_reason = (0.0, "")
     characters = work.get("characters")
     edges = characters.get("edges") if isinstance(characters, dict) else []
     if isinstance(edges, list):
@@ -504,52 +511,70 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
             character_id = _edge_id(character)
             if character_id is None:
                 continue
-            character_name = _display_credit_name(character)
             role_weight = character_role_weight(edge.get("role"))
             key = ("character", character_id)
             boost = 0.0
-            source_title = source_context.get(key, (0.0, ""))[1]
             if key in favorites:
                 boost = 22.0 * role_weight
-                reason = (
-                    f"Features your favorite character: {character_name}"
-                    if character_name else "Features a favorite character"
-                )
-                reasons.append((boost, reason))
+                if boost >= best_reason[0]:
+                    character_name = _display_credit_name(character)
+                    reason = (
+                        f"Features your favorite character: {character_name}"
+                        if character_name else "Features a favorite character"
+                    )
+                    candidate_reason = (boost, reason)
+                    if candidate_reason > best_reason:
+                        best_reason = candidate_reason
             elif source_weights[key] > 0:
                 boost = min(14.0, source_weights[key] * role_weight * 5.0)
-                if character_name and source_title:
-                    reason = f"Shares character {character_name} with {source_title}"
-                elif character_name:
-                    reason = f"Shares character {character_name} with a title you enjoyed"
-                elif source_title:
-                    reason = f"Shares a character with {source_title}"
-                else:
-                    reason = "Shares a character with a title you enjoyed"
-                reasons.append((boost, reason))
-            strongest_by_entity[key] = max(strongest_by_entity.get(key, 0.0), boost)
+                if boost >= best_reason[0]:
+                    character_name = _display_credit_name(character)
+                    source_title = source_context.get(key, (0.0, ""))[1]
+                    if character_name and source_title:
+                        reason = f"Shares character {character_name} with {source_title}"
+                    elif character_name:
+                        reason = f"Shares character {character_name} with a title you enjoyed"
+                    elif source_title:
+                        reason = f"Shares a character with {source_title}"
+                    else:
+                        reason = "Shares a character with a title you enjoyed"
+                    candidate_reason = (boost, reason)
+                    if candidate_reason > best_reason:
+                        best_reason = candidate_reason
+            if boost:
+                strongest_by_entity[key] = max(
+                    strongest_by_entity.get(key, 0.0), boost
+                )
 
             voices = edge.get("voiceActors")
             if not isinstance(voices, list):
                 continue
             for voice in voices:
-                if not isinstance(voice, dict) or not _language_matches(voice.get("language"), voice_language):
+                if (
+                    not isinstance(voice, dict)
+                    or not _language_matches(voice.get("language"), voice_language)
+                ):
                     continue
                 voice_id = _edge_id(voice)
                 if voice_id is None:
                     continue
                 key = ("voice_actor", voice_id)
-                voice_name = _display_credit_name(voice)
-                source_title = source_context.get(key, (0.0, ""))[1]
                 if key in favorites:
                     voice_boost = 20.0 * role_weight
-                    reason = (
-                        f"Features a voice actor you favorited: {voice_name}"
-                        if voice_name else "Features a voice actor you favorited"
-                    )
                 else:
-                    voice_boost = min(16.0, source_weights[key] * role_weight * 5.5)
-                    if voice_boost:
+                    voice_boost = min(
+                        16.0, source_weights[key] * role_weight * 5.5
+                    )
+
+                if voice_boost and voice_boost >= best_reason[0]:
+                    voice_name = _display_credit_name(voice)
+                    if key in favorites:
+                        reason = (
+                            f"Features a voice actor you favorited: {voice_name}"
+                            if voice_name else "Features a voice actor you favorited"
+                        )
+                    else:
+                        source_title = source_context.get(key, (0.0, ""))[1]
                         language = str(voice.get("language") or "").strip()
                         normalized_language = language.casefold().replace("_", " ").replace("-", " ")
                         if normalized_language in {"japanese", "ja", "jpn", "jp"}:
@@ -568,9 +593,14 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
                             reason = f"Shares a {credit_label} with {source_title}"
                         else:
                             reason = f"Shares a {credit_label} with a title you enjoyed"
+                    candidate_reason = (voice_boost, reason)
+                    if candidate_reason > best_reason:
+                        best_reason = candidate_reason
+
                 if voice_boost:
-                    reasons.append((voice_boost, reason))
-                strongest_by_entity[key] = max(strongest_by_entity.get(key, 0.0), voice_boost)
+                    strongest_by_entity[key] = max(
+                        strongest_by_entity.get(key, 0.0), voice_boost
+                    )
 
     staff_connection = work.get("staff")
     staff_edges = staff_connection.get("edges") if isinstance(staff_connection, dict) else []
@@ -582,14 +612,14 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
             person_id = _edge_id(person)
             if person_id is None:
                 continue
-            person_name = _display_credit_name(person)
             role_weight = staff_role_weight(edge.get("role"))
             key = ("staff", person_id)
             boost = 15.0 * role_weight if key in favorites else min(
                 14.0, source_weights[key] * role_weight * 5.0
             )
-            source_title = source_context.get(key, (0.0, ""))[1]
-            if boost:
+            if boost and boost >= best_reason[0]:
+                person_name = _display_credit_name(person)
+                source_title = source_context.get(key, (0.0, ""))[1]
                 if key in favorites:
                     reason = (
                         f"Features a production contributor you favorited: {person_name}"
@@ -603,18 +633,22 @@ def _candidate_credit_signal(work, credit_profile, favorite_entities, voice_lang
                     reason = f"Shares production staff with {source_title}"
                 else:
                     reason = "Shares important production staff with a title you enjoyed"
-                reasons.append((boost, reason))
-            strongest_by_entity[key] = max(strongest_by_entity.get(key, 0.0), boost)
+                candidate_reason = (boost, reason)
+                if candidate_reason > best_reason:
+                    best_reason = candidate_reason
+            if boost:
+                strongest_by_entity[key] = max(
+                    strongest_by_entity.get(key, 0.0), boost
+                )
 
     favorite_boost = sum(value for key, value in strongest_by_entity.items() if key in favorites)
     other_boost = sum(value for key, value in strongest_by_entity.items() if key not in favorites)
-    return min(48.0, favorite_boost) + min(26.0, other_boost), max(reasons, default=(0.0, ""))[1]
-
+    return min(48.0, favorite_boost) + min(26.0, other_boost), best_reason[1]
 
 def rank_candidates(
     candidates, history=None, favorite_works=None, rotation=0,
     credit_profile=None, favorite_entities=None, voice_language="ALL",
-    exclude_seen=False,
+    exclude_seen=False, _precompute_credit_index=True,
 ):
     """Score candidates with local feedback, weighted credits and exposure."""
     history = history or {}
@@ -623,6 +657,10 @@ def rank_candidates(
     credit_profile = credit_profile or {}
     favorite_entities = favorite_entities or []
     voice_language = str(voice_language or "ALL").upper()
+    # Contributor weights depend on the source library, not on an individual
+    # candidate. Build this index lazily once per ranking pass rather than
+    # rescanning every saved source title for every candidate.
+    credit_signal_index = None
     scored = []
     for raw in candidates or []:
         if not isinstance(raw, dict):
@@ -669,8 +707,20 @@ def rank_candidates(
         community_score = max(0, min(100, _safe_int(raw.get("averageScore"))))
         recommendation_score = max(0, min(100, _safe_int(raw.get("_recommendation_rating"))))
         popularity = max(0, _safe_int(raw.get("popularity")))
+        if _precompute_credit_index:
+            if credit_signal_index is None:
+                credit_signal_index = _build_credit_signal_index(
+                    credit_profile, favorite_entities, voice_language
+                )
+            candidate_credit_index = credit_signal_index
+        else:
+            # Benchmark/reference mode: reproduce the former per-candidate
+            # indexing work so the benefit of precomputation can be measured.
+            candidate_credit_index = _build_credit_signal_index(
+                credit_profile, favorite_entities, voice_language
+            )
         credit_boost, credit_reason = _candidate_credit_signal(
-            raw, credit_profile, favorite_entities, voice_language
+            raw, candidate_credit_index, voice_language
         )
         raw_score = (
             6.0

@@ -14,12 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from database import (
-    get_all_library,
-    get_episodes,
-    get_release_reminders,
-    set_release_reminder,
-)
+from database import get_all_library, get_upcoming_library_episodes, set_release_reminder
 from diagnostics import log_exception
 from ui.theme import COLORS, surface_rgba
 from ui.widgets.work_card import WorkCard
@@ -33,8 +28,11 @@ class HomePage(QWidget):
     work_selected = Signal(object)
     calendar_requested = Signal()
 
-    def __init__(self, add_callback=None):
+    def __init__(self, add_callback=None, defer_initial_recommendations=False):
         super().__init__()
+        self._defer_initial_recommendations = bool(defer_initial_recommendations)
+        self._initial_recommendations_started = False
+        self._pending_recommendation_library_rows = None
         self.setObjectName("homePage")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -201,17 +199,36 @@ class HomePage(QWidget):
         }
         self.content_layout.addWidget(self._continue_section(continue_items[:4]))
         self.content_layout.addWidget(
-            self._release_section(self._upcoming_release_rows(library))
+            self._release_section(self._upcoming_release_rows())
         )
         # Reuse the already-loaded local rows instead of querying SQLite a
         # second time just to seed recommendations.
         self.content_layout.addWidget(self.recommendations_page)
-        # A new Home visit starts a new recommendation cycle. Feedback and
-        # exposure history are loaded by the worker, and the discovery sort
-        # rotates so the same first page is not shown forever.
-        self.recommendations_page.refresh(force=True, library_rows=library)
+        if self._defer_initial_recommendations and not self._initial_recommendations_started:
+            # Let MainWindow paint its first frame before starting the network
+            # worker. Startup should not launch provider traffic during widget construction.
+            self._pending_recommendation_library_rows = library
+        else:
+            # A new Home visit starts a new recommendation cycle. Feedback and
+            # exposure history are loaded by the worker, and the discovery sort
+            # rotates so the same first page is not shown forever.
+            self.recommendations_page.refresh(force=True, library_rows=library)
         self.content_layout.addStretch(1)
         self._apply_theme_styles()
+
+    def start_initial_recommendations_load(self):
+        """Start the first recommendation fetch after the window has appeared."""
+        if self._initial_recommendations_started:
+            return
+        self._initial_recommendations_started = True
+        self._defer_initial_recommendations = False
+        if getattr(self.recommendations_page, "_shutting_down", False):
+            return
+        library = self._pending_recommendation_library_rows
+        self._pending_recommendation_library_rows = None
+        if library is None:
+            library = self._read_library()
+        self.recommendations_page.refresh(force=True, library_rows=library)
 
     @staticmethod
     def _parse_air_date(value):
@@ -222,59 +239,47 @@ class HomePage(QWidget):
         except (TypeError, ValueError):
             return None
 
-    def _upcoming_release_rows(self, library, today=None):
+    def _upcoming_release_rows(self, today=None):
         """Build a small Home preview from cached episode dates only."""
         today = today or datetime.date.today()
         last_date = today + datetime.timedelta(days=60)
+        end_exclusive = last_date + datetime.timedelta(days=1)
 
-        reminders = set()
         try:
-            for reminder in get_release_reminders() or []:
-                try:
-                    reminders.add((
-                        int(reminder["work_id"]),
-                        int(reminder["episode_number"]),
-                    ))
-                except (KeyError, TypeError, ValueError, OverflowError):
-                    continue
+            episode_rows = get_upcoming_library_episodes(
+                today.isoformat(),
+                end_exclusive.isoformat(),
+            ) or []
         except Exception as error:
-            log_exception("home.release_reminders_load_failed", error)
+            log_exception("home.release_episodes_load_failed", error)
+            return []
 
         events = []
-        for work in library:
-            if str(work.get("type") or "").strip().upper() != "ANIME":
+        for episode in episode_rows:
+            row = dict(episode)
+            air_date = self._parse_air_date(row.get("air_date"))
+            if air_date is None or air_date < today or air_date > last_date:
                 continue
-            work_id = self._integer(work.get("id"))
+
+            work_id = self._integer(row.get("work_id"))
             if work_id <= 0:
                 continue
+            episode_number = self._integer(row.get("episode_number"))
+            episode_title = row.get("title")
+            if not isinstance(episode_title, str):
+                episode_title = ""
+            episode_title = episode_title.strip()
+            if not episode_title or episode_title.casefold().startswith("episode "):
+                episode_title = f"Episode {episode_number}"
 
-            try:
-                episodes = get_episodes(work_id) or []
-            except Exception as error:
-                log_exception("home.release_episodes_load_failed", error, work_id=work_id)
-                continue
-
-            for episode in episodes:
-                row = dict(episode)
-                air_date = self._parse_air_date(row.get("air_date"))
-                if air_date is None or air_date < today or air_date > last_date:
-                    continue
-                episode_number = self._integer(row.get("episode_number"))
-                episode_title = row.get("title")
-                if not isinstance(episode_title, str):
-                    episode_title = ""
-                episode_title = episode_title.strip()
-                if not episode_title or episode_title.casefold().startswith("episode "):
-                    episode_title = f"Episode {episode_number}"
-
-                events.append({
-                    "work_id": work_id,
-                    "work_title": str(work.get("title") or f"Untitled · {work_id}"),
-                    "episode_number": episode_number,
-                    "episode_title": episode_title,
-                    "_release_date": air_date,
-                    "_reminder_enabled": (work_id, episode_number) in reminders,
-                })
+            events.append({
+                "work_id": work_id,
+                "work_title": str(row.get("work_title") or f"Untitled · {work_id}"),
+                "episode_number": episode_number,
+                "episode_title": episode_title,
+                "_release_date": air_date,
+                "_reminder_enabled": bool(row.get("reminder_enabled", False)),
+            })
 
         events.sort(key=lambda row: (
             row["_release_date"],

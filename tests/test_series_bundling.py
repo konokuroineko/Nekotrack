@@ -1,6 +1,12 @@
+import random
+import re
+import tempfile
+import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+import database
 import series
 
 
@@ -15,6 +21,635 @@ def media(media_id, title, fmt="TV", media_type="ANIME", relations=None):
 
 def edge(relation_type, node):
     return {"relationType": relation_type, "node": node}
+
+
+class SeriesKeyCacheTests(unittest.TestCase):
+    def tearDown(self):
+        series._cached_series_key.cache_clear()
+
+    def test_cached_key_preserves_normalization_and_input_coercion(self):
+        series._cached_series_key.cache_clear()
+        cases = [
+            (None, ""),
+            ("Example Series Season 2", "example series"),
+            ("Example Series - Final Season", "example series"),
+            ("Sword Art Online: Alicization - War of Underworld",
+             "sword art online alicization war of underworld"),
+            (["Odd Title"], "odd title"),
+        ]
+        for title, expected in cases:
+            with self.subTest(title=title):
+                self.assertEqual(series._series_key(title), expected)
+
+        series._cached_series_key.cache_clear()
+        title = "Repeatable Series Season 2"
+        first = series._series_key(title)
+        first_info = series._cached_series_key.cache_info()
+        second = series._series_key(title)
+        second_info = series._cached_series_key.cache_info()
+        self.assertEqual(first, second)
+        self.assertEqual(second_info.hits, first_info.hits + 1)
+
+    def test_compiled_patterns_match_the_previous_re_sub_sequence(self):
+        pattern_specs = (
+            (r"\s*[:\-–—]?\s*(?:the\s+)?final\s+season(?:\s+part\s+\d+)?(?:\s+\([^)]*\))?\s*$", ""),
+            (r"\s*[:\-–—]?\s*(?:\d+(?:st|nd|rd|th)|season\s*\d+|series\s*\d+|season\s*[ivx]+|series\s*[ivx]+)(?:\s+part\s+\d+)?\s*$", ""),
+            (r"(?:^|\s)(?:ii|iii|iv|v|vi)\s*[:\-–—]\s*", " "),
+            (r"\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\s*(?:season)?\s*$", ""),
+            (r"\s*[:\-–—]?\s*(?:part|cour)\s*\d+\s*$", ""),
+            (r"\s+\d+$", ""),
+            (r"\s+", " "),
+        )
+
+        def previous_normalizer(title):
+            value = str(title or "").lower().strip()
+            for pattern, replacement in pattern_specs:
+                value = re.sub(pattern, replacement, value)
+            value = value.strip()
+            return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+        titles = [
+            None,
+            "",
+            0,
+            ["Odd Title"],
+            "Example Series Season 2",
+            "Example Series - Final Season",
+            "Sword Art Online: Alicization - War of Underworld",
+            "Example IV: The Return",
+            "Example II — The Return",
+            "Example Series: Part 2",
+            "Example Series Cour 3",
+            "Example Series 4",
+            "Space__The Final Season (TV)",
+            "The 4th Season Part 2",
+            "Re:Zero Season 2 Part 2",
+            "A/B: C—D…E!",
+        ]
+        for title in titles:
+            with self.subTest(title=title):
+                series._cached_series_key.cache_clear()
+                self.assertEqual(series._series_key(title), previous_normalizer(title))
+
+    def test_title_key_cache_has_a_fixed_memory_bound(self):
+        series._cached_series_key.cache_clear()
+        for index in range(16392):
+            series._series_key(f"Synthetic Cache Bound {index} Season 2")
+        info = series._cached_series_key.cache_info()
+        self.assertEqual(info.maxsize, 16384)
+        self.assertLessEqual(info.currsize, info.maxsize)
+
+
+class SeasonMarkerCacheTests(unittest.TestCase):
+    def tearDown(self):
+        series._cached_season_marker.cache_clear()
+
+    def test_cached_markers_match_existing_season_identity_rules(self):
+        cases = [
+            ("Example Final Season", "final"),
+            ("Example 2nd Season", "season-2"),
+            ("Example Second Season", "season-2"),
+            ("Example Season 3", "season-3"),
+            ("Example Series IV", "season-4"),
+            ("Example II: The Return", "season-2"),
+            ("Example Cour 2", None),
+            ("Example Part 2", None),
+            ("Example 7", "season-7"),
+            ("Example Season 2 Part 2", "season-2"),
+            (None, None),
+            (["Example Season 2"], "season-2"),
+        ]
+        for title, expected in cases:
+            with self.subTest(title=title):
+                self.assertEqual(series._season_marker(title), expected)
+
+    def test_case_normalization_uses_the_same_cache_entry(self):
+        series._cached_season_marker.cache_clear()
+        self.assertEqual(series._season_marker("Example Season 2"), "season-2")
+        first = series._cached_season_marker.cache_info()
+        self.assertEqual(series._season_marker("EXAMPLE SEASON 2"), "season-2")
+        second = series._cached_season_marker.cache_info()
+        self.assertEqual(second.hits, first.hits + 1)
+
+    def test_season_marker_cache_has_a_fixed_memory_bound(self):
+        series._cached_season_marker.cache_clear()
+        for index in range(16392):
+            series._season_marker(f"Synthetic Title {index} Season {index % 6 + 1}")
+        info = series._cached_season_marker.cache_info()
+        self.assertEqual(info.maxsize, 16384)
+        self.assertLessEqual(info.currsize, info.maxsize)
+
+
+class TitleFlagCacheTests(unittest.TestCase):
+    def tearDown(self):
+        series._cached_is_continuation.cache_clear()
+        series._cached_is_arc.cache_clear()
+
+    def test_continuation_and_arc_flags_preserve_existing_rules(self):
+        continuation_cases = [
+            ("Example Part 2", True),
+            ("Example Cour IV", True),
+            ("Example Final Season", True),
+            ("Example Season 2", False),
+            (None, False),
+            (["Example Part 2"], True),
+        ]
+        for title, expected in continuation_cases:
+            with self.subTest(predicate="continuation", title=title):
+                self.assertEqual(series._is_continuation(title), expected)
+
+        arc_cases = [
+            ("Example Arc", True),
+            ("Arc Zero", True),
+            ("Arcadia", False),
+            ("Example Season 2", False),
+            (None, False),
+            (["Example Arc"], True),
+        ]
+        for title, expected in arc_cases:
+            with self.subTest(predicate="arc", title=title):
+                self.assertEqual(series._is_arc(title), expected)
+
+    def test_case_normalization_reuses_each_title_flag_cache_entry(self):
+        series._cached_is_continuation.cache_clear()
+        self.assertTrue(series._is_continuation("Example Part 2"))
+        first_continuation = series._cached_is_continuation.cache_info()
+        self.assertTrue(series._is_continuation("EXAMPLE PART 2"))
+        second_continuation = series._cached_is_continuation.cache_info()
+        self.assertEqual(second_continuation.hits, first_continuation.hits + 1)
+
+        series._cached_is_arc.cache_clear()
+        self.assertTrue(series._is_arc("Example Arc"))
+        first_arc = series._cached_is_arc.cache_info()
+        self.assertTrue(series._is_arc("EXAMPLE ARC"))
+        second_arc = series._cached_is_arc.cache_info()
+        self.assertEqual(second_arc.hits, first_arc.hits + 1)
+
+    def test_title_flag_caches_have_fixed_memory_bounds(self):
+        series._cached_is_continuation.cache_clear()
+        series._cached_is_arc.cache_clear()
+        for index in range(16392):
+            series._is_continuation(f"Synthetic Title {index} Part 2")
+            series._is_arc(f"Synthetic Title {index} Arc")
+        continuation_info = series._cached_is_continuation.cache_info()
+        arc_info = series._cached_is_arc.cache_info()
+        self.assertEqual(continuation_info.maxsize, 16384)
+        self.assertLessEqual(continuation_info.currsize, continuation_info.maxsize)
+        self.assertEqual(arc_info.maxsize, 16384)
+        self.assertLessEqual(arc_info.currsize, arc_info.maxsize)
+
+
+class LogicalSeasonCountTests(unittest.TestCase):
+    def test_duplicate_explicit_season_markers_share_one_logical_season(self):
+        members = [
+            media(1, "First Series Season 2", "TV"),
+            media(2, "Different Title Season 2", "TV"),
+            media(3, "First Series Season 3", "TV"),
+        ]
+        self.assertEqual(series.logical_season_count(members), 2)
+
+    def test_linked_part_continuations_share_one_logical_season(self):
+        second = media(2, "Example Series Part 3", "TV")
+        first = media(1, "Example Series Part 2", "TV", relations=[
+            edge("SEQUEL", second),
+        ])
+        self.assertEqual(series.logical_season_count([first, second]), 1)
+
+    def test_unnumbered_arcs_merge_only_for_the_same_airing_quarter(self):
+        later_arc = media(4, "Example Arc Two", "TV")
+        first_arc = media(3, "Example Arc One", "TV", relations=[
+            edge("SEQUEL", later_arc),
+        ])
+        self.assertEqual(series.logical_season_count([first_arc, later_arc]), 1)
+
+        later_arc["startDate"]["month"] = 4
+        self.assertEqual(series.logical_season_count([first_arc, later_arc]), 2)
+
+
+class SeriesPrefixIndexTests(unittest.TestCase):
+    @staticmethod
+    def _reference_indices(keys):
+        token_lists = [tuple(str(key or "").split()) for key in keys]
+        result = []
+        for index, tokens in enumerate(token_lists):
+            matches = []
+            if len(tokens) >= 2:
+                for other_index, other_tokens in enumerate(token_lists):
+                    if other_index == index or len(other_tokens) < 2:
+                        continue
+                    shorter, longer = (
+                        (tokens, other_tokens)
+                        if len(tokens) <= len(other_tokens)
+                        else (other_tokens, tokens)
+                    )
+                    if longer[:len(shorter)] == shorter:
+                        matches.append(other_index)
+            result.append(matches)
+        return token_lists, result
+
+    def test_index_matches_original_all_pairs_logic_and_order(self):
+        keys = [
+            "", "solo", "echo series", "echo series season 2",
+            "echo series season 2 part 2", "echo series ova",
+            "unrelated title", "unrelated title", "東京 物語",
+        ]
+        rng = random.Random(20261023)
+        roots = ["north wind", "blue archive", "one piece", "monogatari", "neko track"]
+        suffixes = ["", "season two", "season two part three", "ova", "arc zero"]
+        for index in range(250):
+            root = rng.choice(roots)
+            suffix = rng.choice(suffixes)
+            keys.append(" ".join(part for part in (root, suffix, f"variant{index}") if part))
+            if index % 6 == 0:
+                keys.append(root + " " + suffix if suffix else root)
+
+        expected_tokens, expected_indices = self._reference_indices(keys)
+        actual_tokens, actual_indices = series._prefix_related_tv_candidate_indices(keys)
+
+        self.assertEqual(actual_tokens, expected_tokens)
+        self.assertEqual(actual_indices, expected_indices)
+
+    def test_short_or_empty_titles_have_no_prefix_candidates(self):
+        keys = ["", "solo", "another", "solo season 2", "solo season 3"]
+        tokens, matches = series._prefix_related_tv_candidate_indices(keys)
+        self.assertEqual(tokens[0:3], [(), ("solo",), ("another",)])
+        self.assertEqual(matches[0:3], [[], [], []])
+        self.assertEqual(matches[3], [])
+        self.assertEqual(matches[4], [])
+
+
+class SeriesExclusionIndexTests(unittest.TestCase):
+    def test_neighbor_lookup_matches_original_cross_product_check(self):
+        rng = random.Random(20261024)
+        for _ in range(500):
+            universe = list(range(1, rng.randint(5, 60)))
+            rng.shuffle(universe)
+            split = rng.randrange(1, len(universe))
+            left_members = set(universe[:split])
+            right_members = set(universe[split:])
+            if rng.randrange(5) == 0:
+                left_members.clear()
+            if rng.randrange(5) == 0:
+                right_members.clear()
+
+            excluded_links = set()
+            for _ in range(rng.randrange(0, 25)):
+                a = rng.choice(universe)
+                b = rng.choice(universe)
+                if a != b:
+                    excluded_links.add(tuple(sorted((a, b))))
+
+            expected = any(
+                tuple(sorted((left_id, right_id))) in excluded_links
+                for left_id in left_members
+                for right_id in right_members
+            )
+            neighbors = series._build_exclusion_neighbors(excluded_links)
+            actual = series._components_have_excluded_pair(
+                left_members, right_members, neighbors
+            )
+            with self.subTest(
+                left_size=len(left_members),
+                right_size=len(right_members),
+                exclusion_count=len(excluded_links),
+            ):
+                self.assertEqual(actual, expected)
+
+    def test_exclusion_neighbor_index_is_undirected(self):
+        neighbors = series._build_exclusion_neighbors({(12, 99), (13, 98)})
+        self.assertEqual(neighbors[12], {99})
+        self.assertEqual(neighbors[99], {12})
+        self.assertTrue(series._components_have_excluded_pair({12}, {99}, neighbors))
+        self.assertFalse(series._components_have_excluded_pair({12}, {98}, neighbors))
+        self.assertFalse(series._components_have_excluded_pair({12}, {98}, {}))
+
+    def test_missing_or_empty_neighbor_sets_do_not_create_false_exclusions(self):
+        self.assertFalse(
+            series._components_have_excluded_pair(
+                {1, 2}, {3, 4}, {1: set(), 2: set()}
+            )
+        )
+        self.assertTrue(
+            series._components_have_excluded_pair(
+                {1, 2}, {3, 4}, {1: {4}}
+            )
+        )
+
+
+class BundleOverrideBatchingTests(unittest.TestCase):
+    def test_search_grouping_applies_override_from_one_bulk_read(self):
+        first = media(1, "Same Series", "TV")
+        second = media(2, "Same Series", "TV")
+        override = {
+            "bundle_anchor_id": 1,
+            "custom_title": "My Custom Series",
+            "cover_work_id": 2,
+            "custom_cover_path": None,
+        }
+        with (
+            patch("series.get_manual_bundle_links", return_value=[]),
+            patch("series.get_bundle_exclusions", return_value=[]),
+            patch("series.get_bundle_overrides", return_value=[override]) as bulk,
+            patch("series.get_bundle_override") as single,
+            patch("series.get", return_value=False),
+        ):
+            groups = series.group_media_results([first, second], enrich=False)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["title"], "My Custom Series")
+        self.assertEqual(groups[0]["_bundle_cover_work_id"], 2)
+        bulk.assert_called_once_with([1, 2])
+        single.assert_not_called()
+
+
+
+class LargeLibraryRelationQueryTests(unittest.TestCase):
+    def test_relation_lookup_chunks_large_id_sets_and_deduplicates_cross_chunk_edges(self):
+        with tempfile.TemporaryDirectory(prefix="nekotrack-relations-") as temporary:
+            with patch.object(database, "DATABASE_NAME", str(Path(temporary) / "relations.sqlite3")):
+                connection = database.get_connection()
+                try:
+                    connection.execute("""
+                        CREATE TABLE work_relations (
+                            source_id INTEGER NOT NULL,
+                            target_id INTEGER NOT NULL,
+                            relation_type TEXT NOT NULL,
+                            PRIMARY KEY (source_id, target_id, relation_type)
+                        )
+                    """)
+                    connection.executemany(
+                        "INSERT INTO work_relations VALUES (?, ?, ?)",
+                        [
+                            (10, 900, "SEQUEL"),
+                            (1200, 1100, "PREQUEL"),
+                            (1500, 10, "SIDE_STORY"),
+                            (10, 1500, "SPIN_OFF"),
+                            (5, 6, "OTHER"),
+                        ],
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+
+                rows = series._relation_data_for(set(range(1, 1201)))
+
+        actual = [
+            (int(row["source_id"]), int(row["target_id"]), str(row["relation_type"]))
+            for row in rows
+        ]
+        self.assertEqual(len(actual), 4)
+        self.assertCountEqual(actual, [
+            (10, 900, "SEQUEL"),
+            (1200, 1100, "PREQUEL"),
+            (1500, 10, "SIDE_STORY"),
+            (10, 1500, "SPIN_OFF"),
+        ])
+
+
+    def test_relation_lookup_reuses_a_supplied_connection_without_closing_it(self):
+        with tempfile.TemporaryDirectory(prefix="nekotrack-relations-shared-") as temporary:
+            with patch.object(database, "DATABASE_NAME", str(Path(temporary) / "relations.sqlite3")):
+                connection = database.get_connection()
+                try:
+                    connection.execute("""
+                        CREATE TABLE work_relations (
+                            source_id INTEGER NOT NULL,
+                            target_id INTEGER NOT NULL,
+                            relation_type TEXT NOT NULL,
+                            PRIMARY KEY (source_id, target_id, relation_type)
+                        )
+                    """)
+                    connection.executemany(
+                        "INSERT INTO work_relations VALUES (?, ?, ?)",
+                        [
+                            (10, 900, "SEQUEL"),
+                            (400, 401, "PREQUEL"),
+                            (1200, 1100, "PREQUEL"),
+                            (1500, 10, "SIDE_STORY"),
+                        ],
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+
+                ids = set(range(1, 1201))
+                expected = [
+                    dict(row) for row in series._relation_data_for(ids)
+                ]
+                connection = database.get_connection()
+                try:
+                    with patch.object(
+                        series,
+                        "get_connection",
+                        wraps=database.get_connection,
+                    ) as connection_factory:
+                        actual = [
+                            dict(row)
+                            for row in series._relation_data_for(ids, connection=connection)
+                        ]
+                    connection_factory.assert_not_called()
+                    self.assertEqual(actual, expected)
+                    self.assertEqual(connection.execute("SELECT 1").fetchone()[0], 1)
+                finally:
+                    connection.close()
+
+
+
+
+class ComponentUnionBySizeTests(unittest.TestCase):
+    @staticmethod
+    def _find(parent, item_id):
+        while parent[item_id] != item_id:
+            parent[item_id] = parent[parent[item_id]]
+            item_id = parent[item_id]
+        return item_id
+
+    def test_small_to_large_merge_preserves_members_and_avoids_repeated_large_copies(self):
+        count = 4096
+        balanced_parent = {item_id: item_id for item_id in range(count)}
+        balanced_members = {item_id: {item_id} for item_id in range(count)}
+        balanced_moves = 0
+
+        reference_parent = {item_id: item_id for item_id in range(count)}
+        reference_members = {item_id: {item_id} for item_id in range(count)}
+        reference_moves = 0
+
+        # The descending chain is hostile to the former "always attach right
+        # to left" rule: each merge would copy the entire growing component.
+        for left_id in range(count - 2, -1, -1):
+            balanced_left = self._find(balanced_parent, left_id)
+            balanced_right = self._find(balanced_parent, left_id + 1)
+            if balanced_left != balanced_right:
+                _root, moved = series._merge_component_roots(
+                    balanced_parent, balanced_members, balanced_left, balanced_right
+                )
+                balanced_moves += moved
+
+            reference_left = self._find(reference_parent, left_id)
+            reference_right = self._find(reference_parent, left_id + 1)
+            if reference_left != reference_right:
+                reference_moves += len(reference_members[reference_right])
+                reference_parent[reference_right] = reference_left
+                reference_members[reference_left].update(
+                    reference_members.pop(reference_right)
+                )
+
+        balanced_components = {}
+        reference_components = {}
+        for item_id in range(count):
+            balanced_components.setdefault(
+                self._find(balanced_parent, item_id), set()
+            ).add(item_id)
+            reference_components.setdefault(
+                self._find(reference_parent, item_id), set()
+            ).add(item_id)
+
+        self.assertEqual(
+            {frozenset(members) for members in balanced_components.values()},
+            {frozenset(members) for members in reference_components.values()},
+        )
+        self.assertEqual(len(balanced_components), 1)
+        self.assertEqual(next(iter(balanced_components.values())), set(range(count)))
+        self.assertLessEqual(balanced_moves, count)
+        self.assertGreater(reference_moves, count * count // 4)
+
+    def test_snapshot_sets_follow_the_selected_root(self):
+        parent = {1: 1, 2: 2, 3: 3}
+        members = {1: {1}, 2: {2, 3}, 3: set()}
+        snapshots = {1: {100}, 2: {200}, 3: set()}
+        # Use consistent disjoint-set keys and validate that the larger root,
+        # along with its snapshot IDs, survives the small-to-large merge.
+        parent = {1: 1, 2: 2}
+        members = {1: {1}, 2: {2, 3}}
+        snapshots = {1: {100}, 2: {200}}
+        root, moved = series._merge_component_roots(
+            parent, members, 1, 2, snapshots
+        )
+        self.assertEqual(root, 2)
+        self.assertEqual(moved, 1)
+        self.assertEqual(parent, {1: 2, 2: 2})
+        self.assertEqual(members, {2: {1, 2, 3}})
+        self.assertEqual(snapshots, {2: {100, 200}})
+
+
+
+class RelationEdgePresenceTests(unittest.TestCase):
+    def test_presence_check_matches_filtered_edge_list_truthiness(self):
+        samples = [
+            None,
+            {},
+            {"relations": None},
+            {"relations": {"edges": None}},
+            {"relations": {"edges": []}},
+            {"relations": {"edges": [None, 1, "bad"]}},
+            {"relations": {"edges": [{"relationType": "SEQUEL", "node": {"id": 2}}]}},
+            {"relations": {"edges": [None, "bad", {"relationType": "SEQUEL", "node": {"id": 2}}]}},
+            {"relations": {"edges": (None, {"relationType": "PREQUEL", "node": {"id": 3}})}},
+        ]
+        for item in samples:
+            with self.subTest(item=item):
+                self.assertEqual(
+                    series._has_search_relation_edges(item),
+                    bool(series._search_relation_edges(item)),
+                )
+
+
+class BundlePreferenceSnapshotTests(unittest.TestCase):
+    def test_search_grouping_reuses_its_bundle_preference_snapshot(self):
+        ova = media(2, "Example Series OVA", "OVA")
+        tv = media(1, "Example Series", "TV", relations=[
+            edge("SIDE_STORY", ova),
+        ])
+        preference_reads = []
+
+        def enabled(key):
+            preference_reads.append(key)
+            return key == "bundle_include_ovas"
+
+        expected_keys = {
+            "bundle_include_movies",
+            "bundle_include_ovas",
+            "bundle_include_onas",
+            "bundle_include_specials",
+            "bundle_include_manga",
+            "bundle_include_novels",
+            "bundle_include_one_shots",
+        }
+        with (
+            patch("series.get", side_effect=enabled),
+            patch("series.get_manual_bundle_links", return_value=[]),
+            patch("series.get_bundle_exclusions", return_value=[]),
+            patch("series.get_bundle_overrides", return_value=[]),
+        ):
+            groups = series.group_media_results([tv, ova], enrich=False, delay=0)
+
+        self.assertEqual(len(groups), 1)
+        self.assertCountEqual(preference_reads, expected_keys)
+        self.assertEqual(len(preference_reads), len(expected_keys))
+
+
+class MediaFamilyLookupTests(unittest.TestCase):
+    def test_auto_bundleable_reads_type_and_format_once(self):
+        class CountingMedia(dict):
+            def __init__(self, values):
+                super().__init__(values)
+                self.read_counts = {}
+
+            def get(self, key, default=None):
+                self.read_counts[key] = self.read_counts.get(key, 0) + 1
+                return super().get(key, default)
+
+        item = CountingMedia({"id": 1, "type": "MANGA", "format": "NOVEL"})
+        with patch("series.get", return_value=True):
+            self.assertTrue(series._auto_bundleable(item))
+
+        self.assertEqual(item.read_counts.get("type"), 1)
+        self.assertEqual(item.read_counts.get("format"), 1)
+
+    def test_bundle_option_key_reads_type_and_format_once(self):
+        class CountingMedia(dict):
+            def __init__(self, values):
+                super().__init__(values)
+                self.read_counts = {}
+
+            def get(self, key, default=None):
+                self.read_counts[key] = self.read_counts.get(key, 0) + 1
+                return super().get(key, default)
+
+        item = CountingMedia({"id": 1, "type": "MANGA", "format": "NOVEL"})
+        self.assertEqual(series._bundle_option_key(item), "bundle_include_novels")
+        self.assertEqual(item.read_counts.get("type"), 1)
+        self.assertEqual(item.read_counts.get("format"), 1)
+
+
+    def test_bundle_options_snapshot_reads_type_and_format_once_per_item(self):
+        class CountingMedia(dict):
+            def __init__(self, values):
+                super().__init__(values)
+                self.read_counts = {}
+
+            def get(self, key, default=None):
+                self.read_counts[key] = self.read_counts.get(key, 0) + 1
+                return super().get(key, default)
+
+        items = [
+            CountingMedia({"id": 1, "type": "MANGA", "format": "NOVEL"}),
+            CountingMedia({"id": 2, "type": "ANIME", "format": "OVA"}),
+            CountingMedia({"id": 3, "type": "ANIME", "format": "TV"}),
+            CountingMedia({"id": 4, "type": "ANIME", "format": "MUSIC"}),
+        ]
+        with patch("series.get", side_effect=lambda key: key in {
+            "bundle_include_novels", "bundle_include_ovas"
+        }):
+            options = series._bundle_options_for_items(items)
+
+        self.assertEqual(options, {
+            "bundle_include_novels": True,
+            "bundle_include_ovas": True,
+        })
+        for item in items:
+            self.assertEqual(item.read_counts.get("type"), 1)
+            self.assertEqual(item.read_counts.get("format"), 1)
 
 
 class BundleOptionTests(unittest.TestCase):
@@ -136,6 +771,198 @@ class BundleOptionTests(unittest.TestCase):
             groups = series.group_media_results([root], enrich=False)
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0]["_series_count"], 1)
+
+
+
+class RelationPendingQueueTests(unittest.TestCase):
+    @staticmethod
+    def _reference_has_pending(results):
+        seen = set()
+        queue = list(results)
+        while queue:
+            item = queue.pop(0)
+            item_id = int(item["id"])
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+            if series._get(item, "_relations_loaded"):
+                edges = series._search_relation_edges(item)
+            else:
+                cached = series._relation_cache.get(item_id)
+                if cached:
+                    edges = (cached.get("relations") or {}).get("edges", [])
+                elif series._get(item, "_related_only"):
+                    return True
+                else:
+                    edges = series._search_relation_edges(item)
+            for relation in edges:
+                if not series._relation_edge_allowed(item, relation):
+                    continue
+                node = relation.get("node") or {}
+                target_id = node.get("id")
+                if (
+                    target_id
+                    and int(target_id) not in seen
+                    and int(target_id) not in series._relation_cache
+                ):
+                    queue.append(series._related_placeholder(node))
+        return False
+
+    def test_deque_fifo_matches_reference_on_a_large_loaded_frontier(self):
+        frontier = []
+        for work_id in range(1, 2501):
+            item = media(work_id, f"Synthetic Series {work_id}", "TV")
+            item["_relations_loaded"] = True
+            frontier.append(item)
+
+        with patch.object(series, "_relation_cache", series._BoundedRelationCache()):
+            expected = self._reference_has_pending(frontier)
+            actual = series.has_pending_relation_enrichment(frontier)
+
+        self.assertFalse(expected)
+        self.assertEqual(actual, expected)
+
+    def test_deque_traversal_still_detects_an_uncached_related_placeholder(self):
+        root = media(1, "Example Series", "TV", relations=[
+            edge("SEQUEL", {
+                "id": 2,
+                "type": "ANIME",
+                "format": "TV",
+                "title": {"english": "Example Series Season 2", "romaji": "Example Series Season 2"},
+                "coverImage": {"large": None},
+                "episodes": 12,
+                "startDate": {"year": 2021, "month": 1, "day": 1},
+            })
+        ])
+        root["_relations_loaded"] = True
+
+        with patch.object(series, "_relation_cache", series._BoundedRelationCache()):
+            expected = self._reference_has_pending([root])
+            actual = series.has_pending_relation_enrichment([root])
+
+        self.assertTrue(expected)
+        self.assertEqual(actual, expected)
+
+
+
+class RelationBatchFailureIsolationTests(unittest.TestCase):
+    def test_anilist_batch_failure_does_not_fan_out_to_single_item_requests(self):
+        ids = [910001, 910002, 910003, 910004, 910005]
+        calls = []
+
+        def fail_batch(request_ids):
+            calls.append(list(request_ids))
+            raise RuntimeError("AniList temporarily unavailable")
+
+        with (
+            patch.object(series, "_relation_cache", series._BoundedRelationCache()),
+            patch("series.get_media_relations_batch", side_effect=fail_batch),
+        ):
+            result = series._cache_relation_details_batch(ids)
+
+        self.assertEqual(result, {})
+        self.assertEqual(calls, [ids])
+
+    def test_anilist_failure_does_not_block_negative_mangabaka_ids(self):
+        positive_id = 920001
+        local_id = -920001
+        local_details = {
+            "id": local_id, "type": "MANGA", "format": "MANGA",
+            "title": {"english": "Local title"}, "relations": {"edges": []},
+        }
+        calls = []
+
+        def split_provider_fetch(request_ids):
+            calls.append(list(request_ids))
+            if request_ids == [positive_id]:
+                raise RuntimeError("AniList temporarily unavailable")
+            return {local_id: local_details}
+
+        with (
+            patch.object(series, "_relation_cache", series._BoundedRelationCache()),
+            patch("series.get_media_relations_batch", side_effect=split_provider_fetch),
+        ):
+            result = series._cache_relation_details_batch([positive_id, local_id])
+
+        self.assertEqual(calls, [[positive_id], [local_id]])
+        self.assertEqual(result, {local_id: local_details})
+
+
+
+
+
+class BoundedRelationCacheTests(unittest.TestCase):
+    def test_cache_promotes_reads_and_evicts_least_recently_used(self):
+        cache = series._BoundedRelationCache(max_entries=2)
+        cache[1] = {"id": 1}
+        cache[2] = {"id": 2}
+        self.assertEqual(cache.get(1), {"id": 1})
+        cache[3] = {"id": 3}
+
+        self.assertEqual(list(cache), [1, 3])
+        self.assertNotIn(2, cache)
+
+    def test_cache_operations_are_safe_while_worker_threads_mutate_it(self):
+        cache = series._BoundedRelationCache(max_entries=64)
+        failures = []
+        start = threading.Barrier(4)
+
+        def writer(offset):
+            try:
+                start.wait()
+                for index in range(1500):
+                    key = offset * 10000 + index
+                    cache[key] = {"id": key}
+                    cache.get(key)
+                    if index % 7 == 0:
+                        cache.pop(key - 1, None)
+            except Exception as error:
+                failures.append(error)
+
+        def reader():
+            try:
+                start.wait()
+                for _ in range(1500):
+                    keys = list(cache)
+                    for key in keys[:8]:
+                        cache.get(key)
+                    if len(cache) > cache.max_entries:
+                        failures.append(AssertionError("LRU cache exceeded its configured limit"))
+            except Exception as error:
+                failures.append(error)
+
+        threads = [
+            threading.Thread(target=writer, args=(1,)),
+            threading.Thread(target=writer, args=(2,)),
+            threading.Thread(target=reader),
+            threading.Thread(target=reader),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(failures, [])
+        self.assertLessEqual(len(cache), cache.max_entries)
+
+    def test_batch_returns_all_results_even_when_cache_limit_is_exceeded(self):
+        cache = series._BoundedRelationCache(max_entries=2)
+        details = {
+            work_id: {
+                "id": work_id,
+                "relations": {"edges": []},
+            }
+            for work_id in (1, 2, 3)
+        }
+        with (
+            patch.object(series, "_relation_cache", cache),
+            patch("series.get_media_relations_batch", return_value=details),
+        ):
+            result = series._cache_relation_details_batch([1, 2, 3])
+
+        self.assertEqual(result, details)
+        self.assertEqual(list(cache), [2, 3])
+        self.assertLessEqual(len(cache), cache.max_entries)
 
 
 

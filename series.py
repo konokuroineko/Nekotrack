@@ -1,4 +1,6 @@
-from collections import defaultdict
+from collections import OrderedDict, defaultdict, deque
+from functools import lru_cache
+from threading import RLock
 import re
 import time
 
@@ -6,9 +8,10 @@ from api import get_media_relations_batch
 from diagnostics import diagnostic_context, log_event, log_exception
 from database import (
     get_all_library,
-    get_automatic_bundle_memberships,
     get_bundle_override,
+    get_bundle_overrides,
     get_bundle_exclusions,
+    get_library_bundle_grouping_state,
     get_connection,
     get_manual_bundle_links,
     save_anime,
@@ -31,12 +34,145 @@ SEASON_CHAIN_RELATIONS = {"PREQUEL", "SEQUEL", "PARENT", "SUMMARY", "SIDE_STORY"
 RELATED_TRAVERSAL_RELATIONS = {
     "SPIN_OFF", "ALTERNATIVE", "COMPILATION", "FULL_STORY", "CONTAINS",
 }
+
+
+def _build_exclusion_neighbors(excluded_links):
+    """Build an undirected lookup for user-defined bundle exclusions."""
+    neighbors = defaultdict(set)
+    for left_id, right_id in excluded_links or ():
+        neighbors[left_id].add(right_id)
+        neighbors[right_id].add(left_id)
+    return neighbors
+
+
+def _components_have_excluded_pair(left_members, right_members, excluded_neighbors):
+    """Check cross-component exclusions without scanning every member pair."""
+    if not excluded_neighbors:
+        return False
+    if len(left_members) > len(right_members):
+        left_members, right_members = right_members, left_members
+    for member_id in left_members:
+        neighbors = excluded_neighbors.get(member_id)
+        if neighbors and not neighbors.isdisjoint(right_members):
+            return True
+    return False
 ANIME_BUNDLE_FORMATS = {"TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL"}
+_BUNDLE_OPTION_BY_FORMAT = {
+    "MOVIE": "bundle_include_movies",
+    "OVA": "bundle_include_ovas",
+    "ONA": "bundle_include_onas",
+    "SPECIAL": "bundle_include_specials",
+}
+_BUNDLE_OPTION_BY_FAMILY = {
+    "MANGA": "bundle_include_manga",
+    "NOVEL": "bundle_include_novels",
+    "ONE_SHOT": "bundle_include_one_shots",
+}
 RELATION_BATCH_SIZE = 10
 MAX_NODE_FETCH_RETRIES = 3
 
 _relation_sync_checked_ids = set()
-_relation_cache = {}
+RELATION_CACHE_MAX_ENTRIES = 5000
+
+
+class _BoundedRelationCache(OrderedDict):
+    """Small LRU cache so relation graphs from old Search sessions are released."""
+
+    def __init__(self, max_entries=RELATION_CACHE_MAX_ENTRIES):
+        super().__init__()
+        self.max_entries = max(1, int(max_entries))
+        self._lock = RLock()
+
+    def __contains__(self, key):
+        with self._lock:
+            return super().__contains__(key)
+
+    def __getitem__(self, key):
+        with self._lock:
+            value = super().__getitem__(key)
+            super().move_to_end(key)
+            return value
+
+    def get(self, key, default=None):
+        # Membership, lookup and LRU promotion must be atomic: concurrent
+        # relation-enrichment workers can otherwise evict a key between them.
+        with self._lock:
+            try:
+                value = super().__getitem__(key)
+            except KeyError:
+                return default
+            super().move_to_end(key)
+            return value
+
+    def __setitem__(self, key, value):
+        with self._lock:
+            super().__setitem__(key, value)
+            super().move_to_end(key)
+            while len(self) > self.max_entries:
+                super().popitem(last=False)
+
+    def __delitem__(self, key):
+        with self._lock:
+            super().__delitem__(key)
+
+    def __iter__(self):
+        # Iterating a live OrderedDict while a worker updates it raises
+        # RuntimeError. Iterate a stable key snapshot under the same lock.
+        with self._lock:
+            keys = tuple(super().__iter__())
+        return iter(keys)
+
+    def __len__(self):
+        with self._lock:
+            return super().__len__()
+
+    def clear(self):
+        with self._lock:
+            super().clear()
+
+    def pop(self, key, *default):
+        with self._lock:
+            return super().pop(key, *default)
+
+    def popitem(self, last=True):
+        with self._lock:
+            return super().popitem(last=last)
+
+    def move_to_end(self, key, last=True):
+        with self._lock:
+            return super().move_to_end(key, last=last)
+
+    def copy(self):
+        with self._lock:
+            duplicate = type(self)(self.max_entries)
+            for key, value in super().items():
+                duplicate[key] = value
+            return duplicate
+
+
+_relation_cache = _BoundedRelationCache()
+
+
+
+def _merge_component_roots(
+    parent, component_members, left_root, right_root, component_snapshot_ids=None
+):
+    """Merge disjoint-set roots small-to-large to bound repeated set copying."""
+    left_members = component_members[left_root]
+    right_members = component_members[right_root]
+    if len(left_members) < len(right_members):
+        left_root, right_root = right_root, left_root
+        left_members, right_members = right_members, left_members
+
+    moved_member_count = len(right_members)
+    parent[right_root] = left_root
+    left_members.update(component_members.pop(right_root))
+    if component_snapshot_ids is not None:
+        component_snapshot_ids[left_root].update(
+            component_snapshot_ids.pop(right_root)
+        )
+    return left_root, moved_member_count
+
 
 
 def _get(item, key, default=None):
@@ -87,90 +223,173 @@ def _media_type(item):
     return str(value or "UNKNOWN").upper()
 
 
-def _media_family(item):
+def _media_family_and_format(item):
+    """Normalize type/format once for the hot-path bundle eligibility checks."""
     media_type = _media_type(item)
-    fmt = str(_get(item, "format") or "").upper()
+    media_format = str(_get(item, "format") or "").upper()
     if media_type == "MANGA":
-        if fmt == "NOVEL":
-            return "NOVEL"
-        if fmt == "ONE_SHOT":
-            return "ONE_SHOT"
-        return "MANGA"
-    return media_type
+        if media_format == "NOVEL":
+            return "NOVEL", media_format
+        if media_format == "ONE_SHOT":
+            return "ONE_SHOT", media_format
+        return "MANGA", media_format
+    return media_type, media_format
+
+
+def _media_family(item):
+    return _media_family_and_format(item)[0]
 
 
 def _same_media_family(left, right):
     return _media_family(left) == _media_family(right)
 
 
-def _is_bundleable(item):
-    family = _media_family(item)
-    fmt = str(_get(item, "format") or "").upper()
+def _is_bundleable_parts(family, media_format):
     if family == "ANIME":
-        return fmt in ANIME_BUNDLE_FORMATS
+        return media_format in ANIME_BUNDLE_FORMATS
     if family == "MANGA":
-        return fmt == "MANGA"
+        return media_format == "MANGA"
     if family in {"NOVEL", "ONE_SHOT"}:
         return True
     return False
 
-def _auto_bundleable(item):
+
+def _is_bundleable(item):
+    family, media_format = _media_family_and_format(item)
+    return _is_bundleable_parts(family, media_format)
+
+def _bundle_option_key_parts(media_family, media_format):
+    if media_family == "ANIME":
+        return _BUNDLE_OPTION_BY_FORMAT.get(media_format)
+    return _BUNDLE_OPTION_BY_FAMILY.get(media_family)
+
+
+def _bundle_option_key(item):
+    """Return the opt-in setting key required by a bundleable media item, if any."""
+    media_family, media_format = _media_family_and_format(item)
+    return _bundle_option_key_parts(media_family, media_format)
+
+
+def _bundle_options_for_items(items):
+    """Read each relevant opt-in preference once for one grouping operation."""
+    option_keys = []
+    seen = set()
+    for item in items or ():
+        media_family, media_format = _media_family_and_format(item)
+        if not _is_bundleable_parts(media_family, media_format):
+            continue
+        option = _bundle_option_key_parts(media_family, media_format)
+        if option and option not in seen:
+            seen.add(option)
+            option_keys.append(option)
+    return {option: bool(get(option)) for option in option_keys}
+
+
+def _bundle_option_enabled(option, bundle_options):
+    if bundle_options is not None and option in bundle_options:
+        value = bundle_options[option]
+        if value is not None:
+            return bool(value)
+    return bool(get(option))
+
+
+def _auto_bundleable(item, bundle_options=None):
     """Return whether an entry is eligible for automatic series bundling.
 
     TV seasons and TV shorts are always part of the main series chain.
     Related formats outside that chain are opt-in individually so users can,
     for example, include OVAs without pulling every movie, special, or manga
-    entry into the same automatic bundle.
+    entry into the same automatic bundle. A grouping operation can pass a
+    settings snapshot to avoid repeating QSettings migration checks per item.
     """
-    if not _is_bundleable(item):
+    media_family, media_format = _media_family_and_format(item)
+    if not _is_bundleable_parts(media_family, media_format):
         return False
-
-    media_family = _media_family(item)
-    media_format = str(_get(item, "format") or "").upper()
 
     if media_family == "ANIME":
         if media_format in {"TV", "TV_SHORT"}:
             return True
-        option_by_format = {
-            "MOVIE": "bundle_include_movies",
-            "OVA": "bundle_include_ovas",
-            "ONA": "bundle_include_onas",
-            "SPECIAL": "bundle_include_specials",
-        }
-        option = option_by_format.get(media_format)
-        return bool(get(option)) if option else False
+        option = _BUNDLE_OPTION_BY_FORMAT.get(media_format)
+    else:
+        option = _BUNDLE_OPTION_BY_FAMILY.get(media_family)
 
-    option_by_family = {
-        "MANGA": "bundle_include_manga",
-        "NOVEL": "bundle_include_novels",
-        "ONE_SHOT": "bundle_include_one_shots",
-    }
-    option = option_by_family.get(media_family)
-    return bool(get(option)) if option else False
-
+    return _bundle_option_enabled(option, bundle_options) if option else False
 
 def _series_key(title):
-    value = str(title or "").lower().strip()
-    value = re.sub(
-        r"\s*[:\-–—]?\s*(?:the\s+)?final\s+season(?:\s+part\s+\d+)?(?:\s+\([^)]*\))?\s*$",
-        "",
-        value,
-    )
-    value = re.sub(
-        r"\s*[:\-–—]?\s*(?:\d+(?:st|nd|rd|th)|season\s*\d+|series\s*\d+|season\s*[ivx]+|series\s*[ivx]+)(?:\s+part\s+\d+)?\s*$",
-        "",
-        value,
-    )
-    value = re.sub(r"(?:^|\s)(?:ii|iii|iv|v|vi)\s*[:\-–—]\s*", " ", value)
-    value = re.sub(
-        r"\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\s*(?:season)?\s*$",
-        "",
-        value,
-    )
-    value = re.sub(r"\s*[:\-–—]?\s*(?:part|cour)\s*\d+\s*$", "", value)
-    value = re.sub(r"\s+\d+$", "", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    return re.sub(r"[^a-z0-9]+", " ", value).strip()
+    """Return the normalized title-family key using a bounded process-local cache."""
+    # Preserve the old coercion semantics for None and malformed provider values.
+    return _cached_series_key(str(title or ""))
+
+
+# Compile these patterns once rather than looking them up through re.sub() for every title.
+_SERIES_KEY_FINAL_SEASON_RE = re.compile(
+    r"\s*[:\-–—]?\s*(?:the\s+)?final\s+season(?:\s+part\s+\d+)?(?:\s+\([^)]*\))?\s*$"
+)
+_SERIES_KEY_SEASON_SUFFIX_RE = re.compile(
+    r"\s*[:\-–—]?\s*(?:\d+(?:st|nd|rd|th)|season\s*\d+|series\s*\d+|season\s*[ivx]+|series\s*[ivx]+)(?:\s+part\s+\d+)?\s*$"
+)
+_SERIES_KEY_ROMAN_PREFIX_RE = re.compile(r"(?:^|\s)(?:ii|iii|iv|v|vi)\s*[:\-–—]\s*")
+_SERIES_KEY_ROMAN_SUFFIX_RE = re.compile(
+    r"\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\s*(?:season)?\s*$"
+)
+_SERIES_KEY_PART_COUR_SUFFIX_RE = re.compile(r"\s*[:\-–—]?\s*(?:part|cour)\s*\d+\s*$")
+_SERIES_KEY_NUMBER_SUFFIX_RE = re.compile(r"\s+\d+$")
+_SERIES_KEY_WHITESPACE_RE = re.compile(r"\s+")
+_SERIES_KEY_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+@lru_cache(maxsize=16384)
+def _cached_series_key(value):
+    """Normalize a title with reusable patterns and a bounded process-local cache."""
+    value = value.lower().strip()
+    value = _SERIES_KEY_FINAL_SEASON_RE.sub("", value)
+    value = _SERIES_KEY_SEASON_SUFFIX_RE.sub("", value)
+    value = _SERIES_KEY_ROMAN_PREFIX_RE.sub(" ", value)
+    value = _SERIES_KEY_ROMAN_SUFFIX_RE.sub("", value)
+    value = _SERIES_KEY_PART_COUR_SUFFIX_RE.sub("", value)
+    value = _SERIES_KEY_NUMBER_SUFFIX_RE.sub("", value)
+    value = _SERIES_KEY_WHITESPACE_RE.sub(" ", value).strip()
+    return _SERIES_KEY_NON_ALNUM_RE.sub(" ", value).strip()
+
+
+def _prefix_related_tv_candidate_indices(keys):
+    """Index title-prefix candidates without comparing every pair of TV titles.
+
+    Return tokenized keys and, for each original position, sorted original
+    indices whose two-or-more tokens are a prefix of each other. Sorting each
+    candidate list preserves the old nested loop's comparison order, which
+    matters because bundle exclusions can make union order observable.
+    """
+    tokens_by_index = [
+        tuple(str(key or "").split())
+        for key in (keys or [])
+    ]
+    exact_by_tokens = defaultdict(list)
+    by_prefix = defaultdict(list)
+
+    for index, tokens in enumerate(tokens_by_index):
+        if len(tokens) < 2:
+            continue
+        exact_by_tokens[tokens].append(index)
+        for prefix_length in range(2, len(tokens) + 1):
+            by_prefix[tokens[:prefix_length]].append(index)
+
+    candidates_by_index = []
+    for index, tokens in enumerate(tokens_by_index):
+        if len(tokens) < 2:
+            candidates_by_index.append([])
+            continue
+
+        matching_indices = set()
+        # Titles that are the same as, or shorter prefixes of, this title.
+        for prefix_length in range(2, len(tokens) + 1):
+            matching_indices.update(exact_by_tokens.get(tokens[:prefix_length], ()))
+        # Titles for which this title is itself a prefix.
+        matching_indices.update(by_prefix.get(tokens, ()))
+        matching_indices.discard(index)
+        candidates_by_index.append(sorted(matching_indices))
+
+    return tokens_by_index, candidates_by_index
 
 
 def _series_group_key(item):
@@ -218,8 +437,13 @@ def _title_family_compatible(left, right):
 
 
 def _season_marker(title):
-    """Return only an explicit season identity, never a bare Part/Cour number."""
-    title = str(title or "").lower()
+    """Return the cached explicit season identity for any title-like value."""
+    return _cached_season_marker(str(title or "").lower())
+
+
+@lru_cache(maxsize=16384)
+def _cached_season_marker(title):
+    """Parse a lowercase string into an explicit season marker."""
 
     if re.search(r"\bfinal\s+season\b", title):
         return "final"
@@ -268,7 +492,11 @@ def _season_marker(title):
 
 
 def _is_continuation(title):
-    title = str(title or "").lower()
+    return _cached_is_continuation(str(title or "").lower())
+
+
+@lru_cache(maxsize=16384)
+def _cached_is_continuation(title):
     return bool(
         re.search(r"\b(?:part|cour)\s*(?:\d+|i|ii|iii|iv|v|vi)\b", title)
         or re.search(r"\bfinal\s+season\b", title)
@@ -276,7 +504,12 @@ def _is_continuation(title):
 
 
 def _is_arc(title):
-    return bool(re.search(r"\barc\b", str(title or "").lower()))
+    return _cached_is_arc(str(title or "").lower())
+
+
+@lru_cache(maxsize=16384)
+def _cached_is_arc(title):
+    return bool(re.search(r"\barc\b", title))
 
 
 def _air_period(member):
@@ -324,10 +557,23 @@ def logical_season_count(members):
         if left_root != right_root:
             parent[right_root] = left_root
 
+    # Snapshot each member's title-derived facts once. The continuation and arc
+    # predicates are also cached across refreshes, but keeping these values local
+    # avoids repeated wrappers/title extraction within this one summary.
+    title_info = {}
+    for media_id, member in by_id.items():
+        title = _title_text(member)
+        title_info[media_id] = (
+            title,
+            _season_marker(title),
+            _is_continuation(title),
+            _is_arc(title),
+        )
+
     # 1. Explicit season labels are authoritative.
     by_marker = defaultdict(list)
-    for media_id, member in by_id.items():
-        marker = _season_marker(_title_text(member))
+    for media_id in by_id:
+        marker = title_info[media_id][1]
         if marker:
             by_marker[marker].append(media_id)
     for members_for_marker in by_marker.values():
@@ -337,10 +583,9 @@ def logical_season_count(members):
     # 2. Part/Cour/final continuations inherit directly connected neighbors,
     #    but never cross two explicit, conflicting season markers.
     for member_id, member in by_id.items():
-        title = _title_text(member)
-        if not _is_continuation(title):
+        _title, current_marker, is_continuation, _is_arc_flag = title_info[member_id]
+        if not is_continuation:
             continue
-        current_marker = _season_marker(title)
         for edge in _search_relation_edges(member):
             if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
                 continue
@@ -350,7 +595,7 @@ def logical_season_count(members):
             target_id = _valid_relation_id(node.get("id"))
             if target_id is None or target_id not in by_id:
                 continue
-            target_marker = _season_marker(_title_text(by_id[target_id]))
+            target_marker = title_info[target_id][1]
             if current_marker is not None and target_marker is not None:
                 if current_marker == target_marker:
                     union(member_id, target_id)
@@ -360,10 +605,9 @@ def logical_season_count(members):
     # 3. Named unnumbered arcs only combine when both have a valid, matching
     #    airing season. Unknown dates are not evidence that two arcs are equal.
     arc_ids = {
-        media_id for media_id, member in by_id.items()
-        if _is_arc(_title_text(member))
-        and _season_marker(_title_text(member)) is None
-        and not _is_continuation(_title_text(member))
+        media_id for media_id, (_title, marker, is_continuation, is_arc_flag)
+        in title_info.items()
+        if is_arc_flag and marker is None and not is_continuation
     }
     for member_id in arc_ids:
         member_period = _air_period(by_id[member_id])
@@ -436,6 +680,25 @@ def _search_relation_edges(item):
     return [edge for edge in edges if isinstance(edge, dict)]
 
 
+def _has_search_relation_edges(item):
+    """Fast-path common relation-edge presence checks; preserve malformed-edge behavior."""
+    relations = _get(item, "relations")
+    if not isinstance(relations, dict):
+        return False
+    edges = relations.get("edges")
+    if not isinstance(edges, (list, tuple)) or not edges:
+        return False
+
+    # Provider relation arrays normally start with a valid edge, so avoid
+    # allocating a generator for that common case. Malformed payloads still
+    # fall through to a complete type check to preserve filtered-list semantics.
+    if isinstance(edges[0], dict):
+        return True
+    # If the first edge is malformed, use the legacy filtered comprehension.
+    # Malformed provider payloads are rare, and this avoids slowing their full scan.
+    return bool([edge for edge in edges if isinstance(edge, dict)])
+
+
 def _relation_edge_allowed(item, edge):
     if not isinstance(edge, dict) or edge.get("relationType") not in SERIES_RELATIONS:
         return False
@@ -453,7 +716,7 @@ def _bundle_edge_allowed(item, edge):
     return _is_bundleable(item) and _is_bundleable(edge.get("node") or {})
 
 
-def _relation_group_compatible(item, edge, target):
+def _relation_group_compatible(item, edge, target, bundle_options=None):
     """Avoid pulling unrelated cross-format works into a series bundle.
 
     AniList can use PREQUEL/SEQUEL/SIDE_STORY for franchise-level connections
@@ -464,7 +727,10 @@ def _relation_group_compatible(item, edge, target):
     """
     if not _relation_edge_allowed(item, edge):
         return False
-    if not _auto_bundleable(item) or not _auto_bundleable(target):
+    if bundle_options is None:
+        if not _auto_bundleable(item) or not _auto_bundleable(target):
+            return False
+    elif not _auto_bundleable(item, bundle_options) or not _auto_bundleable(target, bundle_options):
         return False
 
     source_format = str(_get(item, "format") or "").upper()
@@ -515,7 +781,7 @@ def _relation_group_compatible(item, edge, target):
     return common_prefix >= 2
 
 
-def _traversal_edge_allowed(item, edge):
+def _traversal_edge_allowed(item, edge, bundle_options=None):
     """Walk season chains and carefully include named series extras."""
     if not isinstance(edge, dict):
         return False
@@ -525,7 +791,10 @@ def _traversal_edge_allowed(item, edge):
         return False
     if not _same_media_family(item, node):
         return False
-    if not _auto_bundleable(item) or not _auto_bundleable(node):
+    if bundle_options is None:
+        if not _auto_bundleable(item) or not _auto_bundleable(node):
+            return False
+    elif not _auto_bundleable(item, bundle_options) or not _auto_bundleable(node, bundle_options):
         return False
 
     if relation_type in SEASON_CHAIN_RELATIONS:
@@ -573,55 +842,72 @@ def _apply_relation_details(item, details):
 
 
 def _cache_relation_details_batch(media_ids):
+    """Fetch uncached relation graphs without fanning out failed provider batches."""
     ids = sorted({int(media_id) for media_id in media_ids if media_id is not None})
-    missing = [media_id for media_id in ids if media_id not in _relation_cache]
+    result_for_call = {}
+    for media_id in ids:
+        cached = _relation_cache.get(media_id)
+        if cached is not None:
+            result_for_call[media_id] = cached
+    missing = [media_id for media_id in ids if media_id not in result_for_call]
     if not missing:
-        return {
-            media_id: _relation_cache[media_id]
-            for media_id in ids
-            if media_id in _relation_cache
-        }
+        return result_for_call
 
-    try:
-        fetched = get_media_relations_batch(missing)
-    except Exception:
-        if len(missing) == 1:
-            return {
-                media_id: _relation_cache[media_id]
-                for media_id in ids
-                if media_id in _relation_cache
-            }
+    # Keep the AniList request and local MangaBaka resolutions independent.
+    # A transient AniList failure must not prevent negative-ID entries from
+    # loading, and must not recursively turn one failed request into N requests.
+    provider_groups = (
+        ("anilist", [media_id for media_id in missing if media_id > 0]),
+        ("mangabaka", [media_id for media_id in missing if media_id < 0]),
+    )
+    for provider, group_ids in provider_groups:
+        if not group_ids:
+            continue
+        requested = set(group_ids)
+        try:
+            fetched = get_media_relations_batch(group_ids)
+        except Exception as error:
+            # _discover_related already retries unresolved IDs a bounded number
+            # of times. Keep the batch intact here rather than recursively
+            # issuing one request per member during a shared outage.
+            log_event(
+                "bundling.relation_batch_failed",
+                provider=provider,
+                error_type=type(error).__name__,
+                error=str(error)[:300],
+                requested_count=len(group_ids),
+                requested_ids=group_ids[:50],
+            )
+            continue
+        if not isinstance(fetched, dict):
+            log_event(
+                "bundling.relation_batch_malformed",
+                provider=provider,
+                returned_type=type(fetched).__name__,
+                requested_count=len(group_ids),
+            )
+            continue
 
-        midpoint = max(1, len(missing) // 2)
-        left = _cache_relation_details_batch(missing[:midpoint])
-        right = _cache_relation_details_batch(missing[midpoint:])
-        left.update(right)
-        return {
-            media_id: left[media_id]
-            for media_id in ids
-            if media_id in left
-        }
-
-    for media_id, details in fetched.items():
-        if details is not None:
-            _relation_cache[int(media_id)] = details
-
-    missing_after_fetch = [
-        media_id for media_id in missing if media_id not in _relation_cache
-    ]
-    if missing_after_fetch and len(missing_after_fetch) < len(missing):
-        recovered = _cache_relation_details_batch(missing_after_fetch)
-        for media_id, details in recovered.items():
-            _relation_cache[media_id] = details
+        for raw_id, details in fetched.items():
+            try:
+                media_id = int(raw_id)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if media_id in requested and details is not None:
+                # Keep all results in this call even if inserting later entries
+                # evicts an earlier graph from the bounded cross-search cache.
+                _relation_cache[media_id] = details
+                result_for_call[media_id] = details
 
     return {
-        media_id: _relation_cache[media_id]
+        media_id: result_for_call[media_id]
         for media_id in ids
-        if media_id in _relation_cache
+        if media_id in result_for_call
     }
 
 
-def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_event=None):
+
+def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_event=None, bundle_options=None):
     """Finite breadth-first traversal of the season/continuation relation graph."""
     discovered = list(items)
     known_ids = {int(item["id"]) for item in discovered}
@@ -645,7 +931,7 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
                 continue
 
             if not hydrate_existing_nodes and (
-                _search_relation_edges(item) or item_id in _relation_cache
+                _has_search_relation_edges(item) or item_id in _relation_cache
             ):
                 continue
 
@@ -692,7 +978,7 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
                 if cached is not None:
                     _apply_relation_details(item, cached)
 
-            if not _get(item, "_relations_loaded") and not _search_relation_edges(item):
+            if not _get(item, "_relations_loaded") and not _has_search_relation_edges(item):
                 if fetch_failures[item_id] < MAX_NODE_FETCH_RETRIES and can_fetch:
                     unresolved_remaining.append(item)
                 continue
@@ -700,7 +986,11 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
             processed_ids.add(item_id)
 
             for edge in _search_relation_edges(item):
-                if not _traversal_edge_allowed(item, edge):
+                if bundle_options is None:
+                    allowed = _traversal_edge_allowed(item, edge)
+                else:
+                    allowed = _traversal_edge_allowed(item, edge, bundle_options=bundle_options)
+                if not allowed:
                     continue
 
                 node = edge.get("node") or {}
@@ -745,7 +1035,7 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
     return discovered, requests_used
 
 
-def _apply_bundle_override(group, members):
+def _apply_bundle_override(group, members, overrides_by_anchor=None):
     """Apply the persisted title and cover choice shared by all bundle cards."""
     safe_members = [
         member for member in (members or [])
@@ -755,11 +1045,17 @@ def _apply_bundle_override(group, members):
         return group
     member_ids = [int(_get(member, "id")) for member in safe_members]
     try:
-        override = get_bundle_override(member_ids)
+        if overrides_by_anchor is None:
+            override = get_bundle_override(member_ids)
+        else:
+            # The old helper sorted IDs before selecting an anchor, regardless
+            # of visual/release ordering among bundle members.
+            override = next(
+                (overrides_by_anchor[work_id] for work_id in sorted(set(member_ids))
+                 if work_id in overrides_by_anchor),
+                None,
+            )
     except Exception as error:
-        # Early migrations and minimal test/recovery databases may not have
-        # the optional presentation table yet. Keep that expected case quiet;
-        # a missing decoration must never break otherwise-valid grouping.
         if "no such table: bundle_overrides" not in str(error).casefold():
             log_exception(
                 "bundling.presentation_override_unavailable",
@@ -796,7 +1092,64 @@ def _apply_bundle_override(group, members):
     return group
 
 
-def _group_discovered(results, discovered):
+def _apply_bundle_overrides(groups, connection=None):
+    """Apply all bundle appearance overrides with one batched database read."""
+    entries = []
+    work_ids = set()
+    for group in groups or []:
+        members = _get(group, "_series_members") or [group]
+        safe_members = [
+            member for member in members
+            if _valid_relation_id(_get(member, "id")) is not None
+        ]
+        if len(safe_members) <= 1:
+            continue
+        member_ids = [int(_get(member, "id")) for member in safe_members]
+        entries.append((group, safe_members))
+        work_ids.update(member_ids)
+
+    if not entries:
+        return groups
+
+    try:
+        if connection is None:
+            override_rows = get_bundle_overrides(sorted(work_ids))
+        else:
+            override_rows = get_bundle_overrides(
+                sorted(work_ids), connection=connection
+            )
+    except Exception as error:
+        if "no such table: bundle_overrides" not in str(error).casefold():
+            log_exception(
+                "bundling.presentation_override_unavailable",
+                error,
+                work_ids=sorted(work_ids),
+            )
+        return groups
+
+    overrides_by_anchor = {
+        int(_get(row, "bundle_anchor_id")): row
+        for row in override_rows
+        if _get(row, "bundle_anchor_id") is not None
+    }
+    for group, members in entries:
+        _apply_bundle_override(group, members, overrides_by_anchor)
+    return groups
+
+
+def _group_discovered(results, discovered, bundle_options=None):
+    def is_auto_bundleable(item):
+        if bundle_options is None:
+            return _auto_bundleable(item)
+        return _auto_bundleable(item, bundle_options)
+
+    def relation_group_compatible(item, edge, target):
+        if bundle_options is None:
+            return _relation_group_compatible(item, edge, target)
+        return _relation_group_compatible(
+            item, edge, target, bundle_options=bundle_options
+        )
+
     original_ids = {int(item["id"]) for item in results}
     ids = {int(item["id"]) for item in discovered}
     parent = {item_id: item_id for item_id in ids}
@@ -818,15 +1171,14 @@ def _group_discovered(results, discovered):
         # regrouped as A -> C -> B after the user explicitly split A from B.
         left_members = component_members[left_root]
         right_members = component_members[right_root]
-        if any(
-            tuple(sorted((left_id, right_id))) in excluded_links
-            for left_id in left_members
-            for right_id in right_members
+        if _components_have_excluded_pair(
+            left_members, right_members, excluded_neighbors
         ):
             return False
 
-        parent[right_root] = left_root
-        left_members.update(component_members.pop(right_root))
+        # Keep the larger component as the root. Component exclusions were
+        # checked above and are symmetric, so this only changes merge cost.
+        _merge_component_roots(parent, component_members, left_root, right_root)
         return True
 
     # Explicit manual links are an override: when the user links two works,
@@ -837,6 +1189,7 @@ def _group_discovered(results, discovered):
         tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
         for link in get_bundle_exclusions(ids)
     }
+    excluded_neighbors = _build_exclusion_neighbors(excluded_links)
     manual_ids = set()
     for link in manual_links:
         left_id = int(link["work_a"])
@@ -856,13 +1209,13 @@ def _group_discovered(results, discovered):
                 continue
             if tuple(sorted((item_id, target_id))) in excluded_links:
                 continue
-            if not _relation_group_compatible(item, edge, target):
+            if not relation_group_compatible(item, edge, target):
                 continue
             union(item_id, target_id)
 
     by_key = {}
     for item in discovered:
-        if not _auto_bundleable(item):
+        if not is_auto_bundleable(item):
             continue
         key = _series_group_key(item)
         item_id = int(item["id"])
@@ -888,17 +1241,21 @@ def _group_discovered(results, discovered):
         (item, _series_key(_title_text(item)))
         for item in tv_members
     ]
-    for item, key in tv_keys:
-        if not key:
-            continue
-        item_tokens = key.split()
-        if len(item_tokens) < 2:
+    tv_tokens, tv_candidate_indices = _prefix_related_tv_candidate_indices(
+        [key for _, key in tv_keys]
+    )
+    # Keep candidates in their original order so exclusion-aware union behavior
+    # remains the same while unrelated titles no longer trigger O(n^2) compares.
+    for item_index, (item, key) in enumerate(tv_keys):
+        item_tokens = tv_tokens[item_index]
+        if not key or len(item_tokens) < 2:
             continue
         item_id = int(_get(item, "id"))
-        for other, other_key in tv_keys:
+        for other_index in tv_candidate_indices[item_index]:
+            other, other_key = tv_keys[other_index]
             if item_id == int(_get(other, "id")) or not other_key:
                 continue
-            other_tokens = other_key.split()
+            other_tokens = tv_tokens[other_index]
             if len(other_tokens) < 2:
                 continue
             shorter, longer = (
@@ -944,7 +1301,7 @@ def _group_discovered(results, discovered):
         bundle_members = [
             item
             for item in group_members
-            if _auto_bundleable(item) or int(_get(item, "id")) in manual_ids
+            if is_auto_bundleable(item) or int(_get(item, "id")) in manual_ids
         ]
         visible_bundle_members = [
             item for item in bundle_members
@@ -967,7 +1324,7 @@ def _group_discovered(results, discovered):
             representative["_series_members"] = bundle_members
             representative["_bundle_summary"] = _bundle_summary(bundle_members)
             representative["_bundle_default_member_id"] = int(_get(default_member, "id"))
-            _apply_bundle_override(representative, bundle_members)
+            # Overrides are applied in one batch after every group is assembled.
             grouped.append(
                 (
                     min(
@@ -998,7 +1355,7 @@ def _group_discovered(results, discovered):
         )
 
     grouped.sort(key=lambda pair: pair[0])
-    return [item for _, item in grouped]
+    return _apply_bundle_overrides([item for _, item in grouped])
 
 
 def _diagnostic_media_summary(item, include_relations=False):
@@ -1065,8 +1422,9 @@ def group_media_results(results, enrich=False, max_requests=0, delay=0.25, stop_
                 max_requests=max_requests if enrich else -1,
                 delay=delay,
                 stop_event=stop_event,
+                bundle_options=settings,
             )
-            groups = _group_discovered(results, discovered)
+            groups = _group_discovered(results, discovered, bundle_options=settings)
         except Exception as error:
             log_exception(
                 "bundling.failed",
@@ -1105,10 +1463,10 @@ def group_media_results(results, enrich=False, max_requests=0, delay=0.25, stop_
 
 def has_pending_relation_enrichment(results):
     seen = set()
-    queue = list(results)
+    queue = deque(results)
 
     while queue:
-        item = queue.pop(0)
+        item = queue.popleft()
         item_id = int(item["id"])
         if item_id in seen:
             continue
@@ -1141,24 +1499,61 @@ def has_pending_relation_enrichment(results):
     return False
 
 
-def _relation_data_for(ids):
+def _relation_data_for(ids, connection=None):
     if not ids:
         return []
 
-    placeholders = ",".join("?" for _ in ids)
+    member_ids = sorted({int(work_id) for work_id in ids})
+    if not member_ids:
+        return []
     relation_types = ",".join(repr(value) for value in SERIES_RELATIONS)
-    connection = get_connection()
+    owns_connection = connection is None
+    if owns_connection:
+        connection = get_connection()
+    try:
+        # Keep the single-query path unchanged for typical library sizes. Large
+        # libraries are chunked because this predicate binds every ID twice.
+        if len(member_ids) <= 400:
+            placeholders = ",".join("?" for _ in member_ids)
+            return connection.execute(
+                f"SELECT source_id, target_id, relation_type "
+                f"FROM work_relations "
+                f"WHERE relation_type IN ({relation_types}) "
+                f"AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
+                [*member_ids, *member_ids],
+            ).fetchall()
 
-    rows = connection.execute(
-        f"SELECT source_id, target_id, relation_type "
-        f"FROM work_relations "
-        f"WHERE relation_type IN ({relation_types}) "
-        f"AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
-        [*ids, *ids],
-    ).fetchall()
-
-    connection.close()
-    return rows
+        rows_by_identity = {}
+        for start in range(0, len(member_ids), 400):
+            chunk = member_ids[start:start + 400]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"SELECT rowid AS _relation_rowid, source_id, target_id, relation_type "
+                f"FROM work_relations "
+                f"WHERE relation_type IN ({relation_types}) "
+                f"AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))",
+                [*chunk, *chunk],
+            ).fetchall()
+            for row in rows:
+                identity = (
+                    int(row["source_id"]), int(row["target_id"]), str(row["relation_type"])
+                )
+                rows_by_identity[identity] = (
+                    int(row["_relation_rowid"]),
+                    {
+                        "source_id": identity[0],
+                        "target_id": identity[1],
+                        "relation_type": identity[2],
+                    },
+                )
+        return [
+            row for _rowid, row in sorted(
+                rows_by_identity.values(), key=lambda item: item[0]
+            )
+        ]
+    finally:
+        if owns_connection:
+            connection.close()
 
 
 def sync_library_relations(force_ids=None):
@@ -1350,10 +1745,8 @@ def get_library_series(rows=None):
         right_members = component_members[right_root]
         # Component-wide checks stop indirect relation chains from bypassing
         # an exclusion the user explicitly added.
-        if any(
-            tuple(sorted((left_id, right_id))) in excluded_links
-            for left_id in left_members
-            for right_id in right_members
+        if _components_have_excluded_pair(
+            left_members, right_members, excluded_neighbors
         ):
             return False
 
@@ -1367,121 +1760,128 @@ def get_library_series(rows=None):
         ):
             return False
 
-        parent[right_root] = left_root
-        left_members.update(component_members.pop(right_root))
-        left_snapshots.update(component_snapshot_ids.pop(right_root))
+        # Snapshot compatibility and exclusion checks are symmetric. Merge the
+        # smaller component into the larger one to avoid quadratic set copying.
+        _merge_component_roots(
+            parent, component_members, left_root, right_root, component_snapshot_ids
+        )
         return True
 
     row_by_id = {int(row["id"]): row for row in rows}
-    excluded_links = {
-        tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
-        for link in get_bundle_exclusions(ids)
-    }
-
-    # Search already computed these bundles using the full discovered relation
-    # graph. Preserve that exact grouping in Library while honoring current
-    # format preferences and explicit pair exclusions.
-    saved_groups = defaultdict(set)
-    for membership in get_automatic_bundle_memberships(ids):
-        bundle_id = int(membership["bundle_id"])
-        work_id = int(membership["work_id"])
-        if work_id in ids:
-            saved_groups[bundle_id].add(work_id)
-            component_snapshot_ids[work_id].add(bundle_id)
-
-    for member_ids in saved_groups.values():
-        bundleable_ids = sorted(
-            work_id for work_id in member_ids
-            if work_id in row_by_id and _auto_bundleable(row_by_id[work_id])
-        )
-        if len(bundleable_ids) > 1:
-            anchor_id = bundleable_ids[0]
-            for work_id in bundleable_ids[1:]:
-                union(anchor_id, work_id)
-
-    for relation in _relation_data_for(ids):
-        source_id = int(relation["source_id"])
-        target_id = int(relation["target_id"])
-        source = row_by_id.get(source_id)
-        target = row_by_id.get(target_id)
-
-        if source is None or target is None:
-            continue
-
-        # Use the same conservative relation policy as Search. In particular,
-        # don't let stored franchise-level relations bypass the cross-format
-        # compatibility rules used during search enrichment.
-        edge = {
-            "relationType": relation["relation_type"],
-            "node": target,
+    connection = get_connection()
+    try:
+        grouping_state = get_library_bundle_grouping_state(ids, connection=connection)
+        relation_rows = _relation_data_for(ids, connection=connection)
+        bundle_options = _bundle_options_for_items(rows)
+        excluded_links = {
+            tuple(sorted((int(link["work_a"]), int(link["work_b"]))))
+            for link in grouping_state["exclusions"]
         }
-        if tuple(sorted((source_id, target_id))) in excluded_links:
-            continue
-        if _relation_group_compatible(source, edge, target):
-            union(source_id, target_id)
-
-    # Manual bundle links are explicit user overrides and may join works
-    # even when AniList relations or formats would not allow automatic bundling.
-    for link in get_manual_bundle_links(ids):
-        source_id = int(link["work_a"])
-        target_id = int(link["work_b"])
-        if source_id in ids and target_id in ids:
-            # Explicit user-created manual links may combine automatic
-            # snapshots, but the exclusion check inside union remains active.
-            union(source_id, target_id, allow_snapshot_merge=True)
-
-    by_key = {}
-    for row in rows:
-        if not _auto_bundleable(row):
-            continue
-
-        key = _series_group_key(row)
-        if key[1]:
-            work_id = int(row["id"])
-            if key in by_key:
-                partner_id = by_key[key]
-                if tuple(sorted((work_id, partner_id))) not in excluded_links:
-                    union(work_id, partner_id)
-            else:
-                by_key[key] = work_id
-
-    groups = defaultdict(list)
-    for row in rows:
-        groups[find(int(row["id"]))].append(row)
-
-    result = []
-    for members in groups.values():
-        members.sort(
-            key=lambda row: (
-                row["start_year"] is None,
-                row["start_year"] or 9999,
-                row["id"],
+        excluded_neighbors = _build_exclusion_neighbors(excluded_links)
+    
+        # Search already computed these bundles using the full discovered relation
+        # graph. Preserve that exact grouping in Library while honoring current
+        # format preferences and explicit pair exclusions.
+        saved_groups = defaultdict(set)
+        for membership in grouping_state["automatic_memberships"]:
+            bundle_id = int(membership["bundle_id"])
+            work_id = int(membership["work_id"])
+            if work_id in ids:
+                saved_groups[bundle_id].add(work_id)
+                component_snapshot_ids[work_id].add(bundle_id)
+    
+        for member_ids in saved_groups.values():
+            bundleable_ids = sorted(
+                work_id for work_id in member_ids
+                if work_id in row_by_id and _auto_bundleable(row_by_id[work_id], bundle_options)
             )
-        )
-
-        group = dict(members[0])
-        statuses = {row["status"] for row in members}
-        group["status"] = (
-            "Watching"
-            if "Watching" in statuses
-            else "Completed"
-            if statuses and statuses == {"Completed"}
-            else "Planning"
-        )
-        group["_series_count"] = len(members)
-        group["_series_members"] = members
-        group["_series_episode_total"] = sum(
-            int(row["episodes"] or 0) for row in members
-        )
-        group["_series_progress"] = sum(
-            int(row["progress_episodes"] or 0) for row in members
-        )
-        group["_bundle_summary"] = _bundle_summary(members)
-
-        if len(members) > 1:
-            _apply_bundle_override(group, members)
-
-        group["_bundle_default_member_id"] = int(members[0]["id"])
-        result.append(group)
-
-    return result
+            if len(bundleable_ids) > 1:
+                anchor_id = bundleable_ids[0]
+                for work_id in bundleable_ids[1:]:
+                    union(anchor_id, work_id)
+    
+        for relation in relation_rows:
+            source_id = int(relation["source_id"])
+            target_id = int(relation["target_id"])
+            source = row_by_id.get(source_id)
+            target = row_by_id.get(target_id)
+    
+            if source is None or target is None:
+                continue
+    
+            # Use the same conservative relation policy as Search. In particular,
+            # don't let stored franchise-level relations bypass the cross-format
+            # compatibility rules used during search enrichment.
+            edge = {
+                "relationType": relation["relation_type"],
+                "node": target,
+            }
+            if tuple(sorted((source_id, target_id))) in excluded_links:
+                continue
+            if _relation_group_compatible(source, edge, target, bundle_options=bundle_options):
+                union(source_id, target_id)
+    
+        # Manual bundle links are explicit user overrides and may join works
+        # even when AniList relations or formats would not allow automatic bundling.
+        for link in grouping_state["manual_links"]:
+            source_id = int(link["work_a"])
+            target_id = int(link["work_b"])
+            if source_id in ids and target_id in ids:
+                # Explicit user-created manual links may combine automatic
+                # snapshots, but the exclusion check inside union remains active.
+                union(source_id, target_id, allow_snapshot_merge=True)
+    
+        by_key = {}
+        for row in rows:
+            if not _auto_bundleable(row, bundle_options):
+                continue
+    
+            key = _series_group_key(row)
+            if key[1]:
+                work_id = int(row["id"])
+                if key in by_key:
+                    partner_id = by_key[key]
+                    if tuple(sorted((work_id, partner_id))) not in excluded_links:
+                        union(work_id, partner_id)
+                else:
+                    by_key[key] = work_id
+    
+        groups = defaultdict(list)
+        for row in rows:
+            groups[find(int(row["id"]))].append(row)
+    
+        result = []
+        for members in groups.values():
+            members.sort(
+                key=lambda row: (
+                    row["start_year"] is None,
+                    row["start_year"] or 9999,
+                    row["id"],
+                )
+            )
+    
+            group = dict(members[0])
+            statuses = {row["status"] for row in members}
+            group["status"] = (
+                "Watching"
+                if "Watching" in statuses
+                else "Completed"
+                if statuses and statuses == {"Completed"}
+                else "Planning"
+            )
+            group["_series_count"] = len(members)
+            group["_series_members"] = members
+            group["_series_episode_total"] = sum(
+                int(row["episodes"] or 0) for row in members
+            )
+            group["_series_progress"] = sum(
+                int(row["progress_episodes"] or 0) for row in members
+            )
+            group["_bundle_summary"] = _bundle_summary(members)
+    
+            group["_bundle_default_member_id"] = int(members[0]["id"])
+            result.append(group)
+    
+        return _apply_bundle_overrides(result, connection=connection)
+    finally:
+        connection.close()

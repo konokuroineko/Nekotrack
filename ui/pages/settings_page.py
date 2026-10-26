@@ -1,7 +1,8 @@
 import os
+import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QUrl
+from PySide6.QtCore import QObject, Qt, Signal, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -23,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from diagnostics import default_app_data_dir, export_diagnostics, log_event, log_exception
+from diagnostics import default_app_data_dir, export_diagnostics, log_event, log_exception, log_operation
 from database import get_all_library
 from ui.bundle_options import BUNDLE_OPTION_GROUPS, BUNDLE_OPTION_KEYS
 from ui.preferences import (
@@ -148,6 +149,30 @@ class ThemePresetCard(QFrame):
         super().mousePressEvent(event)
 
 
+class _DiagnosticsExportSignals(QObject):
+    succeeded = Signal(str)
+    failed = Signal(object)
+    completed = Signal()
+
+
+class _DiagnosticsExportWorker:
+    """Build a large diagnostics report without blocking or owning a Qt thread."""
+
+    def __init__(self, destination):
+        self.destination = Path(destination)
+        self.signals = _DiagnosticsExportSignals()
+
+    def run(self):
+        try:
+            output = export_diagnostics(output_path=self.destination)
+        except Exception as error:
+            self.signals.failed.emit(error)
+        else:
+            self.signals.succeeded.emit(str(output))
+        finally:
+            self.signals.completed.emit()
+
+
 class SettingsPage(QWidget):
     settings_changed = Signal(str)
     setup_requested = Signal()
@@ -155,9 +180,14 @@ class SettingsPage(QWidget):
     update_check_requested = Signal()
     rollback_requested = Signal()
 
-    def __init__(self, background_manager=None):
+    def __init__(self, background_manager=None, defer_initial_build=False):
         super().__init__()
         self.background_manager = background_manager
+        self._diagnostics_export_thread = None
+        self._diagnostics_export_worker = None
+        self._diagnostics_export_button_widget = None
+        self._built = False
+        self._defer_initial_build = bool(defer_initial_build)
         self._active_ui_scale = self._read_active_ui_scale()
         self._ui_scale_combo = None
         self._ui_scale_restart_action = None
@@ -167,7 +197,20 @@ class SettingsPage(QWidget):
         self._background_overlay_slider = None
         self._background_overlay_value = None
         self.setMinimumSize(0, 0)
-        self._build()
+        if not self._defer_initial_build:
+            self.ensure_built()
+
+    def ensure_built(self):
+        """Construct Settings only when first opened, keeping startup work focused."""
+        if self._built:
+            return
+        self._built = True
+        try:
+            with log_operation("settings.build"):
+                self._build()
+        except Exception:
+            self._built = False
+            raise
 
     def _build(self):
         outer = QVBoxLayout(self)
@@ -1131,29 +1174,39 @@ class SettingsPage(QWidget):
         button.setToolTip(
             "Create a redacted troubleshooting report in the NekoTrack app-data folder."
         )
+        self._diagnostics_export_button_widget = button
         button.clicked.connect(self._export_diagnostics)
         return button
 
     def _export_diagnostics(self, _checked=False):
-        destination = default_app_data_dir() / "nekotrack_diagnostics.txt"
-        try:
-            log_event("diagnostics.export_started", report_name=destination.name)
-            output = export_diagnostics(output_path=destination)
-        except Exception as error:
-            log_exception(
-                "diagnostics.export_failed",
-                error,
-                report_name=destination.name,
-            )
-            QMessageBox.warning(
-                self,
-                "Diagnostics export failed",
-                "NekoTrack couldn't create the report in its app-data folder. "
-                "Check that the folder is writable and try again.\n\n"
-                f"Details: {error}",
-            )
+        if self._diagnostics_export_thread is not None:
             return
 
+        destination = default_app_data_dir() / "nekotrack_diagnostics.txt"
+        log_event("diagnostics.export_started", report_name=destination.name)
+
+        worker = _DiagnosticsExportWorker(destination)
+        worker.signals.succeeded.connect(self._diagnostics_export_succeeded)
+        worker.signals.failed.connect(self._diagnostics_export_failed)
+        worker.signals.completed.connect(self._diagnostics_export_worker_finished)
+        thread = threading.Thread(
+            target=worker.run,
+            name="NekoTrack-Diagnostics-Export",
+            daemon=False,
+        )
+        self._diagnostics_export_worker = worker
+        self._diagnostics_export_thread = thread
+
+        button = self._diagnostics_export_button_widget
+        if button is not None:
+            button.setEnabled(False)
+            button.setText("Exporting…")
+
+        log_event("diagnostics.export_worker_started")
+        thread.start()
+
+    def _diagnostics_export_succeeded(self, output_path):
+        output = Path(output_path)
         log_event("diagnostics.export_completed", report_name=output.name)
         QMessageBox.information(
             self,
@@ -1164,6 +1217,28 @@ class SettingsPage(QWidget):
             "Review it before sharing.",
         )
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(output.parent)))
+
+    def _diagnostics_export_failed(self, error):
+        log_exception(
+            "diagnostics.export_failed",
+            error,
+            report_name="nekotrack_diagnostics.txt",
+        )
+        QMessageBox.warning(
+            self,
+            "Diagnostics export failed",
+            "NekoTrack couldn't create the report in its app-data folder. "
+            "Check that the folder is writable and try again.\n\n"
+            f"Details: {error}",
+        )
+
+    def _diagnostics_export_worker_finished(self):
+        self._diagnostics_export_worker = None
+        self._diagnostics_export_thread = None
+        button = self._diagnostics_export_button_widget
+        if button is not None:
+            button.setText("Export diagnostics")
+            button.setEnabled(True)
 
     def _info_row(self, name, value):
         value_label = QLabel(value)

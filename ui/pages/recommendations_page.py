@@ -474,16 +474,27 @@ class RecommendationsPage(QWidget):
 
     def set_visibility_viewport(self, viewport, scroll_bar=None):
         """Use the actual Home or Recommendations viewport for pagination and impressions."""
+        next_scroll_bar = scroll_bar
+        if next_scroll_bar is None and self.scroll is not None:
+            next_scroll_bar = self.scroll.verticalScrollBar()
+
+        previous_scroll_bar = self._active_scroll_bar
         self._visibility_viewport = viewport
-        self._active_scroll_bar = scroll_bar
-        if scroll_bar is None and self.scroll is not None:
-            self._active_scroll_bar = self.scroll.verticalScrollBar()
-        if self._active_scroll_bar is not None:
+        if previous_scroll_bar is next_scroll_bar:
+            return
+
+        # Disconnect the previously tracked bar, not the newly supplied one.
+        # Disconnecting a bar that was never connected emits a PySide warning;
+        # replacing the tracked bar also needs to stop old callbacks.
+        if previous_scroll_bar is not None:
             try:
-                self._active_scroll_bar.valueChanged.disconnect(self._scroll_value_changed)
+                previous_scroll_bar.valueChanged.disconnect(self._scroll_value_changed)
             except (TypeError, RuntimeError):
                 pass
-            self._active_scroll_bar.valueChanged.connect(self._scroll_value_changed)
+
+        self._active_scroll_bar = next_scroll_bar
+        if next_scroll_bar is not None:
+            next_scroll_bar.valueChanged.connect(self._scroll_value_changed)
 
     def _scroll_value_changed(self, _value):
         self._maybe_load_more()

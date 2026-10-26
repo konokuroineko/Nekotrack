@@ -47,9 +47,85 @@ jobs:
         if: runner.os == 'Linux'
         run: python installer/generate_icon.py
       - name: Compile Python modules
-        run: python -m compileall -q main.py api.py catalog_search.py debug_tools.py database.py image_cache.py series.py updater.py stress_test.py installer ui tests
+        run: python -m compileall -q main.py api.py native_acceleration.py catalog_search.py debug_tools.py database.py image_cache.py series.py updater.py stress_test.py installer ui tests
       - name: Run regression and deterministic stress tests
         run: python -m unittest discover -s tests -v
       - name: Smoke-test the timed adversarial soak harness
         if: runner.os == 'Linux'
         run: python stress_test.py --seconds 1 --seed 17 --report "${{ runner.temp }}/nekotrack-stress-smoke.json"
+
+  rust-native:
+    name: Rust extension parity (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.14"]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Set up stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install application and build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt maturin
+      - name: Build optimized native wheel
+        working-directory: rust/nekotrack_core
+        run: maturin build --release --out ../../target/wheels
+      - name: Install the native wheel
+        run: python -c "import glob, subprocess, sys; wheels = glob.glob('target/wheels/nekotrack_core-*.whl'); assert len(wheels) == 1, wheels; subprocess.check_call([sys.executable, '-m', 'pip', 'install', wheels[0]])"
+      - name: Check native/Python parity
+        run: python -m unittest discover -s tests -p test_native_acceleration.py -v
+      - name: Benchmark native similarity against Python
+        run: python experiments/benchmark_native_similarity.py --pairs 5000 --iterations 9 --json-out "${{ runner.temp }}/nekotrack-native-similarity.json"
+      - name: Benchmark optimized Python recommendation ranking
+        run: python experiments/benchmark_recommendations.py --candidate-sizes 50 250 500 --sources 50 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-recommendation-ranking.json"
+      - name: Benchmark indexed series-title candidates
+        run: python experiments/benchmark_series_prefix.py --candidate-sizes 100 500 1000 2000 --iterations 5 --json-out "${{ runner.temp }}/nekotrack-series-prefix.json"
+      - name: Benchmark cached series-title normalization
+        run: python experiments/benchmark_series_key_cache.py --unique-title-counts 100 1000 5000 10000 --calls 30000 --iterations 5 --json-out "${{ runner.temp }}/nekotrack-series-key-cache.json"
+      - name: Compare compiled title normalization patterns
+        run: python experiments/benchmark_series_key_compiled.py --title-counts 1000 5000 10000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-series-key-compiled.json"
+      - name: Benchmark indexed bundle exclusion checks
+        run: python experiments/benchmark_series_exclusions.py --component-sizes 100 250 500 1000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-series-exclusions.json"
+      - name: Benchmark small-to-large component merges
+        run: python experiments/benchmark_series_union_by_size.py --member-counts 500 1000 2000 --iterations 5 --json-out "${{ runner.temp }}/nekotrack-series-union-by-size.json"
+      - name: Benchmark Search relation readiness queue
+        run: python experiments/benchmark_relation_pending_queue.py --sizes 1000 5000 10000 20000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-relation-pending-queue.json"
+      - name: Benchmark relation edge presence checks
+        run: python experiments/benchmark_relation_edge_presence.py --edge-counts 0 3 10 50 --calls 30000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-relation-edge-presence.json"
+      - name: Benchmark batched bundle Work Details reads
+        run: python experiments/benchmark_bundle_details.py --work-counts 5 20 50 --iterations 5 --json-out "${{ runner.temp }}/nekotrack-bundle-details.json"
+      - name: Benchmark Work Details episode snapshot reads
+        run: python experiments/benchmark_episode_section_snapshot.py --episode-counts 12 100 1000 5000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-episode-snapshot.json"
+      - name: Benchmark batched episode thumbnail path writes
+        run: python experiments/benchmark_episode_thumbnail_writes.py --episode-counts 12 50 100 500 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-episode-thumbnail-writes.json"
+      - name: Benchmark batched episode catalog upserts
+        run: python experiments/benchmark_episode_catalog_upserts.py --episode-counts 12 100 500 1500 --iterations 5 --json-out "${{ runner.temp }}/nekotrack-episode-catalog-upserts.json"
+      - name: Benchmark batched character snapshot cleanup
+        run: python experiments/benchmark_character_snapshot_cleanup.py --character-counts 25 100 250 500 1000 --iterations 3 --json-out "${{ runner.temp }}/nekotrack-character-snapshot-cleanup.json"
+      - name: Benchmark batched Library grouping reads
+        run: python experiments/benchmark_library_grouping_reads.py --work-counts 100 1000 5000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-library-grouping-reads.json"
+      - name: Benchmark complete synthetic Library grouping
+        run: python experiments/benchmark_library_grouping_full.py --work-counts 100 1000 5000 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-library-grouping-full.json"
+      - name: Compare logical-season metadata algorithms
+        run: python experiments/benchmark_logical_season_metadata.py --group-count 1250 --iterations 7 --json-out "${{ runner.temp }}/nekotrack-logical-season-metadata.json"
+      - name: Upload comparable backend benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: nekotrack-backend-benchmarks-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: ${{ runner.temp }}/nekotrack-*.json
+          if-no-files-found: error

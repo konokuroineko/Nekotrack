@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from database import get_all_library, get_episodes, get_release_reminders, set_release_reminder
+from database import get_release_reminders, get_upcoming_library_episodes, set_release_reminder
 from diagnostics import log_exception
 from ui.theme import COLORS, surface_rgba
 
@@ -15,7 +15,7 @@ from ui.theme import COLORS, surface_rgba
 class CalendarPage(QWidget):
     HORIZON_DAYS = 60
 
-    def __init__(self):
+    def __init__(self, defer_initial_refresh=False):
         super().__init__()
         self.setObjectName("calendarPage")
         self._events = []
@@ -33,7 +33,10 @@ class CalendarPage(QWidget):
         self.layout.setSpacing(15)
         self.scroll.setWidget(self.content)
         outer.addWidget(self.scroll)
-        self.refresh()
+        if defer_initial_refresh:
+            self._apply_theme()
+        else:
+            self.refresh()
 
     @staticmethod
     def _parse_date(value):
@@ -73,30 +76,23 @@ class CalendarPage(QWidget):
         last_date = today + datetime.timedelta(days=self.HORIZON_DAYS)
         events = []
         try:
-            reminders = {
-                (int(row["work_id"]), int(row["episode_number"]))
-                for row in get_release_reminders()
-            }
-            library = [dict(row) for row in (get_all_library() or [])]
-            for work in library:
-                if str(work.get("type") or "").upper() != "ANIME":
+            end_exclusive = last_date + datetime.timedelta(days=1)
+            episode_rows = get_upcoming_library_episodes(
+                today.isoformat(),
+                end_exclusive.isoformat(),
+            )
+            for episode in episode_rows or []:
+                row = dict(episode)
+                air_date = self._parse_date(row.get("air_date"))
+                if air_date is None or air_date < today or air_date > last_date:
                     continue
-                try:
-                    work_id = int(work.get("id"))
-                except (TypeError, ValueError, OverflowError):
-                    continue
-                for episode in get_episodes(work_id):
-                    row = dict(episode)
-                    air_date = self._parse_date(row.get("air_date"))
-                    if air_date is None or air_date < today or air_date > last_date:
-                        continue
-                    row["work_id"] = work_id
-                    row["work_title"] = work.get("title") or f"Untitled · {work_id}"
-                    row["cover_path"] = work.get("cover_path")
-                    row["cover_url"] = work.get("cover_url")
-                    row["_release_date"] = air_date
-                    row["_reminder_enabled"] = (work_id, int(row.get("episode_number") or 0)) in reminders
-                    events.append(row)
+                work_id = int(row.get("work_id") or 0)
+                row["work_title"] = row.get("work_title") or f"Untitled · {work_id}"
+                row["cover_path"] = row.pop("work_cover_path", None)
+                row["cover_url"] = row.pop("work_cover_url", None)
+                row["_release_date"] = air_date
+                row["_reminder_enabled"] = bool(row.pop("reminder_enabled", False))
+                events.append(row)
         except Exception as error:
             log_exception("calendar.load_failed", error)
 

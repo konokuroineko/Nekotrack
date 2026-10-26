@@ -97,7 +97,7 @@ class CharacterCard(QFrame):
         self.character = character
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet(card_stylesheet())
-        self._network_manager = QNetworkAccessManager(self)
+        self._network_manager = None
         self._image_reply = None
         self._voice_image_reply = None
         self._character_id = self._value("id")
@@ -231,10 +231,15 @@ class CharacterCard(QFrame):
             artwork.update()
         self.update()
 
+    def _ensure_network_manager(self):
+        if self._network_manager is None:
+            self._network_manager = QNetworkAccessManager(self)
+        return self._network_manager
+
     def _load_image_url(self, url):
         if not url:
             return
-        self._image_reply = self._network_manager.get(
+        self._image_reply = self._ensure_network_manager().get(
             QNetworkRequest(QUrl(str(url)))
         )
         self._image_reply.finished.connect(self._image_finished)
@@ -264,7 +269,7 @@ class CharacterCard(QFrame):
     def _load_voice_image_url(self, url):
         if not url:
             return
-        self._voice_image_reply = self._network_manager.get(
+        self._voice_image_reply = self._ensure_network_manager().get(
             QNetworkRequest(QUrl(str(url)))
         )
         self._voice_image_reply.finished.connect(self._voice_image_finished)

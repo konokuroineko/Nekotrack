@@ -312,6 +312,67 @@ class ReleaseReminderDatabaseTests(unittest.TestCase):
             database.mark_release_reminder_notified(101, 5, "not-a-date")
 
 
+    def test_calendar_episode_query_is_single_connection_and_filters_library_scope(self):
+        today = datetime.date.today()
+        tomorrow = today + datetime.timedelta(days=1)
+        day_after_tomorrow = tomorrow + datetime.timedelta(days=1)
+
+        database.add_to_library(101, "Watching")
+        database.set_release_reminder(101, 5, True)
+        connection = database.get_connection()
+        try:
+            connection.execute(
+                "UPDATE episodes SET air_date = ? WHERE work_id = ? AND episode_number = ?",
+                (tomorrow.isoformat(), 101, 6),
+            )
+            connection.execute(
+                "INSERT INTO episodes (work_id, episode_number, title, air_date) "
+                "VALUES (?, ?, ?, ?)",
+                (101, 7, "Outside window", day_after_tomorrow.isoformat()),
+            )
+            connection.execute(
+                "INSERT INTO works (id, title, type, format, episodes) VALUES (?, ?, ?, ?, ?)",
+                (102, "Not anime", "MANGA", "MANGA", 0),
+            )
+            connection.execute(
+                "INSERT INTO episodes (work_id, episode_number, title, air_date) "
+                "VALUES (?, ?, ?, ?)",
+                (102, 1, "Manga row", today.isoformat()),
+            )
+            connection.execute(
+                "INSERT INTO works (id, title, type, format, episodes) VALUES (?, ?, ?, ?, ?)",
+                (103, "Anime not in library", "ANIME", "TV", 12),
+            )
+            connection.execute(
+                "INSERT INTO episodes (work_id, episode_number, title, air_date) "
+                "VALUES (?, ?, ?, ?)",
+                (103, 1, "Not tracked", today.isoformat()),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        database.add_to_library(102, "Planning")
+
+        original_factory = database.get_connection
+        with patch.object(database, "get_connection", wraps=original_factory) as connection_factory:
+            rows = database.get_upcoming_library_episodes(
+                today.isoformat(),
+                day_after_tomorrow.isoformat(),
+            )
+
+        connection_factory.assert_called_once()
+        self.assertEqual(
+            [(row["work_id"], row["episode_number"]) for row in rows],
+            [(101, 5), (101, 6)],
+        )
+        self.assertEqual([bool(row["reminder_enabled"]) for row in rows], [True, False])
+        self.assertTrue(all(row["work_title"] == "Reminder Test" for row in rows))
+
+    def test_upcoming_library_episode_query_rejects_invalid_or_empty_date_ranges(self):
+        self.assertEqual(database.get_upcoming_library_episodes("not-a-date", "2026-01-01"), [])
+        self.assertEqual(database.get_upcoming_library_episodes("2026-01-02", "2026-01-02"), [])
+        self.assertEqual(database.get_upcoming_library_episodes("2026-01-03", "2026-01-02"), [])
+
     def test_calendar_page_shows_cached_upcoming_events_and_persists_toggle(self):
         from PySide6.QtWidgets import QApplication, QPushButton
         from ui.pages.calendar_page import CalendarPage
@@ -360,3 +421,121 @@ class ReleaseReminderDatabaseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EpisodeCatalogRefreshDatabaseTests(unittest.TestCase):
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self._database_path = Path(self._directory.name) / "episode-catalog-refresh.db"
+        self._patcher = patch.object(database, "DATABASE_NAME", str(self._database_path))
+        self._patcher.start()
+        database.initialize_database()
+
+        connection = database.get_connection()
+        try:
+            works = [
+                (101, "Legacy cached anime", "ANIME", "TV", 12),
+                (102, "Fresh cached anime", "ANIME", "TV", 12),
+                (103, "Stale cached anime", "ANIME", "TV", 12),
+                (104, "Incomplete cached anime", "ANIME", "TV", 12),
+                (105, "Old-policy cached anime", "ANIME", "TV", 12),
+                (106, "Missing episode rows", "ANIME", "TV", 12),
+                (107, "Manga entry", "MANGA", "MANGA", 0),
+                (108, "Anime outside Library", "ANIME", "TV", 12),
+                (109, "Finished legacy anime", "ANIME", "TV", 12),
+            ]
+            connection.executemany(
+                "INSERT INTO works (id, title, type, format, episodes) VALUES (?, ?, ?, ?, ?)",
+                works,
+            )
+            connection.executemany(
+                "INSERT INTO user_library (work_id, status) VALUES (?, 'Planning')",
+                [(work_id,) for work_id in [101, 102, 103, 104, 105, 106, 107, 109]],
+            )
+            connection.executemany(
+                "INSERT INTO episodes (work_id, episode_number, title, air_date) VALUES (?, 1, 'Episode 1', ?)",
+                [
+                    (101, "2030-01-01"),
+                    (102, "2030-01-01"),
+                    (103, "2030-01-01"),
+                    (104, "2030-01-01"),
+                    (105, "2030-01-01"),
+                    (109, "2000-01-01"),
+                ],
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        self._now = datetime.datetime(2026, 10, 25, 12, 0).timestamp()
+        self._interval = 7 * 24 * 60 * 60
+        database.save_provider_metadata(
+            102,
+            "tmdb_episode_match_version",
+            {
+                "version": api.TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": self._now - 100,
+                "complete": True,
+            },
+        )
+        database.save_provider_metadata(
+            103,
+            "tmdb_episode_match_version",
+            {
+                "version": api.TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": self._now - self._interval - 1,
+                "complete": True,
+            },
+        )
+        database.save_provider_metadata(
+            104,
+            "tmdb_episode_match_version",
+            {
+                "version": api.TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": self._now - 100,
+                "complete": False,
+            },
+        )
+        database.save_provider_metadata(
+            105,
+            "tmdb_episode_match_version",
+            {
+                "version": api.TMDB_EPISODE_CATALOG_VERSION - 1,
+                "fetched_at": self._now - 100,
+                "complete": True,
+            },
+        )
+        database.save_provider_metadata(
+            106,
+            "tmdb_episode_match_version",
+            {
+                "version": api.TMDB_EPISODE_CATALOG_VERSION,
+                "fetched_at": self._now - 100,
+                "complete": True,
+            },
+        )
+
+    def tearDown(self):
+        self._patcher.stop()
+        self._directory.cleanup()
+
+    def test_refresh_candidates_include_legacy_stale_incomplete_and_missing_rows(self):
+        original_factory = database.get_connection
+        with patch.object(database, "get_connection", wraps=original_factory) as factory:
+            work_ids = database.get_library_episode_catalog_refresh_ids(
+                api.TMDB_EPISODE_CATALOG_VERSION,
+                self._interval,
+                now=self._now,
+            )
+
+        factory.assert_called_once()
+        self.assertEqual(work_ids, [101, 103, 104, 105, 106])
+        self.assertNotIn(102, work_ids, "A fresh complete catalog should stay cached")
+        self.assertNotIn(107, work_ids, "Manga entries do not use episode catalogs")
+        self.assertNotIn(108, work_ids, "Only works saved in Library are eligible")
+        self.assertNotIn(
+            109,
+            work_ids,
+            "A past-only legacy catalog should not trigger a one-time mass refresh",
+        )
+
