@@ -1080,6 +1080,60 @@ class UiStartupTests(unittest.TestCase):
         prune.assert_not_called()
         self.assertFalse(save_metadata.call_args.args[2]["complete"])
 
+    def test_episode_preloader_treats_shutdown_cancellation_as_normal_exit(self):
+        import threading
+
+        stop_event = threading.Event()
+        work = {
+            "id": 303,
+            "type": "ANIME",
+            "title": "Example ONA",
+            "start_year": None,
+            "start_month": None,
+            "start_day": None,
+            "episodes": 12,
+            "format": "ONA",
+            "tmdb_id": None,
+            "tmdb_season_number": None,
+        }
+        snapshot = {
+            "work": work,
+            "catalog_metadata": {"version": 0},
+            "catalog_metadata_error": None,
+        }
+
+        def record_attempt(*_args, **_kwargs):
+            stop_event.set()
+
+        errors = []
+        completed = []
+        worker = LibraryEpisodePreloadWorker([303], stop_event)
+        worker.error.connect(lambda work_id, message: errors.append((work_id, message)))
+        worker.completed.connect(lambda: completed.append(True))
+
+        with (
+            patch("ui.main_window.get_episode_section_snapshot", return_value=snapshot),
+            patch("ui.main_window.get_alternate_titles", return_value=[]),
+            patch("ui.main_window.save_provider_metadata", side_effect=record_attempt),
+            patch(
+                "ui.main_window.get_tmdb_episode_data",
+                side_effect=InterruptedError("Network request cancelled during shutdown."),
+            ) as get_episode_data,
+            patch("ui.main_window.log_event") as log_event,
+            patch("ui.main_window.log_exception") as log_exception,
+        ):
+            worker.run()
+
+        get_episode_data.assert_called_once()
+        self.assertEqual(errors, [])
+        self.assertEqual(completed, [True])
+        log_event.assert_any_call(
+            "library.episode_preload.cancelled",
+            work_id=303,
+            reason="shutdown",
+        )
+        log_exception.assert_not_called()
+
     def test_episode_preload_completion_refreshes_only_the_visible_schedule_view(self):
         from types import SimpleNamespace
         from ui.main_window import MainWindow
