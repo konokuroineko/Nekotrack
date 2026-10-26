@@ -6,6 +6,60 @@ import api
 
 
 class ProviderPaginationShutdownTests(unittest.TestCase):
+    def setUp(self):
+        api.reset_api_shutdown()
+
+    def tearDown(self):
+        api.reset_api_shutdown()
+
+    def test_blocking_http_call_can_be_abandoned_during_shutdown(self):
+        stop_event = threading.Event()
+        request_started = threading.Event()
+        release_request = threading.Event()
+        response_closed = threading.Event()
+        errors = []
+
+        class FakeResponse:
+            def close(self):
+                response_closed.set()
+
+        def blocking_request(*_args, **_kwargs):
+            request_started.set()
+            release_request.wait(timeout=3)
+            return FakeResponse()
+
+        def call_api():
+            try:
+                api.anilist_request(
+                    "query Example { Viewer { id } }",
+                    stop_event=stop_event,
+                )
+            except Exception as error:
+                errors.append(error)
+
+        with (
+            patch.object(api, "_wait_for_anilist_slot"),
+            patch.object(api.requests, "post", side_effect=blocking_request),
+        ):
+            caller = threading.Thread(target=call_api, name="test-api-caller")
+            caller.start()
+            try:
+                self.assertTrue(request_started.wait(timeout=2))
+                stop_event.set()
+                caller.join(timeout=0.5)
+                self.assertFalse(
+                    caller.is_alive(),
+                    "The provider caller should not wait for a blocked socket at shutdown.",
+                )
+                self.assertEqual(len(errors), 1)
+                self.assertIsInstance(errors[0], InterruptedError)
+            finally:
+                release_request.set()
+                caller.join(timeout=2)
+                response_closed.wait(timeout=2)
+
+        self.assertTrue(response_closed.is_set())
+
     def test_anilist_slot_wait_stops_immediately_when_shutdown_is_set(self):
         stop_event = threading.Event()
         stop_event.set()
