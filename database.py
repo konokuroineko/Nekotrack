@@ -2456,22 +2456,31 @@ def get_library_episode_catalog_refresh_ids(
             attempt_metadata = json.loads(row["attempt_payload"])
         except (TypeError, ValueError, json.JSONDecodeError):
             attempt_metadata = None
-        if isinstance(attempt_metadata, dict) and attempt_cooldown > 0:
+        if isinstance(attempt_metadata, dict):
             try:
                 attempted_version = max(0, int(attempt_metadata.get("version") or 0))
             except (TypeError, ValueError, OverflowError):
                 attempted_version = 0
-            try:
-                attempted_at = float(attempt_metadata.get("attempted_at") or 0)
-            except (TypeError, ValueError, OverflowError):
-                attempted_at = 0.0
-            if (
-                attempted_version >= required_version
-                and math.isfinite(attempted_at)
-                and attempted_at > 0
-                and 0 <= current_time - attempted_at < attempt_cooldown
-            ):
+            status = str(attempt_metadata.get("status") or "").strip().casefold()
+
+            # A confirmed provider miss is stable for this matching policy.
+            # Do not repeat its search every day; bumping the catalog version
+            # intentionally permits a new matching attempt.
+            if attempted_version >= required_version and status == "no_series_match":
                 continue
+
+            if attempt_cooldown > 0:
+                try:
+                    attempted_at = float(attempt_metadata.get("attempted_at") or 0)
+                except (TypeError, ValueError, OverflowError):
+                    attempted_at = 0.0
+                if (
+                    attempted_version >= required_version
+                    and math.isfinite(attempted_at)
+                    and attempted_at > 0
+                    and 0 <= current_time - attempted_at < attempt_cooldown
+                ):
+                    continue
 
         if not bool(row["has_episodes"]):
             refresh_ids.append(int(row["id"]))
