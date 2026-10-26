@@ -149,7 +149,15 @@ class LibraryImportWorker(QObject):
 
     def _run_import(self):
         try:
-            details = get_media_details(self.work_id)
+            # Pass the shared shutdown signal into paginated provider reads so
+            # an active import stops optional follow-up requests between pages.
+            if self.stop_event is None:
+                details = get_media_details(self.work_id)
+            else:
+                details = get_media_details(
+                    self.work_id,
+                    stop_event=self.stop_event,
+                )
             if not details:
                 raise RuntimeError("AniList returned no details for this work.")
 
