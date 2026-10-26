@@ -715,7 +715,10 @@ set for every miss. It now checks the returned neighbor set directly and only ca
 those repeated allocations. The existing randomized cross-product parity tests remain,
 with an additional empty-neighbor regression.
 
-The existing CI benchmark now measures the old cartesian baseline, the previous
-indexed helper and the allocation-free helper side by side on the same deterministic
-absence workload. Wait for those results before claiming a measurable gain; no
-end-to-end application speed claim is made.
+The CI benchmark compared the old cartesian baseline, the previous indexed helper
+and the allocation-free helper side by side. All four environments returned identical
+decisions. Against the previous helper, median time improved 2.24–2.80× for component
+sizes of 100–1,000 members per side. At 1,000 members, Windows/Python 3.14 fell from
+0.090 ms to 0.039 ms and Linux/Python 3.14 from 0.117 ms to 0.047 ms. These are tiny
+per-call savings on a synthetic absence workload; they justify removing the needless
+allocations but do not indicate an end-to-end app speedup.
