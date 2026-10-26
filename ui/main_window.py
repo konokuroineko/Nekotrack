@@ -5,6 +5,8 @@ from pathlib import Path
 
 from api import (
     get_media_details,
+    request_api_shutdown,
+    reset_api_shutdown,
     get_tmdb_episode_data,
     TMDB_EPISODE_CATALOG_REFRESH_INTERVAL_SECONDS,
     TMDB_EPISODE_CATALOG_VERSION,
@@ -623,6 +625,7 @@ class MainWindow(QMainWindow):
         self._shutdown_event = threading.Event()
         self._shutdown_requested = False
         self._shutdown_started_at = None
+        self._startup_preload_scheduled = False
         self._shutdown_timer = QTimer(self)
         self._shutdown_timer.setInterval(100)
         self._shutdown_timer.timeout.connect(self._poll_shutdown_workers)
@@ -651,7 +654,8 @@ class MainWindow(QMainWindow):
         self._release_reminder_timer.start()
         with log_operation("main_window.initial_ui_build"):
             self.setup_ui()
-        QTimer.singleShot(250, self._start_existing_library_episode_preload)
+        # Initial API work is started after the first frame, not while pages are
+        # being constructed. This reduces startup contention and close-time waits.
         QTimer.singleShot(5_000, self._check_release_reminders)
 
     def setup_ui(self, initial_page="home"):
@@ -707,7 +711,10 @@ class MainWindow(QMainWindow):
             # settings controls the first time the user visits Settings.
             self.settings_page = SettingsPage(background_manager=self.background_manager, defer_initial_build=True)
         with log_operation("main_window.construct_page", page="home"):
-            self.home_page = HomePage(self.add_to_library)
+            self.home_page = HomePage(
+                self.add_to_library,
+                defer_initial_recommendations=True,
+            )
         self.recommendations_page = self.home_page.recommendations_page
         with log_operation("main_window.construct_page", page="calendar"):
             self.calendar_page = CalendarPage(defer_initial_refresh=True)
@@ -803,10 +810,23 @@ class MainWindow(QMainWindow):
         # replacement is being built. Only switch once the new tree exists.
         self._ui_root_stack.addWidget(root)
         self._ui_root_stack.setCurrentWidget(root)
+        if self.isVisible():
+            QTimer.singleShot(150, self.start_initial_background_work)
 
         # Do not eagerly build/cache a full Qt widget tree for every Library
         # entry on the GUI thread. Detail views are rendered when selected and
         # episode cards are created in bounded event-loop batches.
+
+    def start_initial_background_work(self):
+        """Start optional API work after Home has had a chance to paint."""
+        if self._shutdown_requested or self._shutdown_event.is_set():
+            return
+        home = getattr(self, "home_page", None)
+        if home is not None:
+            home.start_initial_recommendations_load()
+        if not self._startup_preload_scheduled:
+            self._startup_preload_scheduled = True
+            QTimer.singleShot(1_000, self._start_existing_library_episode_preload)
 
     def _refresh_library_after_bundle_change(self):
         # Wait until the detail-page deletion/link change has fully returned to
@@ -1884,6 +1904,7 @@ class MainWindow(QMainWindow):
 
         self._shutdown_requested = True
         self._shutdown_event.set()
+        request_api_shutdown()
         self._library_import_queue.close()
 
         for search_page in self.findChildren(SearchPage):
@@ -1901,6 +1922,11 @@ class MainWindow(QMainWindow):
         # never means a hidden process is still using the database in the back.
         for thread in self.findChildren(QThread):
             try:
+                cancel = getattr(thread, "cancel", None)
+                if callable(cancel):
+                    cancel()
+                else:
+                    thread.requestInterruption()
                 thread.quit()
             except RuntimeError:
                 continue
@@ -1938,6 +1964,7 @@ class MainWindow(QMainWindow):
         )
         if self._release_reminder_tray.isVisible():
             self._release_reminder_tray.hide()
+        reset_api_shutdown()
         event.accept()
         if self._restart_requested and not self._restart_launch_scheduled:
             self._restart_launch_scheduled = True
