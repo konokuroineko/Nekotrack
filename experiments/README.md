@@ -80,7 +80,7 @@ Run from the repository root:
 
 This runs the actual `series.get_library_series()` function against disposable synthetic
 SQLite Libraries. It verifies exact bundle membership, checks expected connection
-factory calls, and reports cold/warm title-cache median/p95 time. For the largest
+factory calls, and reports cold/warm normalization-cache median/p95 time. For the largest
 requested library size it also records the top 15 cumulative `cProfile` functions to
 identify the next optimization target. It includes database reads and Python grouping,
 but excludes UI painting, network requests and any user database. CI uploads the JSON.

@@ -800,7 +800,7 @@ Library and measures the real grouping function through its row fetch, grouping-
 snapshot, relation reads, component unions, summaries and presentation overrides.
 It validates the exact expected four-member bundle sets, every work ID's unique
 coverage and two connection factories per refresh (one Library row fetch, one shared
-grouping snapshot), and reports cold/warm title-cache median/p95 timings at 100, 1,000
+grouping snapshot), and reports cold/warm normalization-cache median/p95 timings at 100, 1,000
 and 5,000 works. It also records the top 15 cumulative `cProfile` functions at the
 largest requested size, giving the next pass evidence about where grouping CPU time
 is actually spent.
@@ -825,3 +825,9 @@ cased inputs share a cache entry, and checks the fixed memory bound. The full Li
 benchmark already reports cold and warm refresh times, so CI can show whether the
 cache provides a repeat-refresh benefit. Keep it only if the matrix passes and cold
 behavior does not show a meaningful regression; no speedup is claimed in advance.
+
+
+The full grouping benchmark now clears both the normalized series-key cache and the
+season-marker cache before every cold iteration, and clears both before profiling.
+Its JSON field names therefore describe the full normalization-cache state instead of
+only the older series-key cache.
