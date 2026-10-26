@@ -57,11 +57,15 @@ class EpisodeCatalogRefreshAttemptTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def _save_attempt(self, *, version, attempted_at):
+    def _save_attempt(self, *, version, attempted_at, status="pending"):
         database.save_provider_metadata(
             120700,
             "tmdb_episode_match_attempt",
-            {"version": version, "attempted_at": attempted_at},
+            {
+                "version": version,
+                "attempted_at": attempted_at,
+                "status": status,
+            },
         )
 
     def _refresh_ids(self, *, version=4, now=None, cooldown=24 * 60 * 60):
@@ -91,6 +95,26 @@ class EpisodeCatalogRefreshAttemptTests(unittest.TestCase):
         self._save_attempt(version=4, attempted_at=self.now - 60)
 
         self.assertEqual(self._refresh_ids(cooldown=0), [120700])
+
+
+    def test_confirmed_no_match_does_not_retry_until_policy_changes(self):
+        self._save_attempt(
+            version=4,
+            attempted_at=self.now - 60 * 24 * 60 * 60,
+            status="no_series_match",
+        )
+
+        self.assertEqual(self._refresh_ids(), [])
+        self.assertEqual(self._refresh_ids(version=5), [120700])
+
+    def test_other_outcomes_still_expire_after_cooldown(self):
+        self._save_attempt(
+            version=4,
+            attempted_at=self.now - 2 * 24 * 60 * 60,
+            status="failed",
+        )
+
+        self.assertEqual(self._refresh_ids(), [120700])
 
 
 if __name__ == "__main__":
