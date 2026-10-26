@@ -1002,7 +1002,12 @@ def _apply_bundle_overrides(groups, connection=None):
         return groups
 
     try:
-        override_rows = get_bundle_overrides(sorted(work_ids), connection=connection)
+        if connection is None:
+            override_rows = get_bundle_overrides(sorted(work_ids))
+        else:
+            override_rows = get_bundle_overrides(
+                sorted(work_ids), connection=connection
+            )
     except Exception as error:
         if "no such table: bundle_overrides" not in str(error).casefold():
             log_exception(
