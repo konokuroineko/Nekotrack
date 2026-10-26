@@ -472,6 +472,7 @@ class LibraryEpisodePreloadWorker(QObject):
                         {
                             "version": TMDB_EPISODE_CATALOG_VERSION,
                             "attempted_at": int(time.time()),
+                            "status": "pending",
                         },
                     )
                 except Exception as metadata_error:
@@ -517,6 +518,22 @@ class LibraryEpisodePreloadWorker(QObject):
                 self.finished.emit(work_id, episodes)
             except InterruptedError as error:
                 if self.stop_event is not None and self.stop_event.is_set():
+                    try:
+                        save_provider_metadata(
+                            work_id,
+                            "tmdb_episode_match_attempt",
+                            {
+                                "version": TMDB_EPISODE_CATALOG_VERSION,
+                                "attempted_at": int(time.time()),
+                                "status": "cancelled",
+                            },
+                        )
+                    except Exception as metadata_error:
+                        log_exception(
+                            "library.episode_preload.attempt_marker_failed",
+                            metadata_error,
+                            work_id=work_id,
+                        )
                     log_event(
                         "library.episode_preload.cancelled",
                         work_id=work_id,
@@ -530,6 +547,22 @@ class LibraryEpisodePreloadWorker(QObject):
                     isinstance(error, RuntimeError)
                     and str(error) == "TMDB could not find a matching TV series."
                 ):
+                    try:
+                        save_provider_metadata(
+                            work_id,
+                            "tmdb_episode_match_attempt",
+                            {
+                                "version": TMDB_EPISODE_CATALOG_VERSION,
+                                "attempted_at": int(time.time()),
+                                "status": "no_series_match",
+                            },
+                        )
+                    except Exception as metadata_error:
+                        log_exception(
+                            "library.episode_preload.attempt_marker_failed",
+                            metadata_error,
+                            work_id=work_id,
+                        )
                     log_event(
                         "library.episode_preload.unavailable",
                         work_id=work_id,
@@ -538,6 +571,22 @@ class LibraryEpisodePreloadWorker(QObject):
                     )
                     self.skipped.emit(work_id)
                 else:
+                    try:
+                        save_provider_metadata(
+                            work_id,
+                            "tmdb_episode_match_attempt",
+                            {
+                                "version": TMDB_EPISODE_CATALOG_VERSION,
+                                "attempted_at": int(time.time()),
+                                "status": "failed",
+                            },
+                        )
+                    except Exception as metadata_error:
+                        log_exception(
+                            "library.episode_preload.attempt_marker_failed",
+                            metadata_error,
+                            work_id=work_id,
+                        )
                     log_exception("library.episode_preload.failed", error, work_id=work_id)
                     self.error.emit(work_id, str(error))
         self.completed.emit()
