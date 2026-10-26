@@ -107,7 +107,7 @@ def _wait_for_anilist_slot(stop_event=None):
 def _wait_for_anilist_retry(wait_time, stop_event=None):
     """Wait before a retry, unless shutdown was requested in the meantime."""
     if stop_event is None:
-        _wait_for_anilist_retry(wait_time, stop_event)
+        _retry_sleep(wait_time)
     elif stop_event.wait(max(0.0, wait_time)):
         raise InterruptedError("AniList request cancelled during shutdown.")
 
