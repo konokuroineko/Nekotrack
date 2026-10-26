@@ -1895,8 +1895,7 @@ class MainWindow(QMainWindow):
         for profile_page in self.findChildren(EntityProfilePage):
             profile_page.request_shutdown()
         for recommendations_page in self.findChildren(RecommendationsPage):
-            profile_page = recommendations_page
-            profile_page.request_shutdown()
+            recommendations_page.request_shutdown()
         # Stop event loops; an in-flight provider request must still return.
         # Keep the disabled window present until workers finish, so "closed"
         # never means a hidden process is still using the database in the back.
