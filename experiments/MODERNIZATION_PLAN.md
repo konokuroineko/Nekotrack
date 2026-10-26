@@ -53,7 +53,7 @@ services, not part of the current implementation phase.
   It now uses a prefix index that returns the same matching candidate indices in the
   same order, preserving exclusion-aware union behavior while avoiding comparisons
   between unrelated titles. A reference-equivalence test and synthetic benchmark cover it.
-- TMDB and MangaBaka title normalizers now use bounded, 8,192-entry caches to avoid
+- TMDB and MangaBaka title normalizers now use bounded, 16,384-entry caches to avoid
   repeating regex and whitespace normalization for aliases reused across candidates.
 - The separate MangaBaka fuzzy-match path also calls the Rust helper for short titles.
   For right-hand strings of 200+ characters it deliberately stays on difflib, because
@@ -95,7 +95,7 @@ assuming CPU-bound code should be ported to Rust:
   reference implementation on deterministic generated inputs.
 - `api._normalize_title` and `api._mangabaka_normalize_title` normalized the same
   aliases repeatedly while candidates were scored. Their pure string transformation
-  steps now have bounded caches (8,192 entries each).
+  steps now have bounded caches (16,384 entries each).
 - `match_series_for_anilist` had a second Python `SequenceMatcher` path that wasn't
   using the native helper. Short title pairs now use the already-tested Rust function.
   To preserve Python's *default* `autojunk=True` semantics exactly, right-hand strings
@@ -694,10 +694,10 @@ Library, so they are not an end-to-end UI speed claim.
 ## Forty-seventh-pass bounded series-title normalization cache
 
 `_series_key()` applies several regular-expression substitutions and is invoked from
-multiple parts of the relation/grouping path. A bounded 8,192-entry LRU now memoizes
+multiple parts of the relation/grouping path. A bounded 16,384-entry LRU now memoizes
 the normalized string while preserving the previous coercion behavior for `None` and
 non-string inputs. This avoids unbounded growth if the application sees many distinct
-provider titles. Added regression coverage for normalization, cache hits and the
+provider titles. The prior 8,192-entry trial showed capacity churn on a synthetic 10,000-title working set, so the bound was raised to 16,384 to retain that set while remaining bounded. Added regression coverage for normalization, cache hits and the
 fixed memory bound, plus a deterministic benchmark against the former uncached regex
 implementation. Review the Windows and Linux benchmark artifacts before keeping this
 pass as a performance win; no speedup is claimed until the run results are inspected.

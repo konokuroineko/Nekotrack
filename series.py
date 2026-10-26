@@ -279,7 +279,7 @@ def _series_key(title):
     return _cached_series_key(str(title or ""))
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=16384)
 def _cached_series_key(value):
     """Normalize one title; the bounded cache avoids repeating regex work on graph edges."""
     value = value.lower().strip()

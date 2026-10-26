@@ -51,10 +51,10 @@ class SeriesKeyCacheTests(unittest.TestCase):
 
     def test_title_key_cache_has_a_fixed_memory_bound(self):
         series._cached_series_key.cache_clear()
-        for index in range(8200):
+        for index in range(16392):
             series._series_key(f"Synthetic Cache Bound {index} Season 2")
         info = series._cached_series_key.cache_info()
-        self.assertEqual(info.maxsize, 8192)
+        self.assertEqual(info.maxsize, 16384)
         self.assertLessEqual(info.currsize, info.maxsize)
 
 

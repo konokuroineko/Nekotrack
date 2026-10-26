@@ -52,7 +52,7 @@ pending; no speedup claim is made yet.
   index only visits keys with a matching 2+ token prefix and retains the prior order
   for exclusion-aware union calls. Regression tests compare the matching candidate
   lists against the reference all-pairs algorithm.
-- TMDB and MangaBaka title normalization now use bounded 8,192-entry caches because
+- TMDB and MangaBaka title normalization now use bounded 16,384-entry caches because
   catalog matching repeatedly reuses the same aliases across candidates.
 - The MangaBaka fuzzy-title matcher now uses the optional Rust helper for short pairs.
   It falls back to Python's standard library when the right-hand string reaches 200
@@ -66,7 +66,7 @@ Run from the repository root:
 
     python experiments/benchmark_series_key_cache.py --unique-title-counts 100 1000 5000 10000 --calls 30000 --iterations 5 --json-out "$env:TEMP\nekotrack-series-key-cache.json"
 
-This compares the former uncached regex normalization with the production 8,192-entry
+This compares the former uncached regex normalization with the production 16,384-entry
 LRU cache over repeatable synthetic title cycles. It validates exact normalized-output
 parity and reports median/p95 time and the final bounded cache size. The workload is
 synthetic and measures title normalization only, not end-to-end Library or Search speed.
