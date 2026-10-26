@@ -670,3 +670,9 @@ Regression tests cover refresh-candidate selection, one-connection selection, ol
 Each Library refresh queried all distinct source/target IDs in work_relations only to write diagnostic counts and a sample. Those values did not participate in the pending-sync calculation, which depends on Library IDs plus the session's completed/failed sets. Removed that whole-table read and its unused log fields while retaining the Library ID query and the actual relation-sync selection. A regression test verifies the plan uses one query and does not touch work_relations merely for diagnostics.
 
 This reduces unnecessary database work; no whole-app speedup is claimed until a real Windows Library-refresh trace is compared.
+
+## Forty-sixth-pass single-connection Library grouping reads
+
+A full Library grouping could open separate SQLite connections for saved manual/exclusion/membership state, cached relation edges, and bundle appearance overrides. The read helpers now accept an optional existing connection, and `get_library_series()` uses one connection for all three. The relation query itself is unchanged, including the <=400-ID single-query path and the large-library rowid-based de-duplication path; standalone helper callers keep their previous self-contained behavior. The grouping method closes the shared connection in `finally`, including when a read or override application fails.
+
+Regression coverage checks grouped title/cover and progress output while asserting one connection for the entire nonempty grouping pass. A separate large-ID test verifies that the relation reader returns the same rows when supplied a connection and leaves that connection open for its owner. This reduces connection churn from up to three connections to one for a populated grouped Library refresh; actual end-to-end timing still needs a Windows diagnostic run.
