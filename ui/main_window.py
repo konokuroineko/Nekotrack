@@ -462,6 +462,25 @@ class LibraryEpisodePreloadWorker(QObject):
                     tmdb_id = connection_work["tmdb_id"]
                     tmdb_season_number = connection_work["tmdb_season_number"]
 
+                # Record the attempt before the network call. Failed, unmatched,
+                # or shutdown-interrupted lookups otherwise remain stale and
+                # get retried every time the app starts.
+                try:
+                    save_provider_metadata(
+                        work_id,
+                        "tmdb_episode_match_attempt",
+                        {
+                            "version": TMDB_EPISODE_CATALOG_VERSION,
+                            "attempted_at": int(time.time()),
+                        },
+                    )
+                except Exception as metadata_error:
+                    log_exception(
+                        "library.episode_preload.attempt_marker_failed",
+                        metadata_error,
+                        work_id=work_id,
+                    )
+
                 log_event("library.episode_preload.started", work_id=work_id)
                 payload = get_tmdb_episode_data(
                     title_variants,
@@ -496,6 +515,16 @@ class LibraryEpisodePreloadWorker(QObject):
                     tmdb_id=resolved_tmdb_id,
                 )
                 self.finished.emit(work_id, episodes)
+            except InterruptedError as error:
+                if self.stop_event is not None and self.stop_event.is_set():
+                    log_event(
+                        "library.episode_preload.cancelled",
+                        work_id=work_id,
+                        reason="shutdown",
+                    )
+                    break
+                log_exception("library.episode_preload.failed", error, work_id=work_id)
+                self.error.emit(work_id, str(error))
             except Exception as error:
                 if (
                     isinstance(error, RuntimeError)
@@ -1079,6 +1108,11 @@ class MainWindow(QMainWindow):
             log_exception("library.episode_preload.candidate_query_failed", error)
             return
 
+        log_event(
+            "library.episode_preload.plan",
+            candidate_count=len(refresh_ids),
+            candidate_ids=refresh_ids[:100],
+        )
         if not refresh_ids:
             return
 
