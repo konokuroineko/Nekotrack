@@ -641,7 +641,7 @@ def _search_relation_edges(item):
 
 
 def _has_search_relation_edges(item):
-    """Check for any valid relation edge without allocating a filtered list."""
+    """Fast-path common relation-edge presence checks; preserve malformed-edge behavior."""
     relations = _get(item, "relations")
     if not isinstance(relations, dict):
         return False
