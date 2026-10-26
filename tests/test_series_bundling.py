@@ -460,6 +460,40 @@ class BundlePreferenceSnapshotTests(unittest.TestCase):
         self.assertEqual(len(preference_reads), len(expected_keys))
 
 
+class MediaFamilyLookupTests(unittest.TestCase):
+    def test_auto_bundleable_reads_type_and_format_once(self):
+        class CountingMedia(dict):
+            def __init__(self, values):
+                super().__init__(values)
+                self.read_counts = {}
+
+            def get(self, key, default=None):
+                self.read_counts[key] = self.read_counts.get(key, 0) + 1
+                return super().get(key, default)
+
+        item = CountingMedia({"id": 1, "type": "MANGA", "format": "NOVEL"})
+        with patch("series.get", return_value=True):
+            self.assertTrue(series._auto_bundleable(item))
+
+        self.assertEqual(item.read_counts.get("type"), 1)
+        self.assertEqual(item.read_counts.get("format"), 1)
+
+    def test_bundle_option_key_reads_type_and_format_once(self):
+        class CountingMedia(dict):
+            def __init__(self, values):
+                super().__init__(values)
+                self.read_counts = {}
+
+            def get(self, key, default=None):
+                self.read_counts[key] = self.read_counts.get(key, 0) + 1
+                return super().get(key, default)
+
+        item = CountingMedia({"id": 1, "type": "MANGA", "format": "NOVEL"})
+        self.assertEqual(series._bundle_option_key(item), "bundle_include_novels")
+        self.assertEqual(item.read_counts.get("type"), 1)
+        self.assertEqual(item.read_counts.get("format"), 1)
+
+
 class BundleOptionTests(unittest.TestCase):
     def test_tv_and_tv_short_are_always_bundleable(self):
         with patch("series.get", return_value=False):

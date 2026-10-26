@@ -831,3 +831,19 @@ The full grouping benchmark now clears both the normalized series-key cache and 
 season-marker cache before every cold iteration, and clears both before profiling.
 Its JSON field names therefore describe the full normalization-cache state instead of
 only the older series-key cache.
+
+## Fifty-fifth-pass single-read media family and format classification
+
+The synthetic full-Library profile showed media-family and bundle-eligibility helpers
+repeating type and format normalization in the hot path, including two family
+classifications inside every automatic bundleability check. Added a shared helper
+returning the normalized family and format, plus a parts-based eligibility helper,
+so automatic bundleability, ordinary bundleability and bundle-option lookup each
+normalize a row's type and format only once. Existing eligibility rules and
+preference decisions are unchanged.
+
+Two regression tests count type and format reads for automatic bundleability and
+bundle-option lookup, while existing tests cover TV, TV_SHORT, movie, OVA, ONA,
+special, manga, novel, one-shot and ineligible types. The full synthetic Library
+benchmark measures cold/warm timing and a refreshed profile; keep this only if the
+full test matrix passes without a grouping performance regression.

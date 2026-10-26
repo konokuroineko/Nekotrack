@@ -223,37 +223,44 @@ def _media_type(item):
     return str(value or "UNKNOWN").upper()
 
 
-def _media_family(item):
+def _media_family_and_format(item):
+    """Normalize type/format once for the hot-path bundle eligibility checks."""
     media_type = _media_type(item)
-    fmt = str(_get(item, "format") or "").upper()
+    media_format = str(_get(item, "format") or "").upper()
     if media_type == "MANGA":
-        if fmt == "NOVEL":
-            return "NOVEL"
-        if fmt == "ONE_SHOT":
-            return "ONE_SHOT"
-        return "MANGA"
-    return media_type
+        if media_format == "NOVEL":
+            return "NOVEL", media_format
+        if media_format == "ONE_SHOT":
+            return "ONE_SHOT", media_format
+        return "MANGA", media_format
+    return media_type, media_format
+
+
+def _media_family(item):
+    return _media_family_and_format(item)[0]
 
 
 def _same_media_family(left, right):
     return _media_family(left) == _media_family(right)
 
 
-def _is_bundleable(item):
-    family = _media_family(item)
-    fmt = str(_get(item, "format") or "").upper()
+def _is_bundleable_parts(family, media_format):
     if family == "ANIME":
-        return fmt in ANIME_BUNDLE_FORMATS
+        return media_format in ANIME_BUNDLE_FORMATS
     if family == "MANGA":
-        return fmt == "MANGA"
+        return media_format == "MANGA"
     if family in {"NOVEL", "ONE_SHOT"}:
         return True
     return False
 
+
+def _is_bundleable(item):
+    family, media_format = _media_family_and_format(item)
+    return _is_bundleable_parts(family, media_format)
+
 def _bundle_option_key(item):
     """Return the opt-in setting key required by a bundleable media item, if any."""
-    media_family = _media_family(item)
-    media_format = str(_get(item, "format") or "").upper()
+    media_family, media_format = _media_family_and_format(item)
     if media_family == "ANIME":
         return _BUNDLE_OPTION_BY_FORMAT.get(media_format)
     return _BUNDLE_OPTION_BY_FAMILY.get(media_family)
@@ -290,11 +297,9 @@ def _auto_bundleable(item, bundle_options=None):
     entry into the same automatic bundle. A grouping operation can pass a
     settings snapshot to avoid repeating QSettings migration checks per item.
     """
-    if not _is_bundleable(item):
+    media_family, media_format = _media_family_and_format(item)
+    if not _is_bundleable_parts(media_family, media_format):
         return False
-
-    media_family = _media_family(item)
-    media_format = str(_get(item, "format") or "").upper()
 
     if media_family == "ANIME":
         if media_format in {"TV", "TV_SHORT"}:
