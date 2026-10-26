@@ -7,7 +7,7 @@ from pathlib import Path
 
 _BOOTSTRAP_STARTED_AT = time.perf_counter()
 
-from PySide6.QtCore import QObject, QPointF, QUrl, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QPointF, QTimer, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen, QPolygonF
 
 
@@ -445,6 +445,9 @@ def main():
         window.show()
 
     log_event("app.ready", maximized=bool(get("maximized")))
+    # Paint the main window first; start recommendations and episode metadata
+    # only after the application is visibly ready.
+    QTimer.singleShot(150, window.start_initial_background_work)
 
     window.check_updates_requested.connect(lambda: _check_for_updates(window, manual=True))
     window.rollback_requested.connect(lambda: _rollback_previous_version(window))
@@ -460,8 +463,16 @@ def main():
             log_event("updater.startup_health_write_failed", error=str(health_error))
 
     if get("auto_check_updates"):
-        # Network checks are off the UI thread and never delay first paint.
-        _check_for_updates(window, manual=False)
+        # Don't start an 8-second network request during launch. Keep the update
+        # check automatic, but start it only after the app has settled.
+        def start_automatic_update_check():
+            if (
+                window.isVisible()
+                and not getattr(window, "_shutdown_requested", False)
+            ):
+                _check_for_updates(window, manual=False)
+
+        QTimer.singleShot(2_000, start_automatic_update_check)
 
     with log_operation("app.event_loop"):
         exit_code = app.exec()
