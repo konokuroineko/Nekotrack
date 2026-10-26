@@ -552,10 +552,23 @@ def logical_season_count(members):
         if left_root != right_root:
             parent[right_root] = left_root
 
+    # Snapshot each member's title-derived facts once. The continuation and arc
+    # predicates are also cached across refreshes, but keeping these values local
+    # avoids repeated wrappers/title extraction within this one summary.
+    title_info = {}
+    for media_id, member in by_id.items():
+        title = _title_text(member)
+        title_info[media_id] = (
+            title,
+            _season_marker(title),
+            _is_continuation(title),
+            _is_arc(title),
+        )
+
     # 1. Explicit season labels are authoritative.
     by_marker = defaultdict(list)
-    for media_id, member in by_id.items():
-        marker = _season_marker(_title_text(member))
+    for media_id in by_id:
+        marker = title_info[media_id][1]
         if marker:
             by_marker[marker].append(media_id)
     for members_for_marker in by_marker.values():
@@ -565,10 +578,9 @@ def logical_season_count(members):
     # 2. Part/Cour/final continuations inherit directly connected neighbors,
     #    but never cross two explicit, conflicting season markers.
     for member_id, member in by_id.items():
-        title = _title_text(member)
-        if not _is_continuation(title):
+        _title, current_marker, is_continuation, _is_arc_flag = title_info[member_id]
+        if not is_continuation:
             continue
-        current_marker = _season_marker(title)
         for edge in _search_relation_edges(member):
             if edge.get("relationType") not in {"PREQUEL", "SEQUEL"}:
                 continue
@@ -578,7 +590,7 @@ def logical_season_count(members):
             target_id = _valid_relation_id(node.get("id"))
             if target_id is None or target_id not in by_id:
                 continue
-            target_marker = _season_marker(_title_text(by_id[target_id]))
+            target_marker = title_info[target_id][1]
             if current_marker is not None and target_marker is not None:
                 if current_marker == target_marker:
                     union(member_id, target_id)
@@ -588,10 +600,9 @@ def logical_season_count(members):
     # 3. Named unnumbered arcs only combine when both have a valid, matching
     #    airing season. Unknown dates are not evidence that two arcs are equal.
     arc_ids = {
-        media_id for media_id, member in by_id.items()
-        if _is_arc(_title_text(member))
-        and _season_marker(_title_text(member)) is None
-        and not _is_continuation(_title_text(member))
+        media_id for media_id, (_title, marker, is_continuation, is_arc_flag)
+        in title_info.items()
+        if is_arc_flag and marker is None and not is_continuation
     }
     for member_id in arc_ids:
         member_period = _air_period(by_id[member_id])

@@ -157,6 +157,33 @@ class TitleFlagCacheTests(unittest.TestCase):
         self.assertLessEqual(arc_info.currsize, arc_info.maxsize)
 
 
+class LogicalSeasonCountTests(unittest.TestCase):
+    def test_duplicate_explicit_season_markers_share_one_logical_season(self):
+        members = [
+            media(1, "First Series Season 2", "TV"),
+            media(2, "Different Title Season 2", "TV"),
+            media(3, "First Series Season 3", "TV"),
+        ]
+        self.assertEqual(series.logical_season_count(members), 2)
+
+    def test_linked_part_continuations_share_one_logical_season(self):
+        second = media(2, "Example Series Part 3", "TV")
+        first = media(1, "Example Series Part 2", "TV", relations=[
+            edge("SEQUEL", second),
+        ])
+        self.assertEqual(series.logical_season_count([first, second]), 1)
+
+    def test_unnumbered_arcs_merge_only_for_the_same_airing_quarter(self):
+        later_arc = media(4, "Example Arc Two", "TV")
+        first_arc = media(3, "Example Arc One", "TV", relations=[
+            edge("SEQUEL", later_arc),
+        ])
+        self.assertEqual(series.logical_season_count([first_arc, later_arc]), 1)
+
+        later_arc["startDate"]["month"] = 4
+        self.assertEqual(series.logical_season_count([first_arc, later_arc]), 2)
+
+
 class SeriesPrefixIndexTests(unittest.TestCase):
     @staticmethod
     def _reference_indices(keys):
