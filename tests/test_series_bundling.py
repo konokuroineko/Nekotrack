@@ -365,6 +365,40 @@ class ComponentUnionBySizeTests(unittest.TestCase):
 
 
 
+class BundlePreferenceSnapshotTests(unittest.TestCase):
+    def test_search_grouping_reuses_its_bundle_preference_snapshot(self):
+        ova = media(2, "Example Series OVA", "OVA")
+        tv = media(1, "Example Series", "TV", relations=[
+            edge("SIDE_STORY", ova),
+        ])
+        preference_reads = []
+
+        def enabled(key):
+            preference_reads.append(key)
+            return key == "bundle_include_ovas"
+
+        expected_keys = {
+            "bundle_include_movies",
+            "bundle_include_ovas",
+            "bundle_include_onas",
+            "bundle_include_specials",
+            "bundle_include_manga",
+            "bundle_include_novels",
+            "bundle_include_one_shots",
+        }
+        with (
+            patch("series.get", side_effect=enabled),
+            patch("series.get_manual_bundle_links", return_value=[]),
+            patch("series.get_bundle_exclusions", return_value=[]),
+            patch("series.get_bundle_overrides", return_value=[]),
+        ):
+            groups = series.group_media_results([tv, ova], enrich=False, delay=0)
+
+        self.assertEqual(len(groups), 1)
+        self.assertCountEqual(preference_reads, expected_keys)
+        self.assertEqual(len(preference_reads), len(expected_keys))
+
+
 class BundleOptionTests(unittest.TestCase):
     def test_tv_and_tv_short_are_always_bundleable(self):
         with patch("series.get", return_value=False):

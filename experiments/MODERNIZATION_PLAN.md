@@ -734,3 +734,15 @@ calls to `_auto_bundleable()` outside this Library operation retain their origin
 one-item behavior. A regression test covers Manga, Novel, One Shot, OVA and TV rows
 and checks that each relevant preference is read exactly once. CI needs to pass before
 this remains; no wall-clock speedup is claimed yet.
+
+
+## Fiftieth-pass Search bundling preference snapshot reuse
+
+Search bundling already reads the seven opt-in bundle preferences once to include
+them in the operation's diagnostic-start event, but previously the relation walker
+and grouping stage read them again for candidate entries and graph edges. The same
+snapshot is now passed through those stages. If an individual preference lookup
+failed during snapshot creation, its `None` value still falls back to the original
+getter behavior rather than silently disabling the option. A relation-walk regression
+checks that one Search grouping operation reads each preference exactly once. CI
+must validate this pass; no wall-clock claim is made until benchmarked.

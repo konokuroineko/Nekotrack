@@ -722,7 +722,7 @@ def _relation_group_compatible(item, edge, target, bundle_options=None):
     return common_prefix >= 2
 
 
-def _traversal_edge_allowed(item, edge):
+def _traversal_edge_allowed(item, edge, bundle_options=None):
     """Walk season chains and carefully include named series extras."""
     if not isinstance(edge, dict):
         return False
@@ -732,7 +732,10 @@ def _traversal_edge_allowed(item, edge):
         return False
     if not _same_media_family(item, node):
         return False
-    if not _auto_bundleable(item) or not _auto_bundleable(node):
+    if bundle_options is None:
+        if not _auto_bundleable(item) or not _auto_bundleable(node):
+            return False
+    elif not _auto_bundleable(item, bundle_options) or not _auto_bundleable(node, bundle_options):
         return False
 
     if relation_type in SEASON_CHAIN_RELATIONS:
@@ -845,7 +848,7 @@ def _cache_relation_details_batch(media_ids):
 
 
 
-def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_event=None):
+def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_event=None, bundle_options=None):
     """Finite breadth-first traversal of the season/continuation relation graph."""
     discovered = list(items)
     known_ids = {int(item["id"]) for item in discovered}
@@ -924,7 +927,11 @@ def _discover_related(items, max_nodes=2000, max_requests=0, delay=0.25, stop_ev
             processed_ids.add(item_id)
 
             for edge in _search_relation_edges(item):
-                if not _traversal_edge_allowed(item, edge):
+                if bundle_options is None:
+                    allowed = _traversal_edge_allowed(item, edge)
+                else:
+                    allowed = _traversal_edge_allowed(item, edge, bundle_options=bundle_options)
+                if not allowed:
                     continue
 
                 node = edge.get("node") or {}
@@ -1071,7 +1078,19 @@ def _apply_bundle_overrides(groups, connection=None):
     return groups
 
 
-def _group_discovered(results, discovered):
+def _group_discovered(results, discovered, bundle_options=None):
+    def is_auto_bundleable(item):
+        if bundle_options is None:
+            return _auto_bundleable(item)
+        return _auto_bundleable(item, bundle_options)
+
+    def relation_group_compatible(item, edge, target):
+        if bundle_options is None:
+            return _relation_group_compatible(item, edge, target)
+        return _relation_group_compatible(
+            item, edge, target, bundle_options=bundle_options
+        )
+
     original_ids = {int(item["id"]) for item in results}
     ids = {int(item["id"]) for item in discovered}
     parent = {item_id: item_id for item_id in ids}
@@ -1131,13 +1150,13 @@ def _group_discovered(results, discovered):
                 continue
             if tuple(sorted((item_id, target_id))) in excluded_links:
                 continue
-            if not _relation_group_compatible(item, edge, target):
+            if not relation_group_compatible(item, edge, target):
                 continue
             union(item_id, target_id)
 
     by_key = {}
     for item in discovered:
-        if not _auto_bundleable(item):
+        if not is_auto_bundleable(item):
             continue
         key = _series_group_key(item)
         item_id = int(item["id"])
@@ -1223,7 +1242,7 @@ def _group_discovered(results, discovered):
         bundle_members = [
             item
             for item in group_members
-            if _auto_bundleable(item) or int(_get(item, "id")) in manual_ids
+            if is_auto_bundleable(item) or int(_get(item, "id")) in manual_ids
         ]
         visible_bundle_members = [
             item for item in bundle_members
@@ -1344,8 +1363,9 @@ def group_media_results(results, enrich=False, max_requests=0, delay=0.25, stop_
                 max_requests=max_requests if enrich else -1,
                 delay=delay,
                 stop_event=stop_event,
+                bundle_options=settings,
             )
-            groups = _group_discovered(results, discovered)
+            groups = _group_discovered(results, discovered, bundle_options=settings)
         except Exception as error:
             log_exception(
                 "bundling.failed",
