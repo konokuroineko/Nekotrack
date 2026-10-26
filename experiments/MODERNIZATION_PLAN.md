@@ -878,15 +878,38 @@ Library benchmark now clears the series-key, season-marker, continuation and arc
 caches before every cold sample and before profiling, with output fields renamed to
 title-analysis caches. CI will determine whether the warm path improves enough to keep
 this change; no timing gain is claimed in advance.
-\n## Fifty-eighth-pass local logical-season title metadata\n\nThe full-library profile still attributes a large part of grouping time to\nlogical_season_count(). Its three stages repeatedly extracted the same title text and\nlooked up the same season marker and continuation/arc flags. The function now creates\none local metadata tuple per TV member and reuses it for explicit-marker groups,\nPart/Cour relation joins and named-arc checks. This is a per-summary snapshot; it\ndoes not persist metadata across mutable provider rows or change relation rules.\n\nDirect tests cover shared explicit season markers, linked Part continuations and the\nsame-quarter requirement for unnumbered arcs. The title-flag caches and exact-membership\nfull Library benchmark remain enabled, so CI will validate behavior and measure the\ncombined cold/warm effect before this pass is considered complete.
+\n## Fifty-eighth-pass local logical-season title metadata
+
+The full-library profile identified `logical_season_count()` as a substantial cumulative
+cost. Its three stages previously re-extracted title text and re-read season-marker /
+continuation / arc flags for the same TV member. The function now creates one local
+metadata tuple per TV member and reuses it for explicit-marker groups, Part/Cour
+relation joins and named-arc checks. The snapshot is local to one summary call, so it
+does not persist metadata across mutable provider rows or change relation rules.
+
+Direct tests cover shared explicit season markers, linked Part continuations and the
+same-quarter requirement for unnumbered arcs.
 
 ## Fifty-ninth-pass paired logical-season benchmark
 
-Added a side-by-side benchmark for the prior logical-season loop and the current
-per-member metadata snapshot. Earlier full-Library CI runs gave inconsistent
-cross-run timings: Linux did not improve while one Windows/Python 3.11 run showed a
-large improvement, so those measurements are not decisive. The new benchmark compares
-both implementations in the same process on identical synthetic season/Part/Arc
-bundles, checks exact outputs, alternates execution order, and separately measures
-cold and warm title caches across Windows/Linux and Python 3.11/3.14. Use this paired
-result to decide whether the metadata snapshot should remain; no gain is assumed.
+Added a side-by-side benchmark for the prior logical-season loop and the metadata
+snapshot. It compares both implementations in the same process on 1,250 synthetic
+four-work bundles (5,000 members), alternates execution order, separately measures
+cold and warm title caches, and verifies exact output parity before timing. The
+reference uses the original `defaultdict(list)` marker grouping.
+
+All four CI platforms/versions returned identical logical-season counts. Measured
+reference → snapshot median timings (milliseconds for all 1,250 groups):
+
+| Platform / Python | Cold: reference → snapshot | Cold speedup | Warm: reference → snapshot | Warm speedup |
+|---|---:|---:|---:|---:|
+| Ubuntu / 3.11 | 47.543 → 43.902 ms | 1.083× | 15.919 → 13.221 ms | 1.204× |
+| Ubuntu / 3.14 | 102.647 → 95.686 ms | 1.073× | 38.009 → 31.964 ms | 1.189× |
+| Windows / 3.11 | 88.123 → 81.898 ms | 1.076× | 32.755 → 27.306 ms | 1.200× |
+| Windows / 3.14 | 62.846 → 59.197 ms | 1.062× | 24.423 → 20.582 ms | 1.187× |
+
+The paired result supports keeping the snapshot: about 6.2–8.3% faster cold and
+18.7–20.4% faster warm on the isolated season-count workload, with exact parity.
+This is not an end-to-end Library/UI refresh speed claim. Full regression and
+adversarial stress were green on the runtime-change commit; the corrected-reference
+benchmark-only commit is running the final full matrix now.
