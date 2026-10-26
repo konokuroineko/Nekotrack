@@ -75,7 +75,7 @@ def run_case(item: dict, calls: int, iterations: int) -> dict:
             "median_ms": round(reference_median, 3),
             "p95_ms": round(percentile(reference_samples, 0.95), 3),
         },
-        "allocation_free_presence_check": {
+        "fast_path_presence_check": {
             "median_ms": round(optimized_median, 3),
             "p95_ms": round(percentile(optimized_samples, 0.95), 3),
         },

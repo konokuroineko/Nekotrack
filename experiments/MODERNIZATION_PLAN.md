@@ -750,22 +750,43 @@ adversarial stress run all passed for this change. The evidence is a bounded get
 count, not an end-to-end timing result, so no wall-clock speedup is claimed.
 
 
-## Fifty-first-pass allocation-free relation-edge presence checks
+## Fifty-first-pass relation-edge presence fast path
 
 Two branches in relation discovery only need the boolean answer to “does this item
 have any valid relation edges?” They previously built a filtered list via
-`_search_relation_edges()` and discarded it immediately. The first implementation
-used a generator-based `any()`; its initial benchmark showed overhead for empty and
-short lists even though large valid lists improved. The helper now handles empty
-arrays directly and checks the first edge before falling back to a loop over malformed
-prefixes, preserving the old truthiness for missing, empty and malformed edge data.
-The main traversal still uses the filtered list where it needs to iterate edges.
+`_search_relation_edges()` and discarded it immediately. The first generator-based
+`any()` implementation was slower on empty and short lists. The final helper now
+returns immediately for an empty list or a valid first edge. If the first edge is
+malformed, it falls back to the original filtered list comprehension to preserve
+truthiness without making malformed-only payloads pay for a Python indexing loop.
+The actual traversal still uses the filtered list where it needs to iterate edges.
 
-The first-edge fast path speeds common empty and valid-first arrays. For an
-array whose first element is malformed, the helper falls back to the original filtered
-list comprehension rather than a Python indexing loop; this keeps unusual malformed
-payloads from regressing while preserving the exact truth value.
+The deterministic synthetic benchmark passed on Windows and Linux with Python 3.11
+and 3.14; results and outputs were consistent across all four environments. Relative
+to the former filtered-list check, the final fast path measured:
 
-Parity tests and a synthetic benchmark cover empty, valid, invalid-only and mixed edge
-lists; CI uploads the JSON results. Keep this only if the fast-path revision remains
-green and improves representative common cases. No end-to-end speedup is claimed.
+- Empty edge lists: about 1.21–1.53× faster.
+- Three valid edges: about 1.49–1.84× faster.
+- Ten valid edges: about 2.18–2.71× faster.
+- Fifty valid edges: about 5.96–7.29× faster.
+
+For intentionally malformed arrays whose first entry is not a dictionary, timings
+were roughly 2–10% slower depending on list size. This is a defensive input path;
+normal provider relation arrays are dictionaries or empty. Output parity, Python
+regression tests, Rust parity/benchmark jobs, and adversarial stress all passed for
+the fast-path revision. These are helper-level synthetic timings, not end-to-end
+application speed claims.
+
+## Fifty-second-pass lazy legacy QSettings construction
+
+`ui.preferences.settings()` previously constructed both the current NekoTrack
+`QSettings` and the legacy AniTrack `QSettings` on every preferences read, even when
+the migration marker already showed that the legacy store was no longer needed. The
+legacy object is now constructed only when the one-time migration is pending. This
+reduces the common post-migration path from two store constructions to one without
+changing the migration copy path.
+
+Regression tests assert that a completed migration opens only the current settings
+store and that a pending migration still opens both stores, copies legacy values and
+sets the migration marker. This is a deterministic construction-count improvement;
+no wall-clock gain is claimed without measurement.

@@ -42,6 +42,39 @@ class PreferenceMigrationTests(unittest.TestCase):
             },
         }
 
+    def test_legacy_settings_store_is_not_opened_after_migration(self):
+        opened_stores = []
+
+        class CountingSettings(MemorySettings):
+            def __init__(self, organization, application):
+                opened_stores.append((organization, application))
+                super().__init__(organization, application)
+
+        with patch.object(preferences, "QSettings", CountingSettings):
+            preferences.settings()
+
+        self.assertEqual(opened_stores, [("NekoTrack", "NekoTrack")])
+
+    def test_pending_legacy_migration_still_opens_and_copies_both_stores(self):
+        current_store = MemorySettings.stores[("NekoTrack", "NekoTrack")]
+        current_store.pop(preferences._MIGRATION_KEY, None)
+        opened_stores = []
+
+        class CountingSettings(MemorySettings):
+            def __init__(self, organization, application):
+                opened_stores.append((organization, application))
+                super().__init__(organization, application)
+
+        with patch.object(preferences, "QSettings", CountingSettings):
+            settings = preferences.settings()
+
+        self.assertEqual(opened_stores, [
+            ("NekoTrack", "NekoTrack"),
+            ("AniTrack", "AniTrack"),
+        ])
+        self.assertEqual(settings.value("font_size"), "11")
+        self.assertTrue(settings.value(preferences._MIGRATION_KEY))
+
     def test_white_mode_preserves_the_selected_theme_accent(self):
         self.assertNotIn("Light", preferences.THEME_PRESETS)
         for name, theme in preferences.THEME_PRESETS.items():

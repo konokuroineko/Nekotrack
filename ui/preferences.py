@@ -273,7 +273,6 @@ def palette_for_mode(theme, light_mode=False):
 def settings():
     """Return NekoTrack's settings store and migrate the old AniTrack store once."""
     current = QSettings(_ORGANIZATION, _APPLICATION)
-    legacy = QSettings(_LEGACY_ORGANIZATION, _LEGACY_APPLICATION)
 
     migration_done = current.value(_MIGRATION_KEY, False)
     if isinstance(migration_done, str):
@@ -287,6 +286,7 @@ def settings():
     # every call to get(), restoring the old colors immediately after a theme
     # is selected.
     if not migration_done:
+        legacy = QSettings(_LEGACY_ORGANIZATION, _LEGACY_APPLICATION)
         for key in legacy.allKeys():
             current.setValue(key, legacy.value(key))
         current.setValue(_MIGRATION_KEY, True)
