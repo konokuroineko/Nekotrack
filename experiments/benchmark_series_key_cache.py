@@ -26,24 +26,24 @@ def reference_series_key(title):
     import re
 
     value = re.sub(
-        r"\\s*[:\\-–—]?\\s*(?:the\\s+)?final\\s+season(?:\\s+part\\s+\\d+)?(?:\\s+\\([^)]*\\))?\\s*$",
+        r"\s*[:\-–—]?\s*(?:the\s+)?final\s+season(?:\s+part\s+\d+)?(?:\s+\([^)]*\))?\s*$",
         "",
         value,
     )
     value = re.sub(
-        r"\\s*[:\\-–—]?\\s*(?:\\d+(?:st|nd|rd|th)|season\\s*\\d+|series\\s*\\d+|season\\s*[ivx]+|series\\s*[ivx]+)(?:\\s+part\\s+\\d+)?\\s*$",
+        r"\s*[:\-–—]?\s*(?:\d+(?:st|nd|rd|th)|season\s*\d+|series\s*\d+|season\s*[ivx]+|series\s*[ivx]+)(?:\s+part\s+\d+)?\s*$",
         "",
         value,
     )
-    value = re.sub(r"(?:^|\\s)(?:ii|iii|iv|v|vi)\\s*[:\\-–—]\\s*", " ", value)
+    value = re.sub(r"(?:^|\s)(?:ii|iii|iv|v|vi)\s*[:\-–—]\s*", " ", value)
     value = re.sub(
-        r"\\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\\s*(?:season)?\\s*$",
+        r"\s+(?:i|ii|iii|iv|v|vi|1st|2nd|3rd|4th|5th)\s*(?:season)?\s*$",
         "",
         value,
     )
-    value = re.sub(r"\\s*[:\\-–—]?\\s*(?:part|cour)\\s*\\d+\\s*$", "", value)
-    value = re.sub(r"\\s+\\d+$", "", value)
-    value = re.sub(r"\\s+", " ", value).strip()
+    value = re.sub(r"\s*[:\-–—]?\s*(?:part|cour)\s*\d+\s*$", "", value)
+    value = re.sub(r"\s+\d+$", "", value)
+    value = re.sub(r"\s+", " ", value).strip()
     return re.sub(r"[^a-z0-9]+", " ", value).strip()
 
 
