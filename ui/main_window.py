@@ -625,6 +625,7 @@ class MainWindow(QMainWindow):
         self._shutdown_event = threading.Event()
         self._shutdown_requested = False
         self._shutdown_started_at = None
+        self._shutdown_waited_for_workers = False
         self._startup_preload_scheduled = False
         self._shutdown_timer = QTimer(self)
         self._shutdown_timer.setInterval(100)
@@ -1924,15 +1925,19 @@ class MainWindow(QMainWindow):
             try:
                 cancel = getattr(thread, "cancel", None)
                 if callable(cancel):
-                    cancel()
+                    try:
+                        cancel()
+                    except TypeError:
+                        thread.requestInterruption()
                 else:
                     thread.requestInterruption()
                 thread.quit()
-            except RuntimeError:
+            except (RuntimeError, TypeError):
                 continue
 
         running_threads = self._running_worker_threads()
         if running_threads:
+            self._shutdown_waited_for_workers = True
             elapsed_ms = (
                 round((time.monotonic() - self._shutdown_started_at) * 1000, 2)
                 if self._shutdown_started_at is not None else 0.0
@@ -1960,7 +1965,7 @@ class MainWindow(QMainWindow):
         log_event(
             "app.shutdown_completed",
             elapsed_ms=elapsed_ms,
-            waited_for_workers=False,
+            waited_for_workers=self._shutdown_waited_for_workers,
         )
         if self._release_reminder_tray.isVisible():
             self._release_reminder_tray.hide()
