@@ -623,7 +623,6 @@ class MainWindow(QMainWindow):
         self._shutdown_event = threading.Event()
         self._shutdown_requested = False
         self._shutdown_started_at = None
-        self._shutdown_window_hidden = False
         self._shutdown_timer = QTimer(self)
         self._shutdown_timer.setInterval(100)
         self._shutdown_timer.timeout.connect(self._poll_shutdown_workers)
@@ -706,10 +705,7 @@ class MainWindow(QMainWindow):
         with log_operation("main_window.construct_page", page="settings"):
             # Keep startup focused on the initial Home page. Build the full
             # settings controls the first time the user visits Settings.
-            self.settings_page = SettingsPage(
-                background_manager=self.background_manager,
-                defer_initial_build=True,
-            )
+            self.settings_page = SettingsPage(background_manager=self.background_manager)
         with log_operation("main_window.construct_page", page="home"):
             self.home_page = HomePage(self.add_to_library)
         self.recommendations_page = self.home_page.recommendations_page
@@ -1899,10 +1895,11 @@ class MainWindow(QMainWindow):
         for profile_page in self.findChildren(EntityProfilePage):
             profile_page.request_shutdown()
         for recommendations_page in self.findChildren(RecommendationsPage):
-            recommendations_page.request_shutdown()
-        # Stop event loops; a worker inside a provider request still must return.
-        # Never destroy a running QThread: hide the main window immediately and
-        # allow the existing shutdown poll to finish the safe teardown.
+            profile_page = recommendations_page
+            profile_page.request_shutdown()
+        # Stop event loops; an in-flight provider request must still return.
+        # Keep the disabled window present until workers finish, so "closed"
+        # never means a hidden process is still using the database in the back.
         for thread in self.findChildren(QThread):
             try:
                 thread.quit()
@@ -1928,9 +1925,6 @@ class MainWindow(QMainWindow):
             event.ignore()
             if not self._shutdown_timer.isActive():
                 self._shutdown_timer.start()
-            if self.isVisible():
-                self._shutdown_window_hidden = True
-                self.hide()
             return
 
         self._shutdown_timer.stop()
@@ -1941,7 +1935,7 @@ class MainWindow(QMainWindow):
         log_event(
             "app.shutdown_completed",
             elapsed_ms=elapsed_ms,
-            waited_for_workers=self._shutdown_window_hidden,
+            waited_for_workers=False,
         )
         if self._release_reminder_tray.isVisible():
             self._release_reminder_tray.hide()
@@ -1949,10 +1943,6 @@ class MainWindow(QMainWindow):
         if self._restart_requested and not self._restart_launch_scheduled:
             self._restart_launch_scheduled = True
             QTimer.singleShot(250, self._launch_restarted_application)
-        if self._shutdown_window_hidden:
-            # Hiding the window above keeps Qt alive while the active requests
-            # finish. Explicitly quit once all owned QThreads have stopped.
-            QTimer.singleShot(0, QApplication.quit)
 
     def _poll_shutdown_workers(self):
         if self._has_running_worker_threads():
