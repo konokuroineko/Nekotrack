@@ -705,7 +705,7 @@ class MainWindow(QMainWindow):
         with log_operation("main_window.construct_page", page="settings"):
             # Keep startup focused on the initial Home page. Build the full
             # settings controls the first time the user visits Settings.
-            self.settings_page = SettingsPage(background_manager=self.background_manager)
+            self.settings_page = SettingsPage(background_manager=self.background_manager, defer_initial_build=True)
         with log_operation("main_window.construct_page", page="home"):
             self.home_page = HomePage(self.add_to_library)
         self.recommendations_page = self.home_page.recommendations_page
