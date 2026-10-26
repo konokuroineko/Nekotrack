@@ -646,9 +646,18 @@ def _has_search_relation_edges(item):
     if not isinstance(relations, dict):
         return False
     edges = relations.get("edges")
-    if not isinstance(edges, (list, tuple)):
+    if not isinstance(edges, (list, tuple)) or not edges:
         return False
-    return any(isinstance(edge, dict) for edge in edges)
+
+    # Provider relation arrays normally start with a valid edge, so avoid
+    # allocating a generator for that common case. Malformed payloads still
+    # fall through to a complete type check to preserve filtered-list semantics.
+    if isinstance(edges[0], dict):
+        return True
+    for index in range(1, len(edges)):
+        if isinstance(edges[index], dict):
+            return True
+    return False
 
 
 def _relation_edge_allowed(item, edge):

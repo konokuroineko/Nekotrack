@@ -754,12 +754,13 @@ count, not an end-to-end timing result, so no wall-clock speedup is claimed.
 
 Two branches in relation discovery only need the boolean answer to “does this item
 have any valid relation edges?” They previously built a filtered list via
-`_search_relation_edges()` and discarded it immediately. A separate
-`_has_search_relation_edges()` now short-circuits on the first valid edge while
-preserving the old truthiness for missing, empty and malformed edge data. The main
-traversal still uses the filtered list where it actually needs to iterate edges.
+`_search_relation_edges()` and discarded it immediately. The first implementation
+used a generator-based `any()`; its initial benchmark showed overhead for empty and
+short lists even though large valid lists improved. The helper now handles empty
+arrays directly and checks the first edge before falling back to a loop over malformed
+prefixes, preserving the old truthiness for missing, empty and malformed edge data.
+The main traversal still uses the filtered list where it needs to iterate edges.
 
-Added parity tests and a synthetic benchmark for empty, valid, invalid-only and mixed
-edge lists, and included the results in the existing backend benchmark artifact.
-Retain this only if CI remains green and the measurements show a useful improvement;
-no end-to-end speedup is claimed.
+Parity tests and a synthetic benchmark cover empty, valid, invalid-only and mixed edge
+lists; CI uploads the JSON results. Keep this only if the fast-path revision remains
+green and improves representative common cases. No end-to-end speedup is claimed.
