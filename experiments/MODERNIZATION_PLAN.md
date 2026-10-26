@@ -879,3 +879,14 @@ caches before every cold sample and before profiling, with output fields renamed
 title-analysis caches. CI will determine whether the warm path improves enough to keep
 this change; no timing gain is claimed in advance.
 \n## Fifty-eighth-pass local logical-season title metadata\n\nThe full-library profile still attributes a large part of grouping time to\nlogical_season_count(). Its three stages repeatedly extracted the same title text and\nlooked up the same season marker and continuation/arc flags. The function now creates\none local metadata tuple per TV member and reuses it for explicit-marker groups,\nPart/Cour relation joins and named-arc checks. This is a per-summary snapshot; it\ndoes not persist metadata across mutable provider rows or change relation rules.\n\nDirect tests cover shared explicit season markers, linked Part continuations and the\nsame-quarter requirement for unnumbered arcs. The title-flag caches and exact-membership\nfull Library benchmark remain enabled, so CI will validate behavior and measure the\ncombined cold/warm effect before this pass is considered complete.
+
+## Fifty-ninth-pass paired logical-season benchmark
+
+Added a side-by-side benchmark for the prior logical-season loop and the current
+per-member metadata snapshot. Earlier full-Library CI runs gave inconsistent
+cross-run timings: Linux did not improve while one Windows/Python 3.11 run showed a
+large improvement, so those measurements are not decisive. The new benchmark compares
+both implementations in the same process on identical synthetic season/Part/Arc
+bundles, checks exact outputs, alternates execution order, and separately measures
+cold and warm title caches across Windows/Linux and Python 3.11/3.14. Use this paired
+result to decide whether the metadata snapshot should remain; no gain is assumed.

@@ -85,6 +85,18 @@ requested library size it also records the top 15 cumulative `cProfile` function
 identify the next optimization target. It includes database reads and Python grouping,
 but excludes UI painting, network requests and any user database. CI uploads the JSON.
 
+## Logical-season metadata A/B benchmark
+
+Run from the repository root:
+
+    python experiments/benchmark_logical_season_metadata.py --group-count 1250 --iterations 7 --json-out "$env:TEMP\nekotrack-logical-season-metadata.json"
+
+This compares the previous `logical_season_count()` loop with the current per-member
+title-metadata snapshot in the same Python process on identical synthetic four-work
+bundles. It alternates implementations, clears title caches before cold samples, checks
+exact output parity, and reports cold/warm median and p95 timings. It uses no database,
+network, or user data. CI runs it on Windows and Linux.
+
 ## Relation edge presence benchmark
 
 Run from the repository root:
