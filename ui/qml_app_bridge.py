@@ -240,7 +240,11 @@ class ApplicationBridge(LibraryBridge):
 
     @Property(str, notify=themeChanged)
     def backgroundOverlayColor(self):
-        if self._background_manager is None or not self._background_manager.display_pixmap:
+        if (
+            self._background_manager is None
+            or self._background_manager.display_pixmap is None
+            or self._background_manager.display_pixmap.isNull()
+        ):
             return "#00000000"
         color = QColor(COLORS.get("background", "#17131e"))
         color.setAlpha(round(255 * self._background_manager.overlay_opacity / 100))
@@ -299,6 +303,30 @@ class ApplicationBridge(LibraryBridge):
         raw_path = manager.selected_path if manager is not None and manager.display_pixmap is not None else None
         self._background_source = _file_source(raw_path)
         self.backgroundChanged.emit()
+
+    @Slot(str)
+    def initializePage(self, page):
+        target = str(page or "home")
+        if target not in {"home", "collections", "search", "calendar", "favorites", "settings",
+                          "work_detail", "entity_profile", "relation"}:
+            target = "home"
+        self._current_page = target
+        if target not in {"work_detail", "entity_profile", "relation"}:
+            self._previous_content_page = target
+        self.pageChanged.emit()
+
+    @Slot(str)
+    def setCurrentPage(self, page):
+        target = str(page or "home")
+        if target not in {"home", "collections", "search", "calendar", "favorites", "settings",
+                          "work_detail", "entity_profile", "relation"}:
+            return
+        if target == self._current_page:
+            return
+        if target not in {"work_detail", "entity_profile", "relation"}:
+            self._previous_content_page = target
+        self._current_page = target
+        self.pageChanged.emit()
 
     @Slot(str)
     def navigate(self, page):
@@ -451,14 +479,16 @@ class ApplicationBridge(LibraryBridge):
     def homeStats(self):
         return dict(self._home_stats)
 
-    @Slot(int)
+    @Slot(int, result=bool)
     def requestOpenWork(self, work_id):
         normalized = _optional_int(work_id)
         if normalized is None or normalized == 0:
-            return
+            return False
         group = self._group_for_id(normalized)
-        if group is not None:
-            self.openWorkRequested.emit(normalized)
+        if group is None:
+            return False
+        self.openWorkRequested.emit(normalized)
+        return True
 
     def _group_for_id(self, work_id):
         for group in self._raw_groups:
@@ -844,6 +874,21 @@ class ApplicationBridge(LibraryBridge):
         self.episodesChanged.emit()
         self.pageChanged.emit()
 
+    @Slot(int, bool)
+    def markAllEpisodesWatched(self, work_id, watched):
+        try:
+            snapshot = get_episode_section_snapshot(work_id)
+            numbers = [
+                _optional_int(dict(row).get("episode_number"))
+                for row in snapshot.get("episodes") or []
+            ]
+            numbers = [number for number in numbers if number is not None] if watched else []
+            set_episode_progress(work_id, numbers)
+            self.setSelectedWork(self._selected_work_raw)
+            self.refreshHome()
+        except Exception as error:
+            log_exception("qml_bridge.mark_all_episodes_failed", error, work_id=work_id)
+
     @Slot(int, int, bool)
     def setEpisodeWatched(self, work_id, episode_number, watched):
         current = [item["episodeNumber"] for item in self._episode_items if item["watched"]]
@@ -861,8 +906,15 @@ class ApplicationBridge(LibraryBridge):
         self.setSelectedWork(self._selected_work_raw)
         self.refreshHome()
 
+    @Slot(int, str, int)
+    def setReadingProgress(self, work_id, item_type, read_count):
+        self._save_reading_progress(work_id, item_type, read_count, 0)
+
     @Slot(int, str, int, int)
-    def setReadingProgress(self, work_id, item_type, read_count, total_hint=0):
+    def setReadingProgressWithTotal(self, work_id, item_type, read_count, total_hint):
+        self._save_reading_progress(work_id, item_type, read_count, total_hint)
+
+    def _save_reading_progress(self, work_id, item_type, read_count, total_hint=0):
         try:
             set_reading_progress_count(work_id, item_type, read_count, total_hint)
             chapters, _chapter_total = get_reading_progress(work_id, "chapter")
@@ -875,6 +927,11 @@ class ApplicationBridge(LibraryBridge):
             log_exception("qml_bridge.reading_progress_save_failed", error, work_id=work_id, item_type=item_type)
 
     # ---- QML poster menus and refresh ------------------------------------------
+
+    @Slot(str)
+    def reportSearchError(self, message):
+        self._search_error = str(message or "")
+        self.searchChanged.emit()
 
     @Slot()
     def refreshVisiblePage(self):

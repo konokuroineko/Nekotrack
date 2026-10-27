@@ -41,7 +41,7 @@ Item {
             Layout.rightMargin: 38
             Layout.preferredHeight: 58
             radius: 14
-            color: bridge.surfaceColor
+            color: bridge.surfaceFillColor
 
             Row {
                 anchors.fill: parent
@@ -151,9 +151,20 @@ Item {
                                 fillMode: Image.PreserveAspectCrop
                                 asynchronous: true
                                 cache: true
-                                visible: false
                                 property bool cacheRequested: false
                                 onSourceChanged: cacheRequested = false
+                                layer.enabled: true
+                                layer.effect: MultiEffect {
+                                    maskEnabled: true
+                                    autoPaddingEnabled: false
+                                    maskSource: Rectangle {
+                                        width: cover.width
+                                        height: cover.height
+                                        radius: bridge.cornerRadius
+                                        color: "white"
+                                        layer.enabled: true
+                                    }
+                                }
                                 onStatusChanged: {
                                     if (status === Image.Ready && !cacheRequested) {
                                         var sourceText = source.toString()
@@ -162,25 +173,6 @@ Item {
                                             bridge.requestCoverCache(card.coverCacheWorkId, sourceText)
                                         }
                                     }
-                                }
-                            }
-                            MultiEffect {
-                                id: roundedCover
-                                x: cover.x
-                                y: cover.y
-                                width: cover.width
-                                height: cover.height
-                                source: cover
-                                maskEnabled: true
-                                autoPaddingEnabled: false
-                                maskSource: Rectangle {
-                                    width: cover.width
-                                    height: cover.height
-                                    radius: bridge.cornerRadius
-                                    color: "white"
-                                    antialiasing: true
-                                    visible: false
-                                    layer.enabled: true
                                 }
                             }
                             Rectangle {

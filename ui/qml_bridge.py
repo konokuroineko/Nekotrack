@@ -14,7 +14,7 @@ from diagnostics import log_event, log_exception
 from series import get_library_series
 from ui.display_identity import get_display_override
 from ui.preferences import get
-from ui.theme import COLORS
+from ui.theme import COLORS, surface_rgba
 
 _IMAGE_DIRECTORY = Path("data") / "images" / "works"
 _FILTERS = ("All", "Watching", "Completed", "Planned")
@@ -465,6 +465,10 @@ class QmlApplicationBridge(QObject):
     @Property(str, notify=themeChanged)
     def surfaceHoverColor(self):
         return self._theme_values["surfaceHoverColor"]
+
+    @Property(str, notify=themeChanged)
+    def surfaceFillColor(self):
+        return surface_rgba("surface")
 
     @Property(str, notify=themeChanged)
     def accentColor(self):
