@@ -1617,7 +1617,7 @@ Item {
                         Rectangle {
                             visible: settingsPage.settingsCategory === "Library"
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 166
+                            Layout.preferredHeight: 184
                             radius: 13
                             color: bridge.surfaceFillColor
                             border.width: 1
