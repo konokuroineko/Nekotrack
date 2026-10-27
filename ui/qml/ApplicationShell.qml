@@ -1859,6 +1859,7 @@ Item {
                                     from: 0
                                     to: 100000
                                     editable: true
+                                    enabled: bridge.selectedWork.isInLibrary
                                     value: readingProgressRow.selectedReadingProgress.chapters || 0
                                     onValueModified: bridge.setReadingProgress(readingProgressRow.readingMemberId, "chapter", value)
                                 }
@@ -1871,6 +1872,7 @@ Item {
                                     from: 0
                                     to: 100000
                                     editable: true
+                                    enabled: bridge.selectedWork.isInLibrary
                                     value: readingProgressRow.selectedReadingProgress.volumes || 0
                                     onValueModified: bridge.setReadingProgress(readingProgressRow.readingMemberId, "volume", value)
                                 }

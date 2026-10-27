@@ -869,7 +869,11 @@ class ApplicationBridge(LibraryBridge):
         self._library_model.refresh()
         self._refresh_home_items()
         # A screen revisit must not cancel an in-flight recommendations request.
-        if self._startup_ready and self._recommendation_thread is None:
+        if (
+            self._startup_ready
+            and self._current_page == "home"
+            and self._recommendation_thread is None
+        ):
             self.refreshRecommendations()
 
     def _refresh_home_items(self):
