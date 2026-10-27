@@ -524,6 +524,17 @@ class QmlApplicationBridgeTests(unittest.TestCase):
 
 
 class QmlThemeColorTests(unittest.TestCase):
+    def test_application_bridge_imports_with_inherited_theme_notify_signal(self):
+        # Importing ApplicationBridge executes its Property decorators. If an
+        # inherited notify signal is referenced as a local class variable, the
+        # import raises NameError before the app can start.
+        from ui.qml_app_bridge import ApplicationBridge
+
+        bridge = ApplicationBridge()
+        self.assertEqual(bridge.cardSize, 210)
+        self.assertEqual(bridge.coverHeight, 284)
+        bridge.deleteLater()
+
     def test_qml_surface_colors_are_valid_argb_and_keep_legacy_opacity(self):
         from ui.theme import SURFACE_OPACITY, surface_qml_color
 

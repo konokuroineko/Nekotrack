@@ -457,15 +457,15 @@ class ApplicationBridge(LibraryBridge):
         self._theme_values["animationSpeed"] = int(get("animation_speed"))
         self._theme_values["uiScale"] = max(80, min(200, int(get("ui_scale"))))
 
-    @Property(bool, notify=themeChanged)
+    @Property(bool, notify=LibraryBridge.themeChanged)
     def resizeAnimation(self):
         return self._theme_values["resizeAnimation"]
 
-    @Property(int, notify=themeChanged)
+    @Property(int, notify=LibraryBridge.themeChanged)
     def animationSpeed(self):
         return self._theme_values["animationSpeed"]
 
-    @Property(int, notify=themeChanged)
+    @Property(int, notify=LibraryBridge.themeChanged)
     def uiScale(self):
         return self._theme_values["uiScale"]
 
@@ -495,11 +495,11 @@ class ApplicationBridge(LibraryBridge):
     def backgroundSource(self):
         return self._background_source
 
-    @Property(str, notify=themeChanged)
+    @Property(str, notify=LibraryBridge.themeChanged)
     def backgroundColor(self):
         return COLORS.get("background", "#17131e")
 
-    @Property(str, notify=themeChanged)
+    @Property(str, notify=LibraryBridge.themeChanged)
     def backgroundOverlayColor(self):
         if (
             self._background_manager is None
@@ -511,39 +511,39 @@ class ApplicationBridge(LibraryBridge):
         color.setAlpha(round(255 * self._background_manager.overlay_opacity / 100))
         return color.name(QColor.NameFormat.HexArgb)
 
-    @Property(str, notify=themeChanged)
+    @Property(str, notify=LibraryBridge.themeChanged)
     def sidebarFillColor(self):
         return surface_qml_color("sidebar")
 
-    @Property(str, notify=themeChanged)
+    @Property(str, notify=LibraryBridge.themeChanged)
     def surfaceFillColor(self):
         return surface_qml_color("surface")
 
-    @Property(str, notify=themeChanged)
+    @Property(str, notify=LibraryBridge.themeChanged)
     def surfaceAltFillColor(self):
         return surface_qml_color("surface_alt")
 
-    @Property(str, notify=themeChanged)
+    @Property(str, notify=LibraryBridge.themeChanged)
     def borderColor(self):
         return COLORS.get("border", "#51475f")
 
-    @Property(str, notify=themeChanged)
+    @Property(str, notify=LibraryBridge.themeChanged)
     def accentColor(self):
         return COLORS.get("accent", "#9271c5")
 
-    @Property(str, notify=themeChanged)
+    @Property(str, notify=LibraryBridge.themeChanged)
     def successColor(self):
         return COLORS.get("success", "#55b881")
 
-    @Property(str, notify=themeChanged)
+    @Property(str, notify=LibraryBridge.themeChanged)
     def dangerColor(self):
         return COLORS.get("danger", "#d85b70")
 
-    @Property(str, notify=themeChanged)
+    @Property(str, notify=LibraryBridge.themeChanged)
     def themePreset(self):
         return str(get("theme_preset") or "Neko")
 
-    @Property(bool, notify=themeChanged)
+    @Property(bool, notify=LibraryBridge.themeChanged)
     def lightMode(self):
         return bool(get("light_mode"))
 
@@ -573,27 +573,27 @@ class ApplicationBridge(LibraryBridge):
     def themePresets(self):
         return list(THEME_PRESETS.keys())
 
-    @Property(bool, notify=themeChanged)
+    @Property(bool, notify=LibraryBridge.themeChanged)
     def autoCheckUpdates(self):
         return bool(get("auto_check_updates"))
 
-    @Property(str, notify=themeChanged)
+    @Property(str, notify=LibraryBridge.themeChanged)
     def updateChannel(self):
         return str(get("update_channel") or "stable")
 
-    @Property(bool, notify=themeChanged)
+    @Property(bool, notify=LibraryBridge.themeChanged)
     def maximized(self):
         return bool(get("maximized"))
 
-    @Property(str, notify=themeChanged)
+    @Property(str, notify=LibraryBridge.themeChanged)
     def tmdbApiToken(self):
         return str(get("tmdb_api_token") or "")
 
-    @Property(str, notify=themeChanged)
+    @Property(str, notify=LibraryBridge.themeChanged)
     def recommendationVoiceLanguage(self):
         return str(get("recommendation_voice_language") or "ALL").upper()
 
-    @Property("QVariantList", notify=themeChanged)
+    @Property("QVariantList", notify=LibraryBridge.themeChanged)
     def bundleOptionGroups(self):
         return [
             {
