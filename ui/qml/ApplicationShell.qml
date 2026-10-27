@@ -1017,10 +1017,10 @@ Item {
                                     }
                                     Button {
                                         text: "Remove current image"
-                                        enabled: bridge.backgroundPaths.length > 0
+                                        enabled: bridge.backgroundSelectedPath.length > 0
                                         onClicked: {
-                                            if (bridge.backgroundPaths.length > 0)
-                                                bridge.removeBackgroundImage(bridge.backgroundPaths[0])
+                                            if (bridge.backgroundSelectedPath.length > 0)
+                                                bridge.removeBackgroundImage(bridge.backgroundSelectedPath)
                                         }
                                     }
                                     Item { Layout.fillWidth: true }
@@ -1080,7 +1080,7 @@ Item {
                                 Button {
                                     text: "Refresh details"
                                     enabled: !bridge.selectedWork.detailsLoading
-                                    onClicked: bridge.setSelectedWork(bridge.selectedWorkRaw)
+                                    onClicked: bridge.refreshSelectedWork()
                                 }
                             }
 

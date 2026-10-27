@@ -432,6 +432,20 @@ class ApplicationBridge(LibraryBridge):
     def backgroundPaths(self):
         return list(self._background_manager.paths) if self._background_manager else []
 
+    @Property(str, notify=backgroundChanged)
+    def backgroundSelectedPath(self):
+        if self._background_manager is None:
+            return ""
+        return str(self._background_manager.selected_path or "")
+
+    @Property(int, notify=backgroundChanged)
+    def backgroundInterval(self):
+        return int(self._background_manager.interval) if self._background_manager else int(get("background_slideshow_interval"))
+
+    @Property("QVariantList", constant=True)
+    def backgroundIntervals(self):
+        return [-1, 0, 30, 60, 300, 900, 1800]
+
     @Property("QVariantList", constant=True)
     def themePresets(self):
         return list(THEME_PRESETS.keys())
@@ -534,6 +548,8 @@ class ApplicationBridge(LibraryBridge):
                 apply_theme_preset(str(value))
             elif key == "background_overlay_opacity" and self._background_manager is not None:
                 self._background_manager.set_overlay_opacity(value)
+            elif key == "background_slideshow_interval" and self._background_manager is not None:
+                self._background_manager.set_interval(value)
             else:
                 set_value(key, value)
             refresh_theme()
@@ -1007,12 +1023,20 @@ class ApplicationBridge(LibraryBridge):
     def searchQuery(self):
         return self._search_query
 
+    @Property("QVariantMap", notify=searchChanged)
+    def searchFilters(self):
+        return dict(self._search_filters)
+
     @Slot(str, str, str)
     def searchCatalog(self, query, media_type="", media_format=""):
+        self.searchCatalogWithFilters(query, media_type, media_format, {})
+
+    @Slot(str, str, str, "QVariantMap")
+    def searchCatalogWithFilters(self, query, media_type="", media_format="", filters=None):
         self._search_query = str(query or "").strip()
         self._search_type = str(media_type or "")
         self._search_format = str(media_format or "")
-        self._search_filters = {}
+        self._search_filters = dict(filters or {})
         self._search_page = 1
         self._search_raw_items = []
         self._search_rows = {}
@@ -1486,6 +1510,12 @@ class ApplicationBridge(LibraryBridge):
     def reportSearchError(self, message):
         self._search_error = str(message or "")
         self.searchChanged.emit()
+
+    @Slot()
+    @Slot()
+    def refreshSelectedWork(self):
+        if self._selected_work_raw:
+            self.setSelectedWork(self._selected_work_raw)
 
     @Slot()
     def refreshVisiblePage(self):
