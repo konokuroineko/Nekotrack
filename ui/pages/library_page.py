@@ -251,6 +251,7 @@ class FlowLayout(QLayout):
 
 class LibraryPage(QWidget):
     work_selected = Signal(object)
+    relation_sync_completed = Signal()
 
     def __init__(self, defer_initial_refresh=False):
         super().__init__()
@@ -627,6 +628,19 @@ class LibraryPage(QWidget):
         self._sync_thread = None
         self._sync_worker = None
         if self._closing:
+            return
+
+        # In the unified application shell, this hidden widget only hosts the
+        # relation-sync worker. Refresh the visible QML model instead of doing
+        # another synchronous grouping query in this hidden page.
+        try:
+            qml_shell_active = bool(
+                getattr(self.window(), "_qml_shell_enabled", False)
+            )
+        except RuntimeError:
+            qml_shell_active = False
+        if qml_shell_active:
+            self.relation_sync_completed.emit()
             return
         self.refresh(retry_failed=False)
 

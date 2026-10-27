@@ -85,6 +85,16 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
         self.assertIn('if action == "customize_identity" and group is None:', main_source)
         self.assertIn("bridge.refreshSelectedWork()", main_source)
 
+
+    def test_qml_library_route_preserves_deferred_relation_sync(self):
+        library_source = (ROOT / "ui" / "pages" / "library_page.py").read_text(encoding="utf-8")
+        main_source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
+        self.assertIn("relation_sync_completed = Signal()", library_source)
+        self.assertIn('getattr(self.window(), "_qml_shell_enabled", False)', library_source)
+        self.assertIn("self.library_page.relation_sync_completed.connect(self._refresh_library_after_bundle_change)", main_source)
+        self.assertIn("QTimer.singleShot(0, self._start_qml_library_relation_sync)", main_source)
+        self.assertIn("page._start_relation_sync()", main_source)
+
     def test_production_application_shell_loads_with_the_application_bridge(self):
         source = (ROOT / "ui" / "qml" / "ApplicationShell.qml").read_text(encoding="utf-8")
         self.assertIn('text: "Edit bundle"', source)

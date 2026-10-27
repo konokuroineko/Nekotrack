@@ -849,6 +849,7 @@ class MainWindow(QMainWindow):
             lambda: self.navigation.show("search")
         )
         self.library_page.work_selected.connect(self.show_work_details)
+        self.library_page.relation_sync_completed.connect(self._refresh_library_after_bundle_change)
         self.search_page.anime_selected.connect(self.show_search_work)
         self.work_detail_page.back_requested.connect(self._back_from_work_detail)
         self.work_detail_page.bundle_edit_requested.connect(self.library_page._edit_bundle)
@@ -1129,6 +1130,10 @@ class MainWindow(QMainWindow):
                 return
             self.qml_bridge.setCurrentPage(page_name)
             self.qml_bridge.refreshVisiblePage()
+            if page_name == "collections":
+                # Relation sync is needed for the existing automatic-bundle
+                # backfill, but only start it once Library is visible.
+                QTimer.singleShot(0, self._start_qml_library_relation_sync)
             self._last_navigation_page = page_name
             return
         if page_name == "settings":
@@ -1154,6 +1159,15 @@ class MainWindow(QMainWindow):
             # can be retried through the normal page refresh path.
             self.library_page.refresh()
         self._last_navigation_page = page_name
+
+    def _start_qml_library_relation_sync(self):
+        if not self._qml_shell_enabled or self._shutdown_requested:
+            return
+        page = self.library_page
+        # Revisiting Library is also the explicit retry path for failed relation
+        # requests in the legacy page; successful IDs remain memoized.
+        page._sync_failed_ids.clear()
+        page._start_relation_sync()
 
     def open_setup_wizard(self):
         wizard = SetupWizard(self)
