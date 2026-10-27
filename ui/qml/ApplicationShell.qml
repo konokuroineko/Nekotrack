@@ -664,6 +664,51 @@ Item {
                     id: searchPage
                     property string selectedType: ""
                     property string selectedFormat: ""
+                    property var allFormatOptions: [
+                        "All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special",
+                        "Music", "Manga", "Novel", "One Shot"
+                    ]
+                    property bool seasonEnabled: true
+                    property bool providerFiltersEnabled: true
+
+                    function refreshFormatFilter() {
+                        var previous = formatFilter.currentText
+                        var options = allFormatOptions
+                        if (mediaFilter.currentText === "Anime") {
+                            options = ["All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music"]
+                        } else if (mediaFilter.currentText === "Manga") {
+                            options = ["All", "Manga", "One Shot"]
+                        } else if (mediaFilter.currentText === "Novels") {
+                            options = ["All", "Novel"]
+                        }
+                        formatFilter.model = options
+                        var restored = options.indexOf(previous)
+                        formatFilter.currentIndex = restored >= 0 ? restored : 0
+                        refreshFilterAvailability()
+                    }
+
+                    function refreshFilterAvailability() {
+                        var mediaChoice = mediaFilter.currentText
+                        var formatChoice = formatFilter.currentText
+                        var animeFormats = ["TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music"]
+                        var mangaFormats = ["Manga", "Novel", "One Shot"]
+                        var animeSpecific = mediaChoice === "Anime"
+                            || animeFormats.indexOf(formatChoice) >= 0
+                            || seasonFilter.currentText !== "All"
+                        var mangaSpecific = mediaChoice === "Manga"
+                            || mediaChoice === "Novels"
+                            || mangaFormats.indexOf(formatChoice) >= 0
+                        if (mangaSpecific && seasonFilter.currentText !== "All")
+                            seasonFilter.currentIndex = 0
+                        seasonEnabled = !mangaSpecific
+                        providerFiltersEnabled = !animeSpecific && formatChoice !== "One Shot"
+                        if (!providerFiltersEnabled) {
+                            publisherFilter.clear()
+                            licensingFilter.currentIndex = 0
+                        }
+                    }
+
+                    Component.onCompleted: refreshFormatFilter()
 
                     ColumnLayout {
                         anchors.fill: parent
@@ -786,11 +831,13 @@ Item {
                                     id: mediaFilter
                                     Layout.fillWidth: true
                                     model: ["All media", "Anime", "Manga", "Novels"]
+                                    onActivated: searchPage.refreshFormatFilter()
                                 }
                                 ComboBox {
                                     id: formatFilter
                                     Layout.fillWidth: true
-                                    model: ["All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music", "Manga", "Novel", "One Shot"]
+                                    model: searchPage.allFormatOptions
+                                    onActivated: searchPage.refreshFilterAvailability()
                                 }
                                 ComboBox {
                                     id: statusFilter
@@ -800,8 +847,9 @@ Item {
                                 ComboBox {
                                     id: seasonFilter
                                     Layout.fillWidth: true
-                                    enabled: mediaFilter.currentText === "All media" || mediaFilter.currentText === "Anime"
+                                    enabled: searchPage.seasonEnabled
                                     model: ["All", "Winter", "Spring", "Summer", "Fall"]
+                                    onActivated: searchPage.refreshFilterAvailability()
                                 }
                                 TextField {
                                     id: yearFilter
@@ -834,13 +882,13 @@ Item {
                                     Layout.fillWidth: true
                                     placeholderText: "MangaBaka publisher ID"
                                     validator: RegularExpressionValidator { regularExpression: /^[0-9]*$/ }
-                                    enabled: mediaFilter.currentText === "All media"
+                                    enabled: searchPage.providerFiltersEnabled
                                 }
                                 ComboBox {
                                     id: licensingFilter
                                     Layout.fillWidth: true
                                     model: ["Any licensing", "Licensed only", "Unlicensed only"]
-                                    enabled: mediaFilter.currentText === "All media"
+                                    enabled: searchPage.providerFiltersEnabled
                                 }
                                 CheckBox {
                                     id: fastSearch
@@ -866,6 +914,7 @@ Item {
                                         publisherFilter.clear()
                                         licensingFilter.currentIndex = 0
                                         fastSearch.checked = false
+                                        searchPage.refreshFormatFilter()
                                     }
                                 }
                                 Item { Layout.fillWidth: true }
@@ -2020,7 +2069,7 @@ Item {
                                 }
                                 ComboBox {
                                     Layout.preferredWidth: 220
-                                    visible: (bridge.selectedWork.bundleMembers || []).length > 1
+                                    visible: (bridge.selectedWork.readingMembers || []).length > 1
                                     model: bridge.selectedWork.readingMembers || []
                                     textRole: "title"
                                     currentIndex: {
@@ -2032,7 +2081,7 @@ Item {
                                         return 0
                                     }
                                     onActivated: {
-                                        var members = bridge.selectedWork.bundleMembers || []
+                                        var members = bridge.selectedWork.readingMembers || []
                                         if (currentIndex >= 0 && currentIndex < members.length)
                                             readingProgressRow.readingMemberId = members[currentIndex].id
                                     }
