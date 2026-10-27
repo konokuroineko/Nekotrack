@@ -529,31 +529,191 @@ Item {
                             }
                         }
 
+                        function runSearch() {
+                            var mediaChoice = mediaFilter.currentText
+                            var mediaType = ""
+                            if (mediaChoice === "Anime")
+                                mediaType = "ANIME"
+                            else if (mediaChoice === "Manga" || mediaChoice === "Novels")
+                                mediaType = "MANGA"
+
+                            var formatMap = {
+                                "TV": "TV", "TV Short": "TV_SHORT", "Movie": "MOVIE",
+                                "OVA": "OVA", "ONA": "ONA", "Special": "SPECIAL", "Music": "MUSIC",
+                                "Manga": "MANGA", "Novel": "NOVEL", "One Shot": "ONE_SHOT"
+                            }
+                            var selectedFormat = formatMap[formatFilter.currentText] || ""
+                            if (formatFilter.currentText === "All") {
+                                if (mediaChoice === "Manga")
+                                    selectedFormat = "MANGA"
+                                else if (mediaChoice === "Novels")
+                                    selectedFormat = "NOVEL"
+                            }
+
+                            var statusMap = {
+                                "Finished": "FINISHED", "Releasing": "RELEASING",
+                                "Not Yet Released": "NOT_YET_RELEASED", "Cancelled": "CANCELLED",
+                                "Hiatus": "HIATUS"
+                            }
+                            var seasonMap = {
+                                "Winter": "WINTER", "Spring": "SPRING",
+                                "Summer": "SUMMER", "Fall": "FALL"
+                            }
+                            var sortMap = {
+                                "Relevance": "SEARCH_MATCH", "Popularity": "POPULARITY_DESC",
+                                "Score": "SCORE_DESC", "Newest": "START_DATE_DESC",
+                                "Oldest": "START_DATE", "Title A–Z": "TITLE_ROMAJI",
+                                "Title Z–A": "TITLE_ROMAJI_DESC"
+                            }
+                            var scoreText = scoreFilter.currentText
+                            var scoreValue = scoreText.endsWith("+") ? parseInt(scoreText.slice(0, -1)) : null
+                            var yearText = yearFilter.text.trim()
+                            var publisherText = publisherFilter.text.trim()
+                            var licensing = licensingFilter.currentText
+
+                            var filters = {
+                                "format_filter": formatFilter.currentText === "All" ? null : selectedFormat,
+                                "status": statusMap[statusFilter.currentText] || null,
+                                "season": (mediaChoice === "All media" || mediaChoice === "Anime")
+                                    ? (seasonMap[seasonFilter.currentText] || null) : null,
+                                "year": /^[0-9]{4}$/.test(yearText) ? yearText : null,
+                                "sort": sortMap[sortFilter.currentText] || "SEARCH_MATCH",
+                                "min_score": isNaN(scoreValue) ? null : scoreValue,
+                                "genre": genreFilter.text.trim() || null,
+                                "tag": tagFilter.text.trim() || null,
+                                "publisher_id": /^[0-9]+$/.test(publisherText) ? publisherText : null,
+                                "is_licensed": licensing === "Licensed only" ? true
+                                    : (licensing === "Unlicensed only" ? false : null),
+                                "fast_search": fastSearch.checked
+                            }
+
+                            bridge.searchCatalogWithFilters(searchInput.text, mediaType, selectedFormat, filters)
+                        }
+
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 8
                             TextField {
                                 id: searchInput
                                 Layout.fillWidth: true
-                                placeholderText: "Search titles…"
+                                placeholderText: "Title, character, franchise, or AniList link…"
                                 selectByMouse: true
-                                onAccepted: bridge.searchCatalog(text, searchPage.selectedType, searchPage.selectedFormat)
+                                onAccepted: searchPage.runSearch()
                             }
-                            ComboBox {
-                                Layout.preferredWidth: 125
-                                model: ["All media", "ANIME", "MANGA"]
-                                currentIndex: 0
-                                onActivated: searchPage.selectedType = currentIndex === 0 ? "" : currentText
-                            }
-                            ComboBox {
-                                Layout.preferredWidth: 135
-                                model: ["All formats", "TV", "TV_SHORT", "MOVIE", "OVA", "ONA", "SPECIAL", "MANGA", "NOVEL", "ONE_SHOT"]
-                                currentIndex: 0
-                                onActivated: searchPage.selectedFormat = currentIndex === 0 ? "" : currentText
+                            Button {
+                                text: filtersPanel.visible ? "Hide filters" : "Filters"
+                                onClicked: filtersPanel.visible = !filtersPanel.visible
                             }
                             Button {
                                 text: "Search"
-                                onClicked: bridge.searchCatalog(searchInput.text, searchPage.selectedType, searchPage.selectedFormat)
+                                onClicked: searchPage.runSearch()
+                            }
+                        }
+
+                        ColumnLayout {
+                            id: filtersPanel
+                            Layout.fillWidth: true
+                            visible: false
+                            spacing: 9
+
+                            GridLayout {
+                                Layout.fillWidth: true
+                                columns: 4
+                                columnSpacing: 10
+                                rowSpacing: 7
+
+                                ComboBox {
+                                    id: mediaFilter
+                                    Layout.fillWidth: true
+                                    model: ["All media", "Anime", "Manga", "Novels"]
+                                }
+                                ComboBox {
+                                    id: formatFilter
+                                    Layout.fillWidth: true
+                                    model: ["All", "TV", "TV Short", "Movie", "OVA", "ONA", "Special", "Music", "Manga", "Novel", "One Shot"]
+                                }
+                                ComboBox {
+                                    id: statusFilter
+                                    Layout.fillWidth: true
+                                    model: ["All", "Finished", "Releasing", "Not Yet Released", "Cancelled", "Hiatus"]
+                                }
+                                ComboBox {
+                                    id: seasonFilter
+                                    Layout.fillWidth: true
+                                    enabled: mediaFilter.currentText === "All media" || mediaFilter.currentText === "Anime"
+                                    model: ["All", "Winter", "Spring", "Summer", "Fall"]
+                                }
+                                TextField {
+                                    id: yearFilter
+                                    Layout.fillWidth: true
+                                    placeholderText: "Year (e.g. 2024)"
+                                    validator: RegularExpressionValidator { regularExpression: /^[0-9]{0,4}$/ }
+                                }
+                                ComboBox {
+                                    id: scoreFilter
+                                    Layout.fillWidth: true
+                                    model: ["Any score", "50+", "60+", "70+", "80+", "90+"]
+                                }
+                                ComboBox {
+                                    id: sortFilter
+                                    Layout.fillWidth: true
+                                    model: ["Relevance", "Popularity", "Score", "Newest", "Oldest", "Title A–Z", "Title Z–A"]
+                                }
+                                TextField {
+                                    id: genreFilter
+                                    Layout.fillWidth: true
+                                    placeholderText: "Genre"
+                                }
+                                TextField {
+                                    id: tagFilter
+                                    Layout.fillWidth: true
+                                    placeholderText: "Tag"
+                                }
+                                TextField {
+                                    id: publisherFilter
+                                    Layout.fillWidth: true
+                                    placeholderText: "MangaBaka publisher ID"
+                                    validator: RegularExpressionValidator { regularExpression: /^[0-9]*$/ }
+                                    enabled: mediaFilter.currentText === "All media"
+                                }
+                                ComboBox {
+                                    id: licensingFilter
+                                    Layout.fillWidth: true
+                                    model: ["Any licensing", "Licensed only", "Unlicensed only"]
+                                    enabled: mediaFilter.currentText === "All media"
+                                }
+                                CheckBox {
+                                    id: fastSearch
+                                    text: "Fast Search (skip franchise grouping)"
+                                    Layout.columnSpan: 2
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Button {
+                                    text: "Clear filters"
+                                    onClicked: {
+                                        mediaFilter.currentIndex = 0
+                                        formatFilter.currentIndex = 0
+                                        statusFilter.currentIndex = 0
+                                        seasonFilter.currentIndex = 0
+                                        yearFilter.clear()
+                                        scoreFilter.currentIndex = 0
+                                        sortFilter.currentIndex = 0
+                                        genreFilter.clear()
+                                        tagFilter.clear()
+                                        publisherFilter.clear()
+                                        licensingFilter.currentIndex = 0
+                                        fastSearch.checked = false
+                                    }
+                                }
+                                Item { Layout.fillWidth: true }
+                                Text {
+                                    text: "All filters are applied by the existing Python search backend."
+                                    color: bridge.mutedColor
+                                    font.pixelSize: 10
+                                }
                             }
                         }
 

@@ -131,7 +131,7 @@ class _SearchWorker(QRunnable):
                 self.media_type or None,
                 self.media_format or None,
                 self.filters,
-                include_relations=True,
+                include_relations=not bool(self.filters.get("fast_search")),
             )
             self.signals.finished.emit(self.generation, self.page, result, None)
         except Exception as error:
@@ -1086,11 +1086,14 @@ class ApplicationBridge(LibraryBridge):
         self._search_raw_items.extend(
             _plain(item) for item in incoming if isinstance(item, dict)
         )
-        try:
-            grouped = group_media_results(self._search_raw_items, enrich=False)
-        except Exception as group_error:
-            log_exception("qml_bridge.search_grouping_failed", group_error)
+        if bool(self._search_filters.get("fast_search")):
             grouped = list(self._search_raw_items)
+        else:
+            try:
+                grouped = group_media_results(self._search_raw_items, enrich=False)
+            except Exception as group_error:
+                log_exception("qml_bridge.search_grouping_failed", group_error)
+                grouped = list(self._search_raw_items)
 
         self._search_rows = {}
         mapped = []
