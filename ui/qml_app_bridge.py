@@ -693,16 +693,16 @@ class ApplicationBridge(LibraryBridge):
         self._library_model.refresh()
         self._refresh_home_items()
 
-        if self._groups_refresh_requested:
-            self._groups_refresh_requested = False
-            QTimer.singleShot(0, lambda: self._load_groups(force=True))
-            return
         if self._current_page == "home" and self._startup_ready:
             self.refreshRecommendations()
 
     @Slot()
     def refreshAll(self):
         self._load_groups(force=self._groups_loaded)
+
+    @Slot()
+    def forceRefreshAll(self):
+        self._load_groups(force=True)
 
     @Slot()
     def markStartupReady(self):

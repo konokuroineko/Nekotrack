@@ -213,7 +213,7 @@ Item {
         Item { width: 1; height: 8 }
 
         Text {
-            width: root.posterWidth + 4
+            width: root.posterWidth + 4 - (root.showRecommendationFeedback ? 32 : 0)
             height: root.titleHeight
             text: root.displayTitle
             color: bridge.primaryColor

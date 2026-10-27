@@ -204,6 +204,47 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         self.assertTrue(bridge.animationSpeed >= 0)
         self.assertIn(bridge.uiScale, {80, 90, 100, 110, 125, 150, 175, 200})
 
+
+    def test_startup_does_not_start_recommendations_until_visible(self):
+        from unittest.mock import patch
+
+        from ui.qml_app_bridge import ApplicationBridge
+
+        bridge = ApplicationBridge()
+        bridge._groups_loaded = True
+        with patch.object(bridge, "refreshRecommendations") as refresh_recommendations:
+            bridge.refreshHome()
+            refresh_recommendations.assert_not_called()
+            bridge.markStartupReady()
+            refresh_recommendations.assert_called_once_with()
+
+    def test_exact_default_theme_geometry_values(self):
+        from unittest.mock import patch
+
+        from ui.qml_app_bridge import ApplicationBridge
+
+        values = {
+            "card_size": 210,
+            "card_gap": 24,
+            "corner_radius": 12,
+            "font_size": 13,
+            "hover_highlight": True,
+            "resize_animation": True,
+            "animation_speed": 260,
+            "ui_scale": 100,
+        }
+        with patch("ui.qml_bridge.get", side_effect=lambda key: values[key]), \
+             patch("ui.qml_app_bridge.get", side_effect=lambda key: values[key]):
+            bridge = ApplicationBridge()
+
+        self.assertEqual(bridge.cardSize, 210)
+        self.assertEqual(bridge.coverHeight, 284)
+        self.assertEqual(bridge.cardGap, 24)
+        self.assertEqual(bridge.cornerRadius, 12)
+        self.assertEqual(bridge.fontSize, 13)
+        self.assertEqual(bridge.animationSpeed, 260)
+        self.assertEqual(bridge.uiScale, 100)
+
     def test_refresh_errors_are_reported_without_crashing_the_host(self):
         def fail_loader():
             raise RuntimeError("synthetic database read failure")

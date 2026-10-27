@@ -1945,7 +1945,7 @@ class MainWindow(QMainWindow):
                 button.setText("Added")
                 button.setEnabled(False)
             if self._qml_shell_enabled and self.qml_bridge is not None:
-                self.qml_bridge.refreshAll()
+                self.qml_bridge.forceRefreshAll()
                 self.qml_bridge.refreshVisiblePage()
             else:
                 self.library_page.refresh()
