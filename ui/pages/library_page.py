@@ -259,16 +259,16 @@ class LibraryPage(QWidget):
         self._sync_threads = []; self._shutdown_event = threading.Event(); self._closing = False
         self._resize_timer = QTimer(self); self._resize_timer.setSingleShot(True); self._resize_timer.setInterval(140); self._resize_timer.timeout.connect(self._finish_resize)
         self._resize_layout_was_enabled = True; self._last_target_positions = None; self._animations = []
-        self._defer_qml_load = bool(defer_initial_refresh)
-        self._qml_disabled = False
+        # The app-level QML shell owns the visible Library route. Keep this
+        # QWidget page only as a compatibility controller for bundle dialogs,
+        # relation sync and the original interface fallback.
+        self._defer_qml_load = False
+        self._qml_disabled = True
         self._qml_failure_queued = False
-        if defer_initial_refresh:
-            self.qml_bridge = None
-            self.qml_widget = None
-            self._using_qml = False
-            self._build_legacy_shell()
-        else:
-            self._build_shell()
+        self.qml_bridge = None
+        self.qml_widget = None
+        self._using_qml = False
+        self._build_legacy_shell()
         if defer_initial_refresh:
             # MainWindow opens on Home. Do not query/group the entire Library or
             # create all its cards before the first frame; _page_changed refreshes
@@ -499,9 +499,6 @@ class LibraryPage(QWidget):
         return super().eventFilter(watched, event)
 
     def refresh(self, retry_failed=True):
-        if self._defer_qml_load:
-            self._defer_qml_load = False
-            self._build_shell()
         log_event("library.refresh.started", retry_failed=bool(retry_failed))
         if retry_failed:
             self._sync_failed_ids.clear()
@@ -540,11 +537,8 @@ class LibraryPage(QWidget):
             member_count=library_member_count,
             groups=group_summary,
         )
-        if self._using_qml and self.qml_bridge is not None:
-            self.qml_bridge.refreshLibrary()
-        else:
-            self._apply_filter()
-            self._populate()
+        self._apply_filter()
+        self._populate()
         self._start_relation_sync()
         log_event("library.refresh.completed", visible_group_count=len(self.all_anime))
 
@@ -896,9 +890,6 @@ class LibraryPage(QWidget):
         for name,button in self.filter_buttons.items(): button.setChecked(name==value); button.setStyleSheet(self._filter_style(name==value))
         self._cancel_resize_animation(); self._apply_filter(); self._populate()
     def refresh_theme(self):
-        if self._using_qml and self.qml_bridge is not None:
-            self.qml_bridge.refreshTheme()
-            return
         if hasattr(self, "filter_controls"):
             self.filter_controls.setStyleSheet(
                 f"QFrame#libraryFilters{{background:{surface_rgba('surface')};border:none;border-radius:14px;}}"

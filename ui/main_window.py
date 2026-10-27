@@ -13,7 +13,9 @@ from api import (
     get_mangabaka_series_news,
     get_mangabaka_volume_records,
 )
-from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer, QSize, QProcess
+from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer, QSize, QProcess, QUrl
+from PySide6.QtGui import QColor
+from PySide6.QtQuickWidgets import QQuickWidget
 
 from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QMainWindow, QMessageBox, QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout
 
@@ -48,6 +50,7 @@ from ui.backgrounds import BackgroundCanvas, BackgroundManager
 from ui.branding import application_icon, navigation_icon, WordmarkLabel
 from ui.navigation import NavigationController
 from ui.preferences import get
+from ui.qml_app_bridge import ApplicationBridge
 from ui.setup_wizard import SetupWizard
 from ui.theme import COLORS, application_stylesheet, refresh_theme, surface_rgba
 from ui.pages.calendar_page import CalendarPage
@@ -722,6 +725,10 @@ class MainWindow(QMainWindow):
         self._library_episode_preload_thread = None
         self._library_episode_preload_worker = None
         self._ui_root_stack = None
+        self._legacy_root_stack = None
+        self._qml_shell_enabled = False
+        self._qml_shell_widget = None
+        self.qml_bridge = None
         self.background_manager = BackgroundManager(self)
         self._release_reminder_tray = QSystemTrayIcon(application_icon(), self)
         self._release_reminder_tray.setToolTip("NekoTrack release reminders")
@@ -883,12 +890,12 @@ class MainWindow(QMainWindow):
             QPushButton[navButton="true"]:checked {{ background:{surface_rgba('accent_soft')}; border-color:{COLORS['nav_selected_frame']}; color:{COLORS['nav_selected_text']}; }}
         """
         )
-        self.navigation.show(initial_page, record_history=False)
-
-        # Keep the currently visible UI root on screen while this complete
-        # replacement is being built. Only switch once the new tree exists.
+        # Keep the old page tree alive for backend compatibility, but use one
+        # QML root for the entire visible application.
         self._ui_root_stack.addWidget(root)
         self._ui_root_stack.setCurrentWidget(root)
+        self._install_qml_shell(initial_page)
+        self.navigation.show(initial_page, record_history=False)
         if self.isVisible():
             QTimer.singleShot(150, self.start_initial_background_work)
 
@@ -896,23 +903,148 @@ class MainWindow(QMainWindow):
         # entry on the GUI thread. Detail views are rendered when selected and
         # episode cards are created in bounded event-loop batches.
 
+    def _install_qml_shell(self, initial_page="home"):
+        """Make one QML root responsible for the visible shell and every main route."""
+        bridge = ApplicationBridge(parent=self, background_manager=self.background_manager)
+        quick = QQuickWidget(self)
+        quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+        quick.setClearColor(QColor(COLORS["background"]))
+        quick.rootContext().setContextProperty("appBridge", bridge)
+        quick.rootContext().setContextProperty("qmlBridge", bridge)
+        quick.statusChanged.connect(self._qml_shell_status_changed)
+        scene_graph_error = getattr(quick, "sceneGraphError", None)
+        if scene_graph_error is not None:
+            scene_graph_error.connect(self._qml_shell_scene_graph_error)
+
+        bridge.navigationRequested.connect(self._qml_navigation_requested)
+        bridge.openWorkRequested.connect(self._qml_open_library_work)
+        bridge.editBundleRequested.connect(self._qml_edit_bundle)
+        bridge.deleteWorkRequested.connect(self._qml_delete_work)
+        bridge.addToLibraryRequested.connect(lambda work: self.add_to_library(work, None))
+        bridge.searchWorkRequested.connect(self.show_search_work)
+        bridge.profileRequested.connect(self._qml_profile_requested)
+        bridge.setupRequested.connect(self.open_setup_wizard)
+        bridge.updateRequested.connect(self.check_updates_requested.emit)
+        bridge.diagnosticsExportRequested.connect(self._qml_export_diagnostics)
+        bridge.settingsChanged.connect(self.apply_settings)
+
+        qml_path = Path(__file__).resolve().parent / "qml" / "ApplicationShell.qml"
+        quick.setSource(QUrl.fromLocalFile(str(qml_path)))
+        if quick.status() == QQuickWidget.Status.Error:
+            log_event(
+                "qml_shell.load_failed",
+                errors=[error.toString() for error in quick.errors()][:30],
+            )
+            quick.deleteLater()
+            bridge.deleteLater()
+            self._qml_shell_enabled = False
+            self.qml_bridge = None
+            return False
+
+        old_central = self.takeCentralWidget()
+        if old_central is not None:
+            old_central.setParent(self)
+            old_central.hide()
+            self._legacy_root_stack = old_central
+
+        self.qml_bridge = bridge
+        self._qml_shell_widget = quick
+        self.setCentralWidget(quick)
+        self._qml_shell_enabled = True
+        bridge.initializePage(initial_page)
+        log_event("qml_shell.loaded", source=str(qml_path))
+        return True
+
+    def _qml_navigation_requested(self, page_name):
+        if not self._qml_shell_enabled:
+            return
+        if page_name in getattr(self.navigation, "pages", {}):
+            self.navigation.show(page_name, record_history=False)
+
+    def _qml_open_library_work(self, work_id):
+        if not self._qml_shell_enabled or self.qml_bridge is None:
+            return
+        group = self.qml_bridge._group_for_id(int(work_id))
+        if group is not None:
+            self.show_work_details(group)
+
+    def _qml_edit_bundle(self, work_id):
+        if self.qml_bridge is None:
+            return
+        group = self.qml_bridge._group_for_id(int(work_id))
+        if group is not None:
+            self.library_page._edit_bundle(group)
+            self.qml_bridge.refreshAll()
+
+    def _qml_delete_work(self, work_id):
+        if self.qml_bridge is None:
+            return
+        group = self.qml_bridge._group_for_id(int(work_id))
+        if group is not None:
+            self.library_page._delete_item(group)
+            QTimer.singleShot(0, self.qml_bridge.refreshAll)
+
+    def _qml_profile_requested(self, profile):
+        if not isinstance(profile, dict):
+            return
+        self.show_entity_profile(profile.get("entity_type"), profile, from_favorites=True)
+
+    def _qml_export_diagnostics(self):
+        exporter = getattr(self.settings_page, "_export_diagnostics", None)
+        if callable(exporter):
+            exporter(False)
+
+    def _qml_shell_status_changed(self, status):
+        if status != QQuickWidget.Status.Error:
+            return
+        errors = []
+        if self._qml_shell_widget is not None:
+            errors = [error.toString() for error in self._qml_shell_widget.errors()]
+        log_event("qml_shell.load_failed", errors=errors[:30])
+        self._fallback_to_legacy_shell()
+
+    def _qml_shell_scene_graph_error(self, error, message):
+        log_event("qml_shell.scene_graph_error", error=str(error), message=str(message)[:1000])
+        self._fallback_to_legacy_shell()
+
+    def _fallback_to_legacy_shell(self):
+        quick = self._qml_shell_widget
+        self._qml_shell_enabled = False
+        self.qml_bridge = None
+        self._qml_shell_widget = None
+        if quick is not None:
+            self.takeCentralWidget()
+            quick.deleteLater()
+        if self._legacy_root_stack is not None:
+            self.setCentralWidget(self._legacy_root_stack)
+            self._legacy_root_stack.show()
+        log_event("qml_shell.legacy_fallback")
+
     def start_initial_background_work(self):
         """Start optional API work after Home has had a chance to paint."""
         if self._shutdown_requested or self._shutdown_event.is_set():
             return
         home = getattr(self, "home_page", None)
-        if home is not None:
+        if home is not None and not self._qml_shell_enabled:
             home.start_initial_recommendations_load()
+        elif self._qml_shell_enabled and self.qml_bridge is not None:
+            QTimer.singleShot(0, self.qml_bridge.refreshHome)
         if not self._startup_preload_scheduled:
             self._startup_preload_scheduled = True
             QTimer.singleShot(1_000, self._start_existing_library_episode_preload)
 
     def _refresh_library_after_bundle_change(self):
-        # Wait until the detail-page deletion/link change has fully returned to
-        # the event loop, then rebuild the Library from the current database state.
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            QTimer.singleShot(0, self.qml_bridge.refreshAll)
+            return
         QTimer.singleShot(0, self.library_page.refresh)
 
     def _page_changed(self, page_name):
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            self.qml_bridge.setCurrentPage(page_name)
+            self.qml_bridge.refreshVisiblePage()
+            self._last_navigation_page = page_name
+            return
         if page_name == "settings":
             self.settings_page.ensure_built()
         previous_page = self._last_navigation_page
@@ -967,6 +1099,9 @@ class MainWindow(QMainWindow):
         refresh_theme()
         if hasattr(self, "background_manager"):
             self.background_manager.refresh_theme()
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            self.qml_bridge.refreshTheme()
+            self.qml_bridge.refreshVisiblePage()
 
         self.setStyleSheet(
             application_stylesheet()
@@ -1054,6 +1189,12 @@ class MainWindow(QMainWindow):
 
     def _rebuild_for_settings(self, changed_key):
         self._settings_rebuild_pending = False
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            self.qml_bridge.refreshTheme()
+            self.qml_bridge.refreshVisiblePage()
+            if changed_key == "maximized":
+                self.showMaximized() if get("maximized") else self.showNormal()
+            return
         current_page = "home"
         if hasattr(self, "navigation"):
             current_widget = self.stack.currentWidget()
@@ -1255,7 +1396,10 @@ class MainWindow(QMainWindow):
             member_count=len(members),
         )
 
-        self.work_detail_page.set_work(work)
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            self.qml_bridge.setSelectedWork(work)
+        else:
+            self.work_detail_page.set_work(work)
         log_event(
             "work_details.page_build_returned",
             work_id=work_id,
@@ -1448,6 +1592,15 @@ class MainWindow(QMainWindow):
         if not entity:
             return
         kind = str(entity_type or "").strip().lower()
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            try:
+                record = dict(entity)
+            except (TypeError, ValueError):
+                record = {"name": str(entity)}
+            record["entity_type"] = kind
+            self.qml_bridge.setSelectedProfile(record)
+            self.navigation.show("entity_profile", record_history=False)
+            return
         # Preserve whichever profile launched this one, including character
         # links opened from a voice actor's voice-acting credits. Back returns
         # through the same profile path in either direction.
@@ -1774,21 +1927,29 @@ class MainWindow(QMainWindow):
             )
             self._queue_library_imports(membership_ids)
 
-            button.setText("Added")
-            button.setEnabled(False)
-            self.library_page.refresh()
+            if button is not None:
+                button.setText("Added")
+                button.setEnabled(False)
+            if self._qml_shell_enabled and self.qml_bridge is not None:
+                self.qml_bridge.refreshAll()
+                self.qml_bridge.refreshVisiblePage()
+            else:
+                self.library_page.refresh()
 
-            # Covers will be loaded/cached normally by the Library cards.
-            # Start the representative cover download as before.
-            self.start_cover_download(
-                primary_id,
-                (anime.get("coverImage") or {}).get("large"),
-                button,
-            )
+            # The QML poster cache handles artwork for the visible interface.
+            if button is not None:
+                self.start_cover_download(
+                    primary_id,
+                    (anime.get("coverImage") or {}).get("large"),
+                    button,
+                )
         except Exception as error:
             log_exception("library.add_failed", error,
                           work_id=anime.get("id") if hasattr(anime, "get") else None)
-            button.setText("Error")
+            if button is not None:
+                button.setText("Error")
+            if self._qml_shell_enabled and self.qml_bridge is not None:
+                self.qml_bridge.reportSearchError(f"Could not save: {error}")
             self.search_page.results_title.setText(f"Could not save: {error}")
 
 
