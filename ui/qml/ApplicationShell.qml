@@ -233,343 +233,338 @@ Item {
                         anchors.fill: parent
                         clip: true
                         contentWidth: width
-                        contentHeight: homeColumn.implicitHeight + 64
+                        contentHeight: homeColumn.implicitHeight + 40
                         boundsBehavior: Flickable.StopAtBounds
+                        onContentYChanged: {
+                            if (contentHeight > height
+                                    && contentY >= contentHeight - height * 1.35
+                                    && bridge.recommendationItems.length > 0
+                                    && bridge.recommendationHasNext
+                                    && !bridge.recommendationLoading) {
+                                bridge.loadMoreRecommendations()
+                            }
+                        }
 
                         ColumnLayout {
                             id: homeColumn
-                            x: 38
-                            y: 32
-                            width: Math.max(1, homeScroll.width - 76)
-                            spacing: 22
+                            x: 18
+                            y: 18
+                            width: Math.max(1, homeScroll.width - 36)
+                            spacing: 12
 
-                            ColumnLayout {
+                            Rectangle {
                                 Layout.fillWidth: true
-                                spacing: 3
-                                Text {
-                                    text: "Home"
-                                    color: bridge.primaryColor
-                                    font.pixelSize: 32
-                                    font.weight: Font.Black
-                                }
-                                Text {
-                                    text: "Your anime, manga and light novels in one place."
-                                    color: bridge.mutedColor
-                                    font.pixelSize: 12
-                                }
-                            }
+                                Layout.preferredHeight: bridge.homeItems.length > 0
+                                    ? bridge.coverHeight + bridge.titleHeight + bridge.seriesHeight + bridge.metadataHeight + 124
+                                    : 150
+                                radius: 16
+                                color: bridge.surfaceFillColor
+                                border.width: 1
+                                border.color: bridge.frameColor
 
-                            GridLayout {
-                                Layout.fillWidth: true
-                                columns: 3
-                                columnSpacing: 12
-                                rowSpacing: 12
-
-                                Repeater {
-                                    model: [
-                                        {title: "In progress", value: bridge.homeStats.inProgress},
-                                        {title: "Completed", value: bridge.homeStats.completed},
-                                        {title: "Planned", value: bridge.homeStats.planned}
-                                    ]
-                                    delegate: Rectangle {
-                                        required property var modelData
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 82
-                                        radius: 13
-                                        color: bridge.surfaceFillColor
-                                        border.width: 1
-                                        border.color: bridge.frameColor
-                                        Column {
-                                            anchors.left: parent.left
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            anchors.leftMargin: 17
-                                            spacing: 4
-                                            Text {
-                                                text: modelData.value
-                                                color: bridge.primaryColor
-                                                font.pixelSize: 24
-                                                font.weight: Font.Black
-                                            }
-                                            Text {
-                                                text: modelData.title
-                                                color: bridge.mutedColor
-                                                font.pixelSize: 11
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Text {
-                                    text: "Continue watching & reading"
-                                    color: bridge.primaryColor
-                                    font.pixelSize: 20
-                                    font.weight: Font.Bold
-                                    Layout.fillWidth: true
-                                }
-                                Button {
-                                    text: "View Library"
-                                    onClicked: bridge.navigate("collections")
-                                }
-                            }
-
-                            Item {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: bridge.coverHeight + bridge.titleHeight
-                                    + bridge.seriesHeight + bridge.metadataHeight + 66
-                                GridView {
-                                    id: continueGrid
+                                ColumnLayout {
                                     anchors.fill: parent
-                                    clip: true
-                                    boundsBehavior: Flickable.StopAtBounds
-                                    cellWidth: homePage.homeCardWidth
-                                    cellHeight: bridge.coverHeight + bridge.titleHeight + bridge.seriesHeight + bridge.metadataHeight + 66
-                                    model: bridge.homeItems
+                                    anchors.margins: 12
+                                    spacing: 7
 
-                                    delegate: Item {
-                                        required property var modelData
-                                        width: continueGrid.cellWidth - bridge.cardGap
-                                        height: continueGrid.cellHeight
-
-                                        Column {
-                                            anchors.left: parent.left
-                                            anchors.top: parent.top
-                                            spacing: 3
-
-                                            PosterCard {
-                                                bridge: root.bridge
-                                                workId: modelData.workId
-                                                title: modelData.title
-                                                fullTitle: modelData.fullTitle || modelData.title
-                                                coverSource: modelData.coverSource || ""
-                                                coverCacheWorkId: modelData.coverCacheWorkId || modelData.workId
-                                                format: modelData.format || ""
-                                                startYear: modelData.startYear || 0
-                                                mediaType: modelData.mediaType || ""
-                                                seriesCount: modelData.seriesCount || 1
-                                                bundleSummary: modelData.bundleSummary || ""
-                                                status: modelData.homeStatus || modelData.status || ""
-                                                progressEpisodes: modelData.progressEpisodes || 0
-                                                episodeTotal: modelData.episodeTotal || 0
-                                                isInLibrary: true
-                                                showMenu: true
-                                                onActivated: function(workId) { bridge.requestOpenWork(workId) }
-                                                onEditBundleRequested: function(workId) { bridge.requestEditBundle(workId) }
-                                                onDeleteRequested: function(workId) { bridge.requestDeleteWork(workId) }
-                                            }
-
-                                            Text {
-                                                width: bridge.cardSize
-                                                height: 12
-                                                text: (modelData.homeStatus || modelData.status || "IN PROGRESS")
-                                                    .replace(/_/g, " ").toUpperCase()
-                                                color: bridge.secondaryColor
-                                                font.pixelSize: 9
-                                                font.weight: Font.DemiBold
-                                                elide: Text.ElideRight
-                                            }
-
-                                            Text {
-                                                width: bridge.cardSize
-                                                height: 36
-                                                text: modelData.progressCaption || ""
-                                                color: bridge.mutedColor
-                                                font.pixelSize: 10
-                                                wrapMode: Text.WordWrap
-                                                maximumLineCount: 3
-                                                elide: Text.ElideRight
-                                                clip: true
-                                            }
-                                        }
-                                    }
-                                }
-
-                                Text {
-                                    anchors.centerIn: parent
-                                    visible: bridge.homeLoading
-                                    width: Math.min(parent.width - 50, 420)
-                                    text: "Loading your Library…"
-                                    horizontalAlignment: Text.AlignHCenter
-                                    wrapMode: Text.WordWrap
-                                    color: bridge.mutedColor
-                                    font.pixelSize: 15
-                                }
-
-                                Text {
-                                    anchors.centerIn: parent
-                                    visible: !bridge.homeLoading && bridge.homeItems.length === 0
-                                    width: Math.min(parent.width - 50, 420)
-                                    text: "Nothing in progress yet.\n\nAdd titles from Search to start tracking them."
-                                    horizontalAlignment: Text.AlignHCenter
-                                    wrapMode: Text.WordWrap
-                                    color: bridge.mutedColor
-                                    font.pixelSize: 15
-                                }
-                            }
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 9
-
-                                RowLayout {
-                                    Layout.fillWidth: true
                                     ColumnLayout {
                                         Layout.fillWidth: true
-                                        spacing: 3
+                                        spacing: 4
                                         Text {
-                                            text: "Upcoming releases"
+                                            text: "Continue watching or reading"
                                             color: bridge.primaryColor
-                                            font.pixelSize: 20
-                                            font.weight: Font.Bold
+                                            font.pixelSize: 16
+                                            font.weight: Font.Black
                                         }
                                         Text {
-                                            text: "Cached episode dates for the next 60 days."
+                                            text: "Pick up from your locally saved progress."
                                             color: bridge.mutedColor
                                             font.pixelSize: 11
                                             wrapMode: Text.WordWrap
-                                        }
-                                    }
-                                    Button {
-                                        text: "Open calendar"
-                                        onClicked: bridge.navigate("calendar")
-                                    }
-                                }
-
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    radius: 13
-                                    color: bridge.surfaceFillColor
-                                    border.width: 1
-                                    border.color: bridge.frameColor
-                                    ColumnLayout {
-                                        anchors.fill: parent
-                                        anchors.margins: 9
-                                        spacing: 7
-
-                                        RowLayout {
                                             Layout.fillWidth: true
-                                            Text {
-                                                text: bridge.calendarItems.length
-                                                    + " upcoming episode"
-                                                    + (bridge.calendarItems.length === 1 ? "" : "s")
-                                                    + " · next 60 days"
-                                                color: bridge.mutedColor
-                                                font.pixelSize: 10
-                                                Layout.fillWidth: true
-                                            }
                                         }
+                                    }
 
-                                        Repeater {
-                                            model: bridge.calendarItems.slice(0, 3)
-                                            delegate: Rectangle {
+                                    Item {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: bridge.homeItems.length > 0
+                                            ? bridge.coverHeight + bridge.titleHeight + bridge.seriesHeight + bridge.metadataHeight + 54
+                                            : 68
+
+                                        ListView {
+                                            id: continueList
+                                            anchors.fill: parent
+                                            visible: bridge.homeItems.length > 0
+                                            clip: true
+                                            orientation: ListView.Horizontal
+                                            spacing: 10
+                                            boundsBehavior: Flickable.StopAtBounds
+                                            model: bridge.homeItems.slice(0, 4)
+
+                                            delegate: Item {
                                                 required property var modelData
-                                                Layout.fillWidth: true
-                                                Layout.preferredHeight: 62
-                                                radius: 9
-                                                color: bridge.surfaceAltFillColor
-                                                border.width: 1
-                                                border.color: bridge.frameColor
+                                                width: homePage.homeCardWidth
+                                                height: continueList.height
 
-                                                RowLayout {
-                                                    anchors.fill: parent
-                                                    anchors.margins: 7
-                                                    spacing: 9
-                                                    Rectangle {
-                                                        Layout.preferredWidth: 46
-                                                        Layout.fillHeight: true
-                                                        radius: 7
-                                                        color: bridge.accentSoftColor
-                                                        Column {
-                                                            anchors.centerIn: parent
-                                                            spacing: 0
-                                                            Text {
-                                                                text: modelData.month
-                                                                color: bridge.accentColor
-                                                                font.pixelSize: 9
-                                                                font.weight: Font.Black
-                                                                anchors.horizontalCenter: parent.horizontalCenter
-                                                            }
-                                                            Text {
-                                                                text: modelData.day
-                                                                color: bridge.primaryColor
-                                                                font.pixelSize: 19
-                                                                font.weight: Font.Black
-                                                                anchors.horizontalCenter: parent.horizontalCenter
-                                                            }
-                                                        }
+                                                Column {
+                                                    anchors.left: parent.left
+                                                    anchors.top: parent.top
+                                                    spacing: 3
+
+                                                    PosterCard {
+                                                        bridge: root.bridge
+                                                        workId: modelData.workId
+                                                        title: modelData.title
+                                                        fullTitle: modelData.fullTitle || modelData.title
+                                                        coverSource: modelData.coverSource || ""
+                                                        coverCacheWorkId: modelData.coverCacheWorkId || modelData.workId
+                                                        format: modelData.format || ""
+                                                        startYear: modelData.startYear || 0
+                                                        mediaType: modelData.mediaType || ""
+                                                        seriesCount: modelData.seriesCount || 1
+                                                        bundleSummary: modelData.bundleSummary || ""
+                                                        status: modelData.homeStatus || modelData.status || ""
+                                                        progressEpisodes: modelData.progressEpisodes || 0
+                                                        episodeTotal: modelData.episodeTotal || 0
+                                                        isInLibrary: true
+                                                        showMenu: true
+                                                        onActivated: function(workId) { bridge.requestOpenWork(workId) }
+                                                        onEditBundleRequested: function(workId) { bridge.requestEditBundle(workId) }
+                                                        onDeleteRequested: function(workId) { bridge.requestDeleteWork(workId) }
                                                     }
-                                                    ColumnLayout {
-                                                        Layout.fillWidth: true
-                                                        spacing: 1
-                                                        Text {
-                                                            text: (modelData.workTitle || "Untitled")
-                                                                + " · "
-                                                                + (modelData.episodeTitle.length > 0
-                                                                    ? modelData.episodeTitle
-                                                                    : ("Episode " + modelData.episodeNumber))
-                                                            color: bridge.primaryColor
-                                                            font.pixelSize: 11
-                                                            font.weight: Font.Bold
-                                                            maximumLineCount: 1
-                                                            elide: Text.ElideRight
-                                                            Layout.fillWidth: true
-                                                        }
-                                                        Text {
-                                                            text: modelData.dateLabel
-                                                            color: bridge.mutedColor
-                                                            font.pixelSize: 9
-                                                            elide: Text.ElideRight
-                                                            Layout.fillWidth: true
-                                                        }
+
+                                                    Text {
+                                                        width: bridge.cardSize
+                                                        height: 12
+                                                        text: (modelData.homeStatus || modelData.status || "IN PROGRESS")
+                                                            .replace(/_/g, " ").toUpperCase()
+                                                        color: bridge.accentColor
+                                                        font.pixelSize: 9
+                                                        font.weight: Font.Black
+                                                        elide: Text.ElideRight
                                                     }
-                                                    Button {
-                                                        text: modelData.reminderEnabled ? "On" : "Remind"
-                                                        implicitWidth: 62
-                                                        onClicked: bridge.setReminder(
-                                                            modelData.workId,
-                                                            modelData.episodeNumber,
-                                                            !modelData.reminderEnabled
-                                                        )
+
+                                                    Text {
+                                                        width: bridge.cardSize
+                                                        height: 36
+                                                        text: modelData.progressCaption || ""
+                                                        color: bridge.secondaryColor
+                                                        font.pixelSize: 10
+                                                        wrapMode: Text.WordWrap
+                                                        maximumLineCount: 3
+                                                        elide: Text.ElideRight
+                                                        clip: true
                                                     }
                                                 }
                                             }
                                         }
 
                                         Text {
-                                            visible: bridge.calendarItems.length === 0
-                                            text: "No upcoming episode dates cached. NekoTrack will not guess release dates."
-                                            color: bridge.mutedColor
-                                            font.pixelSize: 11
+                                            anchors.centerIn: parent
+                                            visible: bridge.homeLoading
+                                            width: Math.min(parent.width - 30, 420)
+                                            text: "Loading your Library…"
+                                            horizontalAlignment: Text.AlignHCenter
                                             wrapMode: Text.WordWrap
-                                            Layout.fillWidth: true
+                                            color: bridge.mutedColor
+                                            font.pixelSize: 13
                                         }
 
                                         Text {
-                                            visible: bridge.calendarItems.length > 3
-                                            text: (bridge.calendarItems.length - 3)
-                                                + " more release dates in Calendar."
+                                            anchors.centerIn: parent
+                                            visible: !bridge.homeLoading && bridge.homeItems.length === 0
+                                            width: Math.min(parent.width - 30, 420)
+                                            text: "Nothing in progress yet. Add a title to your Library, then your saved progress will appear here."
+                                            horizontalAlignment: Text.AlignHCenter
+                                            wrapMode: Text.WordWrap
                                             color: bridge.mutedColor
-                                            font.pixelSize: 10
+                                            font.pixelSize: 12
                                         }
                                     }
                                 }
                             }
 
-                            RowLayout {
+                            Rectangle {
                                 Layout.fillWidth: true
-                                Text {
-                                    text: "For your next watch or read"
-                                    color: bridge.primaryColor
-                                    font.pixelSize: 20
-                                    font.weight: Font.Bold
-                                    Layout.fillWidth: true
+                                Layout.preferredHeight: 138
+                                    + Math.min(3, bridge.calendarItems.length) * 62
+                                    + (bridge.calendarItems.length === 0 ? 38 : 0)
+                                    + (bridge.calendarItems.length > 3 ? 16 : 0)
+                                radius: 16
+                                color: bridge.surfaceFillColor
+                                border.width: 1
+                                border.color: bridge.frameColor
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 12
+                                    spacing: 7
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 4
+                                            Text {
+                                                text: "Upcoming releases"
+                                                color: bridge.primaryColor
+                                                font.pixelSize: 16
+                                                font.weight: Font.Black
+                                            }
+                                            Text {
+                                                text: "Cached episode dates for the next 60 days. Reminders notify while NekoTrack is running."
+                                                color: bridge.mutedColor
+                                                font.pixelSize: 11
+                                                wrapMode: Text.WordWrap
+                                                Layout.fillWidth: true
+                                            }
+                                        }
+                                        Button {
+                                            text: "Open calendar"
+                                            onClicked: bridge.navigate("calendar")
+                                        }
+                                    }
+
+                                    Text {
+                                        text: bridge.calendarItems.length
+                                            + " upcoming episode"
+                                            + (bridge.calendarItems.length === 1 ? "" : "s")
+                                            + " · next 60 days"
+                                        color: bridge.secondaryColor
+                                        font.pixelSize: 10
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Repeater {
+                                        model: bridge.calendarItems.slice(0, 3)
+                                        delegate: Rectangle {
+                                            required property var modelData
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 62
+                                            radius: 11
+                                            color: bridge.surfaceAltFillColor
+                                            border.width: 1
+                                            border.color: bridge.borderColor
+
+                                            RowLayout {
+                                                anchors.fill: parent
+                                                anchors.margins: 7
+                                                spacing: 9
+                                                Rectangle {
+                                                    Layout.preferredWidth: 48
+                                                    Layout.fillHeight: true
+                                                    radius: 9
+                                                    color: bridge.accentSoftColor
+                                                    border.width: 1
+                                                    border.color: bridge.borderColor
+                                                    Column {
+                                                        anchors.centerIn: parent
+                                                        spacing: 0
+                                                        Text {
+                                                            text: modelData.month
+                                                            color: bridge.accentColor
+                                                            font.pixelSize: 9
+                                                            font.weight: Font.Black
+                                                            anchors.horizontalCenter: parent.horizontalCenter
+                                                        }
+                                                        Text {
+                                                            text: modelData.day
+                                                            color: bridge.primaryColor
+                                                            font.pixelSize: 20
+                                                            font.weight: Font.Black
+                                                            anchors.horizontalCenter: parent.horizontalCenter
+                                                        }
+                                                    }
+                                                }
+                                                ColumnLayout {
+                                                    Layout.fillWidth: true
+                                                    spacing: 1
+                                                    Text {
+                                                        text: (modelData.workTitle || "Untitled")
+                                                            + " · "
+                                                            + (modelData.episodeTitle.length > 0
+                                                                ? modelData.episodeTitle
+                                                                : ("Episode " + modelData.episodeNumber))
+                                                        color: bridge.primaryColor
+                                                        font.pixelSize: 11
+                                                        font.weight: Font.Bold
+                                                        maximumLineCount: 1
+                                                        elide: Text.ElideRight
+                                                        Layout.fillWidth: true
+                                                    }
+                                                    Text {
+                                                        text: modelData.dateLabel
+                                                        color: bridge.mutedColor
+                                                        font.pixelSize: 10
+                                                        elide: Text.ElideRight
+                                                        Layout.fillWidth: true
+                                                    }
+                                                }
+                                                Button {
+                                                    text: modelData.reminderEnabled ? "On" : "Remind"
+                                                    implicitWidth: 62
+                                                    onClicked: bridge.setReminder(
+                                                        modelData.workId,
+                                                        modelData.episodeNumber,
+                                                        !modelData.reminderEnabled
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        visible: bridge.calendarItems.length === 0
+                                        text: "No upcoming episode dates cached. This preview won't guess release dates."
+                                        color: bridge.mutedColor
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Text {
+                                        visible: bridge.calendarItems.length > 3
+                                        text: (bridge.calendarItems.length - 3) + " more release dates in Calendar."
+                                        color: bridge.mutedColor
+                                        font.pixelSize: 10
+                                    }
                                 }
-                                Button {
-                                    text: "Refresh"
-                                    enabled: !bridge.recommendationLoading
-                                    onClicked: bridge.refreshRecommendations()
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 96
+                                radius: 16
+                                color: bridge.surfaceFillColor
+                                border.width: 1
+                                border.color: bridge.frameColor
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 18
+                                    spacing: 14
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 5
+                                        Text {
+                                            text: "For your next watch or read"
+                                            color: bridge.primaryColor
+                                            font.pixelSize: 20
+                                            font.weight: Font.Black
+                                            Layout.fillWidth: true
+                                        }
+                                        Text {
+                                            text: "A learning feed built from your collection, saved favorites, feedback, and the wider anime catalog."
+                                            color: bridge.mutedColor
+                                            font.pixelSize: 11
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
+                                    }
+                                    Button {
+                                        text: bridge.recommendationLoading ? "Finding…" : "Refresh"
+                                        enabled: !bridge.recommendationLoading
+                                        onClicked: bridge.refreshRecommendations()
+                                    }
                                 }
                             }
 
@@ -592,12 +587,15 @@ Item {
 
                             Item {
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: bridge.coverHeight + bridge.titleHeight
-                                    + bridge.seriesHeight + bridge.metadataHeight + 126
+                                Layout.preferredHeight: Math.max(
+                                    bridge.coverHeight + bridge.titleHeight + bridge.seriesHeight + bridge.metadataHeight + 126,
+                                    recommendationGrid.contentHeight + 8
+                                )
 
                                 GridView {
                                     id: recommendationGrid
                                     anchors.fill: parent
+                                    visible: bridge.recommendationItems.length > 0
                                     clip: true
                                     boundsBehavior: Flickable.StopAtBounds
                                     cellWidth: homePage.homeCardWidth
@@ -632,6 +630,56 @@ Item {
                                             onAddRequested: function(workId) { bridge.requestAddRecommendation(workId) }
                                             onRecommendationFeedbackRequested: function(workId, feedback) {
                                                 bridge.requestRecommendationFeedback(workId, feedback)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Row {
+                                    anchors.fill: parent
+                                    spacing: bridge.cardGap
+                                    clip: true
+                                    visible: bridge.recommendationLoading && bridge.recommendationItems.length === 0
+
+                                    Repeater {
+                                        model: 4
+                                        delegate: Rectangle {
+                                            required property int index
+                                            width: bridge.cardSize
+                                            height: bridge.coverHeight + bridge.titleHeight + bridge.seriesHeight + bridge.metadataHeight + 116
+                                            radius: bridge.cornerRadius
+                                            color: bridge.surfaceFillColor
+                                            border.width: 1
+                                            border.color: bridge.frameColor
+
+                                            Column {
+                                                anchors.fill: parent
+                                                anchors.margins: 8
+                                                spacing: 8
+                                                Rectangle {
+                                                    width: parent.width
+                                                    height: bridge.coverHeight - 8
+                                                    radius: bridge.cornerRadius
+                                                    color: bridge.surfaceAltFillColor
+                                                }
+                                                Rectangle {
+                                                    width: parent.width * 0.82
+                                                    height: 11
+                                                    radius: 5
+                                                    color: bridge.surfaceAltFillColor
+                                                }
+                                                Rectangle {
+                                                    width: parent.width * 0.56
+                                                    height: 8
+                                                    radius: 4
+                                                    color: bridge.surfaceAltFillColor
+                                                }
+                                                Rectangle {
+                                                    width: parent.width * 0.68
+                                                    height: 8
+                                                    radius: 4
+                                                    color: bridge.surfaceAltFillColor
+                                                }
                                             }
                                         }
                                     }
