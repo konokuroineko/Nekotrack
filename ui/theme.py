@@ -86,6 +86,20 @@ def surface_rgba(key):
     return f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha})"
 
 
+def surface_qml_color(key):
+    """Return a QML-safe #AARRGGBB color with the legacy surface opacity."""
+    key = str(key)
+    value = COLORS.get(key)
+    if value is None:
+        return "#00000000"
+    color = QColor(str(value))
+    if not color.isValid():
+        return str(value)
+    opacity = max(0, min(100, int(SURFACE_OPACITY.get(key, 100))))
+    color.setAlpha(round(255 * opacity / 100))
+    return color.name(QColor.NameFormat.HexArgb)
+
+
 def refresh_theme():
     theme_name = str(get("theme_preset") or "Neko")
     base_theme = THEME_PRESETS.get(theme_name, THEME_PRESETS["Neko"])

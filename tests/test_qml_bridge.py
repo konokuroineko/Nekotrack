@@ -6,6 +6,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication
 
 from ui.qml_bridge import LibraryListModel, QmlApplicationBridge
@@ -509,6 +510,24 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("diagnostic log", errors[0])
         self.assertEqual(bridge.libraryModel.rowCount(), 0)
+
+
+class QmlThemeColorTests(unittest.TestCase):
+    def test_qml_surface_colors_are_valid_argb_and_keep_legacy_opacity(self):
+        from ui.theme import SURFACE_OPACITY, surface_qml_color
+
+        for key in ("sidebar", "background_alt", "surface", "surface_alt",
+                    "surface_hover", "panel", "panel_soft", "card",
+                    "card_hover", "accent_soft"):
+            with self.subTest(key=key):
+                raw = surface_qml_color(key)
+                self.assertRegex(raw, r"^#[0-9a-fA-F]{8}$")
+                color = QColor(raw)
+                self.assertTrue(color.isValid())
+                self.assertEqual(
+                    color.alpha(),
+                    round(255 * SURFACE_OPACITY[key] / 100),
+                )
 
 
 if __name__ == "__main__":

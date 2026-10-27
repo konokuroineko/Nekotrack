@@ -145,60 +145,93 @@ Item {
     Column {
         anchors.left: parent.left
         anchors.top: parent.top
-        anchors.leftMargin: 4
+        anchors.leftMargin: 2
         spacing: 0
 
         Item {
             width: root.posterWidth
             height: root.posterHeight
 
-            Image {
-                id: cover
-                x: 2
-                y: 2
-                width: parent.width - 4
-                height: parent.height - 4
-                source: root.coverSource
-                fillMode: Image.PreserveAspectCrop
-                asynchronous: true
-                cache: true
+            Item {
+                width: root.posterWidth + 4
+                height: root.posterHeight
 
-                layer.enabled: true
-                layer.effect: MultiEffect {
-                    maskEnabled: true
-                    autoPaddingEnabled: false
-                    maskSource: Rectangle {
+                // Match WorkCard's centered CoverFrame and its exact 2 px inset.
+                Item {
+                    id: coverFrame
+                    x: 2
+                    width: root.posterWidth
+                    height: root.posterHeight
+
+                    Image {
+                        id: cover
+                        x: 2
+                        y: 2
+                        width: parent.width - 4
+                        height: parent.height - 4
+                        source: root.coverSource
+                        fillMode: Image.PreserveAspectCrop
+                        asynchronous: true
+                        cache: true
+                        visible: false
+
+                        onStatusChanged: {
+                            if (status === Image.Ready) {
+                                var sourceText = source.toString()
+                                if ((sourceText.indexOf("http://") === 0 || sourceText.indexOf("https://") === 0)
+                                        && !cacheRequested) {
+                                    cacheRequested = true
+                                    bridge.requestCoverCache(root.coverCacheWorkId, sourceText)
+                                }
+                            }
+                        }
+                        property bool cacheRequested: false
+                        onSourceChanged: cacheRequested = false
+                    }
+
+                    // Keep the mask separate from the source image; MultiEffect
+                    // draws it into an independent texture to avoid black covers.
+                    Item {
+                        id: coverMask
+                        x: cover.x
+                        y: cover.y
                         width: cover.width
                         height: cover.height
-                        radius: bridge.cornerRadius
-                        color: "white"
+                        visible: false
                         layer.enabled: true
-                    }
-                }
 
-                onStatusChanged: {
-                    if (status === Image.Ready) {
-                        var sourceText = source.toString()
-                        if ((sourceText.indexOf("http://") === 0 || sourceText.indexOf("https://") === 0)
-                                && !cacheRequested) {
-                            cacheRequested = true
-                            bridge.requestCoverCache(root.coverCacheWorkId, sourceText)
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: bridge.cornerRadius
+                            color: "#ffffff"
                         }
                     }
-                }
-                property bool cacheRequested: false
-                onSourceChanged: cacheRequested = false
-            }
 
-            Rectangle {
-                x: 2
-                y: 2
-                width: parent.width - 4
-                height: parent.height - 4
-                radius: bridge.cornerRadius
-                color: "transparent"
-                border.width: 3
-                border.color: bridge.frameColor
+                    MultiEffect {
+                        id: roundedCover
+                        x: cover.x
+                        y: cover.y
+                        width: cover.width
+                        height: cover.height
+                        source: cover
+                        maskEnabled: true
+                        maskSource: coverMask
+                        autoPaddingEnabled: false
+                        visible: cover.status === Image.Ready
+                    }
+
+                    Rectangle {
+                        x: 2
+                        y: 2
+                        width: parent.width - 4
+                        height: parent.height - 4
+                        radius: bridge.cornerRadius
+                        color: "transparent"
+                        border.width: 3
+                        border.color: bridge.frameColor
+                        z: 2
+                    }
+                }
             }
 
             Text {
@@ -213,7 +246,7 @@ Item {
         Item { width: 1; height: 8 }
 
         Text {
-            width: root.posterWidth + 4 - (root.showRecommendationFeedback ? 32 : 0)
+            width: Math.max(1, root.posterWidth - 4 - (root.showRecommendationFeedback ? 32 : 0))
             height: root.titleHeight
             text: root.displayTitle
             color: bridge.primaryColor
@@ -235,7 +268,7 @@ Item {
 
         Text {
             id: reasonLabel
-            width: root.posterWidth
+            width: Math.max(1, root.posterWidth - 4)
             height: root.reasonHeight
             visible: root.recommendationReason.length > 0
             text: root.recommendationReason
@@ -254,7 +287,7 @@ Item {
         }
 
         Text {
-            width: root.posterWidth
+            width: Math.max(1, root.posterWidth - 4)
             height: visible ? root.seriesHeight : 0
             visible: root.seriesCount > 1
             text: root.bundleSummary.length > 0 ? root.bundleSummary : (root.seriesCount + " entries")
@@ -272,7 +305,7 @@ Item {
         }
 
         Text {
-            width: root.posterWidth
+            width: root.posterWidth + 4
             height: visible ? root.metaHeight : 0
             visible: root.hasMetadata
             text: {

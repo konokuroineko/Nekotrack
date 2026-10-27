@@ -14,7 +14,7 @@ from diagnostics import log_event, log_exception
 from series import get_library_series
 from ui.display_identity import get_display_override
 from ui.preferences import get
-from ui.theme import COLORS, surface_rgba
+from ui.theme import COLORS, surface_qml_color
 
 _IMAGE_DIRECTORY = Path("data") / "images" / "works"
 _FILTERS = ("All", "Watching", "Completed", "Planned")
@@ -485,7 +485,7 @@ class QmlApplicationBridge(QObject):
 
     @Property(str, notify=themeChanged)
     def surfaceFillColor(self):
-        return surface_rgba("surface")
+        return surface_qml_color("surface")
 
     @Property(str, notify=themeChanged)
     def accentColor(self):
@@ -529,10 +529,10 @@ class QmlApplicationBridge(QObject):
             "secondaryColor": COLORS.get("secondary", "#c8bdcf"),
             "mutedColor": COLORS.get("muted", "#93899d"),
             "frameColor": COLORS.get("frame", "#51475f"),
-            "surfaceColor": COLORS.get("surface", "#26212e"),
-            "surfaceHoverColor": COLORS.get("surface_hover", "#342b40"),
+            "surfaceColor": surface_qml_color("surface"),
+            "surfaceHoverColor": surface_qml_color("surface_hover"),
             "accentColor": COLORS.get("accent", "#9271c5"),
-            "accentSoftColor": COLORS.get("accent_soft", "#3b304b"),
+            "accentSoftColor": surface_qml_color("accent_soft"),
             "selectedTextColor": COLORS.get("nav_selected_text", "#ede5ff"),
             "selectedFrameColor": COLORS.get("nav_selected_frame", "#9271c5"),
             # Match WorkCard: preserve its 80..270 poster-width clamp.

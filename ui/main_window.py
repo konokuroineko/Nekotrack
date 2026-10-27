@@ -966,14 +966,12 @@ class MainWindow(QMainWindow):
             return
         if page_name not in getattr(self.navigation, "pages", {}):
             return
-        self._qml_navigation_sync = True
-        try:
-            self.navigation.show(page_name, record_history=False)
-        finally:
-            self._qml_navigation_sync = False
+
+        # QML owns visible navigation. Don't activate the hidden Qt Widgets
+        # stack whenever a QML route changes; that stack is only a compatibility
+        # host for legacy dialogs and the fallback UI.
+        self._last_navigation_page = page_name
         if page_name == "collections":
-            # _page_changed deliberately ignores synchronized QML navigation,
-            # so explicitly start relation sync after Library becomes visible.
             QTimer.singleShot(0, self._start_qml_library_relation_sync)
 
     def _qml_open_library_work(self, work_id):

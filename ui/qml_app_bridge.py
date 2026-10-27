@@ -43,7 +43,7 @@ from ui.qml_bridge import (
     _normalize_group,
     _optional_int,
 )
-from ui.theme import COLORS, THEME_PRESETS, refresh_theme, surface_rgba
+from ui.theme import COLORS, THEME_PRESETS, refresh_theme, surface_qml_color
 
 
 def _plain(value):
@@ -513,15 +513,15 @@ class ApplicationBridge(LibraryBridge):
 
     @Property(str, notify=themeChanged)
     def sidebarFillColor(self):
-        return surface_rgba("sidebar")
+        return surface_qml_color("sidebar")
 
     @Property(str, notify=themeChanged)
     def surfaceFillColor(self):
-        return surface_rgba("surface")
+        return surface_qml_color("surface")
 
     @Property(str, notify=themeChanged)
     def surfaceAltFillColor(self):
-        return surface_rgba("surface_alt")
+        return surface_qml_color("surface_alt")
 
     @Property(str, notify=themeChanged)
     def borderColor(self):
