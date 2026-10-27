@@ -1057,215 +1057,560 @@ Item {
 
                 // Work details
                 Item {
-                    ColumnLayout {
+                    id: workDetailsPage
+                    Flickable {
+                        id: detailScroll
                         anchors.fill: parent
-                        anchors.leftMargin: 34
-                        anchors.rightMargin: 34
-                        anchors.topMargin: 28
-                        anchors.bottomMargin: 30
-                        spacing: 16
+                        clip: true
+                        contentWidth: width
+                        contentHeight: detailColumn.implicitHeight + 60
+                        boundsBehavior: Flickable.StopAtBounds
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Button {
-                                text: "← Back"
-                                onClicked: bridge.goBack()
+                        ColumnLayout {
+                            id: detailColumn
+                            x: 34
+                            y: 28
+                            width: Math.max(1, detailScroll.width - 68)
+                            spacing: 16
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Button { text: "← Back"; onClicked: bridge.goBack() }
+                                Item { Layout.fillWidth: true }
+                                Button {
+                                    text: "Refresh details"
+                                    enabled: !bridge.selectedWork.detailsLoading
+                                    onClicked: bridge.setSelectedWork(bridge.selectedWorkRaw)
+                                }
                             }
-                            Item { Layout.fillWidth: true }
-                        }
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 225
-                            spacing: 20
-
-                            Image {
-                                Layout.preferredWidth: 166
+                            RowLayout {
+                                Layout.fillWidth: true
                                 Layout.preferredHeight: 225
-                                source: bridge.selectedWork.coverSource || ""
-                                fillMode: Image.PreserveAspectCrop
-                                asynchronous: true
-                                cache: true
-                                layer.enabled: true
-                                layer.effect: MultiEffect {
-                                    maskEnabled: true
-                                    autoPaddingEnabled: false
-                                    maskSource: Rectangle {
-                                        width: 166
-                                        height: 225
-                                        radius: bridge.cornerRadius
-                                        color: "white"
-                                        layer.enabled: true
+                                spacing: 20
+
+                                Image {
+                                    Layout.preferredWidth: 166
+                                    Layout.preferredHeight: 225
+                                    source: bridge.selectedWork.coverSource || ""
+                                    fillMode: Image.PreserveAspectCrop
+                                    asynchronous: true
+                                    cache: true
+                                    layer.enabled: true
+                                    layer.effect: MultiEffect {
+                                        maskEnabled: true
+                                        autoPaddingEnabled: false
+                                        maskSource: Rectangle {
+                                            width: 166
+                                            height: 225
+                                            radius: bridge.cornerRadius
+                                            color: "white"
+                                            layer.enabled: true
+                                        }
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    spacing: 8
+                                    Text {
+                                        text: bridge.selectedWork.title || "Select a title"
+                                        color: bridge.primaryColor
+                                        font.pixelSize: 27
+                                        font.weight: Font.Black
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+                                    Text {
+                                        text: [bridge.selectedWork.format || "", bridge.selectedWork.startYear || ""].filter(Boolean).join(" · ")
+                                        color: bridge.mutedColor
+                                        font.pixelSize: 12
+                                    }
+                                    Text {
+                                        text: (bridge.selectedWork.mediaType || "")
+                                            + (bridge.selectedWork.status ? " · " + bridge.selectedWork.status : "")
+                                        color: bridge.secondaryColor
+                                        font.pixelSize: 12
+                                    }
+                                    Text {
+                                        text: bridge.selectedWork.isInLibrary
+                                            ? ("Progress: " + (bridge.selectedWork.progressEpisodes || 0)
+                                                + (bridge.selectedWork.episodeTotal
+                                                    ? " / " + bridge.selectedWork.episodeTotal + " episodes"
+                                                    : " episodes"))
+                                            : "Not in your Library yet"
+                                        color: bridge.secondaryColor
+                                        font.pixelSize: 12
+                                    }
+                                    Text {
+                                        visible: bridge.selectedWork.detailsLoading || false
+                                        text: "Loading saved details…"
+                                        color: bridge.mutedColor
+                                        font.pixelSize: 11
+                                    }
+                                    RowLayout {
+                                        Button {
+                                            visible: !(bridge.selectedWork.isInLibrary || false)
+                                            text: "Add to Library"
+                                            onClicked: bridge.requestAddSearchWork(bridge.selectedWork.id)
+                                        }
+                                        Button {
+                                            visible: bridge.selectedWork.isInLibrary
+                                                && bridge.selectedWork.mediaType === "ANIME"
+                                            text: "Mark all watched"
+                                            onClicked: bridge.markAllEpisodesWatched(bridge.selectedWork.id, true)
+                                        }
+                                        Item { Layout.fillWidth: true }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 1
+                                color: bridge.frameColor
+                            }
+
+                            Text {
+                                text: "Synopsis"
+                                color: bridge.primaryColor
+                                font.pixelSize: 17
+                                font.weight: Font.Bold
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: Math.min(160, implicitHeight)
+                                text: bridge.selectedWork.synopsis || "No synopsis available."
+                                color: bridge.secondaryColor
+                                font.pixelSize: 12
+                                wrapMode: Text.WordWrap
+                                clip: true
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                visible: (bridge.selectedWork.bundleMembers || []).length > 1
+                                spacing: 8
+                                Text {
+                                    text: "Bundle members"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 17
+                                    font.weight: Font.Bold
+                                }
+                                ListView {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 104
+                                    clip: true
+                                    orientation: ListView.Horizontal
+                                    spacing: 10
+                                    model: bridge.selectedWork.bundleMembers || []
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        width: 238
+                                        height: 96
+                                        radius: 11
+                                        color: bridge.surfaceFillColor
+                                        border.width: 1
+                                        border.color: bridge.frameColor
+
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 8
+                                            spacing: 10
+                                            Image {
+                                                Layout.preferredWidth: 50
+                                                Layout.preferredHeight: 70
+                                                source: modelData.coverSource || ""
+                                                fillMode: Image.PreserveAspectCrop
+                                                asynchronous: true
+                                                cache: true
+                                            }
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 3
+                                                Text {
+                                                    text: modelData.title || "Untitled"
+                                                    color: bridge.primaryColor
+                                                    font.pixelSize: 11
+                                                    font.weight: Font.Bold
+                                                    wrapMode: Text.WordWrap
+                                                    maximumLineCount: 2
+                                                    elide: Text.ElideRight
+                                                    Layout.fillWidth: true
+                                                }
+                                                Text {
+                                                    text: [modelData.format || "", modelData.startYear || ""].filter(Boolean).join(" · ")
+                                                    color: bridge.mutedColor
+                                                    font.pixelSize: 10
+                                                }
+                                                Button {
+                                                    text: "Open"
+                                                    onClicked: bridge.requestOpenWork(modelData.id)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                visible: bridge.selectedWork.mediaType === "MANGA"
+                                    || bridge.selectedWork.format === "NOVEL"
+                                    || bridge.selectedWork.format === "LIGHT_NOVEL"
+                                spacing: 12
+                                Text {
+                                    text: "Chapters read"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 12
+                                    Layout.fillWidth: true
+                                }
+                                SpinBox {
+                                    from: 0
+                                    to: 100000
+                                    editable: true
+                                    value: bridge.selectedWork.progressChapters || 0
+                                    onValueModified: bridge.setReadingProgress(bridge.selectedWork.id, "chapter", value)
+                                }
+                                Text {
+                                    text: "Volumes read"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 12
+                                }
+                                SpinBox {
+                                    from: 0
+                                    to: 100000
+                                    editable: true
+                                    value: bridge.selectedWork.progressVolumes || 0
+                                    onValueModified: bridge.setReadingProgress(bridge.selectedWork.id, "volume", value)
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                visible: (bridge.selectedWork.characters || []).length > 0
+                                    || bridge.selectedWork.detailsLoading
+                                spacing: 8
+                                Text {
+                                    text: "Characters and voice actors"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 17
+                                    font.weight: Font.Bold
+                                }
+                                Text {
+                                    visible: (bridge.selectedWork.characters || []).length === 0
+                                        && (bridge.selectedWork.detailsLoading || false)
+                                    text: "Loading character credits…"
+                                    color: bridge.mutedColor
+                                    font.pixelSize: 11
+                                }
+                                GridView {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: (bridge.selectedWork.characters || []).length > 0 ? 220 : 0
+                                    cellWidth: Math.max(165, width / 4)
+                                    cellHeight: 104
+                                    clip: true
+                                    interactive: false
+                                    model: bridge.selectedWork.characters || []
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        width: GridView.view.cellWidth - 8
+                                        height: 96
+                                        radius: 10
+                                        color: bridge.surfaceFillColor
+                                        border.width: 1
+                                        border.color: bridge.frameColor
+
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 8
+                                            spacing: 8
+                                            Image {
+                                                Layout.preferredWidth: 42
+                                                Layout.preferredHeight: 58
+                                                source: modelData.coverSource || ""
+                                                fillMode: Image.PreserveAspectCrop
+                                                asynchronous: true
+                                                cache: true
+                                            }
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 3
+                                                Text {
+                                                    text: modelData.name || "Unknown character"
+                                                    color: bridge.primaryColor
+                                                    font.pixelSize: 11
+                                                    font.weight: Font.Bold
+                                                    maximumLineCount: 2
+                                                    wrapMode: Text.WordWrap
+                                                    elide: Text.ElideRight
+                                                    Layout.fillWidth: true
+                                                }
+                                                Text {
+                                                    text: modelData.role || ""
+                                                    color: bridge.mutedColor
+                                                    font.pixelSize: 9
+                                                }
+                                                Button {
+                                                    visible: (modelData.voiceActorId || 0) > 0
+                                                    text: modelData.voiceActorName || "Voice actor"
+                                                    font.pixelSize: 9
+                                                    onClicked: bridge.requestOpenProfile(
+                                                        "voice_actor",
+                                                        modelData.voiceActorId,
+                                                        modelData.voiceActorName
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            z: 1
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: bridge.requestOpenProfile(
+                                                "character",
+                                                modelData.id,
+                                                modelData.name
+                                            )
+                                        }
                                     }
                                 }
                             }
 
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                Layout.fillHeight: true
+                                visible: (bridge.selectedWork.staff || []).length > 0
+                                    || bridge.selectedWork.detailsLoading
                                 spacing: 8
                                 Text {
-                                    text: bridge.selectedWork.title || "Select a title"
+                                    text: "Production staff"
                                     color: bridge.primaryColor
-                                    font.pixelSize: 27
-                                    font.weight: Font.Black
-                                    wrapMode: Text.WordWrap
+                                    font.pixelSize: 17
+                                    font.weight: Font.Bold
+                                }
+                                Text {
+                                    visible: (bridge.selectedWork.staff || []).length === 0
+                                        && (bridge.selectedWork.detailsLoading || false)
+                                    text: "Loading staff credits…"
+                                    color: bridge.mutedColor
+                                    font.pixelSize: 11
+                                }
+                                GridView {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: (bridge.selectedWork.staff || []).length > 0 ? 180 : 0
+                                    cellWidth: Math.max(165, width / 4)
+                                    cellHeight: 94
+                                    clip: true
+                                    interactive: false
+                                    model: bridge.selectedWork.staff || []
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        width: GridView.view.cellWidth - 8
+                                        height: 86
+                                        radius: 10
+                                        color: bridge.surfaceFillColor
+                                        border.width: 1
+                                        border.color: bridge.frameColor
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 8
+                                            spacing: 8
+                                            Image {
+                                                Layout.preferredWidth: 42
+                                                Layout.preferredHeight: 58
+                                                source: modelData.coverSource || ""
+                                                fillMode: Image.PreserveAspectCrop
+                                                asynchronous: true
+                                                cache: true
+                                            }
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 3
+                                                Text {
+                                                    text: modelData.name || "Unknown staff"
+                                                    color: bridge.primaryColor
+                                                    font.pixelSize: 11
+                                                    font.weight: Font.Bold
+                                                    maximumLineCount: 2
+                                                    wrapMode: Text.WordWrap
+                                                    elide: Text.ElideRight
+                                                    Layout.fillWidth: true
+                                                }
+                                                Text {
+                                                    text: modelData.role || ""
+                                                    color: bridge.mutedColor
+                                                    font.pixelSize: 9
+                                                    wrapMode: Text.WordWrap
+                                                    maximumLineCount: 2
+                                                    elide: Text.ElideRight
+                                                    Layout.fillWidth: true
+                                                }
+                                            }
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            z: 1
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: bridge.requestOpenProfile("staff", modelData.id, modelData.name)
+                                        }
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                visible: (bridge.selectedWork.relations || []).length > 0
+                                spacing: 8
+                                Text {
+                                    text: "Related works"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 17
+                                    font.weight: Font.Bold
+                                }
+                                GridView {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: Math.min(
+                                        220,
+                                        Math.ceil((bridge.selectedWork.relations || []).length / 4) * 104
+                                    )
+                                    cellWidth: Math.max(165, width / 4)
+                                    cellHeight: 104
+                                    clip: true
+                                    interactive: false
+                                    model: bridge.selectedWork.relations || []
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        width: GridView.view.cellWidth - 8
+                                        height: 96
+                                        radius: 10
+                                        color: bridge.surfaceFillColor
+                                        border.width: 1
+                                        border.color: bridge.frameColor
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 8
+                                            spacing: 8
+                                            Image {
+                                                Layout.preferredWidth: 42
+                                                Layout.preferredHeight: 58
+                                                source: modelData.coverSource || ""
+                                                fillMode: Image.PreserveAspectCrop
+                                                asynchronous: true
+                                                cache: true
+                                            }
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 3
+                                                Text {
+                                                    text: modelData.title || "Related work"
+                                                    color: bridge.primaryColor
+                                                    font.pixelSize: 11
+                                                    font.weight: Font.Bold
+                                                    maximumLineCount: 2
+                                                    wrapMode: Text.WordWrap
+                                                    elide: Text.ElideRight
+                                                    Layout.fillWidth: true
+                                                }
+                                                Text {
+                                                    text: [modelData.relationTypes || "", modelData.format || ""].filter(Boolean).join(" · ")
+                                                    color: bridge.mutedColor
+                                                    font.pixelSize: 9
+                                                    maximumLineCount: 2
+                                                    wrapMode: Text.WordWrap
+                                                    elide: Text.ElideRight
+                                                    Layout.fillWidth: true
+                                                }
+                                            }
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            z: 1
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: bridge.requestOpenRelatedWork(
+                                                modelData.id,
+                                                modelData.title,
+                                                modelData.mediaType,
+                                                modelData.format,
+                                                modelData.coverSource
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Text {
+                                    text: "Episodes"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 17
+                                    font.weight: Font.Bold
                                     Layout.fillWidth: true
                                 }
                                 Text {
-                                    text: [bridge.selectedWork.format || "", bridge.selectedWork.startYear || ""].filter(Boolean).join(" · ")
+                                    text: bridge.episodeItems.length + " saved"
                                     color: bridge.mutedColor
-                                    font.pixelSize: 12
-                                }
-                                Text {
-                                    text: (bridge.selectedWork.mediaType || "") + (bridge.selectedWork.status ? " · " + bridge.selectedWork.status : "")
-                                    color: bridge.secondaryColor
-                                    font.pixelSize: 12
-                                }
-                                Text {
-                                    text: bridge.selectedWork.isInLibrary
-                                        ? ("Progress: " + bridge.selectedWork.progressEpisodes + (bridge.selectedWork.episodeTotal ? " / " + bridge.selectedWork.episodeTotal + " episodes" : " episodes"))
-                                        : "Not in your Library yet"
-                                    color: bridge.secondaryColor
-                                    font.pixelSize: 12
-                                }
-                                RowLayout {
-                                    Button {
-                                        visible: !bridge.selectedWork.isInLibrary
-                                        text: "Add to Library"
-                                        onClicked: bridge.requestAddSearchWork(bridge.selectedWork.id)
-                                    }
-                                    Button {
-                                        visible: bridge.selectedWork.isInLibrary && bridge.selectedWork.mediaType === "ANIME"
-                                        text: "Mark all watched"
-                                        onClicked: bridge.markAllEpisodesWatched(bridge.selectedWork.id, true)
-                                    }
-                                    Item { Layout.fillWidth: true }
+                                    font.pixelSize: 11
                                 }
                             }
-                        }
 
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 1
-                            color: bridge.frameColor
-                        }
-
-                        Text {
-                            text: "Synopsis"
-                            color: bridge.primaryColor
-                            font.pixelSize: 17
-                            font.weight: Font.Bold
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: Math.min(130, implicitHeight)
-                            text: bridge.selectedWork.synopsis || "No synopsis available."
-                            color: bridge.secondaryColor
-                            font.pixelSize: 12
-                            wrapMode: Text.WordWrap
-                            clip: true
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            visible: bridge.selectedWork.mediaType === "MANGA"
-                                || bridge.selectedWork.format === "NOVEL"
-                                || bridge.selectedWork.format === "LIGHT_NOVEL"
-                            spacing: 12
-                            Text {
-                                text: "Chapters read"
-                                color: bridge.primaryColor
-                                font.pixelSize: 12
+                            ListView {
                                 Layout.fillWidth: true
-                            }
-                            SpinBox {
-                                from: 0
-                                to: 100000
-                                editable: true
-                                value: bridge.selectedWork.progressChapters || 0
-                                onValueModified: bridge.setReadingProgress(bridge.selectedWork.id, "chapter", value)
-                            }
-                            Text {
-                                text: "Volumes read"
-                                color: bridge.primaryColor
-                                font.pixelSize: 12
-                            }
-                            SpinBox {
-                                from: 0
-                                to: 100000
-                                editable: true
-                                value: bridge.selectedWork.progressVolumes || 0
-                                onValueModified: bridge.setReadingProgress(bridge.selectedWork.id, "volume", value)
-                            }
-                        }
+                                Layout.preferredHeight: Math.min(
+                                    360, Math.max(70, bridge.episodeItems.length * 76)
+                                )
+                                clip: true
+                                spacing: 6
+                                model: bridge.episodeItems
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Text {
-                                text: "Episodes"
-                                color: bridge.primaryColor
-                                font.pixelSize: 17
-                                font.weight: Font.Bold
-                                Layout.fillWidth: true
-                            }
-                            Text {
-                                text: bridge.episodeItems.length + " saved"
-                                color: bridge.mutedColor
-                                font.pixelSize: 11
-                            }
-                        }
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    width: ListView.view.width
+                                    height: 76
+                                    radius: 10
+                                    color: bridge.surfaceFillColor
+                                    border.width: 1
+                                    border.color: bridge.frameColor
 
-                        ListView {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            clip: true
-                            spacing: 6
-                            model: bridge.episodeItems
-
-                            delegate: Rectangle {
-                                required property var modelData
-                                width: ListView.view.width
-                                height: 76
-                                radius: 10
-                                color: bridge.surfaceFillColor
-                                border.width: 1
-                                border.color: bridge.frameColor
-
-                                RowLayout {
-                                    anchors.fill: parent
-                                    anchors.margins: 9
-                                    spacing: 10
-                                    Image {
-                                        Layout.preferredWidth: 44
-                                        Layout.preferredHeight: 58
-                                        source: modelData.coverSource || ""
-                                        fillMode: Image.PreserveAspectCrop
-                                        asynchronous: true
-                                    }
-                                    ColumnLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 3
-                                        Text {
-                                            text: modelData.title
-                                            color: bridge.primaryColor
-                                            font.pixelSize: 12
-                                            font.weight: Font.Bold
-                                            Layout.fillWidth: true
-                                            elide: Text.ElideRight
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 9
+                                        spacing: 10
+                                        Image {
+                                            Layout.preferredWidth: 44
+                                            Layout.preferredHeight: 58
+                                            source: modelData.coverSource || ""
+                                            fillMode: Image.PreserveAspectCrop
+                                            asynchronous: true
                                         }
-                                        Text {
-                                            text: modelData.description || modelData.airDate || ("Episode " + modelData.episodeNumber)
-                                            color: bridge.mutedColor
-                                            font.pixelSize: 10
+                                        ColumnLayout {
                                             Layout.fillWidth: true
-                                            elide: Text.ElideRight
+                                            spacing: 3
+                                            Text {
+                                                text: modelData.title
+                                                color: bridge.primaryColor
+                                                font.pixelSize: 12
+                                                font.weight: Font.Bold
+                                                Layout.fillWidth: true
+                                                elide: Text.ElideRight
+                                            }
+                                            Text {
+                                                text: modelData.description || modelData.airDate || ("Episode " + modelData.episodeNumber)
+                                                color: bridge.mutedColor
+                                                font.pixelSize: 10
+                                                Layout.fillWidth: true
+                                                elide: Text.ElideRight
+                                            }
                                         }
-                                    }
-                                    CheckBox {
-                                        checked: modelData.watched
-                                        enabled: bridge.selectedWork.isInLibrary
-                                        onToggled: bridge.setEpisodeWatched(bridge.selectedWork.id, modelData.episodeNumber, checked)
+                                        CheckBox {
+                                            checked: modelData.watched
+                                            enabled: bridge.selectedWork.isInLibrary
+                                            onToggled: bridge.setEpisodeWatched(
+                                                bridge.selectedWork.id, modelData.episodeNumber, checked
+                                            )
+                                        }
                                     }
                                 }
                             }
