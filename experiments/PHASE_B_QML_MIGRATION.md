@@ -29,7 +29,8 @@ These values are sourced from the app's current preferences and the QML bridge. 
 - The QML grid uses the existing canonical Python Library groups and supports All, Watching, Completed, and Planned filters.
 - Poster cards use real cached/local cover paths when available, and the existing remote-cover cache bridge otherwise.
 - Bundle labels, open-details, bundle appearance editing, and deletion confirmation are connected to Python handlers. The empty and loading states are distinct.
-- Library data snapshot/grouping work is scheduled off the UI thread in the application bridge.
+- Library grouping runs on a worker thread, and its preloaded rows are passed directly into the QML list model instead of repeating the grouping query synchronously on the UI thread.
+- The existing relation-sync worker and automatic-bundle-membership backfill are preserved. Opening the QML Library route starts pending relation sync after navigation; completion refreshes the visible QML model instead of rebuilding the hidden Library view.
 
 ### Search and recommendations
 
