@@ -5,6 +5,7 @@ import datetime
 import os
 import threading
 from pathlib import Path
+from urllib.parse import quote
 
 from PySide6.QtCore import QObject, Property, QRunnable, QThread, QThreadPool, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QColor
@@ -37,13 +38,14 @@ from recommendation_engine import inject_rare_exploration, rank_candidates
 from series import get_library_series, group_media_results
 from ui.pages.recommendations_page import RecommendationWorker
 from ui.bundle_options import BUNDLE_OPTION_GROUPS, BUNDLE_OPTION_KEYS
-from ui.preferences import UI_SCALE_OPTIONS, apply_theme_preset, defaults, get, reset, set_value
+from ui.preferences import UI_SCALE_OPTIONS, apply_theme_preset, defaults, get, reset, set_value, palette_for_mode
 from ui.qml_bridge import (
     QmlApplicationBridge as LibraryBridge,
     _normalize_group,
     _optional_int,
 )
 from ui.theme import COLORS, THEME_PRESETS, refresh_theme, surface_qml_color
+from ui.branding import _styled_wordmark_svg
 
 
 def _plain(value):
@@ -553,6 +555,28 @@ class ApplicationBridge(LibraryBridge):
     @Property(bool, notify=applicationThemeChanged)
     def lightMode(self):
         return bool(get("light_mode"))
+
+    @Property(str, notify=applicationThemeChanged)
+    def brandWordmarkSource(self):
+        """Return the shared SVG wordmark, tinted for the active NekoTrack theme."""
+        svg = _styled_wordmark_svg(self.accentColor, self.lightMode)
+        return "data:image/svg+xml;charset=utf-8," + quote(svg, safe="")
+
+    @Property("QVariantList", notify=applicationThemeChanged)
+    def themePresetItems(self):
+        """Expose preview colors and descriptions for the original theme-card selector."""
+        items = []
+        for name, theme in THEME_PRESETS.items():
+            palette = palette_for_mode(theme, self.lightMode)
+            items.append({
+                "name": name,
+                "description": str(theme.get("description") or ""),
+                "background": palette.get("background", "#17131e"),
+                "surface": palette.get("surface", "#211b2a"),
+                "accent": palette.get("accent", "#9271c5"),
+                "border": palette.get("border", palette.get("frame_color", "#51475f")),
+            })
+        return items
 
     @Property(int, notify=backgroundChanged)
     def backgroundOverlayOpacity(self):
