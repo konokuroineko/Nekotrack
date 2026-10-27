@@ -1220,7 +1220,7 @@ Item {
                                 }
                                 CheckBox {
                                     text: "Enable resize animations"
-                                    checked: getPreferenceResizeAnimation
+                                    checked: bridge.resizeAnimation
                                     onToggled: bridge.setPreference("resize_animation", checked)
                                 }
                                 RowLayout {

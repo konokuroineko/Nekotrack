@@ -362,6 +362,19 @@ class ApplicationBridge(LibraryBridge):
         self.refreshTheme()
         self._background_changed()
 
+    def _sync_theme_values(self):
+        super()._sync_theme_values()
+        self._theme_values["resizeAnimation"] = bool(get("resize_animation"))
+        self._theme_values["animationSpeed"] = int(get("animation_speed"))
+
+    @Property(bool, notify=themeChanged)
+    def resizeAnimation(self):
+        return self._theme_values["resizeAnimation"]
+
+    @Property(int, notify=themeChanged)
+    def animationSpeed(self):
+        return self._theme_values["animationSpeed"]
+
     # ---- Global shell and theme -------------------------------------------------
 
     @Property(str, notify=pageChanged)

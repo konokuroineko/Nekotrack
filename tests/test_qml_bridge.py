@@ -154,6 +154,35 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         self.assertEqual(bridge.cardSize, 270)
         self.assertEqual(bridge.coverHeight, round(270 * 284 / 210))
 
+
+    def test_search_filters_are_preserved_and_fast_search_is_forwarded(self):
+        from unittest.mock import patch
+
+        from ui.qml_app_bridge import ApplicationBridge
+
+        bridge = ApplicationBridge()
+        filters = {
+            "status": "FINISHED",
+            "season": "WINTER",
+            "year": "2024",
+            "sort": "SCORE_DESC",
+            "min_score": 80,
+            "genre": "Mystery",
+            "tag": "Time Travel",
+            "publisher_id": "12",
+            "is_licensed": False,
+            "fast_search": True,
+        }
+        with patch.object(bridge, "_start_catalog_page") as start_search:
+            bridge.searchCatalogWithFilters("Example", "ANIME", "", filters)
+
+        self.assertEqual(bridge._search_filters, filters)
+        self.assertEqual(bridge._search_type, "ANIME")
+        self.assertEqual(bridge._search_query, "Example")
+        self.assertEqual(bridge._search_page, 1)
+        start_search.assert_called_once_with(1, 1)
+        self.assertTrue(bridge.animationSpeed >= 0)
+
     def test_refresh_errors_are_reported_without_crashing_the_host(self):
         def fail_loader():
             raise RuntimeError("synthetic database read failure")
