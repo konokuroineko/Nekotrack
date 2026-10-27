@@ -369,7 +369,18 @@ Item {
 
                                 Text {
                                     anchors.centerIn: parent
-                                    visible: bridge.homeItems.length === 0
+                                    visible: bridge.homeLoading
+                                    width: Math.min(parent.width - 50, 420)
+                                    text: "Loading your Library…"
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.WordWrap
+                                    color: bridge.mutedColor
+                                    font.pixelSize: 15
+                                }
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    visible: !bridge.homeLoading && bridge.homeItems.length === 0
                                     width: Math.min(parent.width - 50, 420)
                                     text: "Nothing in progress yet.\n\nAdd titles from Search to start tracking them."
                                     horizontalAlignment: Text.AlignHCenter

@@ -5,7 +5,7 @@ import datetime
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Property, QRunnable, QThread, QThreadPool, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, Property, QRunnable, QThread, QThreadPool, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QFileDialog
 
@@ -103,6 +103,31 @@ def _image_source(record):
         if qurl.isValid() and qurl.scheme().casefold() in {"https", "http"}:
             return qurl.toString()
     return ""
+
+
+class _LibrarySignals(QObject):
+    finished = Signal(int, object, object)
+
+
+class _LibrarySnapshotWorker(QRunnable):
+    """Read and group Library rows away from the UI thread."""
+
+    def __init__(self, generation):
+        super().__init__()
+        self.generation = int(generation)
+        self.signals = _LibrarySignals()
+
+    @Slot()
+    def run(self):
+        try:
+            rows = get_library_series()
+            self.signals.finished.emit(self.generation, rows or [], None)
+        except Exception as error:
+            self.signals.finished.emit(
+                self.generation,
+                None,
+                f"{type(error).__name__}: {error}",
+            )
 
 
 class _SearchSignals(QObject):
@@ -301,6 +326,11 @@ class ApplicationBridge(LibraryBridge):
 
     def __init__(self, parent=None, background_manager=None):
         self._raw_groups = []
+        self._groups_loaded = False
+        self._groups_loading = False
+        self._groups_refresh_requested = False
+        self._groups_generation = 0
+        self._groups_workers = {}
         self._current_page = "home"
         self._previous_content_page = "home"
         self._home_items = []
@@ -605,27 +635,69 @@ class ApplicationBridge(LibraryBridge):
 
     # ---- Library, Home and page refresh ----------------------------------------
 
-    def _load_groups(self):
-        try:
-            rows = get_library_series()
-            self._raw_groups = [_plain(group) for group in (rows or []) if isinstance(group, dict) or hasattr(group, "keys")]
+    def _load_groups(self, force=False):
+        if self._recommendation_shutting_down:
+            return
+        if self._groups_loading:
+            self._groups_refresh_requested = self._groups_refresh_requested or bool(force)
+            return
+        if self._groups_loaded and not force:
             self._library_model.refresh()
             self._refresh_home_items()
-        except Exception as error:
-            log_exception("qml_bridge.library_snapshot_failed", error)
+            return
+
+        self._groups_generation += 1
+        generation = self._groups_generation
+        self._groups_loading = True
+        self.homeChanged.emit()
+        worker = _LibrarySnapshotWorker(generation)
+        worker.signals.finished.connect(self._library_snapshot_ready)
+        self._groups_workers[generation] = worker
+        QThreadPool.globalInstance().start(worker)
+
+    @Slot(int, object, object)
+    def _library_snapshot_ready(self, generation, rows, error):
+        self._groups_workers.pop(generation, None)
+        if generation != self._groups_generation or self._recommendation_shutting_down:
+            return
+        self._groups_loading = False
+        if error:
+            self._groups_loaded = False
+            log_exception(
+                "qml_bridge.library_snapshot_failed",
+                RuntimeError(str(error)),
+            )
             self.errorOccurred.emit("NekoTrack could not load the Library. Check the diagnostic log.")
+            self.homeChanged.emit()
+            return
+
+        self._groups_loaded = True
+        self._raw_groups = [
+            _plain(group)
+            for group in (rows or [])
+            if isinstance(group, dict) or hasattr(group, "keys")
+        ]
+        self._library_model.refresh()
+        self._refresh_home_items()
+
+        if self._groups_refresh_requested:
+            self._groups_refresh_requested = False
+            QTimer.singleShot(0, lambda: self._load_groups(force=True))
+            return
+        if self._current_page == "home":
+            self.refreshRecommendations()
 
     @Slot()
     def refreshAll(self):
-        self._load_groups()
+        self._load_groups(force=True)
 
     @Slot()
     def refreshHome(self):
-        if not self._raw_groups:
+        if not self._groups_loaded:
             self._load_groups()
-        else:
-            self._library_model.refresh()
-            self._refresh_home_items()
+            return
+        self._library_model.refresh()
+        self._refresh_home_items()
         # A screen revisit must not cancel an in-flight recommendations request.
         if self._recommendation_thread is None:
             self.refreshRecommendations()
@@ -651,6 +723,10 @@ class ApplicationBridge(LibraryBridge):
     @Property("QVariantList", notify=homeChanged)
     def homeItems(self):
         return list(self._home_items)
+
+    @Property(bool, notify=homeChanged)
+    def homeLoading(self):
+        return self._groups_loading and not self._groups_loaded
 
     @Property("QVariantMap", notify=homeChanged)
     def homeStats(self):

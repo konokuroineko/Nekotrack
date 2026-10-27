@@ -50,7 +50,7 @@ Item {
     }
 
     function fitTitleToTwoLines(sourceText, availableWidth) {
-        var normalized = String(sourceText || "").replace(/\\s+/g, " ").trim()
+        var normalized = String(sourceText || "").replace(/\s+/g, " ").trim()
         if (!normalized)
             return ""
 
@@ -98,7 +98,7 @@ Item {
             titleMetrics.elideWidth = availableWidth
             second = titleMetrics.elidedText
         }
-        return first + "\\n" + second
+        return first + "\n" + second
     }
 
     function refreshFittedTitle() {

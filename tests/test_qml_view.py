@@ -54,6 +54,16 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
         self.assertIsNotNone(widget.rootObject())
         return widget
 
+
+    def test_qml_poster_keeps_original_width_ratio_and_title_fitting(self):
+        source = (ROOT / "ui" / "qml" / "PosterCard.qml").read_text(encoding="utf-8")
+        self.assertIn("Math.max(1, posterWidth - 4", source)
+        self.assertIn('font.family: "Segoe UI"', source)
+        self.assertIn("font.pointSize: bridge.fontSize", source)
+        self.assertIn('return first + "\\n" + second', source)
+        self.assertIn("readonly property int posterWidth: bridge.cardSize", source)
+        self.assertIn("readonly property int posterHeight: bridge.coverHeight", source)
+
     def test_production_library_qml_loads_with_the_python_bridge(self):
         self._load_qml("LibraryView.qml", self.bridge)
 
