@@ -1015,6 +1015,8 @@ class MainWindow(QMainWindow):
 
     def _fallback_to_legacy_shell(self):
         quick = self._qml_shell_widget
+        if self.qml_bridge is not None:
+            self.qml_bridge.requestShutdown()
         self._qml_shell_enabled = False
         self.qml_bridge = None
         self._qml_shell_widget = None
