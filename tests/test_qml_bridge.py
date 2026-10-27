@@ -362,6 +362,8 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         self.assertEqual([item["workTitle"] for item in payload["episodes"]], ["Season One", "Season Two"])
         self.assertEqual(payload["progressEpisodes"], 6)
         self.assertEqual(payload["episodeTotal"], 22)
+        self.assertEqual(payload["readingProgressByWork"]["101"]["chapters"], 0)
+        self.assertEqual(payload["readingProgressByWork"]["202"]["volumes"], 0)
 
     def test_refresh_errors_are_reported_without_crashing_the_host(self):
         def fail_loader():

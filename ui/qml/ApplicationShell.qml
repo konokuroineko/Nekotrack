@@ -1798,11 +1798,57 @@ Item {
                             }
 
                             RowLayout {
+                                id: readingProgressRow
                                 Layout.fillWidth: true
-                                visible: bridge.selectedWork.mediaType === "MANGA"
-                                    || bridge.selectedWork.format === "NOVEL"
-                                    || bridge.selectedWork.format === "LIGHT_NOVEL"
+                                property int trackedWorkId: bridge.selectedWork.id || 0
+                                property int readingMemberId: bridge.selectedWork.id || 0
+                                readonly property var selectedReadingProgress: {
+                                    var progress = bridge.selectedWork.readingProgressByWork || {}
+                                    return progress[readingProgressRow.readingMemberId.toString()] || {}
+                                }
+                                visible: (bridge.selectedWork.bundleMembers || []).some(function(member) {
+                                    return member.mediaType === "MANGA"
+                                        || member.format === "NOVEL"
+                                        || member.format === "LIGHT_NOVEL"
+                                })
                                 spacing: 12
+
+                                Connections {
+                                    target: bridge
+                                    function onSelectedWorkChanged() {
+                                        var nextId = bridge.selectedWork.id || 0
+                                        if (nextId !== readingProgressRow.trackedWorkId) {
+                                            readingProgressRow.trackedWorkId = nextId
+                                            readingProgressRow.readingMemberId = nextId
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: "Progress for"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 12
+                                }
+                                ComboBox {
+                                    Layout.preferredWidth: 220
+                                    visible: (bridge.selectedWork.bundleMembers || []).length > 1
+                                    model: bridge.selectedWork.bundleMembers || []
+                                    textRole: "title"
+                                    currentIndex: {
+                                        var members = bridge.selectedWork.bundleMembers || []
+                                        for (var i = 0; i < members.length; i++) {
+                                            if (members[i].id === readingProgressRow.readingMemberId)
+                                                return i
+                                        }
+                                        return 0
+                                    }
+                                    onActivated: {
+                                        var members = bridge.selectedWork.bundleMembers || []
+                                        if (currentIndex >= 0 && currentIndex < members.length)
+                                            readingProgressRow.readingMemberId = members[currentIndex].id
+                                    }
+                                }
+
                                 Text {
                                     text: "Chapters read"
                                     color: bridge.primaryColor
@@ -1813,8 +1859,8 @@ Item {
                                     from: 0
                                     to: 100000
                                     editable: true
-                                    value: bridge.selectedWork.progressChapters || 0
-                                    onValueModified: bridge.setReadingProgress(bridge.selectedWork.id, "chapter", value)
+                                    value: readingProgressRow.selectedReadingProgress.chapters || 0
+                                    onValueModified: bridge.setReadingProgress(readingProgressRow.readingMemberId, "chapter", value)
                                 }
                                 Text {
                                     text: "Volumes read"
@@ -1825,8 +1871,8 @@ Item {
                                     from: 0
                                     to: 100000
                                     editable: true
-                                    value: bridge.selectedWork.progressVolumes || 0
-                                    onValueModified: bridge.setReadingProgress(bridge.selectedWork.id, "volume", value)
+                                    value: readingProgressRow.selectedReadingProgress.volumes || 0
+                                    onValueModified: bridge.setReadingProgress(readingProgressRow.readingMemberId, "volume", value)
                                 }
                             }
 

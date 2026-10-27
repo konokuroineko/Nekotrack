@@ -208,6 +208,7 @@ class _DetailSnapshotWorker(QRunnable):
             chapter_total = 0
             progress_volumes = 0
             volume_total = 0
+            reading_progress_by_work = {}
 
             # Fetch episode rows independently for every member. Bundle ids are
             # kept in the canonical series order and every episode retains its
@@ -251,6 +252,12 @@ class _DetailSnapshotWorker(QRunnable):
                 chapter_total += _optional_int(chapters_total) or 0
                 progress_volumes += _optional_int(volumes) or 0
                 volume_total += _optional_int(volumes_total) or 0
+                reading_progress_by_work[str(member_id)] = {
+                    "chapters": _optional_int(chapters) or 0,
+                    "chapterTotal": _optional_int(chapters_total) or 0,
+                    "volumes": _optional_int(volumes) or 0,
+                    "volumeTotal": _optional_int(volumes_total) or 0,
+                }
 
             local_row = local_rows.get(self.work_id, {})
             if not local_row and local_rows:
@@ -306,6 +313,8 @@ class _DetailSnapshotWorker(QRunnable):
                 "localWork": local_row,
                 "progressEpisodes": progress_episodes,
                 "episodeTotal": episode_total,
+                "hasLocalWork": any(bool(row) for row in local_rows.values()),
+                "readingProgressByWork": reading_progress_by_work,
                 "progressChapters": progress_chapters,
                 "chapterTotal": chapter_total,
                 "progressVolumes": progress_volumes,
@@ -1878,22 +1887,20 @@ class ApplicationBridge(LibraryBridge):
             self._selected_work["status"] = str(
                 local_work.get("status") or self._selected_work.get("status") or "Planning"
             )
-            self._selected_work["progressEpisodes"] = (
-                _optional_int(payload.get("progressEpisodes"))
-                if _optional_int(payload.get("progressEpisodes")) is not None
-                else _optional_int(local_work.get("progress_episodes")) or 0
-            )
+            if payload.get("hasLocalWork"):
+                self._selected_work["progressEpisodes"] = _optional_int(
+                    payload.get("progressEpisodes")
+                ) or 0
             self._selected_work["progressChapters"] = _optional_int(
                 payload.get("progressChapters")
             ) or 0
             self._selected_work["progressVolumes"] = _optional_int(
                 payload.get("progressVolumes")
             ) or 0
-            self._selected_work["episodeTotal"] = (
-                _optional_int(payload.get("episodeTotal"))
-                if _optional_int(payload.get("episodeTotal")) is not None
-                else self._selected_work.get("episodeTotal", 0)
-            )
+            aggregate_episode_total = _optional_int(payload.get("episodeTotal")) or 0
+            if aggregate_episode_total > 0:
+                self._selected_work["episodeTotal"] = aggregate_episode_total
+            self._selected_work["readingProgressByWork"] = payload.get("readingProgressByWork") or {}
 
         self._selected_work["characters"] = payload.get("characters") or []
         self._selected_work["staff"] = payload.get("staff") or []
@@ -1980,12 +1987,11 @@ class ApplicationBridge(LibraryBridge):
     def _save_reading_progress(self, work_id, item_type, read_count, total_hint=0):
         try:
             set_reading_progress_count(work_id, item_type, read_count, total_hint)
-            chapters, _chapter_total = get_reading_progress(work_id, "chapter")
-            volumes, _volume_total = get_reading_progress(work_id, "volume")
-            self._selected_work["progressChapters"] = chapters
-            self._selected_work["progressVolumes"] = volumes
-            self.selectedWorkChanged.emit()
-            self.refreshAll()
+            # Reload the selected member's counters off the UI thread and
+            # recompute the bundle aggregate from persisted member records.
+            self.setSelectedWork(self._selected_work_raw)
+            self.forceRefreshAll()
+            self.refreshHome()
         except Exception as error:
             log_exception("qml_bridge.reading_progress_save_failed", error, work_id=work_id, item_type=item_type)
 
@@ -1996,7 +2002,6 @@ class ApplicationBridge(LibraryBridge):
         self._search_error = str(message or "")
         self.searchChanged.emit()
 
-    @Slot()
     @Slot()
     def refreshSelectedWork(self):
         if self._selected_work_raw:
