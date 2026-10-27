@@ -415,6 +415,45 @@ class QmlApplicationBridgeTests(unittest.TestCase):
             )
             pool.return_value.start.assert_called_once()
 
+
+    def test_home_items_include_original_status_and_progress_caption(self):
+        from ui.qml_app_bridge import ApplicationBridge
+
+        bridge = ApplicationBridge()
+        bridge._raw_groups = [{
+            "id": 101,
+            "status": "Planning",
+            "type": "ANIME",
+            "_series_members": [
+                {"id": 101, "status": "Planning", "type": "ANIME"},
+                {"id": 102, "status": "Watching", "type": "ANIME"},
+            ],
+        }]
+        bridge._library_model._all_rows = [{
+            "workId": 101,
+            "title": "Example",
+            "fullTitle": "Example",
+            "mediaType": "ANIME",
+            "format": "TV",
+            "status": "Planning",
+            "progressEpisodes": 4,
+            "episodeTotal": 12,
+            "chapterTotal": 0,
+            "volumeTotal": 0,
+            "progressChapters": 0,
+            "progressVolumes": 0,
+            "seriesCount": 2,
+            "bundleSummary": "2 seasons",
+        }]
+
+        bridge._refresh_home_items()
+
+        self.assertEqual(len(bridge.homeItems), 1)
+        self.assertEqual(bridge.homeItems[0]["homeStatus"], "watching")
+        self.assertEqual(bridge.homeItems[0]["progressCaption"], "Next episode 5 · 4/12 logged")
+        self.assertEqual(bridge.homeStats["all"], 2)
+        self.assertEqual(bridge.homeStats["inProgress"], 1)
+
     def test_refresh_errors_are_reported_without_crashing_the_host(self):
         def fail_loader():
             raise RuntimeError("synthetic database read failure")

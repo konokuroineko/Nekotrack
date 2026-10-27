@@ -901,22 +901,109 @@ class ApplicationBridge(LibraryBridge):
         ):
             self.refreshRecommendations()
 
+    @staticmethod
+    def _home_progress_caption(row, home_status):
+        def nonnegative(value):
+            return max(0, _optional_int(value) or 0)
+
+        media_type = str(row.get("mediaType") or "").strip().upper()
+        status = str(home_status or "").strip().casefold()
+        if media_type == "ANIME" or status in {"watching", "rewatching"}:
+            progress = nonnegative(row.get("progressEpisodes"))
+            total = nonnegative(row.get("episodeTotal"))
+            if total:
+                if progress >= total:
+                    return f"Episode progress: {progress}/{total}"
+                return f"Next episode {progress + 1} · {progress}/{total} logged"
+            return f"Next episode {progress + 1} · total unknown"
+
+        chapter_progress = nonnegative(row.get("progressChapters"))
+        chapter_total = nonnegative(row.get("chapterTotal"))
+        volume_progress = nonnegative(row.get("progressVolumes"))
+        volume_total = nonnegative(row.get("volumeTotal"))
+        details = []
+        if chapter_total or chapter_progress:
+            details.append(
+                f"{chapter_progress}/{chapter_total} chapters"
+                if chapter_total else f"{chapter_progress} chapters logged"
+            )
+        if volume_total or volume_progress:
+            details.append(
+                f"{volume_progress}/{volume_total} volumes"
+                if volume_total else f"{volume_progress} volumes logged"
+            )
+        if not details:
+            return "No chapter or volume progress recorded yet"
+        next_item = (
+            f"Next chapter {chapter_progress + 1}"
+            if chapter_total or chapter_progress
+            else f"Next volume {volume_progress + 1}"
+        )
+        return f"{next_item} · " + " · ".join(details)
+
     def _refresh_home_items(self):
         all_rows = list(self._library_model._all_rows)
-        statuses = [str(row.get("status") or "").strip().casefold() for row in all_rows]
+        raw_members = []
+        raw_by_id = {}
+        for source_group in self._raw_groups:
+            if not isinstance(source_group, dict):
+                continue
+            group_id = _optional_int(source_group.get("id"))
+            if group_id is not None:
+                raw_by_id[group_id] = source_group
+            group_members = source_group.get("_series_members")
+            if not isinstance(group_members, list) or not group_members:
+                group_members = [source_group]
+            raw_members.extend(member for member in group_members if isinstance(member, dict))
+
+        raw_statuses = [
+            str(member.get("status") or "").strip().casefold()
+            for member in raw_members
+        ]
         ongoing = {"watching", "rewatching", "reading", "in progress"}
         planned = {"planning", "plan to watch", "plan to read"}
         completed = {"completed"}
         self._home_stats = {
-            "all": len(all_rows),
-            "inProgress": sum(status in ongoing for status in statuses),
-            "completed": sum(status in completed for status in statuses),
-            "planned": sum(status in planned for status in statuses),
+            "all": len(raw_members) if raw_members else len(all_rows),
+            "inProgress": sum(status in ongoing for status in raw_statuses) if raw_statuses else
+                sum(str(row.get("status") or "").strip().casefold() in ongoing for row in all_rows),
+            "completed": sum(status in completed for status in raw_statuses) if raw_statuses else
+                sum(str(row.get("status") or "").strip().casefold() in completed for row in all_rows),
+            "planned": sum(status in planned for status in raw_statuses) if raw_statuses else
+                sum(str(row.get("status") or "").strip().casefold() in planned for row in all_rows),
         }
-        self._home_items = [
-            dict(row) for row in all_rows
-            if str(row.get("status") or "").strip().casefold() in ongoing
-        ]
+
+        home_items = []
+        for row in all_rows:
+            work_id = _optional_int(row.get("workId"))
+            raw_group = raw_by_id.get(work_id) or {}
+            group_members = raw_group.get("_series_members")
+            if not isinstance(group_members, list) or not group_members:
+                group_members = [raw_group] if raw_group else []
+            member_statuses = [
+                str(member.get("status") or "").strip().casefold()
+                for member in group_members if isinstance(member, dict)
+            ]
+            current_status = str(row.get("status") or "").strip().casefold()
+            eligible = any(status in ongoing for status in member_statuses) or current_status in ongoing
+            if not eligible:
+                continue
+
+            if any(status in {"watching", "rewatching"} for status in member_statuses):
+                home_status = "rewatching" if "rewatching" in member_statuses else "watching"
+            elif "reading" in member_statuses:
+                home_status = "reading"
+            elif "in progress" in member_statuses:
+                home_status = "in progress"
+            else:
+                home_status = current_status
+
+            item = dict(row)
+            item["homeStatus"] = home_status or current_status
+            item["progressCaption"] = self._home_progress_caption(item, item["homeStatus"])
+            home_items.append(item)
+
+        self._home_items = home_items
         self.homeChanged.emit()
 
     @Property("QVariantList", notify=homeChanged)

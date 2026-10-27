@@ -255,6 +255,8 @@ def _normalize_group(raw_group):
     episode_total = _count(group.get("_series_episode_total"))
     if "_series_episode_total" not in group:
         episode_total = sum(_count(member.get("episodes")) for member in members)
+    chapter_total = sum(_count(member.get("chapters")) for member in members)
+    volume_total = sum(_count(member.get("volumes")) for member in members)
     episode_progress = _count(group.get("_series_progress"))
     if "_series_progress" not in group:
         episode_progress = sum(_count(member.get("progress_episodes")) for member in members)
@@ -285,6 +287,8 @@ def _normalize_group(raw_group):
         "episodeTotal": episode_total,
         "progressChapters": sum(_count(member.get("progress_chapters")) for member in members),
         "progressVolumes": sum(_count(member.get("progress_volumes")) for member in members),
+        "chapterTotal": chapter_total,
+        "volumeTotal": volume_total,
         "seriesCount": series_count,
         "bundleSummary": str(group.get("_bundle_summary") or ""),
         "memberIds": member_ids,

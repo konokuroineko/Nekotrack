@@ -325,41 +325,70 @@ Item {
                             Item {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: bridge.coverHeight + bridge.titleHeight
-                                    + bridge.seriesHeight + bridge.metadataHeight + 48
+                                    + bridge.seriesHeight + bridge.metadataHeight + 66
                                 GridView {
                                     id: continueGrid
                                     anchors.fill: parent
                                     clip: true
                                     boundsBehavior: Flickable.StopAtBounds
                                     cellWidth: homePage.homeCardWidth
-                                    cellHeight: bridge.coverHeight + bridge.titleHeight + bridge.seriesHeight + bridge.metadataHeight + 48
+                                    cellHeight: bridge.coverHeight + bridge.titleHeight + bridge.seriesHeight + bridge.metadataHeight + 66
                                     model: bridge.homeItems
 
                                     delegate: Item {
                                         required property var modelData
                                         width: continueGrid.cellWidth - bridge.cardGap
                                         height: continueGrid.cellHeight - 24
-                                        PosterCard {
+
+                                        Column {
                                             anchors.left: parent.left
-                                            bridge: root.bridge
-                                            workId: modelData.workId
-                                            title: modelData.title
-                                            fullTitle: modelData.fullTitle || modelData.title
-                                            coverSource: modelData.coverSource || ""
-                                            coverCacheWorkId: modelData.coverCacheWorkId || modelData.workId
-                                            format: modelData.format || ""
-                                            startYear: modelData.startYear || 0
-                                            mediaType: modelData.mediaType || ""
-                                            seriesCount: modelData.seriesCount || 1
-                                            bundleSummary: modelData.bundleSummary || ""
-                                            status: modelData.status || ""
-                                            progressEpisodes: modelData.progressEpisodes || 0
-                                            episodeTotal: modelData.episodeTotal || 0
-                                            isInLibrary: true
-                                            showMenu: true
-                                            onActivated: function(workId) { bridge.requestOpenWork(workId) }
-                                            onEditBundleRequested: function(workId) { bridge.requestEditBundle(workId) }
-                                            onDeleteRequested: function(workId) { bridge.requestDeleteWork(workId) }
+                                            anchors.top: parent.top
+                                            spacing: 3
+
+                                            PosterCard {
+                                                bridge: root.bridge
+                                                workId: modelData.workId
+                                                title: modelData.title
+                                                fullTitle: modelData.fullTitle || modelData.title
+                                                coverSource: modelData.coverSource || ""
+                                                coverCacheWorkId: modelData.coverCacheWorkId || modelData.workId
+                                                format: modelData.format || ""
+                                                startYear: modelData.startYear || 0
+                                                mediaType: modelData.mediaType || ""
+                                                seriesCount: modelData.seriesCount || 1
+                                                bundleSummary: modelData.bundleSummary || ""
+                                                status: modelData.homeStatus || modelData.status || ""
+                                                progressEpisodes: modelData.progressEpisodes || 0
+                                                episodeTotal: modelData.episodeTotal || 0
+                                                isInLibrary: true
+                                                showMenu: true
+                                                onActivated: function(workId) { bridge.requestOpenWork(workId) }
+                                                onEditBundleRequested: function(workId) { bridge.requestEditBundle(workId) }
+                                                onDeleteRequested: function(workId) { bridge.requestDeleteWork(workId) }
+                                            }
+
+                                            Text {
+                                                width: bridge.cardSize
+                                                height: 12
+                                                text: (modelData.homeStatus || modelData.status || "IN PROGRESS")
+                                                    .replace(/_/g, " ").toUpperCase()
+                                                color: bridge.secondaryColor
+                                                font.pixelSize: 9
+                                                font.weight: Font.DemiBold
+                                                elide: Text.ElideRight
+                                            }
+
+                                            Text {
+                                                width: bridge.cardSize
+                                                height: 36
+                                                text: modelData.progressCaption || ""
+                                                color: bridge.mutedColor
+                                                font.pixelSize: 10
+                                                wrapMode: Text.WordWrap
+                                                maximumLineCount: 3
+                                                elide: Text.ElideRight
+                                                clip: true
+                                            }
                                         }
                                     }
                                 }
