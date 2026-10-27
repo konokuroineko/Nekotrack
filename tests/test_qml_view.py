@@ -141,9 +141,20 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
         self.assertIn('"Customize title and cover…"', source)
         self.assertIn("bridge.requestDeleteWork(bridge.selectedWork.id)", source)
         self.assertIn('bridge.requestDetailAction("customize_identity")', source)
+        self.assertIn("bridge.brandWordmarkSource", source)
+        self.assertIn('model: ["General", "Appearance", "Library", "Discovery", "Integrations", "Data & Storage", "Advanced"]', source)
+        self.assertIn('visible: settingsPage.settingsCategory === "Data & Storage"', source)
+        self.assertIn('text: "Local data"', source)
+        self.assertIn("model: bridge.themePresetItems", source)
         bridge = ApplicationBridge()
         self.addCleanup(bridge.deleteLater)
+        self.assertTrue(bridge.brandWordmarkSource.startswith("data:image/svg+xml;charset=utf-8,"))
+        self.assertGreaterEqual(len(bridge.themePresetItems), 1)
         self._load_qml("ApplicationShell.qml", bridge)
+
+    def test_qml_controls_default_to_palette_aware_basic_style(self):
+        source = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn('os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")', source)
 
 
 if __name__ == "__main__":
