@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 import tempfile
 import unittest
@@ -8,6 +9,34 @@ import diagnostics
 
 
 class DiagnosticRedactionTests(unittest.TestCase):
+    def test_rotation_lock_does_not_emit_logging_error_for_every_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nekotrack.log"
+            handler = diagnostics._ResilientRotatingFileHandler(
+                path, maxBytes=1, backupCount=1, encoding="utf-8", delay=False
+            )
+            first = logging.LogRecord(
+                "nekotrack.test", logging.INFO, __file__, 1, "first-line", (), None
+            )
+            second = logging.LogRecord(
+                "nekotrack.test", logging.INFO, __file__, 2, "second-line", (), None
+            )
+            try:
+                with patch.object(handler, "rotate", side_effect=PermissionError("file locked")) as rotate:
+                    handler.emit(first)
+                    self.assertIsNotNone(handler.stream)
+                    self.assertGreater(handler._rollover_retry_after, 0)
+                    handler.emit(second)
+                    # The second record should skip another failing rollover attempt.
+                    self.assertEqual(rotate.call_count, 1)
+                handler.flush()
+            finally:
+                handler.close()
+
+            contents = path.read_text(encoding="utf-8")
+            self.assertIn("first-line", contents)
+            self.assertIn("second-line", contents)
+
     def test_redacts_credentials_in_headers_assignments_and_urls(self):
         source = (
             "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456 "

@@ -1115,10 +1115,23 @@ class MainWindow(QMainWindow):
         log_event("qml_shell.scene_graph_error", error=str(error), message=str(message)[:1000])
         self._fallback_to_legacy_shell()
 
+    def _unload_qml_scene(self, quick):
+        """Destroy QML bindings before releasing their Python bridge during teardown."""
+        if quick is None:
+            return
+        try:
+            # An empty URL synchronously unloads the QML root. Keeping the bridge
+            # alive through this step prevents thousands of "property of null"
+            # binding warnings as every page is destroyed.
+            quick.setSource(QUrl())
+        except (RuntimeError, TypeError) as error:
+            log_exception("qml_shell.unload_failed", error)
+
     def _fallback_to_legacy_shell(self):
         quick = self._qml_shell_widget
         if self.qml_bridge is not None:
             self.qml_bridge.requestShutdown()
+        self._unload_qml_scene(quick)
         self._qml_shell_enabled = False
         self.qml_bridge = None
         self._qml_shell_widget = None
@@ -2377,6 +2390,11 @@ class MainWindow(QMainWindow):
             return
 
         self._shutdown_timer.stop()
+        # Unload the QML tree after workers have stopped but before Qt destroys
+        # the window-owned bridge. This prevents shutdown-time null-property spam.
+        self._qml_shell_enabled = False
+        self._unload_qml_scene(self._qml_shell_widget)
+        self._qml_shell_widget = None
         elapsed_ms = (
             round((time.monotonic() - self._shutdown_started_at) * 1000, 2)
             if self._shutdown_started_at is not None else 0.0
