@@ -356,15 +356,23 @@ class LibraryPage(QWidget):
         self.scroll_area.setWidget(self.container); root.addWidget(self.scroll_area, 1); self._set_filter("All")
 
     def _group_for_qml_work(self, work_id):
-        target = _optional_int(work_id)
-        if target is None:
+        def numeric_id(value):
+            if isinstance(value, bool):
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+
+        target = numeric_id(work_id)
+        if target is None or target == 0:
             return None
         for group in self.all_anime:
-            if _optional_int(group.get("id")) == target:
+            if numeric_id(group.get("id")) == target:
                 return group
         for group in self.all_anime:
             for member in group.get("_series_members") or []:
-                if _optional_int(member.get("id")) == target:
+                if numeric_id(member.get("id")) == target:
                     return group
         return None
 

@@ -106,7 +106,7 @@ Item {
                     required property string mediaType
                     required property string format
                     required property int startYear
-                    required property url coverSource
+                    required property string coverSource
                     required property int coverCacheWorkId
                     required property string status
                     required property int seriesCount

@@ -138,11 +138,10 @@ def _local_or_remote_cover(group, members, single_override=None):
     path_candidates.extend((
         group.get("_bundle_custom_cover_path"),
         group.get("custom_cover_path"),
-        group.get("cover_path"),
-        group.get("image_path"),
     ))
     if selected_member is not None:
         path_candidates.extend((selected_member.get("cover_path"), selected_member.get("image_path")))
+    path_candidates.extend((group.get("cover_path"), group.get("image_path")))
     if fallback_member is not group:
         path_candidates.extend((fallback_member.get("cover_path"), fallback_member.get("image_path")))
     for raw_path in path_candidates:
