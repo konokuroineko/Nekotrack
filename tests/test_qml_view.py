@@ -67,6 +67,17 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
     def test_production_library_qml_loads_with_the_python_bridge(self):
         self._load_qml("LibraryView.qml", self.bridge)
 
+
+    def test_qml_manage_actions_skip_duplicate_hidden_library_refreshes(self):
+        library_source = (ROOT / "ui" / "pages" / "library_page.py").read_text(encoding="utf-8")
+        main_source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
+        self.assertIn("def _delete_item(self, group, refresh=True)", library_source)
+        self.assertIn("if deleted and refresh:", library_source)
+        self.assertIn("def _edit_bundle(self, group, refresh=True)", library_source)
+        self.assertIn("self.library_page._edit_bundle(group, refresh=False)", main_source)
+        self.assertIn("self.library_page._delete_item(group, refresh=False)", main_source)
+        self.assertIn("QTimer.singleShot(0, bridge.forceRefreshAll)", main_source)
+
     def test_production_application_shell_loads_with_the_application_bridge(self):
         source = (ROOT / "ui" / "qml" / "ApplicationShell.qml").read_text(encoding="utf-8")
         self.assertIn('text: "Edit bundle"', source)

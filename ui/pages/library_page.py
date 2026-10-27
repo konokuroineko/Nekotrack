@@ -630,10 +630,15 @@ class LibraryPage(QWidget):
             return
         self.refresh(retry_failed=False)
 
-    def _delete_item(self, group):
+    def _delete_item(self, group, refresh=True):
+        """Confirm and delete selected Library member(s).
+
+        The unified QML shell can reuse the confirmation flow without
+        rebuilding this hidden embedded Library view a second time.
+        """
         members = list(group.get("_series_members") or [])
         if not members:
-            return
+            return False
 
         if len(members) == 1:
             selected_ids = [int(members[0]["id"])]
@@ -652,7 +657,7 @@ class LibraryPage(QWidget):
                 False,
             )
             if not ok:
-                return
+                return False
             if choice == options[0]:
                 selected_ids = [int(member["id"]) for member in members]
                 selected_title = None
@@ -680,15 +685,16 @@ class LibraryPage(QWidget):
             QMessageBox.No,
         )
         if answer != QMessageBox.Yes:
-            return
+            return False
 
         deleted = False
         for work_id in selected_ids:
             deleted = delete_work_data(work_id) or deleted
-        if deleted:
+        if deleted and refresh:
             self.refresh()
+        return deleted
 
-    def _edit_bundle(self, group):
+    def _edit_bundle(self, group, refresh=True):
         members = list(group.get("_series_members") or [])
         if len(members) < 2:
             return
@@ -833,7 +839,8 @@ class LibraryPage(QWidget):
         def reset_appearance():
             clear_bundle_override(member_ids)
             dialog.reject()
-            self.refresh()
+            if refresh:
+                self.refresh()
 
         reset.clicked.connect(reset_appearance)
         root.addWidget(buttons)
@@ -871,7 +878,8 @@ class LibraryPage(QWidget):
             cover_work_id=cover_work_id,
             custom_cover_path=custom_cover_path,
         ):
-            self.refresh()
+            if refresh:
+                self.refresh()
 
     @staticmethod
     def _member_title(member):

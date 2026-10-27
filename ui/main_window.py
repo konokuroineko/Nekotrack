@@ -979,20 +979,25 @@ class MainWindow(QMainWindow):
             self.show_work_details(group)
 
     def _qml_edit_bundle(self, work_id):
-        if self.qml_bridge is None:
+        bridge = self.qml_bridge
+        if bridge is None:
             return
-        group = self.qml_bridge._group_for_id(int(work_id))
+        group = bridge._group_for_id(int(work_id))
         if group is not None:
-            self.library_page._edit_bundle(group)
-            self.qml_bridge.refreshAll()
+            # Reuse the editor without refreshing the hidden embedded Library.
+            self.library_page._edit_bundle(group, refresh=False)
+            bridge.forceRefreshAll()
 
     def _qml_delete_work(self, work_id):
-        if self.qml_bridge is None:
+        bridge = self.qml_bridge
+        if bridge is None:
             return
-        group = self.qml_bridge._group_for_id(int(work_id))
-        if group is not None:
-            self.library_page._delete_item(group)
-            QTimer.singleShot(0, self.qml_bridge.refreshAll)
+        group = bridge._group_for_id(int(work_id))
+        if group is None:
+            return
+        deleted = self.library_page._delete_item(group, refresh=False)
+        if deleted:
+            QTimer.singleShot(0, bridge.forceRefreshAll)
 
     def _qml_detail_action(self, action, work_id):
         """Reuse existing bundle/identity dialogs only when the user requests them."""
