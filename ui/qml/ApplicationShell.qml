@@ -338,7 +338,7 @@ Item {
                                     delegate: Item {
                                         required property var modelData
                                         width: continueGrid.cellWidth - bridge.cardGap
-                                        height: continueGrid.cellHeight - 24
+                                        height: continueGrid.cellHeight
 
                                         Column {
                                             anchors.left: parent.left
