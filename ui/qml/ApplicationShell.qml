@@ -1067,6 +1067,57 @@ Item {
 
                         Rectangle {
                             Layout.fillWidth: true
+                            Layout.preferredHeight: 228
+                            radius: 13
+                            color: bridge.surfaceFillColor
+                            border.width: 1
+                            border.color: bridge.frameColor
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 16
+                                spacing: 9
+                                Text {
+                                    text: "Startup and updates"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 16
+                                    font.weight: Font.Bold
+                                }
+                                CheckBox {
+                                    text: "Check for updates at startup"
+                                    checked: bridge.autoCheckUpdates
+                                    onToggled: bridge.setPreference("auto_check_updates", checked)
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        text: "Update channel"
+                                        color: bridge.secondaryColor
+                                        font.pixelSize: 12
+                                        Layout.fillWidth: true
+                                    }
+                                    ComboBox {
+                                        Layout.preferredWidth: 215
+                                        model: ["Stable releases only", "Preview releases (testing)"]
+                                        currentIndex: bridge.updateChannel === "preview" ? 1 : 0
+                                        onActivated: bridge.setPreference("update_channel", ["stable", "preview"][currentIndex])
+                                    }
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Button {
+                                        text: "Check for updates now"
+                                        onClicked: bridge.requestUpdateCheck()
+                                    }
+                                    Button {
+                                        text: "Restore previous version"
+                                        onClicked: bridge.requestRollback()
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
                             Layout.preferredHeight: 150
                             radius: 13
                             color: bridge.surfaceFillColor
@@ -1141,19 +1192,20 @@ Item {
                                         font.weight: Font.Bold
                                         Layout.fillWidth: true
                                     }
-                                    Text {
-                                        text: bridge.cardSize + " px"
-                                        color: bridge.mutedColor
-                                        font.pixelSize: 12
+                                    ComboBox {
+                                        Layout.preferredWidth: 165
+                                        model: ["Compact (180 px)", "Default (210 px)", "Large (240 px)", "Huge (270 px)"]
+                                        currentIndex: {
+                                            switch (bridge.cardSize) {
+                                            case 180: return 0
+                                            case 210: return 1
+                                            case 240: return 2
+                                            case 270: return 3
+                                            default: return 1
+                                            }
+                                        }
+                                        onActivated: bridge.setPreference("card_size", [180, 210, 240, 270][currentIndex])
                                     }
-                                }
-                                Slider {
-                                    Layout.fillWidth: true
-                                    from: 80
-                                    to: 270
-                                    stepSize: 5
-                                    value: bridge.cardSize
-                                    onPressedChanged: if (!pressed) bridge.setPreference("card_size", value)
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true
@@ -1164,19 +1216,12 @@ Item {
                                         font.weight: Font.Bold
                                         Layout.fillWidth: true
                                     }
-                                    Text {
-                                        text: bridge.fontSize + " px"
-                                        color: bridge.mutedColor
-                                        font.pixelSize: 12
+                                    ComboBox {
+                                        Layout.preferredWidth: 165
+                                        model: ["Small (12 px)", "Default (13 px)", "Large (14 px)", "Very large (15 px)"]
+                                        currentIndex: Math.max(0, [12, 13, 14, 15].indexOf(bridge.fontSize))
+                                        onActivated: bridge.setPreference("font_size", [12, 13, 14, 15][currentIndex])
                                     }
-                                }
-                                Slider {
-                                    Layout.fillWidth: true
-                                    from: 8
-                                    to: 36
-                                    stepSize: 1
-                                    value: bridge.fontSize
-                                    onPressedChanged: if (!pressed) bridge.setPreference("font_size", value)
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true
@@ -1196,7 +1241,7 @@ Item {
                                 Slider {
                                     Layout.fillWidth: true
                                     from: 0
-                                    to: 60
+                                    to: 120
                                     stepSize: 2
                                     value: bridge.cardGap
                                     onPressedChanged: if (!pressed) bridge.setPreference("card_gap", value)
@@ -1210,19 +1255,12 @@ Item {
                                         font.weight: Font.Bold
                                         Layout.fillWidth: true
                                     }
-                                    Text {
-                                        text: bridge.cornerRadius + " px"
-                                        color: bridge.mutedColor
-                                        font.pixelSize: 12
+                                    ComboBox {
+                                        Layout.preferredWidth: 165
+                                        model: ["Sharp (6)", "Soft (10)", "Rounded (12)", "Very rounded (16)", "Pill-like (20)"]
+                                        currentIndex: Math.max(0, [6, 10, 12, 16, 20].indexOf(bridge.cornerRadius))
+                                        onActivated: bridge.setPreference("corner_radius", [6, 10, 12, 16, 20][currentIndex])
                                     }
-                                }
-                                Slider {
-                                    Layout.fillWidth: true
-                                    from: 0
-                                    to: 32
-                                    stepSize: 1
-                                    value: bridge.cornerRadius
-                                    onPressedChanged: if (!pressed) bridge.setPreference("corner_radius", value)
                                 }
                                 CheckBox {
                                     text: "Highlight cards on hover"
@@ -1262,19 +1300,147 @@ Item {
                                         font.pixelSize: 13
                                         Layout.fillWidth: true
                                     }
-                                    Text {
-                                        text: "Change in ms"
-                                        color: bridge.mutedColor
-                                        font.pixelSize: 11
+                                    ComboBox {
+                                        Layout.preferredWidth: 165
+                                        model: ["Instant (0 ms)", "Fast (180 ms)", "Default (260 ms)", "Smooth (380 ms)", "Slow (520 ms)"]
+                                        currentIndex: Math.max(0, [0, 180, 260, 380, 520].indexOf(bridge.animationSpeed))
+                                        onActivated: bridge.setPreference("animation_speed", [0, 180, 260, 380, 520][currentIndex])
                                     }
                                 }
-                                Slider {
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 405
+                            radius: 13
+                            color: bridge.surfaceFillColor
+                            border.width: 1
+                            border.color: bridge.frameColor
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 16
+                                spacing: 9
+                                Text {
+                                    text: "Automatic bundle contents"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 16
+                                    font.weight: Font.Bold
+                                }
+                                Text {
+                                    text: "TV seasons and TV Shorts are always grouped. Choose which related formats may join them."
+                                    color: bridge.secondaryColor
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
                                     Layout.fillWidth: true
-                                    from: 0
-                                    to: 1000
-                                    stepSize: 20
-                                    value: bridge.animationSpeed
-                                    onPressedChanged: if (!pressed) bridge.setPreference("animation_speed", value)
+                                }
+                                Repeater {
+                                    model: bridge.bundleOptionGroups
+                                    delegate: ColumnLayout {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        spacing: 4
+                                        Text {
+                                            text: modelData.title
+                                            color: bridge.mutedColor
+                                            font.pixelSize: 10
+                                            font.weight: Font.Bold
+                                        }
+                                        Repeater {
+                                            model: parent.modelData.options
+                                            delegate: CheckBox {
+                                                required property var modelData
+                                                text: modelData.label
+                                                checked: modelData.checked
+                                                ToolTip.visible: hovered
+                                                ToolTip.text: modelData.description
+                                                onToggled: bridge.setPreference(modelData.key, checked)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 145
+                            radius: 13
+                            color: bridge.surfaceFillColor
+                            border.width: 1
+                            border.color: bridge.frameColor
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 16
+                                spacing: 9
+                                Text {
+                                    text: "Recommendations"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 16
+                                    font.weight: Font.Bold
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        text: "Voice-actor language"
+                                        color: bridge.secondaryColor
+                                        font.pixelSize: 12
+                                        Layout.fillWidth: true
+                                    }
+                                    ComboBox {
+                                        Layout.preferredWidth: 235
+                                        model: ["Japanese audio / sub", "English dub", "All voice languages / no preference"]
+                                        currentIndex: {
+                                            switch (bridge.recommendationVoiceLanguage) {
+                                            case "JA": return 0
+                                            case "EN": return 1
+                                            default: return 2
+                                            }
+                                        }
+                                        onActivated: bridge.setPreference("recommendation_voice_language", ["JA", "EN", "ALL"][currentIndex])
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 150
+                            radius: 13
+                            color: bridge.surfaceFillColor
+                            border.width: 1
+                            border.color: bridge.frameColor
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 16
+                                spacing: 8
+                                Text {
+                                    text: "TMDB episode metadata"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 16
+                                    font.weight: Font.Bold
+                                }
+                                Text {
+                                    text: "Optional fallback token. A shared NEKOTRACK_TMDB_ACCESS_TOKEN takes priority."
+                                    color: bridge.secondaryColor
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    TextField {
+                                        id: tmdbTokenInput
+                                        Layout.fillWidth: true
+                                        echoMode: TextInput.Password
+                                        placeholderText: "TMDB API Read Access Token"
+                                        text: bridge.tmdbApiToken
+                                        selectByMouse: true
+                                    }
+                                    Button {
+                                        text: "Save token"
+                                        onClicked: bridge.setPreference("tmdb_api_token", tmdbTokenInput.text)
+                                    }
                                 }
                             }
                         }
@@ -1304,6 +1470,22 @@ Item {
                                     font.pixelSize: 12
                                     wrapMode: Text.WordWrap
                                     Layout.fillWidth: true
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        text: "Selected background"
+                                        color: bridge.secondaryColor
+                                        font.pixelSize: 12
+                                        Layout.fillWidth: true
+                                    }
+                                    ComboBox {
+                                        Layout.preferredWidth: 275
+                                        model: bridge.backgroundPaths
+                                        currentIndex: Math.max(0, bridge.backgroundPaths.indexOf(bridge.backgroundSelectedPath))
+                                        enabled: bridge.backgroundPaths.length > 0
+                                        onActivated: bridge.selectBackgroundImage(bridge.backgroundPaths[currentIndex])
+                                    }
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true
@@ -1385,7 +1567,7 @@ Item {
 
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 160
+                            Layout.preferredHeight: 170
                             radius: 13
                             color: bridge.surfaceFillColor
                             border.width: 1
@@ -1400,10 +1582,15 @@ Item {
                                     font.pixelSize: 16
                                     font.weight: Font.Bold
                                 }
+                                CheckBox {
+                                    text: "Open maximized"
+                                    checked: bridge.maximized
+                                    onToggled: bridge.setPreference("maximized", checked)
+                                }
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    Button { text: "Setup"; onClicked: bridge.requestSetup() }
-                                    Button { text: "Check for updates"; onClicked: bridge.requestUpdateCheck() }
+                                    Button { text: "Setup wizard"; onClicked: bridge.requestSetup() }
+                                    Button { text: "Restore defaults"; onClicked: bridge.resetPreferences() }
                                     Button { text: "Export diagnostics"; onClicked: bridge.requestDiagnosticsExport() }
                                 }
                             }

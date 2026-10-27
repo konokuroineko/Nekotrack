@@ -33,7 +33,8 @@ from diagnostics import log_event, log_exception
 from recommendation_engine import inject_rare_exploration, rank_candidates
 from series import get_library_series, group_media_results
 from ui.pages.recommendations_page import RecommendationWorker
-from ui.preferences import apply_theme_preset, get, set_value
+from ui.bundle_options import BUNDLE_OPTION_GROUPS, BUNDLE_OPTION_KEYS
+from ui.preferences import UI_SCALE_OPTIONS, apply_theme_preset, defaults, get, reset, set_value
 from ui.qml_bridge import (
     QmlApplicationBridge as LibraryBridge,
     _normalize_group,
@@ -321,6 +322,7 @@ class ApplicationBridge(LibraryBridge):
     setupRequested = Signal()
     updateRequested = Signal()
     diagnosticsExportRequested = Signal()
+    rollbackRequested = Signal()
     bundleEditRequested = Signal(int)
     bundleDeleteRequested = Signal(int)
 
@@ -503,6 +505,44 @@ class ApplicationBridge(LibraryBridge):
     def themePresets(self):
         return list(THEME_PRESETS.keys())
 
+    @Property(bool, notify=themeChanged)
+    def autoCheckUpdates(self):
+        return bool(get("auto_check_updates"))
+
+    @Property(str, notify=themeChanged)
+    def updateChannel(self):
+        return str(get("update_channel") or "stable")
+
+    @Property(bool, notify=themeChanged)
+    def maximized(self):
+        return bool(get("maximized"))
+
+    @Property(str, notify=themeChanged)
+    def tmdbApiToken(self):
+        return str(get("tmdb_api_token") or "")
+
+    @Property(str, notify=themeChanged)
+    def recommendationVoiceLanguage(self):
+        return str(get("recommendation_voice_language") or "ALL").upper()
+
+    @Property("QVariantList", notify=themeChanged)
+    def bundleOptionGroups(self):
+        return [
+            {
+                "title": group_title,
+                "options": [
+                    {
+                        "key": key,
+                        "label": label,
+                        "description": description,
+                        "checked": bool(get(key)),
+                    }
+                    for key, label, description in options
+                ],
+            }
+            for group_title, options in BUNDLE_OPTION_GROUPS
+        ]
+
     def _background_changed(self, *_args):
         manager = self._background_manager
         raw_path = manager.selected_path if manager is not None and manager.display_pixmap is not None else None
@@ -588,10 +628,11 @@ class ApplicationBridge(LibraryBridge):
     @Slot(str, "QVariant")
     def setPreference(self, key, value):
         allowed = {
-            "theme_preset", "light_mode", "ui_scale", "card_size", "card_gap",
+            "theme_preset", "light_mode", "ui_scale", "maximized", "card_size", "card_gap",
             "corner_radius", "font_size", "hover_highlight",
             "resize_animation", "animation_speed", "background_overlay_opacity",
-            "background_slideshow_interval",
+            "background_slideshow_interval", "auto_check_updates", "update_channel",
+            "recommendation_voice_language", "tmdb_api_token", *BUNDLE_OPTION_KEYS,
         }
         key = str(key or "")
         if key not in allowed:
@@ -599,6 +640,34 @@ class ApplicationBridge(LibraryBridge):
         try:
             if key == "theme_preset":
                 apply_theme_preset(str(value))
+            elif key == "ui_scale":
+                try:
+                    parsed_scale = int(value)
+                except (TypeError, ValueError, OverflowError):
+                    return
+                if parsed_scale not in UI_SCALE_OPTIONS:
+                    return
+                set_value(key, parsed_scale)
+            elif key == "update_channel":
+                parsed_channel = str(value or "").strip().casefold()
+                if parsed_channel not in {"stable", "preview"}:
+                    return
+                set_value(key, parsed_channel)
+            elif key == "recommendation_voice_language":
+                parsed_language = str(value or "ALL").strip().upper()
+                if parsed_language not in {"JA", "EN", "ALL"}:
+                    return
+                set_value(key, parsed_language)
+            elif key == "tmdb_api_token":
+                set_value(key, str(value or "").strip())
+            elif key == "maximized" or key == "auto_check_updates":
+                set_value(key, bool(value))
+            elif key in BUNDLE_OPTION_KEYS:
+                set_value(key, bool(value))
+                set_value(
+                    "bundle_mode",
+                    "extras" if all(bool(get(option_key)) for option_key in BUNDLE_OPTION_KEYS) else "main",
+                )
             elif key == "background_overlay_opacity" and self._background_manager is not None:
                 self._background_manager.set_overlay_opacity(value)
             elif key == "background_slideshow_interval" and self._background_manager is not None:
@@ -633,6 +702,33 @@ class ApplicationBridge(LibraryBridge):
             return
         self._background_manager.remove_image(str(path or ""))
         self._background_changed()
+
+    @Slot(str)
+    def selectBackgroundImage(self, path):
+        if self._background_manager is None:
+            return
+        self._background_manager.select_image(str(path or ""))
+        self._background_changed()
+
+    @Slot()
+    def requestRollback(self):
+        self.rollbackRequested.emit()
+
+    @Slot()
+    def resetPreferences(self):
+        try:
+            reset()
+            for key, value in defaults().items():
+                set_value(key, value)
+            if self._background_manager is not None:
+                self._background_manager.reload_preferences()
+            refresh_theme()
+            self.refreshTheme()
+            self._background_changed()
+            self.settingsChanged.emit("reset")
+            log_event("qml_bridge.preferences_reset")
+        except Exception as error:
+            log_exception("qml_bridge.preferences_reset_failed", error)
 
     # ---- Library, Home and page refresh ----------------------------------------
 
