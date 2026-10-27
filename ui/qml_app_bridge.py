@@ -652,6 +652,8 @@ class ApplicationBridge(LibraryBridge):
         if target == self._current_page:
             if target == "collections":
                 self.refreshAll()
+            elif target == "home":
+                self.refreshHome()
             elif target == "calendar":
                 self.refreshCalendar()
             elif target == "favorites":
@@ -882,6 +884,8 @@ class ApplicationBridge(LibraryBridge):
 
     @Slot()
     def refreshHome(self):
+        # The Home release preview is sourced from locally cached dates only.
+        self.refreshCalendar()
         if not self._groups_loaded:
             self._load_groups()
             return
@@ -1468,6 +1472,11 @@ class ApplicationBridge(LibraryBridge):
                     "reminderEnabled": bool(row.get("reminder_enabled")),
                     "coverSource": cover,
                 })
+            items.sort(key=lambda item: (
+                item["airDate"],
+                str(item["workTitle"] or "").casefold(),
+                item["episodeNumber"],
+            ))
             self._calendar_items = items
         except Exception as error:
             log_exception("qml_bridge.calendar_load_failed", error)
@@ -1835,6 +1844,12 @@ class ApplicationBridge(LibraryBridge):
             }]
 
         is_in_library = is_work_in_library(work_id)
+        reading_members = [
+            dict(member)
+            for member in bundle_members
+            if str(member.get("mediaType") or "").upper() == "MANGA"
+            or str(member.get("format") or "").upper() in {"NOVEL", "LIGHT_NOVEL"}
+        ]
         detail_data = {
             "id": work_id,
             "title": str(title),
@@ -1854,6 +1869,7 @@ class ApplicationBridge(LibraryBridge):
             "bundleSummary": str(raw.get("_bundle_summary") or ""),
             "memberIds": member_ids,
             "bundleMembers": bundle_members,
+            "readingMembers": reading_members,
             "characters": [],
             "staff": [],
             "relations": [],

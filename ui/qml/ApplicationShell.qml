@@ -387,6 +387,154 @@ Item {
                                 }
                             }
 
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 9
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 3
+                                        Text {
+                                            text: "Upcoming releases"
+                                            color: bridge.primaryColor
+                                            font.pixelSize: 20
+                                            font.weight: Font.Bold
+                                        }
+                                        Text {
+                                            text: "Cached episode dates for the next 60 days."
+                                            color: bridge.mutedColor
+                                            font.pixelSize: 11
+                                            wrapMode: Text.WordWrap
+                                        }
+                                    }
+                                    Button {
+                                        text: "Open calendar"
+                                        onClicked: bridge.navigate("calendar")
+                                    }
+                                }
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    radius: 13
+                                    color: bridge.surfaceFillColor
+                                    border.width: 1
+                                    border.color: bridge.frameColor
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 9
+                                        spacing: 7
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Text {
+                                                text: bridge.calendarItems.length
+                                                    + " upcoming episode"
+                                                    + (bridge.calendarItems.length === 1 ? "" : "s")
+                                                    + " · next 60 days"
+                                                color: bridge.mutedColor
+                                                font.pixelSize: 10
+                                                Layout.fillWidth: true
+                                            }
+                                        }
+
+                                        Repeater {
+                                            model: bridge.calendarItems.slice(0, 3)
+                                            delegate: Rectangle {
+                                                required property var modelData
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: 62
+                                                radius: 9
+                                                color: bridge.surfaceAltFillColor
+                                                border.width: 1
+                                                border.color: bridge.frameColor
+
+                                                RowLayout {
+                                                    anchors.fill: parent
+                                                    anchors.margins: 7
+                                                    spacing: 9
+                                                    Rectangle {
+                                                        Layout.preferredWidth: 46
+                                                        Layout.fillHeight: true
+                                                        radius: 7
+                                                        color: bridge.accentSoftColor
+                                                        Column {
+                                                            anchors.centerIn: parent
+                                                            spacing: 0
+                                                            Text {
+                                                                text: modelData.month
+                                                                color: bridge.accentColor
+                                                                font.pixelSize: 9
+                                                                font.weight: Font.Black
+                                                                anchors.horizontalCenter: parent.horizontalCenter
+                                                            }
+                                                            Text {
+                                                                text: modelData.day
+                                                                color: bridge.primaryColor
+                                                                font.pixelSize: 19
+                                                                font.weight: Font.Black
+                                                                anchors.horizontalCenter: parent.horizontalCenter
+                                                            }
+                                                        }
+                                                    }
+                                                    ColumnLayout {
+                                                        Layout.fillWidth: true
+                                                        spacing: 1
+                                                        Text {
+                                                            text: (modelData.workTitle || "Untitled")
+                                                                + " · "
+                                                                + (modelData.episodeTitle.length > 0
+                                                                    ? modelData.episodeTitle
+                                                                    : ("Episode " + modelData.episodeNumber))
+                                                            color: bridge.primaryColor
+                                                            font.pixelSize: 11
+                                                            font.weight: Font.Bold
+                                                            maximumLineCount: 1
+                                                            elide: Text.ElideRight
+                                                            Layout.fillWidth: true
+                                                        }
+                                                        Text {
+                                                            text: modelData.dateLabel
+                                                            color: bridge.mutedColor
+                                                            font.pixelSize: 9
+                                                            elide: Text.ElideRight
+                                                            Layout.fillWidth: true
+                                                        }
+                                                    }
+                                                    Button {
+                                                        text: modelData.reminderEnabled ? "On" : "Remind"
+                                                        implicitWidth: 62
+                                                        onClicked: bridge.setReminder(
+                                                            modelData.workId,
+                                                            modelData.episodeNumber,
+                                                            !modelData.reminderEnabled
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Text {
+                                            visible: bridge.calendarItems.length === 0
+                                            text: "No upcoming episode dates cached. NekoTrack will not guess release dates."
+                                            color: bridge.mutedColor
+                                            font.pixelSize: 11
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
+
+                                        Text {
+                                            visible: bridge.calendarItems.length > 3
+                                            text: (bridge.calendarItems.length - 3)
+                                                + " more release dates in Calendar."
+                                            color: bridge.mutedColor
+                                            font.pixelSize: 10
+                                        }
+                                    }
+                                }
+                            }
+
                             RowLayout {
                                 Layout.fillWidth: true
                                 Text {
@@ -1813,16 +1961,15 @@ Item {
                                 id: readingProgressRow
                                 Layout.fillWidth: true
                                 property int trackedWorkId: bridge.selectedWork.id || 0
-                                property int readingMemberId: bridge.selectedWork.id || 0
+                                property int readingMemberId: {
+                                    var members = bridge.selectedWork.readingMembers || []
+                                    return members.length > 0 ? members[0].id : (bridge.selectedWork.id || 0)
+                                }
                                 readonly property var selectedReadingProgress: {
                                     var progress = bridge.selectedWork.readingProgressByWork || {}
                                     return progress[readingProgressRow.readingMemberId.toString()] || {}
                                 }
-                                visible: (bridge.selectedWork.bundleMembers || []).some(function(member) {
-                                    return member.mediaType === "MANGA"
-                                        || member.format === "NOVEL"
-                                        || member.format === "LIGHT_NOVEL"
-                                })
+                                visible: (bridge.selectedWork.readingMembers || []).length > 0
                                 spacing: 12
 
                                 Connections {
@@ -1831,7 +1978,9 @@ Item {
                                         var nextId = bridge.selectedWork.id || 0
                                         if (nextId !== readingProgressRow.trackedWorkId) {
                                             readingProgressRow.trackedWorkId = nextId
-                                            readingProgressRow.readingMemberId = nextId
+                                            var members = bridge.selectedWork.readingMembers || []
+                                            readingProgressRow.readingMemberId = members.length > 0
+                                                ? members[0].id : nextId
                                         }
                                     }
                                 }
@@ -1844,10 +1993,10 @@ Item {
                                 ComboBox {
                                     Layout.preferredWidth: 220
                                     visible: (bridge.selectedWork.bundleMembers || []).length > 1
-                                    model: bridge.selectedWork.bundleMembers || []
+                                    model: bridge.selectedWork.readingMembers || []
                                     textRole: "title"
                                     currentIndex: {
-                                        var members = bridge.selectedWork.bundleMembers || []
+                                        var members = bridge.selectedWork.readingMembers || []
                                         for (var i = 0; i < members.length; i++) {
                                             if (members[i].id === readingProgressRow.readingMemberId)
                                                 return i

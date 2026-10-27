@@ -387,6 +387,34 @@ class QmlApplicationBridgeTests(unittest.TestCase):
 
         self.assertEqual(requested, [True])
 
+
+    def test_detail_selects_only_manga_and_novel_members_for_reading_progress(self):
+        from unittest.mock import patch
+
+        from ui.qml_app_bridge import ApplicationBridge
+
+        group = {
+            "id": 101,
+            "title": {"romaji": "Example"},
+            "type": "ANIME",
+            "_series_count": 3,
+            "_series_members": [
+                {"id": 101, "title": {"romaji": "Anime Season"}, "type": "ANIME", "format": "TV"},
+                {"id": 202, "title": {"romaji": "Manga"}, "type": "MANGA", "format": "MANGA"},
+                {"id": 303, "title": {"romaji": "Novel"}, "type": "MANGA", "format": "NOVEL"},
+            ],
+        }
+        bridge = ApplicationBridge()
+        with patch("ui.qml_app_bridge.is_work_in_library", return_value=True), \
+             patch("ui.qml_app_bridge.QThreadPool.globalInstance") as pool:
+            bridge._raw_groups = [group]
+            bridge.setSelectedWork(group)
+            self.assertEqual(
+                [item["id"] for item in bridge._selected_work["readingMembers"]],
+                [202, 303],
+            )
+            pool.return_value.start.assert_called_once()
+
     def test_refresh_errors_are_reported_without_crashing_the_host(self):
         def fail_loader():
             raise RuntimeError("synthetic database read failure")
