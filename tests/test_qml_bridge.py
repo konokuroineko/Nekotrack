@@ -206,6 +206,17 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         self.assertIn(bridge.uiScale, {80, 90, 100, 110, 125, 150, 175, 200})
 
 
+    def test_first_library_navigation_reuses_the_preloaded_snapshot(self):
+        from unittest.mock import patch
+
+        from ui.qml_app_bridge import ApplicationBridge
+
+        bridge = ApplicationBridge()
+        bridge._groups_loaded = True
+        with patch.object(bridge, "_load_groups") as load_groups:
+            bridge.navigate("collections")
+        load_groups.assert_not_called()
+
     def test_startup_does_not_start_recommendations_until_visible(self):
         from unittest.mock import patch
 

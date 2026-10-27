@@ -666,7 +666,13 @@ class ApplicationBridge(LibraryBridge):
         self.pageChanged.emit()
         self.navigationRequested.emit(target)
         if target == "collections":
-            self.refreshAll()
+            # Home already preloads the canonical Library snapshot. On the
+            # first switch, reuse that model instead of forcing a second full
+            # database/grouping pass that only causes a visible loading flash.
+            # Explicit refreshes and relation-sync completion still use
+            # refreshAll()/forceRefreshAll().
+            if not self._groups_loaded and not self._groups_loading:
+                self._load_groups()
         elif target == "home":
             self.refreshHome()
         elif target == "calendar":
