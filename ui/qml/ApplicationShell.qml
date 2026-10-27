@@ -2101,7 +2101,7 @@ Item {
                                 Layout.preferredHeight: 42
                                 padding: 0
                                 font.pixelSize: 23
-                                accessibleName: "Back"
+                                Accessible.name: "Back"
                                 onClicked: bridge.goBack()
                                 background: Rectangle {
                                     radius: 21

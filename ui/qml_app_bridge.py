@@ -257,7 +257,7 @@ class _DetailSnapshotWorker(QRunnable):
                             "airDate": str(row.get("air_date") or ""),
                             "watched": bool(row.get("watched")),
                             "coverSource": _file_source(row.get("thumbnail_path") or row.get("image_path"))
-                                or _image_source({"cover_url": row.get("image_url)}),
+                                or _image_source({"cover_url": row.get("image_url")}),
                         })
                 progress_chapters += _optional_int(chapters) or 0
                 chapter_total += _optional_int(chapters_total) or 0
