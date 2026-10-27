@@ -247,15 +247,21 @@ class QmlApplicationBridgeTests(unittest.TestCase):
 
 
     def test_application_bridge_exposes_update_and_discovery_defaults(self):
+        from unittest.mock import patch
+
+        from ui.preferences import defaults
         from ui.qml_app_bridge import ApplicationBridge
 
-        bridge = ApplicationBridge()
-        self.assertTrue(bridge.autoCheckUpdates)
-        self.assertEqual(bridge.updateChannel, "stable")
-        self.assertEqual(bridge.recommendationVoiceLanguage, "ALL")
-        self.assertEqual(bridge.tmdbApiToken, "")
-        self.assertTrue(bridge.maximized)
-        groups = bridge.bundleOptionGroups
+        default_values = defaults()
+        with patch("ui.qml_bridge.get", side_effect=lambda key: default_values[key]), \
+             patch("ui.qml_app_bridge.get", side_effect=lambda key: default_values[key]):
+            bridge = ApplicationBridge()
+            self.assertTrue(bridge.autoCheckUpdates)
+            self.assertEqual(bridge.updateChannel, "stable")
+            self.assertEqual(bridge.recommendationVoiceLanguage, "ALL")
+            self.assertEqual(bridge.tmdbApiToken, "")
+            self.assertTrue(bridge.maximized)
+            groups = bridge.bundleOptionGroups
         self.assertEqual([group["title"] for group in groups], ["ANIME EXTRAS", "MANGA & LITERATURE"])
         self.assertEqual(
             [option["key"] for group in groups for option in group["options"]],
