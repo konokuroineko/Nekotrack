@@ -317,6 +317,52 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         self.assertEqual(work["startYear"], 2020)
         self.assertEqual(work["coverSource"], "https://images.example.invalid/cover.jpg")
 
+
+    def test_detail_snapshot_worker_aggregates_episodes_for_all_bundle_members(self):
+        from unittest.mock import patch
+
+        from ui.qml_app_bridge import _DetailSnapshotWorker
+
+        snapshots = {
+            101: {
+                "work": {"title": "Season One", "episodes": 12, "progress_episodes": 4},
+                "episodes": [{
+                    "episode_number": 1,
+                    "title": "Episode One",
+                    "watched": True,
+                    "air_date": "2020-01-01",
+                }],
+            },
+            202: {
+                "work": {"title": "Season Two", "episodes": 10, "progress_episodes": 2},
+                "episodes": [{
+                    "episode_number": 1,
+                    "title": "Episode Two",
+                    "watched": False,
+                    "air_date": "2021-01-01",
+                }],
+            },
+        }
+        results = []
+        worker = _DetailSnapshotWorker(7, 101, [101, 202], {101: "Season One", 202: "Season Two"})
+        worker.signals.finished.connect(lambda generation, payload, error: results.append((generation, payload, error)))
+
+        with patch("ui.qml_app_bridge.get_episode_section_snapshot", side_effect=lambda work_id: snapshots[work_id]), \
+             patch("ui.qml_app_bridge.get_bundle_characters", return_value=[]), \
+             patch("ui.qml_app_bridge.get_bundle_staff", return_value=[]), \
+             patch("ui.qml_app_bridge.get_bundle_relations", return_value=[]), \
+             patch("ui.qml_app_bridge.get_reading_progress", return_value=(0, 0)):
+            worker.run()
+
+        self.assertEqual(len(results), 1)
+        generation, payload, error = results[0]
+        self.assertEqual(generation, 7)
+        self.assertIsNone(error)
+        self.assertEqual([item["workId"] for item in payload["episodes"]], [101, 202])
+        self.assertEqual([item["workTitle"] for item in payload["episodes"]], ["Season One", "Season Two"])
+        self.assertEqual(payload["progressEpisodes"], 6)
+        self.assertEqual(payload["episodeTotal"], 22)
+
     def test_refresh_errors_are_reported_without_crashing_the_host(self):
         def fail_loader():
             raise RuntimeError("synthetic database read failure")

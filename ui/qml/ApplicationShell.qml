@@ -2085,6 +2085,7 @@ Item {
 
                             RowLayout {
                                 Layout.fillWidth: true
+                                visible: bridge.selectedWork.mediaType === "ANIME"
                                 Text {
                                     text: "Episodes"
                                     color: bridge.primaryColor
@@ -2101,9 +2102,10 @@ Item {
 
                             ListView {
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: Math.min(
+                                visible: bridge.selectedWork.mediaType === "ANIME"
+                                Layout.preferredHeight: visible ? Math.min(
                                     360, Math.max(70, bridge.episodeItems.length * 76)
-                                )
+                                ) : 0
                                 clip: true
                                 spacing: 6
                                 model: bridge.episodeItems
@@ -2132,7 +2134,9 @@ Item {
                                             Layout.fillWidth: true
                                             spacing: 3
                                             Text {
-                                                text: modelData.title
+                                                text: bridge.selectedWork.seriesCount > 1
+                                                    ? ((modelData.workTitle || "Series") + " · " + modelData.title)
+                                                    : modelData.title
                                                 color: bridge.primaryColor
                                                 font.pixelSize: 12
                                                 font.weight: Font.Bold
@@ -2151,7 +2155,9 @@ Item {
                                             checked: modelData.watched
                                             enabled: bridge.selectedWork.isInLibrary
                                             onToggled: bridge.setEpisodeWatched(
-                                                bridge.selectedWork.id, modelData.episodeNumber, checked
+                                                modelData.workId || bridge.selectedWork.id,
+                                                modelData.episodeNumber,
+                                                checked
                                             )
                                         }
                                     }

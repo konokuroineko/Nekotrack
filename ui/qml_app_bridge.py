@@ -181,7 +181,7 @@ class _DetailSignals(QObject):
 class _DetailSnapshotWorker(QRunnable):
     """Build QML detail snapshots from SQLite without blocking the GUI thread."""
 
-    def __init__(self, generation, work_id, member_ids):
+    def __init__(self, generation, work_id, member_ids, member_titles=None):
         super().__init__()
         self.generation = int(generation)
         self.work_id = int(work_id)
@@ -189,32 +189,72 @@ class _DetailSnapshotWorker(QRunnable):
             int(value) for value in (member_ids or ())
             if _optional_int(value) not in (None, 0)
         ))
+        self.member_titles = {
+            int(key): str(value or "").strip()
+            for key, value in (member_titles or {}).items()
+            if _optional_int(key) not in (None, 0)
+        }
         self.signals = _DetailSignals()
 
     @Slot()
     def run(self):
         try:
-            snapshot = get_episode_section_snapshot(self.work_id)
-            local_work = snapshot.get("work")
-            local_row = _plain(dict(local_work)) if local_work is not None else {}
-            episodes = []
-            for source in (snapshot.get("episodes") or [])[:300]:
-                row = _plain(dict(source))
-                number = _optional_int(row.get("episode_number"))
-                if number is None:
-                    continue
-                episodes.append({
-                    "workId": self.work_id,
-                    "episodeNumber": number,
-                    "title": str(row.get("title") or f"Episode {number}"),
-                    "description": str(row.get("description") or ""),
-                    "airDate": str(row.get("air_date") or ""),
-                    "watched": bool(row.get("watched")),
-                    "coverSource": _file_source(row.get("thumbnail_path") or row.get("image_path"))
-                        or _image_source({"cover_url": row.get("image_url")}),
-                })
-
             member_ids = self.member_ids or (self.work_id,)
+            episodes = []
+            local_rows = {}
+            progress_episodes = 0
+            episode_total = 0
+            progress_chapters = 0
+            chapter_total = 0
+            progress_volumes = 0
+            volume_total = 0
+
+            # Fetch episode rows independently for every member. Bundle ids are
+            # kept in the canonical series order and every episode retains its
+            # owning id so the QML checkbox writes progress to the right season.
+            # Keep the visible snapshot bounded even for large bundles.
+            for member_id in member_ids:
+                snapshot = get_episode_section_snapshot(member_id)
+                local_work = snapshot.get("work")
+                row_work = _plain(dict(local_work)) if local_work is not None else {}
+                local_rows[member_id] = row_work
+                member_title = str(
+                    row_work.get("title")
+                    or self.member_titles.get(member_id)
+                    or f"Work {member_id}"
+                )
+                progress_episodes += _optional_int(row_work.get("progress_episodes")) or 0
+                episode_total += _optional_int(row_work.get("episodes")) or 0
+
+                for source in snapshot.get("episodes") or []:
+                    if len(episodes) >= 300:
+                        break
+                    row = _plain(dict(source))
+                    number = _optional_int(row.get("episode_number"))
+                    if number is None:
+                        continue
+                    episodes.append({
+                        "workId": member_id,
+                        "workTitle": member_title,
+                        "episodeNumber": number,
+                        "title": str(row.get("title") or f"Episode {number}"),
+                        "description": str(row.get("description") or ""),
+                        "airDate": str(row.get("air_date") or ""),
+                        "watched": bool(row.get("watched")),
+                        "coverSource": _file_source(row.get("thumbnail_path") or row.get("image_path"))
+                            or _image_source({"cover_url": row.get("image_url")}),
+                    })
+
+                chapters, chapters_total = get_reading_progress(member_id, "chapter")
+                volumes, volumes_total = get_reading_progress(member_id, "volume")
+                progress_chapters += _optional_int(chapters) or 0
+                chapter_total += _optional_int(chapters_total) or 0
+                progress_volumes += _optional_int(volumes) or 0
+                volume_total += _optional_int(volumes_total) or 0
+
+            local_row = local_rows.get(self.work_id, {})
+            if not local_row and local_rows:
+                local_row = next(iter(local_rows.values()))
             characters = []
             for source in get_bundle_characters(member_ids) or []:
                 row = _plain(dict(source))
@@ -258,17 +298,17 @@ class _DetailSnapshotWorker(QRunnable):
                     "relationTypes": str(row.get("relation_types") or row.get("relation_type") or "RELATED"),
                 })
 
-            chapter_count, chapter_total = get_reading_progress(self.work_id, "chapter")
-            volume_count, volume_total = get_reading_progress(self.work_id, "volume")
             payload = {
                 "episodes": episodes,
                 "characters": characters,
                 "staff": staff,
                 "relations": relations,
                 "localWork": local_row,
-                "progressChapters": chapter_count,
+                "progressEpisodes": progress_episodes,
+                "episodeTotal": episode_total,
+                "progressChapters": progress_chapters,
                 "chapterTotal": chapter_total,
-                "progressVolumes": volume_count,
+                "progressVolumes": progress_volumes,
                 "volumeTotal": volume_total,
             }
             self.signals.finished.emit(self.generation, payload, None)
@@ -1797,7 +1837,16 @@ class ApplicationBridge(LibraryBridge):
 
         self._detail_generation += 1
         generation = self._detail_generation
-        worker = _DetailSnapshotWorker(generation, work_id, member_ids)
+        worker = _DetailSnapshotWorker(
+            generation,
+            work_id,
+            member_ids,
+            {
+                _optional_int(member.get("id")): member.get("title")
+                for member in bundle_members
+                if _optional_int(member.get("id")) is not None
+            },
+        )
         worker.signals.finished.connect(self._detail_snapshot_ready)
         self._detail_workers[generation] = worker
         QThreadPool.globalInstance().start(worker)
@@ -1829,18 +1878,22 @@ class ApplicationBridge(LibraryBridge):
             self._selected_work["status"] = str(
                 local_work.get("status") or self._selected_work.get("status") or "Planning"
             )
-            self._selected_work["progressEpisodes"] = _optional_int(
-                local_work.get("progress_episodes")
-            ) or 0
+            self._selected_work["progressEpisodes"] = (
+                _optional_int(payload.get("progressEpisodes"))
+                if _optional_int(payload.get("progressEpisodes")) is not None
+                else _optional_int(local_work.get("progress_episodes")) or 0
+            )
             self._selected_work["progressChapters"] = _optional_int(
                 payload.get("progressChapters")
             ) or 0
             self._selected_work["progressVolumes"] = _optional_int(
                 payload.get("progressVolumes")
             ) or 0
-            self._selected_work["episodeTotal"] = _optional_int(
-                local_work.get("episodes")
-            ) or self._selected_work.get("episodeTotal", 0)
+            self._selected_work["episodeTotal"] = (
+                _optional_int(payload.get("episodeTotal"))
+                if _optional_int(payload.get("episodeTotal")) is not None
+                else self._selected_work.get("episodeTotal", 0)
+            )
 
         self._selected_work["characters"] = payload.get("characters") or []
         self._selected_work["staff"] = payload.get("staff") or []
@@ -1861,13 +1914,29 @@ class ApplicationBridge(LibraryBridge):
     @Slot(int, bool)
     def markAllEpisodesWatched(self, work_id, watched):
         try:
-            snapshot = get_episode_section_snapshot(work_id)
-            numbers = [
-                _optional_int(dict(row).get("episode_number"))
-                for row in snapshot.get("episodes") or []
+            selected_id = _optional_int(self._selected_work.get("id"))
+            selected_member_ids = [
+                _optional_int(value)
+                for value in self._selected_work.get("memberIds") or []
             ]
-            numbers = [number for number in numbers if number is not None] if watched else []
-            set_episode_progress(work_id, numbers)
+            selected_member_ids = [
+                value for value in selected_member_ids if value not in (None, 0)
+            ]
+            targets = (
+                list(dict.fromkeys(selected_member_ids))
+                if selected_id == _optional_int(work_id) and selected_member_ids
+                else [_optional_int(work_id)]
+            )
+            for target_id in targets:
+                if target_id in (None, 0):
+                    continue
+                snapshot = get_episode_section_snapshot(target_id)
+                numbers = [
+                    _optional_int(dict(row).get("episode_number"))
+                    for row in snapshot.get("episodes") or []
+                ]
+                numbers = [number for number in numbers if number is not None] if watched else []
+                set_episode_progress(target_id, numbers)
             self.setSelectedWork(self._selected_work_raw)
             self.refreshHome()
         except Exception as error:
