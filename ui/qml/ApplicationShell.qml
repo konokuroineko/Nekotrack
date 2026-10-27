@@ -1021,15 +1021,17 @@ Item {
 
                 // Settings
                 Flickable {
+                    id: settingsPage
                     clip: true
+                    contentWidth: width
                     contentHeight: settingsColumn.implicitHeight + 60
+                    boundsBehavior: Flickable.StopAtBounds
 
                     ColumnLayout {
                         id: settingsColumn
-                        width: parent.width
-                        anchors.leftMargin: 34
-                        anchors.rightMargin: 34
-                        anchors.topMargin: 28
+                        x: 34
+                        y: 28
+                        width: Math.max(1, settingsPage.width - 68)
                         spacing: 18
 
                         ColumnLayout {
@@ -1050,7 +1052,7 @@ Item {
 
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 144
+                            Layout.preferredHeight: 150
                             radius: 13
                             color: bridge.surfaceFillColor
                             border.width: 1
@@ -1089,7 +1091,7 @@ Item {
 
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 156
+                            Layout.preferredHeight: 390
                             radius: 13
                             color: bridge.surfaceFillColor
                             border.width: 1
@@ -1098,6 +1100,7 @@ Item {
                                 anchors.fill: parent
                                 anchors.margins: 16
                                 spacing: 7
+
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text {
@@ -1144,12 +1147,63 @@ Item {
                                     value: bridge.fontSize
                                     onPressedChanged: if (!pressed) bridge.setPreference("font_size", value)
                                 }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        text: "Poster gap"
+                                        color: bridge.primaryColor
+                                        font.pixelSize: 14
+                                        font.weight: Font.Bold
+                                        Layout.fillWidth: true
+                                    }
+                                    Text {
+                                        text: bridge.cardGap + " px"
+                                        color: bridge.mutedColor
+                                        font.pixelSize: 12
+                                    }
+                                }
+                                Slider {
+                                    Layout.fillWidth: true
+                                    from: 0
+                                    to: 60
+                                    stepSize: 2
+                                    value: bridge.cardGap
+                                    onPressedChanged: if (!pressed) bridge.setPreference("card_gap", value)
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        text: "Corner radius"
+                                        color: bridge.primaryColor
+                                        font.pixelSize: 14
+                                        font.weight: Font.Bold
+                                        Layout.fillWidth: true
+                                    }
+                                    Text {
+                                        text: bridge.cornerRadius + " px"
+                                        color: bridge.mutedColor
+                                        font.pixelSize: 12
+                                    }
+                                }
+                                Slider {
+                                    Layout.fillWidth: true
+                                    from: 0
+                                    to: 32
+                                    stepSize: 1
+                                    value: bridge.cornerRadius
+                                    onPressedChanged: if (!pressed) bridge.setPreference("corner_radius", value)
+                                }
+                                CheckBox {
+                                    text: "Highlight cards on hover"
+                                    checked: bridge.hoverHighlight
+                                    onToggled: bridge.setPreference("hover_highlight", checked)
+                                }
                             }
                         }
 
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 130
+                            Layout.preferredHeight: 136
                             radius: 13
                             color: bridge.surfaceFillColor
                             border.width: 1
@@ -1157,7 +1211,54 @@ Item {
                             ColumnLayout {
                                 anchors.fill: parent
                                 anchors.margins: 16
-                                spacing: 9
+                                spacing: 10
+                                Text {
+                                    text: "Animation"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 16
+                                    font.weight: Font.Bold
+                                }
+                                CheckBox {
+                                    text: "Enable resize animations"
+                                    checked: getPreferenceResizeAnimation
+                                    onToggled: bridge.setPreference("resize_animation", checked)
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        text: "Animation speed"
+                                        color: bridge.primaryColor
+                                        font.pixelSize: 13
+                                        Layout.fillWidth: true
+                                    }
+                                    Text {
+                                        text: "Change in ms"
+                                        color: bridge.mutedColor
+                                        font.pixelSize: 11
+                                    }
+                                }
+                                Slider {
+                                    Layout.fillWidth: true
+                                    from: 0
+                                    to: 1000
+                                    stepSize: 20
+                                    value: bridge.animationSpeed
+                                    onPressedChanged: if (!pressed) bridge.setPreference("animation_speed", value)
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 292
+                            radius: 13
+                            color: bridge.surfaceFillColor
+                            border.width: 1
+                            border.color: bridge.frameColor
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 16
+                                spacing: 10
                                 Text {
                                     text: "Background"
                                     color: bridge.primaryColor
@@ -1165,9 +1266,13 @@ Item {
                                     font.weight: Font.Bold
                                 }
                                 Text {
-                                    text: bridge.backgroundSource.length > 0 ? "Custom background enabled" : "Using the default background"
+                                    text: bridge.backgroundSource.length > 0
+                                        ? ("Showing: " + bridge.backgroundSelectedPath.split("/").pop())
+                                        : "Using the default background"
                                     color: bridge.secondaryColor
                                     font.pixelSize: 12
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true
@@ -1184,6 +1289,65 @@ Item {
                                         }
                                     }
                                     Item { Layout.fillWidth: true }
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        text: "Slideshow"
+                                        color: bridge.primaryColor
+                                        font.pixelSize: 13
+                                        Layout.fillWidth: true
+                                    }
+                                    ComboBox {
+                                        id: backgroundIntervalCombo
+                                        Layout.preferredWidth: 185
+                                        model: ["Disabled", "Static image", "30 seconds", "1 minute", "5 minutes", "15 minutes", "30 minutes"]
+                                        currentIndex: {
+                                            switch (bridge.backgroundInterval) {
+                                            case -1: return 0
+                                            case 0: return 1
+                                            case 30: return 2
+                                            case 60: return 3
+                                            case 300: return 4
+                                            case 900: return 5
+                                            case 1800: return 6
+                                            default: return 1
+                                            }
+                                        }
+                                        onActivated: bridge.setPreference(
+                                            "background_slideshow_interval",
+                                            [-1, 0, 30, 60, 300, 900, 1800][currentIndex]
+                                        )
+                                    }
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        text: "Background overlay"
+                                        color: bridge.primaryColor
+                                        font.pixelSize: 13
+                                        Layout.fillWidth: true
+                                    }
+                                    Text {
+                                        text: bridge.backgroundOverlayOpacity + "%"
+                                        color: bridge.mutedColor
+                                        font.pixelSize: 11
+                                    }
+                                }
+                                Slider {
+                                    Layout.fillWidth: true
+                                    from: 35
+                                    to: 90
+                                    stepSize: 1
+                                    value: bridge.backgroundOverlayOpacity
+                                    onPressedChanged: if (!pressed)
+                                        bridge.setPreference("background_overlay_opacity", value)
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: bridge.backgroundPaths.length + " background image(s) saved."
+                                    color: bridge.mutedColor
+                                    font.pixelSize: 11
                                 }
                             }
                         }
@@ -1206,6 +1370,7 @@ Item {
                                     font.weight: Font.Bold
                                 }
                                 RowLayout {
+                                    Layout.fillWidth: true
                                     Button { text: "Setup"; onClicked: bridge.requestSetup() }
                                     Button { text: "Check for updates"; onClicked: bridge.requestUpdateCheck() }
                                     Button { text: "Export diagnostics"; onClicked: bridge.requestDiagnosticsExport() }
