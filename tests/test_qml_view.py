@@ -135,6 +135,8 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
         self.assertIn('text: "Continue watching or reading"', source)
         self.assertIn("Layout.preferredWidth: 235", source)
         self.assertIn("Layout.preferredHeight: 335", source)
+        self.assertIn("selectedWorkIsReadingMedia", source)
+        self.assertIn("visible: !workDetailsPage.selectedWorkIsReadingMedia", source)
         self.assertIn("radius: 22", source)
         self.assertIn("x: 42\n                            y: 34", source)
         self.assertIn('text: "Reading progress"', source)

@@ -2079,6 +2079,12 @@ Item {
                 // Work details
                 Item {
                     id: workDetailsPage
+                    readonly property bool selectedWorkIsReadingMedia: {
+                        var mediaType = String(bridge.selectedWork.mediaType || "").toUpperCase()
+                        var mediaFormat = String(bridge.selectedWork.format || "").toUpperCase()
+                        return mediaType === "MANGA"
+                            || ["MANGA", "NOVEL", "ONE_SHOT"].indexOf(mediaFormat) >= 0
+                    }
                     Flickable {
                         id: detailScroll
                         anchors.fill: parent
@@ -2163,7 +2169,12 @@ Item {
                                         Text {
                                             anchors.centerIn: parent
                                             visible: detailHeroCover.status !== Image.Ready
-                                            text: "COVER UNAVAILABLE"
+                                            text: {
+                                                if (!String(bridge.selectedWork.coverSource || "").length)
+                                                    return "NO COVER"
+                                                return detailHeroCover.status === Image.Loading
+                                                    ? "Loading artwork…" : "COVER UNAVAILABLE"
+                                            }
                                             color: bridge.mutedColor
                                             font.pixelSize: 10
                                             font.weight: Font.Bold
@@ -2185,7 +2196,7 @@ Item {
                                                 text: bridge.selectedWork.title || "Select a title"
                                                 color: bridge.primaryColor
                                                 font.pixelSize: 34
-                                                font.weight: Font.Black
+                                                font.weight: 850
                                                 wrapMode: Text.WordWrap
                                             }
                                             ToolButton {
@@ -2225,7 +2236,7 @@ Item {
                                                     parts.push(bridge.selectedWork.format)
                                                 if (bridge.selectedWork.startYear)
                                                     parts.push(bridge.selectedWork.startYear)
-                                                var isReading = (bridge.selectedWork.readingMembers || []).length > 0
+                                                var isReading = workDetailsPage.selectedWorkIsReadingMedia
                                                 if (isReading) {
                                                     if (bridge.selectedWork.chapterTotal)
                                                         parts.push(bridge.selectedWork.chapterTotal + " chapters")
@@ -2251,7 +2262,7 @@ Item {
                                                 : "—  No score"
                                             color: bridge.accentColor
                                             font.pixelSize: 18
-                                            font.weight: Font.Bold
+                                            font.weight: 800
                                         }
 
                                         Item { Layout.preferredHeight: 10 }
@@ -2272,7 +2283,7 @@ Item {
 
                             ColumnLayout {
                                 id: readingProgressPanel
-                                visible: (bridge.selectedWork.readingMembers || []).length > 0
+                                visible: workDetailsPage.selectedWorkIsReadingMedia
                                 Layout.fillWidth: true
                                 spacing: 0
 
@@ -2296,7 +2307,7 @@ Item {
                                                 text: "Reading progress"
                                                 color: bridge.primaryColor
                                                 font.pixelSize: 17
-                                                font.weight: Font.Bold
+                                                font.weight: 800
                                             }
                                             Item { Layout.fillWidth: true }
                                             ToolButton {
@@ -2520,7 +2531,7 @@ Item {
 
                             Rectangle {
                                 id: episodeSectionPanel
-                                visible: bridge.selectedWork.mediaType === "ANIME"
+                                visible: !workDetailsPage.selectedWorkIsReadingMedia
                                 Layout.fillWidth: true
                                 implicitHeight: episodeSectionColumn.implicitHeight + 28
                                 radius: 14
@@ -2551,7 +2562,7 @@ Item {
                                             }
                                             color: bridge.primaryColor
                                             font.pixelSize: 19
-                                            font.weight: Font.Bold
+                                            font.weight: 850
                                             wrapMode: Text.WordWrap
                                         }
                                         Text {
@@ -2566,7 +2577,7 @@ Item {
                                             }
                                             color: bridge.accentColor
                                             font.pixelSize: 13
-                                            font.weight: Font.Bold
+                                            font.weight: 850
                                         }
                                         ToolButton {
                                             id: episodeMemberButton
@@ -2808,7 +2819,7 @@ Item {
                                         text: "MangaBaka metadata"
                                         color: bridge.primaryColor
                                         font.pixelSize: 17
-                                        font.weight: Font.Bold
+                                        font.weight: 850
                                     }
 
                                     Repeater {
@@ -2964,7 +2975,7 @@ Item {
                                         text: "Characters"
                                         color: bridge.primaryColor
                                         font.pixelSize: 17
-                                        font.weight: Font.Bold
+                                        font.weight: 800
                                     }
                                     Text {
                                         visible: (bridge.selectedWork.characters || []).length === 0
@@ -3072,7 +3083,7 @@ Item {
                                         text: "Staff"
                                         color: bridge.primaryColor
                                         font.pixelSize: 17
-                                        font.weight: Font.Bold
+                                        font.weight: 800
                                     }
                                     Text {
                                         visible: (bridge.selectedWork.staff || []).length === 0
@@ -3172,7 +3183,7 @@ Item {
                                         text: "Relations"
                                         color: bridge.primaryColor
                                         font.pixelSize: 17
-                                        font.weight: Font.Bold
+                                        font.weight: 800
                                     }
                                     Text {
                                         visible: (bridge.selectedWork.relations || []).length === 0

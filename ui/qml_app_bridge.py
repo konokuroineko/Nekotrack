@@ -2109,7 +2109,9 @@ class ApplicationBridge(LibraryBridge):
             dict(member)
             for member in bundle_members
             if str(member.get("mediaType") or "").upper() == "MANGA"
-            or str(member.get("format") or "").upper() in {"NOVEL", "LIGHT_NOVEL"}
+            or str(member.get("format") or "").upper() in {
+                "MANGA", "NOVEL", "ONE_SHOT", "LIGHT_NOVEL"
+            }
         ]
         previous_work_id = _optional_int(self._selected_work.get("id"))
         selected_episode_id = _optional_int(getattr(self, "_selected_episode_work_id", None))
@@ -2168,7 +2170,7 @@ class ApplicationBridge(LibraryBridge):
                 if _optional_int(member.get("id")) is not None
             },
             selected_episode_id,
-            bool(reading_members),
+            media_type == "MANGA" or fmt in {"MANGA", "NOVEL", "ONE_SHOT"},
         )
         worker.signals.finished.connect(self._detail_snapshot_ready)
         self._detail_workers[generation] = worker
