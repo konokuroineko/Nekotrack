@@ -819,7 +819,7 @@ class ApplicationBridge(LibraryBridge):
             self._groups_refresh_requested = self._groups_refresh_requested or bool(force)
             return
         if self._groups_loaded and not force:
-            self._library_model.refresh()
+            self._library_model.refresh(self._raw_groups)
             self._refresh_home_items()
             return
 
@@ -866,7 +866,7 @@ class ApplicationBridge(LibraryBridge):
             for group in (rows or [])
             if isinstance(group, dict) or hasattr(group, "keys")
         ]
-        self._library_model.refresh()
+        self._library_model.refresh(self._raw_groups)
         self._refresh_home_items()
 
         if self._current_page == "home" and self._startup_ready:
@@ -892,7 +892,7 @@ class ApplicationBridge(LibraryBridge):
         if not self._groups_loaded:
             self._load_groups()
             return
-        self._library_model.refresh()
+        self._library_model.refresh(self._raw_groups)
         self._refresh_home_items()
         # A screen revisit must not cancel an in-flight recommendations request.
         if (

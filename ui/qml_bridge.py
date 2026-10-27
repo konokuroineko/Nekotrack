@@ -18,6 +18,7 @@ from ui.theme import COLORS, surface_rgba
 
 _IMAGE_DIRECTORY = Path("data") / "images" / "works"
 _FILTERS = ("All", "Watching", "Completed", "Planned")
+_LOAD_LIBRARY_GROUPS = object()
 
 
 def _optional_int(value):
@@ -377,9 +378,15 @@ class LibraryListModel(QAbstractListModel):
         self.rowsReloaded.emit(len(self._rows))
         return True
 
-    def refresh(self):
-        """Reload canonical groups while keeping the current status filter."""
-        groups = self._library_loader()
+    def refresh(self, groups=_LOAD_LIBRARY_GROUPS):
+        """Refresh from a supplied snapshot, or load canonical groups if omitted.
+
+        ApplicationBridge supplies rows produced by its background worker so
+        an already-computed grouping snapshot is never recomputed on the UI
+        thread. Standalone/legacy Library refreshes keep the no-argument path.
+        """
+        if groups is _LOAD_LIBRARY_GROUPS:
+            groups = self._library_loader()
         if groups is None:
             groups = []
         if isinstance(groups, (str, bytes, dict)) or not hasattr(groups, "__iter__"):

@@ -476,6 +476,27 @@ class QmlApplicationBridgeTests(unittest.TestCase):
             ("customize_identity", 123),
         ])
 
+
+    def test_model_refresh_uses_supplied_snapshot_without_calling_loader(self):
+        from unittest.mock import Mock
+
+        loader = Mock(side_effect=AssertionError("loader should not run for supplied groups"))
+        model = LibraryListModel(library_loader=loader)
+        groups = [{
+            "id": 501,
+            "title": {"romaji": "Preloaded title"},
+            "type": "ANIME",
+            "format": "TV",
+            "start_year": 2024,
+            "_series_members": [{"id": 501, "title": {"romaji": "Preloaded title"}}],
+        }]
+
+        count = model.refresh(groups)
+
+        self.assertEqual(count, 1)
+        self.assertEqual(model._all_rows[0]["workId"], 501)
+        loader.assert_not_called()
+
     def test_refresh_errors_are_reported_without_crashing_the_host(self):
         def fail_loader():
             raise RuntimeError("synthetic database read failure")
