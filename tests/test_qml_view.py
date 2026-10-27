@@ -58,6 +58,7 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
     def test_qml_cover_mask_keeps_legacy_crop_insets_and_separate_effect(self):
         source = (ROOT / "ui" / "qml" / "PosterCard.qml").read_text(encoding="utf-8")
         self.assertIn("fillMode: Image.PreserveAspectCrop", source)
+        self.assertIn("smooth: true", source)
         self.assertIn("width: parent.width - 4", source)
         self.assertIn("height: parent.height - 4", source)
         self.assertIn("maskSource: coverMask", source)

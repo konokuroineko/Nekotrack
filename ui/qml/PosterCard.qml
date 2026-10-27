@@ -171,6 +171,7 @@ Item {
                         height: parent.height - 4
                         source: root.coverSource
                         fillMode: Image.PreserveAspectCrop
+                        smooth: true
                         asynchronous: true
                         cache: true
                         visible: false
@@ -204,6 +205,7 @@ Item {
                             anchors.fill: parent
                             radius: bridge.cornerRadius
                             color: "#ffffff"
+                            antialiasing: true
                         }
                     }
 
@@ -229,6 +231,7 @@ Item {
                         color: "transparent"
                         border.width: 3
                         border.color: bridge.frameColor
+                        antialiasing: true
                         z: 2
                     }
                 }
