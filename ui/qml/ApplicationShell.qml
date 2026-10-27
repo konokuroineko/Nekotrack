@@ -2442,68 +2442,144 @@ Item {
                                 }
                             }
 
-                            ListView {
+                            GridView {
+                                id: episodesGrid
                                 Layout.fillWidth: true
                                 visible: bridge.selectedWork.mediaType === "ANIME"
+                                    && bridge.episodeItems.length > 0
                                 Layout.preferredHeight: visible ? Math.min(
-                                    360, Math.max(70, bridge.episodeItems.length * 76)
+                                    560,
+                                    Math.max(274, Math.ceil(bridge.episodeItems.length
+                                        / Math.max(1, Math.floor(width / cellWidth))) * cellHeight)
                                 ) : 0
+                                cellWidth: 252
+                                cellHeight: 274
                                 clip: true
-                                spacing: 6
+                                boundsBehavior: Flickable.StopAtBounds
                                 model: bridge.episodeItems
 
                                 delegate: Rectangle {
                                     required property var modelData
-                                    width: ListView.view.width
-                                    height: 76
+                                    width: 240
+                                    height: 260
                                     radius: 10
                                     color: bridge.surfaceFillColor
                                     border.width: 1
                                     border.color: bridge.frameColor
 
-                                    RowLayout {
+                                    ColumnLayout {
                                         anchors.fill: parent
-                                        anchors.margins: 9
-                                        spacing: 10
-                                        Image {
-                                            Layout.preferredWidth: 44
-                                            Layout.preferredHeight: 58
-                                            source: modelData.coverSource || ""
-                                            fillMode: Image.PreserveAspectCrop
-                                            asynchronous: true
-                                        }
-                                        ColumnLayout {
+                                        anchors.margins: 8
+                                        spacing: 4
+
+                                        Rectangle {
                                             Layout.fillWidth: true
-                                            spacing: 3
+                                            Layout.preferredHeight: 126
+                                            radius: 8
+                                            clip: true
+                                            color: bridge.accentSoftColor
+
                                             Text {
-                                                text: bridge.selectedWork.seriesCount > 1
-                                                    ? ((modelData.workTitle || "Series") + " · " + modelData.title)
-                                                    : modelData.title
-                                                color: bridge.primaryColor
-                                                font.pixelSize: 12
-                                                font.weight: Font.Bold
-                                                Layout.fillWidth: true
-                                                elide: Text.ElideRight
-                                            }
-                                            Text {
-                                                text: modelData.description || modelData.airDate || ("Episode " + modelData.episodeNumber)
+                                                anchors.centerIn: parent
+                                                visible: episodeArtwork.status !== Image.Ready
+                                                text: "ARTWORK UNAVAILABLE"
                                                 color: bridge.mutedColor
-                                                font.pixelSize: 10
-                                                Layout.fillWidth: true
-                                                elide: Text.ElideRight
+                                                font.pixelSize: 9
+                                                font.weight: Font.Bold
+                                            }
+                                            Image {
+                                                id: episodeArtwork
+                                                anchors.fill: parent
+                                                source: modelData.coverSource || ""
+                                                fillMode: Image.PreserveAspectCrop
+                                                asynchronous: true
+                                                cache: true
                                             }
                                         }
-                                        CheckBox {
-                                            checked: modelData.watched
-                                            enabled: bridge.selectedWork.isInLibrary
-                                            onToggled: bridge.setEpisodeWatched(
-                                                modelData.workId || bridge.selectedWork.id,
-                                                modelData.episodeNumber,
-                                                checked
-                                            )
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: visible ? 12 : 0
+                                            visible: bridge.selectedWork.seriesCount > 1
+                                            text: modelData.workTitle || "Series"
+                                            color: bridge.mutedColor
+                                            font.pixelSize: 9
+                                            font.weight: Font.Bold
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 36
+                                            text: modelData.title || ("Episode " + modelData.episodeNumber)
+                                            color: bridge.primaryColor
+                                            font.pixelSize: 13
+                                            font.weight: Font.Bold
+                                            wrapMode: Text.WordWrap
+                                            maximumLineCount: 2
+                                            elide: Text.ElideRight
+                                            verticalAlignment: Text.AlignTop
+                                        }
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: visible ? 28 : 0
+                                            visible: String(modelData.description || "").trim().length > 0
+                                            text: modelData.description || ""
+                                            color: bridge.secondaryColor
+                                            font.pixelSize: 10
+                                            wrapMode: Text.WordWrap
+                                            maximumLineCount: 2
+                                            elide: Text.ElideRight
+                                            verticalAlignment: Text.AlignTop
+                                        }
+
+                                        Item { Layout.fillHeight: true }
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 18
+                                            spacing: 4
+                                            Text {
+                                                text: "EP " + ((modelData.episodeNumber || 0) < 10 ? "0" : "")
+                                                    + (modelData.episodeNumber || 0)
+                                                color: bridge.accentColor
+                                                font.pixelSize: 9
+                                                font.weight: Font.Bold
+                                            }
+                                            Text {
+                                                Layout.fillWidth: true
+                                                visible: String(modelData.airDate || "").length > 0
+                                                text: modelData.airDate || ""
+                                                color: bridge.mutedColor
+                                                font.pixelSize: 9
+                                                elide: Text.ElideRight
+                                            }
+                                            CheckBox {
+                                                text: "Watched"
+                                                checked: modelData.watched
+                                                enabled: bridge.selectedWork.isInLibrary
+                                                font.pixelSize: 10
+                                                onToggled: bridge.setEpisodeWatched(
+                                                    modelData.workId || bridge.selectedWork.id,
+                                                    modelData.episodeNumber,
+                                                    checked
+                                                )
+                                            }
                                         }
                                     }
                                 }
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                visible: bridge.selectedWork.mediaType === "ANIME"
+                                    && bridge.episodeItems.length === 0
+                                    && !(bridge.selectedWork.detailsLoading || false)
+                                text: "No saved episode data yet. Refresh details after the episode catalog is available."
+                                color: bridge.mutedColor
+                                font.pixelSize: 11
+                                wrapMode: Text.WordWrap
                             }
                         }
                     }

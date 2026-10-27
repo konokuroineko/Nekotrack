@@ -97,6 +97,17 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
         self.assertIn("QTimer.singleShot(0, self._start_qml_library_relation_sync)", navigation_handler)
         self.assertIn("page._start_relation_sync()", main_source)
 
+
+    def test_qml_episode_tiles_keep_original_card_geometry_and_content(self):
+        source = (ROOT / "ui" / "qml" / "ApplicationShell.qml").read_text(encoding="utf-8")
+        self.assertIn("cellWidth: 252", source)
+        self.assertIn("cellHeight: 274", source)
+        self.assertIn("width: 240\n                                    height: 260", source)
+        self.assertIn("Layout.preferredHeight: 126", source)
+        self.assertIn("modelData.description ||", source)
+        self.assertIn('"EP " + ((modelData.episodeNumber || 0) < 10 ? "0" : "")', source)
+        self.assertIn('text: "Watched"', source)
+
     def test_production_application_shell_loads_with_the_application_bridge(self):
         source = (ROOT / "ui" / "qml" / "ApplicationShell.qml").read_text(encoding="utf-8")
         self.assertIn('text: "Edit bundle"', source)
