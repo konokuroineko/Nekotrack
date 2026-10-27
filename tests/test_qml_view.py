@@ -92,7 +92,9 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
         self.assertIn("relation_sync_completed = Signal()", library_source)
         self.assertIn('getattr(self.window(), "_qml_shell_enabled", False)', library_source)
         self.assertIn("self.library_page.relation_sync_completed.connect(self._refresh_library_after_bundle_change)", main_source)
-        self.assertIn("QTimer.singleShot(0, self._start_qml_library_relation_sync)", main_source)
+        navigation_handler = main_source[main_source.index("def _qml_navigation_requested"):main_source.index("def _qml_open_library_work")]
+        self.assertIn('if page_name == "collections":', navigation_handler)
+        self.assertIn("QTimer.singleShot(0, self._start_qml_library_relation_sync)", navigation_handler)
         self.assertIn("page._start_relation_sync()", main_source)
 
     def test_production_application_shell_loads_with_the_application_bridge(self):

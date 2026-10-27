@@ -971,6 +971,10 @@ class MainWindow(QMainWindow):
             self.navigation.show(page_name, record_history=False)
         finally:
             self._qml_navigation_sync = False
+        if page_name == "collections":
+            # _page_changed deliberately ignores synchronized QML navigation,
+            # so explicitly start relation sync after Library becomes visible.
+            QTimer.singleShot(0, self._start_qml_library_relation_sync)
 
     def _qml_open_library_work(self, work_id):
         if not self._qml_shell_enabled or self.qml_bridge is None:
@@ -1130,10 +1134,6 @@ class MainWindow(QMainWindow):
                 return
             self.qml_bridge.setCurrentPage(page_name)
             self.qml_bridge.refreshVisiblePage()
-            if page_name == "collections":
-                # Relation sync is needed for the existing automatic-bundle
-                # backfill, but only start it once Library is visible.
-                QTimer.singleShot(0, self._start_qml_library_relation_sync)
             self._last_navigation_page = page_name
             return
         if page_name == "settings":
