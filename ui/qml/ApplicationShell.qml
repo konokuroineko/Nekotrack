@@ -1991,6 +1991,12 @@ Item {
                                             text: "Mark all watched"
                                             onClicked: bridge.markAllEpisodesWatched(bridge.selectedWork.id, true)
                                         }
+                                        Button {
+                                            visible: bridge.selectedWork.isInLibrary
+                                                && bridge.selectedWork.mediaType === "ANIME"
+                                            text: "Clear progress"
+                                            onClicked: bridge.markAllEpisodesWatched(bridge.selectedWork.id, false)
+                                        }
                                         Item { Layout.fillWidth: true }
                                     }
                                 }
