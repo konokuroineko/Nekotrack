@@ -15,6 +15,6 @@ If QML cannot load, the Library route falls back to the existing Qt Widgets scre
 
 ## Validation and remaining parity gate
 
-Model tests cover member order, bundle aggregates, cached cover source choice, invalid rows, filters, signed work IDs, and refresh failures. CI must be checked after each push; queued checks are not passes.
+Model tests cover member order, bundle aggregates, cached cover source choice, invalid rows, filters, signed work IDs, and refresh failures. A headless smoke test loads the production QML file against the Python bridge to catch QML import or syntax errors. CI must be checked after each push; queued checks are not passes.
 
 Before the migration can be considered complete, compare the QML Library against the original screen using a populated real database and verify poster/card sizing across window widths, dark/light themes and accent colors, filter counts, cover caching, bundle edits, deletion, empty state, and opening each media type. Do not merge this PR until these checks pass. Later screens are separate follow-up work on the same Phase B branch/PR.
