@@ -4,7 +4,7 @@
 
 The existing Library route now hosts a QML poster grid inside the current Qt Widgets application shell. The application continues to use the existing SQLite/API/Python grouping logic; QML is the presentation layer. Clicking a card returns the original Python group to the existing Work Details page. The view includes status filters, theme-aware layout, bundle labels, selected/custom cover behavior, cover caching, bundle appearance editing, and deletion confirmation via existing Python page methods.
 
-If QML cannot load, the Library route falls back to the existing Qt Widgets screen and logs the error. The rest of the app—including Search, Home, Calendar, Settings, Work Details, and navigation—remains Qt Widgets for now.
+If QML cannot load, the Library route falls back to the existing Qt Widgets screen and logs the error. The rest of the app—including Search, Home, Calendar, Settings, Work Details, and navigation—remains Qt Widgets for now. In the normal startup path, QML engine creation is deferred until the user first opens Library so Home startup does not pay the QML initialization cost.
 
 ## Architecture
 

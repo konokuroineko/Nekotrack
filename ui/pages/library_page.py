@@ -258,7 +258,15 @@ class LibraryPage(QWidget):
         self._sync_thread = None; self._sync_worker = None; self._sync_done_ids = set(); self._sync_failed_ids = set()
         self._sync_threads = []; self._shutdown_event = threading.Event(); self._closing = False
         self._resize_timer = QTimer(self); self._resize_timer.setSingleShot(True); self._resize_timer.setInterval(140); self._resize_timer.timeout.connect(self._finish_resize)
-        self._resize_layout_was_enabled = True; self._last_target_positions = None; self._animations = []; self._build_shell()
+        self._resize_layout_was_enabled = True; self._last_target_positions = None; self._animations = []
+        self._defer_qml_load = bool(defer_initial_refresh)
+        if defer_initial_refresh:
+            self.qml_bridge = None
+            self.qml_widget = None
+            self._using_qml = False
+            self._build_legacy_shell()
+        else:
+            self._build_shell()
         if defer_initial_refresh:
             # MainWindow opens on Home. Do not query/group the entire Library or
             # create all its cards before the first frame; _page_changed refreshes
@@ -436,6 +444,9 @@ class LibraryPage(QWidget):
         return super().eventFilter(watched, event)
 
     def refresh(self, retry_failed=True):
+        if self._defer_qml_load:
+            self._defer_qml_load = False
+            self._build_shell()
         log_event("library.refresh.started", retry_failed=bool(retry_failed))
         if retry_failed:
             self._sync_failed_ids.clear()
