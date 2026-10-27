@@ -1886,15 +1886,9 @@ Item {
                                 Layout.fillWidth: true
                                 Button { text: "← Back"; onClicked: bridge.goBack() }
                                 Button {
-                                    visible: (bridge.selectedWork.isInLibrary || false)
-                                        && (bridge.selectedWork.seriesCount || 1) > 1
-                                    text: "Edit bundle"
-                                    onClicked: bridge.requestEditBundle(bridge.selectedWork.id)
-                                }
-                                Button {
-                                    visible: bridge.selectedWork.isInLibrary || false
-                                    text: "Delete from Library"
-                                    onClicked: bridge.requestDeleteWork(bridge.selectedWork.id)
+                                    visible: (bridge.selectedWork.id || 0) !== 0
+                                    text: "Manage"
+                                    onClicked: detailManagementMenu.open()
                                 }
                                 Item { Layout.fillWidth: true }
                                 Button {
@@ -2508,6 +2502,45 @@ Item {
                         }
                     }
                 }
+
+                    Menu {
+                        id: detailManagementMenu
+                        title: "Manage title"
+                        MenuItem {
+                            text: "Auto-bundle related works"
+                            enabled: bridge.selectedWork.isInLibrary || false
+                            onTriggered: bridge.requestDetailAction("auto_bundle")
+                        }
+                        MenuItem {
+                            text: "Add to bundle…"
+                            enabled: bridge.selectedWork.isInLibrary || false
+                            onTriggered: bridge.requestDetailAction("add_to_bundle")
+                        }
+                        MenuItem {
+                            text: "Remove bundled item…"
+                            visible: (bridge.selectedWork.seriesCount || 1) > 1
+                            enabled: bridge.selectedWork.isInLibrary || false
+                            onTriggered: bridge.requestDetailAction("remove_from_bundle")
+                        }
+                        MenuItem {
+                            text: (bridge.selectedWork.seriesCount || 1) > 1
+                                ? "Edit bundle appearance…" : "Customize title and cover…"
+                            visible: (bridge.selectedWork.id || 0) !== 0
+                            onTriggered: {
+                                if ((bridge.selectedWork.seriesCount || 1) > 1
+                                        && (bridge.selectedWork.isInLibrary || false))
+                                    bridge.requestEditBundle(bridge.selectedWork.id)
+                                else
+                                    bridge.requestDetailAction("customize_identity")
+                            }
+                        }
+                        MenuSeparator {}
+                        MenuItem {
+                            text: "Delete from Library"
+                            visible: bridge.selectedWork.isInLibrary || false
+                            onTriggered: bridge.requestDeleteWork(bridge.selectedWork.id)
+                        }
+                    }
 
                 // Entity profile
                 Item {

@@ -376,6 +376,7 @@ class ApplicationBridge(LibraryBridge):
     diagnosticsExportRequested = Signal()
     rollbackRequested = Signal()
     restartRequested = Signal()
+    detailActionRequested = Signal(str, int)
     bundleEditRequested = Signal(int)
     bundleDeleteRequested = Signal(int)
 
@@ -1384,6 +1385,19 @@ class ApplicationBridge(LibraryBridge):
         normalized = _optional_int(work_id)
         if normalized is not None and normalized != 0:
             self.deleteWorkRequested.emit(normalized)
+
+    @Slot(str)
+    def requestDetailAction(self, action):
+        allowed = {
+            "auto_bundle",
+            "add_to_bundle",
+            "remove_from_bundle",
+            "customize_identity",
+        }
+        normalized_action = str(action or "").strip().casefold()
+        work_id = _optional_int(self._selected_work.get("id"))
+        if normalized_action in allowed and work_id not in (None, 0):
+            self.detailActionRequested.emit(normalized_action, work_id)
 
     # ---- Search ----------------------------------------------------------------
 

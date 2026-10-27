@@ -921,6 +921,8 @@ class MainWindow(QMainWindow):
         bridge.openWorkRequested.connect(self._qml_open_library_work)
         bridge.editBundleRequested.connect(self._qml_edit_bundle)
         bridge.deleteWorkRequested.connect(self._qml_delete_work)
+        bridge.detailActionRequested.connect(self._qml_detail_action)
+        bridge.libraryChanged.connect(self._qml_library_refreshed)
         bridge.addToLibraryRequested.connect(lambda work: self.add_to_library(work, None))
         bridge.searchWorkRequested.connect(self.show_search_work)
         bridge.profileRequested.connect(self._qml_profile_requested)
@@ -991,6 +993,66 @@ class MainWindow(QMainWindow):
         if group is not None:
             self.library_page._delete_item(group)
             QTimer.singleShot(0, self.qml_bridge.refreshAll)
+
+    def _qml_detail_action(self, action, work_id):
+        """Reuse existing bundle/identity dialogs only when the user requests them."""
+        if not self._qml_shell_enabled or self.qml_bridge is None:
+            return
+        try:
+            normalized_id = int(work_id)
+        except (TypeError, ValueError, OverflowError):
+            return
+
+        bridge = self.qml_bridge
+        group = bridge._group_for_id(normalized_id)
+        raw_work = group or bridge._selected_work_raw
+        if not isinstance(raw_work, dict):
+            return
+
+        # Keep the old detail widget available as a dialog/action host only. Do
+        # not call set_work here: that would build a complete hidden detail page.
+        legacy_detail = self.work_detail_page
+        legacy_detail.work = raw_work
+        try:
+            if action == "auto_bundle":
+                legacy_detail._start_auto_bundle()
+                return
+            if action == "add_to_bundle":
+                legacy_detail._open_add_bundle_dialog()
+            elif action == "remove_from_bundle":
+                legacy_detail._open_remove_bundle_dialog()
+            elif action == "customize_identity":
+                legacy_detail._open_display_identity_editor()
+            else:
+                return
+        except Exception as error:
+            log_exception(
+                "qml_shell.detail_action_failed",
+                error,
+                action=action,
+                work_id=normalized_id,
+            )
+            return
+
+        # These dialogs can write bundle memberships or display overrides.
+        bridge.forceRefreshAll()
+        bridge.refreshSelectedWork()
+
+    def _qml_library_refreshed(self, _item_count=0):
+        bridge = self.qml_bridge
+        if not self._qml_shell_enabled or bridge is None:
+            return
+        if bridge.currentPage not in {"work_detail", "relation"}:
+            return
+
+        selected = bridge.selectedWork
+        selected_id = selected.get("id")
+        group = bridge._group_for_id(selected_id)
+        if group is not None:
+            bridge.setSelectedWork(group)
+        elif selected.get("isInLibrary"):
+            # Do not leave the detail route showing a record that was deleted.
+            bridge.navigate("collections")
 
     def _qml_profile_requested(self, profile):
         if not isinstance(profile, dict):
