@@ -2988,7 +2988,7 @@ Item {
                                         id: detailCharactersGrid
                                         Layout.fillWidth: true
                                         visible: (bridge.selectedWork.characters || []).length > 0
-                                        cellWidth: Math.max(330, width / 3)
+                                        cellWidth: Math.max(260, width / 4)
                                         cellHeight: 152
                                         Layout.preferredHeight: visible ? Math.ceil((bridge.selectedWork.characters || []).length
                                             / Math.max(1, Math.floor(width / cellWidth))) * cellHeight : 0
@@ -2996,59 +2996,149 @@ Item {
                                         interactive: false
                                         model: bridge.selectedWork.characters || []
                                         delegate: Rectangle {
+                                            id: detailCharacterCard
                                             required property var modelData
                                             width: detailCharactersGrid.cellWidth - 8
                                             height: 140
-                                            radius: 12
-                                            color: bridge.surfaceAltFillColor
-                                            border.width: 1
-                                            border.color: bridge.borderColor
+                                            radius: bridge.cornerRadius
+                                            color: characterCardMouseArea.containsMouse
+                                                ? bridge.cardHoverFillColor : bridge.cardFillColor
+                                            border.width: 2
+                                            border.color: bridge.frameColor
+
                                             MouseArea {
+                                                id: characterCardMouseArea
                                                 anchors.fill: parent
-                                                z: 0
+                                                hoverEnabled: true
                                                 cursorShape: Qt.PointingHandCursor
                                                 onClicked: bridge.requestOpenProfile("character", modelData.id, modelData.name)
                                             }
+
                                             RowLayout {
                                                 anchors.fill: parent
                                                 anchors.margins: 12
                                                 spacing: 8
-                                                Image {
+
+                                                Item {
                                                     Layout.preferredWidth: 88
                                                     Layout.preferredHeight: 116
-                                                    source: modelData.coverSource || ""
-                                                    fillMode: Image.PreserveAspectCrop
-                                                    asynchronous: true
-                                                    cache: true
+                                                    Image {
+                                                        id: characterPicture
+                                                        anchors.fill: parent
+                                                        source: modelData.coverSource || ""
+                                                        fillMode: Image.PreserveAspectCrop
+                                                        asynchronous: true
+                                                        cache: true
+                                                        layer.enabled: true
+                                                        layer.effect: MultiEffect {
+                                                            maskEnabled: true
+                                                            autoPaddingEnabled: false
+                                                            maskSource: Rectangle {
+                                                                width: 88
+                                                                height: 116
+                                                                radius: 14
+                                                                color: "white"
+                                                                layer.enabled: true
+                                                            }
+                                                        }
+                                                    }
+                                                    Rectangle {
+                                                        anchors.fill: parent
+                                                        radius: 14
+                                                        color: "transparent"
+                                                        border.width: characterPicture.status === Image.Ready ? 3 : 0
+                                                        border.color: bridge.frameColor
+                                                    }
                                                 }
+
                                                 ColumnLayout {
                                                     Layout.fillWidth: true
-                                                    spacing: 6
+                                                    Layout.fillHeight: true
+                                                    Layout.minimumWidth: 0
+                                                    spacing: 0
                                                     Text {
                                                         Layout.fillWidth: true
-                                                        text: modelData.role || ""
+                                                        visible: String(modelData.role || "").length > 0
+                                                        text: String(modelData.role || "")
+                                                            .replace(/_/g, " ")
+                                                            .toLowerCase()
+                                                            .replace(/\b\w/g, function(c) { return c.toUpperCase() })
                                                         color: bridge.primaryColor
-                                                        font.pixelSize: 12
-                                                        font.weight: Font.DemiBold
+                                                        font.pixelSize: 13
+                                                        font.weight: 700
                                                         wrapMode: Text.WordWrap
                                                         horizontalAlignment: Text.AlignHCenter
+                                                        verticalAlignment: Text.AlignTop
                                                     }
-                                                    Text {
+                                                    RowLayout {
                                                         Layout.fillWidth: true
-                                                        text: modelData.name || "Unknown character"
-                                                        color: bridge.primaryColor
-                                                        font.pixelSize: 12
-                                                        font.weight: Font.DemiBold
-                                                        wrapMode: Text.WordWrap
-                                                        maximumLineCount: 3
-                                                        elide: Text.ElideRight
+                                                        Layout.fillHeight: true
+                                                        spacing: 18
+                                                        Text {
+                                                            Layout.fillWidth: true
+                                                            text: modelData.name || "Unknown character"
+                                                            color: bridge.primaryColor
+                                                            font.pixelSize: 13
+                                                            font.weight: 600
+                                                            wrapMode: Text.WordWrap
+                                                            verticalAlignment: Text.AlignVCenter
+                                                        }
+                                                        Text {
+                                                            id: characterVoiceActorName
+                                                            Layout.fillWidth: true
+                                                            visible: String(modelData.voiceActorName || "").length > 0
+                                                            text: modelData.voiceActorName || ""
+                                                            color: bridge.primaryColor
+                                                            font.pixelSize: 13
+                                                            font.weight: 600
+                                                            wrapMode: Text.WordWrap
+                                                            horizontalAlignment: Text.AlignRight
+                                                            verticalAlignment: Text.AlignVCenter
+                                                            MouseArea {
+                                                                anchors.fill: parent
+                                                                enabled: (modelData.voiceActorId || 0) > 0
+                                                                cursorShape: Qt.PointingHandCursor
+                                                                onClicked: bridge.requestOpenProfile(
+                                                                    "voice_actor",
+                                                                    modelData.voiceActorId,
+                                                                    modelData.voiceActorName
+                                                                )
+                                                            }
+                                                        }
                                                     }
-                                                    Item { Layout.fillHeight: true }
-                                                    Button {
-                                                        visible: (modelData.voiceActorId || 0) > 0
-                                                        text: modelData.voiceActorName || "Voice actor"
-                                                        font.pixelSize: 10
-                                                        onClicked: bridge.requestOpenProfile("voice_actor", modelData.voiceActorId, modelData.voiceActorName)
+                                                }
+
+                                                Item {
+                                                    Layout.preferredWidth: 88
+                                                    Layout.preferredHeight: 116
+                                                    Image {
+                                                        id: voiceActorPicture
+                                                        anchors.fill: parent
+                                                        visible: String(modelData.voiceActorName || "").length > 0
+                                                        source: modelData.voiceActorCoverSource || ""
+                                                        fillMode: Image.PreserveAspectCrop
+                                                        asynchronous: true
+                                                        cache: true
+                                                        layer.enabled: true
+                                                        layer.effect: MultiEffect {
+                                                            maskEnabled: true
+                                                            autoPaddingEnabled: false
+                                                            maskSource: Rectangle {
+                                                                width: 88
+                                                                height: 116
+                                                                radius: 14
+                                                                color: "white"
+                                                                layer.enabled: true
+                                                            }
+                                                        }
+                                                    }
+                                                    Rectangle {
+                                                        anchors.fill: parent
+                                                        visible: String(modelData.voiceActorName || "").length > 0
+                                                        radius: 14
+                                                        color: "transparent"
+                                                        border.width: voiceActorPicture.status === Image.Ready ? 3 : 0
+                                                        border.color: bridge.frameColor
                                                     }
                                                 }
                                             }
@@ -3104,32 +3194,57 @@ Item {
                                         interactive: false
                                         model: bridge.selectedWork.staff || []
                                         delegate: Rectangle {
+                                            id: detailStaffCard
                                             required property var modelData
                                             width: 180
                                             height: 215
-                                            radius: 12
-                                            color: bridge.surfaceAltFillColor
-                                            border.width: 1
-                                            border.color: bridge.borderColor
+                                            radius: bridge.cornerRadius
+                                            color: staffCardMouseArea.containsMouse
+                                                ? bridge.cardHoverFillColor : bridge.cardFillColor
+                                            border.width: 2
+                                            border.color: bridge.frameColor
                                             ColumnLayout {
                                                 anchors.fill: parent
                                                 anchors.margins: 12
                                                 spacing: 8
-                                                Image {
+                                                Item {
                                                     Layout.preferredWidth: 120
                                                     Layout.preferredHeight: 120
                                                     Layout.alignment: Qt.AlignHCenter
-                                                    source: modelData.coverSource || ""
-                                                    fillMode: Image.PreserveAspectCrop
-                                                    asynchronous: true
-                                                    cache: true
+                                                    Image {
+                                                        id: staffPicture
+                                                        anchors.fill: parent
+                                                        source: modelData.coverSource || ""
+                                                        fillMode: Image.PreserveAspectCrop
+                                                        asynchronous: true
+                                                        cache: true
+                                                        layer.enabled: true
+                                                        layer.effect: MultiEffect {
+                                                            maskEnabled: true
+                                                            autoPaddingEnabled: false
+                                                            maskSource: Rectangle {
+                                                                width: 120
+                                                                height: 120
+                                                                radius: 14
+                                                                color: "white"
+                                                                layer.enabled: true
+                                                            }
+                                                        }
+                                                    }
+                                                    Rectangle {
+                                                        anchors.fill: parent
+                                                        radius: 14
+                                                        color: "transparent"
+                                                        border.width: staffPicture.status === Image.Ready ? 3 : 0
+                                                        border.color: bridge.frameColor
+                                                    }
                                                 }
                                                 Text {
                                                     Layout.fillWidth: true
                                                     text: modelData.name || "Unknown staff"
                                                     color: bridge.primaryColor
-                                                    font.pixelSize: 12
-                                                    font.weight: Font.DemiBold
+                                                    font.pixelSize: 13
+                                                    font.weight: 600
                                                     horizontalAlignment: Text.AlignHCenter
                                                     wrapMode: Text.WordWrap
                                                     maximumLineCount: 2
@@ -3139,7 +3254,7 @@ Item {
                                                     Layout.fillWidth: true
                                                     text: modelData.role || ""
                                                     color: bridge.mutedColor
-                                                    font.pixelSize: 10
+                                                    font.pixelSize: 11
                                                     horizontalAlignment: Text.AlignHCenter
                                                     wrapMode: Text.WordWrap
                                                     maximumLineCount: 3
@@ -3147,8 +3262,10 @@ Item {
                                                 }
                                             }
                                             MouseArea {
+                                                id: staffCardMouseArea
                                                 anchors.fill: parent
                                                 z: 1
+                                                hoverEnabled: true
                                                 cursorShape: Qt.PointingHandCursor
                                                 onClicked: bridge.requestOpenProfile("staff", modelData.id, modelData.name)
                                             }

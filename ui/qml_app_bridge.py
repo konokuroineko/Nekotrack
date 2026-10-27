@@ -570,6 +570,14 @@ class ApplicationBridge(LibraryBridge):
         return surface_qml_color("surface_alt")
 
     @Property(str, notify=applicationThemeChanged)
+    def cardFillColor(self):
+        return surface_qml_color("card")
+
+    @Property(str, notify=applicationThemeChanged)
+    def cardHoverFillColor(self):
+        return surface_qml_color("card_hover")
+
+    @Property(str, notify=applicationThemeChanged)
     def borderColor(self):
         return COLORS.get("border", "#51475f")
 
