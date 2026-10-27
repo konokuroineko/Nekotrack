@@ -35,7 +35,6 @@ from ui.qml_bridge import (
     QmlApplicationBridge as LibraryBridge,
     _normalize_group,
     _optional_int,
-    _remote_image_url,
 )
 from ui.theme import COLORS, THEME_PRESETS, refresh_theme, surface_rgba
 
