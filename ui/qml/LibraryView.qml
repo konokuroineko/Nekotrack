@@ -144,7 +144,18 @@ Item {
             Text {
                 anchors.centerIn: parent
                 width: Math.min(parent.width - 40, 420)
-                visible: bridge.visibleCount === 0
+                visible: bridge.libraryLoading
+                text: "Loading your Library…"
+                color: bridge.mutedColor
+                font.pixelSize: 15
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+            }
+
+            Text {
+                anchors.centerIn: parent
+                width: Math.min(parent.width - 40, 420)
+                visible: bridge.visibleCount === 0 && !bridge.libraryLoading
                 text: "Nothing here yet\n\nAdd titles from Search to build your collection."
                 color: bridge.mutedColor
                 font.pixelSize: 15

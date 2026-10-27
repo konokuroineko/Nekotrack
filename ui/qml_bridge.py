@@ -413,6 +413,7 @@ class QmlApplicationBridge(QObject):
     editBundleRequested = Signal(int)
     deleteWorkRequested = Signal(int)
     libraryChanged = Signal(int)
+    loadingChanged = Signal()
     filterChanged = Signal(str)
     errorOccurred = Signal(str)
     themeChanged = Signal()
@@ -421,6 +422,7 @@ class QmlApplicationBridge(QObject):
         super().__init__(parent)
         self._library_model = LibraryListModel(library_loader=library_loader, parent=self)
         self._library_model.rowsReloaded.connect(self.libraryChanged)
+        self._library_loading = False
         self._cover_network = None
         self._cover_urls_inflight = set()
         self._cover_waiters = {}
@@ -437,6 +439,10 @@ class QmlApplicationBridge(QObject):
     @Property(int, notify=libraryChanged)
     def visibleCount(self):
         return self._library_model.rowCount()
+
+    @Property(bool, notify=loadingChanged)
+    def libraryLoading(self):
+        return bool(self._library_loading)
 
     @Property(str, notify=filterChanged)
     def libraryFilter(self):

@@ -1034,10 +1034,9 @@ class MainWindow(QMainWindow):
             return
         home = getattr(self, "home_page", None)
         if self._qml_shell_enabled and self.qml_bridge is not None:
-            # The shell root only selects the Home route; populate its local
-            # Library snapshot and start the existing recommendation worker
-            # after the first frame, matching the old startup deferral.
-            QTimer.singleShot(0, self.qml_bridge.refreshHome)
+            # Recommendations start only after the first frame; the local
+            # Library snapshot is already loading off-thread.
+            self.qml_bridge.markStartupReady()
         elif home is not None:
             home.start_initial_recommendations_load()
         if not self._startup_preload_scheduled:

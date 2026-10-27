@@ -328,6 +328,7 @@ class ApplicationBridge(LibraryBridge):
         self._raw_groups = []
         self._groups_loaded = False
         self._groups_loading = False
+        self._startup_ready = False
         self._groups_refresh_requested = False
         self._groups_generation = 0
         self._groups_workers = {}
@@ -649,6 +650,8 @@ class ApplicationBridge(LibraryBridge):
         self._groups_generation += 1
         generation = self._groups_generation
         self._groups_loading = True
+        self._library_loading = True
+        self.loadingChanged.emit()
         self.homeChanged.emit()
         worker = _LibrarySnapshotWorker(generation)
         worker.signals.finished.connect(self._library_snapshot_ready)
@@ -662,6 +665,9 @@ class ApplicationBridge(LibraryBridge):
             return
         self._groups_loading = False
         if error:
+            self._groups_refresh_requested = False
+            self._library_loading = False
+            self.loadingChanged.emit()
             self._groups_loaded = False
             log_exception(
                 "qml_bridge.library_snapshot_failed",
@@ -670,7 +676,14 @@ class ApplicationBridge(LibraryBridge):
             self.errorOccurred.emit("NekoTrack could not load the Library. Check the diagnostic log.")
             self.homeChanged.emit()
             return
+        if self._groups_refresh_requested:
+            self._groups_refresh_requested = False
+            # Do not flash the loading state off while replacing a stale snapshot.
+            QTimer.singleShot(0, lambda: self._load_groups(force=True))
+            return
 
+        self._library_loading = False
+        self.loadingChanged.emit()
         self._groups_loaded = True
         self._raw_groups = [
             _plain(group)
@@ -684,12 +697,17 @@ class ApplicationBridge(LibraryBridge):
             self._groups_refresh_requested = False
             QTimer.singleShot(0, lambda: self._load_groups(force=True))
             return
-        if self._current_page == "home":
+        if self._current_page == "home" and self._startup_ready:
             self.refreshRecommendations()
 
     @Slot()
     def refreshAll(self):
-        self._load_groups(force=True)
+        self._load_groups(force=self._groups_loaded)
+
+    @Slot()
+    def markStartupReady(self):
+        self._startup_ready = True
+        self.refreshHome()
 
     @Slot()
     def refreshHome(self):
@@ -699,7 +717,7 @@ class ApplicationBridge(LibraryBridge):
         self._library_model.refresh()
         self._refresh_home_items()
         # A screen revisit must not cancel an in-flight recommendations request.
-        if self._recommendation_thread is None:
+        if self._startup_ready and self._recommendation_thread is None:
             self.refreshRecommendations()
 
     def _refresh_home_items(self):
