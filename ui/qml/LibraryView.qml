@@ -96,7 +96,7 @@ Item {
                 boundsBehavior: Flickable.StopAtBounds
                 model: bridge.libraryModel
                 cellWidth: bridge.cardSize + bridge.cardGap + 8
-                cellHeight: Math.round(bridge.cardSize * 284 / 210 + 86 + bridge.cardGap)
+                cellHeight: Math.round(bridge.cardSize * 284 / 210 + Math.max(86, bridge.fontSize * 2.6 + 39) + bridge.cardGap)
                 reuseItems: true
 
                 delegate: Item {
@@ -126,7 +126,7 @@ Item {
                     Column {
                         anchors.fill: parent
                         anchors.margins: 2
-                        spacing: 8
+                        spacing: 0
 
                         Item {
                             width: bridge.cardSize
@@ -167,8 +167,13 @@ Item {
                             }
                         }
 
+                        Item {
+                            width: 1
+                            height: 8
+                        }
+
                         Text {
-                            width: parent.width
+                            width: bridge.cardSize - 4
                             height: bridge.fontSize * 2.6
                             text: card.title
                             color: bridge.primaryColor
@@ -179,8 +184,13 @@ Item {
                             elide: Text.ElideRight
                             verticalAlignment: Text.AlignTop
                         }
+                        Item {
+                            width: 1
+                            height: (card.seriesCount <= 1 && (card.format.length > 0 || card.startYear > 0)) ? 12 : 0
+                        }
+
                         Text {
-                            width: parent.width
+                            width: bridge.cardSize - 4
                             height: visible ? 13 : 0
                             visible: card.seriesCount > 1
                             text: card.bundleSummary.length > 0 ? card.bundleSummary : (card.seriesCount + " entries")
@@ -191,7 +201,7 @@ Item {
                             verticalAlignment: Text.AlignVCenter
                         }
                         Text {
-                            width: parent.width
+                            width: bridge.cardSize - 4
                             height: visible ? 14 : 0
                             visible: card.format.length > 0 || card.startYear > 0
                             text: {
