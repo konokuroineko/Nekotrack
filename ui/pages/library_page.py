@@ -2,7 +2,9 @@ import shutil
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, Signal, QEvent, QTimer, QPropertyAnimation, QEasingCurve, QThread
+from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, Signal, QEvent, QTimer, QPropertyAnimation, QEasingCurve, QThread, QUrl
+from PySide6.QtGui import QColor
+from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLayout
 
 from api import get_media_relations_batch
@@ -18,6 +20,7 @@ from database import (
     save_bundle_override,
 )
 from series import get_library_series, group_media_results
+from ui.qml_bridge import QmlApplicationBridge
 from ui.preferences import get
 from ui.theme import COLORS, surface_rgba
 from ui.widgets.work_card import WorkCard
@@ -266,7 +269,64 @@ class LibraryPage(QWidget):
             self.refresh()
 
     def _build_shell(self):
-        root = QVBoxLayout(self); root.setContentsMargins(38, 32, 38, 30); root.setSpacing(18)
+        self.qml_bridge = None
+        self.qml_widget = None
+        self._using_qml = False
+        bridge = None
+        quick = None
+        try:
+            bridge = QmlApplicationBridge(
+                parent=self,
+                library_loader=lambda: self.all_anime,
+                auto_refresh=False,
+            )
+            quick = QQuickWidget(self)
+            quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+            quick.setClearColor(QColor(0, 0, 0, 0))
+            quick.rootContext().setContextProperty("qmlBridge", bridge)
+            qml_path = Path(__file__).resolve().parents[1] / "qml" / "LibraryView.qml"
+            quick.setSource(QUrl.fromLocalFile(str(qml_path)))
+            if quick.status() == QQuickWidget.Status.Error:
+                detail = "; ".join(error.toString() for error in quick.errors())
+                raise RuntimeError(detail or "The QML Library view did not load.")
+
+            root = QVBoxLayout(self)
+            root.setContentsMargins(0, 0, 0, 0)
+            root.setSpacing(0)
+            root.addWidget(quick)
+            self.qml_bridge = bridge
+            self.qml_widget = quick
+            self._using_qml = True
+            bridge.openWorkRequested.connect(self._open_qml_work)
+            bridge.editBundleRequested.connect(self._edit_qml_bundle)
+            bridge.deleteWorkRequested.connect(self._delete_qml_work)
+            bridge.filterChanged.connect(self._on_qml_filter_changed)
+            quick.statusChanged.connect(self._qml_status_changed)
+            log_event("qml_bridge.library_view_loaded")
+            return
+        except Exception as error:
+            if quick is not None:
+                quick.deleteLater()
+            if bridge is not None:
+                bridge.deleteLater()
+            log_exception("qml_bridge.library_view_unavailable", error)
+
+        self._using_qml = False
+        self._build_legacy_shell()
+
+    def _build_legacy_shell(self):
+        root = self.layout()
+        if root is None:
+            root = QVBoxLayout(self)
+        else:
+            while root.count():
+                item = root.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.setParent(None)
+                    widget.deleteLater()
+        root.setContentsMargins(38, 32, 38, 30)
+        root.setSpacing(18)
         header = QHBoxLayout(); title_box = QVBoxLayout(); title_box.setSpacing(2)
         title = QLabel("Library")
         self.title_label = title
@@ -295,6 +355,64 @@ class LibraryPage(QWidget):
         self.container = QWidget(); self.container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum); self.container.installEventFilter(self); self.flow_layout = FlowLayout(self.container)
         self.scroll_area.setWidget(self.container); root.addWidget(self.scroll_area, 1); self._set_filter("All")
 
+    def _group_for_qml_work(self, work_id):
+        target = _optional_int(work_id)
+        if target is None:
+            return None
+        for group in self.all_anime:
+            if _optional_int(group.get("id")) == target:
+                return group
+        for group in self.all_anime:
+            for member in group.get("_series_members") or []:
+                if _optional_int(member.get("id")) == target:
+                    return group
+        return None
+
+    def _open_qml_work(self, work_id):
+        group = self._group_for_qml_work(work_id)
+        if group is not None:
+            self.work_selected.emit(group)
+
+    def _edit_qml_bundle(self, work_id):
+        group = self._group_for_qml_work(work_id)
+        if group is not None and len(group.get("_series_members") or []) > 1:
+            self._edit_bundle(group)
+
+    def _delete_qml_work(self, work_id):
+        group = self._group_for_qml_work(work_id)
+        if group is not None:
+            self._delete_item(group)
+
+    def _on_qml_filter_changed(self, value):
+        self.current_filter = value
+
+    def _qml_status_changed(self, status):
+        if status != QQuickWidget.Status.Error or not self._using_qml:
+            return
+        errors = []
+        if self.qml_widget is not None:
+            errors = [error.toString() for error in self.qml_widget.errors()]
+        log_event("qml_bridge.library_view_failed_after_load", errors=errors[:20])
+        previous_filter = self.current_filter
+        self._using_qml = False
+        layout = self.layout()
+        if layout is not None and self.qml_widget is not None:
+            layout.removeWidget(self.qml_widget)
+            self.qml_widget.setParent(None)
+            self.qml_widget.deleteLater()
+        if self.qml_bridge is not None:
+            self.qml_bridge.deleteLater()
+        self.qml_widget = None
+        self.qml_bridge = None
+        self._build_legacy_shell()
+        self._set_filter(
+            previous_filter
+            if previous_filter in ("All", "Watching", "Completed", "Planned")
+            else "All"
+        )
+        self._apply_filter()
+        self._populate()
+
     def eventFilter(self, watched, event):
         if watched is self.container and event.type() == QEvent.Resize and self._cards:
             if self.flow_layout.isEnabled(): self._resize_layout_was_enabled = True; self.flow_layout.setEnabled(False)
@@ -313,7 +431,8 @@ class LibraryPage(QWidget):
         log_event("library.refresh.started", retry_failed=bool(retry_failed))
         if retry_failed:
             self._sync_failed_ids.clear()
-        self._cancel_resize_animation()
+        if not self._using_qml:
+            self._cancel_resize_animation()
         self.all_anime = get_library_series()
         group_summary = []
         library_member_count = 0
@@ -347,8 +466,11 @@ class LibraryPage(QWidget):
             member_count=library_member_count,
             groups=group_summary,
         )
-        self._apply_filter()
-        self._populate()
+        if self._using_qml and self.qml_bridge is not None:
+            self.qml_bridge.refreshLibrary()
+        else:
+            self._apply_filter()
+            self._populate()
         self._start_relation_sync()
         log_event("library.refresh.completed", visible_group_count=len(self.all_anime))
 
@@ -700,6 +822,9 @@ class LibraryPage(QWidget):
         for name,button in self.filter_buttons.items(): button.setChecked(name==value); button.setStyleSheet(self._filter_style(name==value))
         self._cancel_resize_animation(); self._apply_filter(); self._populate()
     def refresh_theme(self):
+        if self._using_qml and self.qml_bridge is not None:
+            self.qml_bridge.refreshTheme()
+            return
         if hasattr(self, "filter_controls"):
             self.filter_controls.setStyleSheet(
                 f"QFrame#libraryFilters{{background:{surface_rgba('surface')};border:none;border-radius:14px;}}"
