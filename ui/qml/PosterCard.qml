@@ -4,8 +4,8 @@ import QtQuick.Effects
 
 Item {
     id: root
-
     property var bridge
+    property var impressionViewport: null
     property int workId: 0
     property string title: "Untitled"
     property string fullTitle: title
@@ -16,27 +16,38 @@ Item {
     property int startYear: 0
     property int seriesCount: 1
     property string bundleSummary: ""
+    property string recommendationReason: ""
     property string status: ""
     property int progressEpisodes: 0
     property int episodeTotal: 0
     property bool isInLibrary: false
     property bool showAddButton: false
     property bool showMenu: false
+    property bool showRecommendationFeedback: false
     property bool isHovered: false
 
     signal activated(int workId)
     signal addRequested(int workId)
     signal editBundleRequested(int workId)
     signal deleteRequested(int workId)
+    signal recommendationFeedbackRequested(int workId, string feedback)
 
     readonly property int posterWidth: bridge.cardSize
     readonly property int posterHeight: bridge.coverHeight
     readonly property int titleHeight: bridge.titleHeight
     readonly property int seriesHeight: bridge.seriesHeight
     readonly property int metaHeight: bridge.metadataHeight
+    readonly property bool hasMetadata: format.length > 0 || startYear > 0
+    readonly property int reasonHeight: recommendationReason.length > 0
+        ? Math.min(48, reasonLabel.implicitHeight) : 0
     readonly property int contentHeight: posterHeight + 8 + titleHeight
-        + ((seriesCount > 1 || format.length > 0 || startYear > 0) ? seriesHeight : 0)
-        + ((format.length > 0 || startYear > 0) ? metaHeight : 0) + 4
+        + (recommendationReason.length > 0
+            ? 5 + reasonHeight + ((seriesCount > 1 || hasMetadata) ? 5 : 0)
+            : ((seriesCount > 1 || hasMetadata) ? seriesHeight : 0))
+        + (seriesCount > 1 ? seriesHeight : 0)
+        + (hasMetadata ? metaHeight : 0)
+        + ((recommendationReason.length > 0 && seriesCount > 1 && hasMetadata) ? 5 : 0)
+        + 4
     readonly property int fixedHeight: contentHeight + (showAddButton ? 38 : 0)
 
     width: posterWidth + 8
@@ -46,7 +57,7 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        height: root.contentHeight
+        height: root.fixedHeight
         radius: bridge.cornerRadius + 2
         color: root.isHovered && bridge.hoverHighlight ? bridge.surfaceHoverColor : "transparent"
         border.width: 2
@@ -124,14 +135,14 @@ Item {
         Item { width: 1; height: 8 }
 
         Text {
-            width: root.posterWidth
+            width: root.posterWidth - (root.showRecommendationFeedback ? 30 : 0)
             height: root.titleHeight
             text: root.title
             color: bridge.primaryColor
             font.pixelSize: bridge.fontSize
             font.weight: Font.Bold
             wrapMode: Text.NoWrap
-            elide: Text.ElideNone
+            elide: Text.ElideRight
             verticalAlignment: Text.AlignTop
             ToolTip.visible: root.isHovered
             ToolTip.text: root.fullTitle
@@ -139,9 +150,28 @@ Item {
 
         Item {
             width: 1
-            height: (root.seriesCount <= 1
-                     && (root.format.length > 0 || root.startYear > 0))
-                     ? root.seriesHeight : 0
+            height: root.recommendationReason.length > 0 ? 5
+                : ((root.seriesCount <= 1 && root.hasMetadata) ? root.seriesHeight : 0)
+        }
+
+        Text {
+            id: reasonLabel
+            width: root.posterWidth
+            height: root.reasonHeight
+            visible: root.recommendationReason.length > 0
+            text: root.recommendationReason
+            color: bridge.secondaryColor
+            font.pixelSize: Math.max(9, bridge.fontSize - 2)
+            wrapMode: Text.WordWrap
+            maximumLineCount: 3
+            elide: Text.ElideRight
+            clip: true
+        }
+
+        Item {
+            width: 1
+            height: (root.recommendationReason.length > 0
+                     && (root.seriesCount > 1 || root.hasMetadata)) ? 5 : 0
         }
 
         Text {
@@ -156,10 +186,16 @@ Item {
             verticalAlignment: Text.AlignVCenter
         }
 
+        Item {
+            width: 1
+            height: (root.recommendationReason.length > 0
+                     && root.seriesCount > 1 && root.hasMetadata) ? 5 : 0
+        }
+
         Text {
             width: root.posterWidth
             height: visible ? root.metaHeight : 0
-            visible: root.format.length > 0 || root.startYear > 0
+            visible: root.hasMetadata
             text: {
                 var parts = []
                 if (root.format.length > 0)
@@ -172,6 +208,22 @@ Item {
             font.pixelSize: 11
             elide: Text.ElideRight
         }
+    }
+
+    ToolButton {
+        visible: root.showRecommendationFeedback
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.rightMargin: 5
+        anchors.topMargin: root.posterHeight + 7
+        width: 27
+        height: root.titleHeight
+        z: 4
+        text: "⋮"
+        font.pixelSize: 18
+        ToolTip.visible: hovered
+        ToolTip.text: "Recommendation preferences"
+        onClicked: cardMenu.popup()
     }
 
     Button {
@@ -190,15 +242,53 @@ Item {
     Menu {
         id: cardMenu
         MenuItem {
+            text: "I want more like this"
+            visible: root.showRecommendationFeedback
+            onTriggered: root.recommendationFeedbackRequested(root.workId, "more_like_this")
+        }
+        MenuItem {
+            text: "I don't want anything like this"
+            visible: root.showRecommendationFeedback
+            onTriggered: root.recommendationFeedbackRequested(root.workId, "less_like_this")
+        }
+        MenuItem {
+            text: "Don't recommend this title"
+            visible: root.showRecommendationFeedback
+            onTriggered: root.recommendationFeedbackRequested(root.workId, "never_show")
+        }
+        MenuItem {
             text: "Edit bundle appearance"
-            visible: root.seriesCount > 1
+            visible: root.showMenu && root.isInLibrary && root.seriesCount > 1
             onTriggered: root.editBundleRequested(root.workId)
         }
         MenuItem {
             text: "Delete from Library"
+            visible: root.showMenu && root.isInLibrary
             onTriggered: root.deleteRequested(root.workId)
         }
     }
+
+    Timer {
+        id: impressionTimer
+        interval: 220
+        repeat: false
+        running: root.showRecommendationFeedback
+        onTriggered: {
+            var viewport = root.impressionViewport
+            if (viewport
+                    && root.y + root.height > viewport.contentY
+                    && root.y < viewport.contentY + viewport.height) {
+                bridge.recordRecommendationImpression(root.workId)
+            }
+        }
+    }
+
+    Connections {
+        target: root.impressionViewport
+        function onContentYChanged() { impressionTimer.restart() }
+    }
+
+    onWorkIdChanged: impressionTimer.restart()
 
     MouseArea {
         anchors.left: parent.left

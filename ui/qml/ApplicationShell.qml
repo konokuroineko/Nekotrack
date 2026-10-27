@@ -231,136 +231,258 @@ Item {
                 // Home
                 Item {
                     id: homePage
+                    clip: true
                     property int homeCardWidth: bridge.cardSize + bridge.cardGap + 8
 
-                    ColumnLayout {
+                    Flickable {
+                        id: homeScroll
                         anchors.fill: parent
-                        anchors.leftMargin: 38
-                        anchors.rightMargin: 38
-                        anchors.topMargin: 32
-                        anchors.bottomMargin: 30
-                        spacing: 24
+                        clip: true
+                        contentWidth: width
+                        contentHeight: homeColumn.implicitHeight + 64
+                        boundsBehavior: Flickable.StopAtBounds
 
                         ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 3
-                            Text {
-                                text: "Home"
-                                color: bridge.primaryColor
-                                font.pixelSize: 32
-                                font.weight: Font.Black
+                            id: homeColumn
+                            x: 38
+                            y: 32
+                            width: Math.max(1, homeScroll.width - 76)
+                            spacing: 22
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 3
+                                Text {
+                                    text: "Home"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 32
+                                    font.weight: Font.Black
+                                }
+                                Text {
+                                    text: "Your anime, manga and light novels in one place."
+                                    color: bridge.mutedColor
+                                    font.pixelSize: 12
+                                }
                             }
+
+                            GridLayout {
+                                Layout.fillWidth: true
+                                columns: 3
+                                columnSpacing: 12
+                                rowSpacing: 12
+
+                                Repeater {
+                                    model: [
+                                        {title: "In progress", value: bridge.homeStats.inProgress},
+                                        {title: "Completed", value: bridge.homeStats.completed},
+                                        {title: "Planned", value: bridge.homeStats.planned}
+                                    ]
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 82
+                                        radius: 13
+                                        color: bridge.surfaceFillColor
+                                        border.width: 1
+                                        border.color: bridge.frameColor
+                                        Column {
+                                            anchors.left: parent.left
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            anchors.leftMargin: 17
+                                            spacing: 4
+                                            Text {
+                                                text: modelData.value
+                                                color: bridge.primaryColor
+                                                font.pixelSize: 24
+                                                font.weight: Font.Black
+                                            }
+                                            Text {
+                                                text: modelData.title
+                                                color: bridge.mutedColor
+                                                font.pixelSize: 11
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Text {
+                                    text: "Continue watching & reading"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 20
+                                    font.weight: Font.Bold
+                                    Layout.fillWidth: true
+                                }
+                                Button {
+                                    text: "View Library"
+                                    onClicked: bridge.navigate("collections")
+                                }
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: bridge.coverHeight + bridge.titleHeight
+                                    + bridge.seriesHeight + bridge.metadataHeight + 48
+                                GridView {
+                                    id: continueGrid
+                                    anchors.fill: parent
+                                    clip: true
+                                    boundsBehavior: Flickable.StopAtBounds
+                                    cellWidth: homePage.homeCardWidth
+                                    cellHeight: bridge.coverHeight + bridge.titleHeight + bridge.seriesHeight + bridge.metadataHeight + 48
+                                    model: bridge.homeItems
+
+                                    delegate: Item {
+                                        required property var modelData
+                                        width: continueGrid.cellWidth - bridge.cardGap
+                                        height: continueGrid.cellHeight - 24
+                                        PosterCard {
+                                            anchors.left: parent.left
+                                            bridge: root.bridge
+                                            workId: modelData.workId
+                                            title: modelData.title
+                                            fullTitle: modelData.fullTitle || modelData.title
+                                            coverSource: modelData.coverSource || ""
+                                            coverCacheWorkId: modelData.coverCacheWorkId || modelData.workId
+                                            format: modelData.format || ""
+                                            startYear: modelData.startYear || 0
+                                            mediaType: modelData.mediaType || ""
+                                            seriesCount: modelData.seriesCount || 1
+                                            bundleSummary: modelData.bundleSummary || ""
+                                            status: modelData.status || ""
+                                            progressEpisodes: modelData.progressEpisodes || 0
+                                            episodeTotal: modelData.episodeTotal || 0
+                                            isInLibrary: true
+                                            showMenu: true
+                                            onActivated: function(workId) { bridge.requestOpenWork(workId) }
+                                            onEditBundleRequested: function(workId) { bridge.requestEditBundle(workId) }
+                                            onDeleteRequested: function(workId) { bridge.requestDeleteWork(workId) }
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    visible: bridge.homeItems.length === 0
+                                    width: Math.min(parent.width - 50, 420)
+                                    text: "Nothing in progress yet.\n\nAdd titles from Search to start tracking them."
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.WordWrap
+                                    color: bridge.mutedColor
+                                    font.pixelSize: 15
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Text {
+                                    text: "For your next watch or read"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 20
+                                    font.weight: Font.Bold
+                                    Layout.fillWidth: true
+                                }
+                                Button {
+                                    text: "Refresh"
+                                    enabled: !bridge.recommendationLoading
+                                    onClicked: bridge.refreshRecommendations()
+                                }
+                            }
+
                             Text {
-                                text: "Your anime, manga and light novels in one place."
+                                Layout.fillWidth: true
+                                visible: bridge.recommendationError.length > 0
+                                text: bridge.recommendationError
+                                color: bridge.dangerColor
+                                font.pixelSize: 12
+                                wrapMode: Text.WordWrap
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                visible: bridge.recommendationLoading && bridge.recommendationItems.length === 0
+                                text: "Finding recommendations from your saved titles…"
                                 color: bridge.mutedColor
                                 font.pixelSize: 12
                             }
-                        }
 
-                        GridLayout {
-                            Layout.fillWidth: true
-                            columns: 3
-                            columnSpacing: 12
-                            rowSpacing: 12
-
-                            Repeater {
-                                model: [
-                                    {title: "In progress", value: bridge.homeStats.inProgress},
-                                    {title: "Completed", value: bridge.homeStats.completed},
-                                    {title: "Planned", value: bridge.homeStats.planned}
-                                ]
-                                delegate: Rectangle {
-                                    required property var modelData
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 82
-                                    radius: 13
-                                    color: bridge.surfaceFillColor
-                                    border.width: 1
-                                    border.color: bridge.frameColor
-                                    Column {
-                                        anchors.left: parent.left
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        anchors.leftMargin: 17
-                                        spacing: 4
-                                        Text {
-                                            text: modelData.value
-                                            color: bridge.primaryColor
-                                            font.pixelSize: 24
-                                            font.weight: Font.Black
-                                        }
-                                        Text {
-                                            text: modelData.title
-                                            color: bridge.mutedColor
-                                            font.pixelSize: 11
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Text {
-                                text: "Continue watching & reading"
-                                color: bridge.primaryColor
-                                font.pixelSize: 20
-                                font.weight: Font.Bold
+                            Item {
                                 Layout.fillWidth: true
-                            }
-                            Button {
-                                text: "View Library"
-                                onClicked: bridge.navigate("collections")
-                            }
-                        }
+                                Layout.preferredHeight: bridge.coverHeight + bridge.titleHeight
+                                    + bridge.seriesHeight + bridge.metadataHeight + 126
 
-                        Item {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
+                                GridView {
+                                    id: recommendationGrid
+                                    anchors.fill: parent
+                                    clip: true
+                                    boundsBehavior: Flickable.StopAtBounds
+                                    cellWidth: homePage.homeCardWidth
+                                    cellHeight: bridge.coverHeight + bridge.titleHeight + bridge.seriesHeight
+                                        + bridge.metadataHeight + 116
+                                    model: bridge.recommendationItems
 
-                            GridView {
-                                id: continueGrid
-                                anchors.fill: parent
-                                clip: true
-                                boundsBehavior: Flickable.StopAtBounds
-                                cellWidth: homePage.homeCardWidth
-                                cellHeight: bridge.coverHeight + bridge.titleHeight + bridge.seriesHeight + bridge.metadataHeight + 48
-                                model: bridge.homeItems
-
-                                delegate: Item {
-                                    required property var modelData
-                                    width: continueGrid.cellWidth - bridge.cardGap
-                                    height: continueGrid.cellHeight - 24
-                                    PosterCard {
-                                        bridge: root.bridge
-                                        workId: modelData.workId
-                                        title: modelData.title
-                                        fullTitle: modelData.fullTitle || modelData.title
-                                        coverSource: modelData.coverSource || ""
-                                        coverCacheWorkId: modelData.coverCacheWorkId || modelData.workId
-                                        format: modelData.format || ""
-                                        startYear: modelData.startYear || 0
-                                        mediaType: modelData.mediaType || ""
-                                        seriesCount: modelData.seriesCount || 1
-                                        bundleSummary: modelData.bundleSummary || ""
-                                        status: modelData.status || ""
-                                        progressEpisodes: modelData.progressEpisodes || 0
-                                        episodeTotal: modelData.episodeTotal || 0
-                                        onActivated: function(workId) { bridge.requestOpenWork(workId) }
-                                        onEditBundleRequested: function(workId) { bridge.requestEditBundle(workId) }
-                                        onDeleteRequested: function(workId) { bridge.requestDeleteWork(workId) }
+                                    delegate: Item {
+                                        required property var modelData
+                                        width: recommendationGrid.cellWidth - bridge.cardGap
+                                        height: recommendationGrid.cellHeight - bridge.cardGap
+                                        PosterCard {
+                                            anchors.left: parent.left
+                                            bridge: root.bridge
+                                            impressionViewport: recommendationGrid
+                                            workId: modelData.workId || modelData.id
+                                            title: modelData.title || "Untitled"
+                                            fullTitle: modelData.fullTitle || modelData.title || "Untitled"
+                                            coverSource: modelData.coverSource || ""
+                                            coverCacheWorkId: modelData.coverCacheWorkId || modelData.workId || modelData.id
+                                            format: modelData.format || ""
+                                            startYear: modelData.startYear || 0
+                                            mediaType: modelData.mediaType || ""
+                                            seriesCount: modelData.seriesCount || 1
+                                            bundleSummary: modelData.bundleSummary || ""
+                                            recommendationReason: modelData.recommendationReason || ""
+                                            isInLibrary: modelData.isInLibrary || false
+                                            showAddButton: true
+                                            showMenu: true
+                                            showRecommendationFeedback: true
+                                            onActivated: function(workId) { bridge.requestOpenRecommendation(workId) }
+                                            onAddRequested: function(workId) { bridge.requestAddRecommendation(workId) }
+                                            onRecommendationFeedbackRequested: function(workId, feedback) {
+                                                bridge.requestRecommendationFeedback(workId, feedback)
+                                            }
+                                        }
                                     }
+                                }
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    visible: !bridge.recommendationLoading && bridge.recommendationItems.length === 0
+                                        && bridge.recommendationError.length === 0
+                                    width: Math.min(parent.width - 50, 420)
+                                    text: "No recommendations yet.\n\nRefresh to discover titles from your library and the wider catalog."
+                                    color: bridge.mutedColor
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.WordWrap
+                                    font.pixelSize: 14
                                 }
                             }
 
-                            Text {
-                                anchors.centerIn: parent
-                                visible: bridge.homeItems.length === 0
-                                width: Math.min(parent.width - 50, 420)
-                                text: "Nothing in progress yet.\n\nAdd titles from Search to start tracking them."
-                                horizontalAlignment: Text.AlignHCenter
-                                wrapMode: Text.WordWrap
-                                color: bridge.mutedColor
-                                font.pixelSize: 15
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Text {
+                                    text: bridge.recommendationLoading && bridge.recommendationItems.length > 0
+                                        ? "Finding more titles…" : (bridge.recommendationItems.length + " suggestions")
+                                    color: bridge.mutedColor
+                                    font.pixelSize: 11
+                                    Layout.fillWidth: true
+                                }
+                                Button {
+                                    text: "Load more"
+                                    visible: bridge.recommendationHasNext
+                                    enabled: bridge.recommendationHasNext && !bridge.recommendationLoading
+                                    onClicked: bridge.loadMoreRecommendations()
+                                }
                             }
                         }
                     }
