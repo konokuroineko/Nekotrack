@@ -1009,8 +1009,8 @@ class MainWindow(QMainWindow):
         if not isinstance(raw_work, dict):
             return
 
-        # Keep the old detail widget available as a dialog/action host only. Do
-        # not call set_work here: that would build a complete hidden detail page.
+        # Keep the old detail widget available as a dialog/action host only.
+        # Assign the selected record without eagerly building its hidden detail UI.
         legacy_detail = self.work_detail_page
         legacy_detail.work = raw_work
         try:

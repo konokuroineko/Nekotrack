@@ -2501,8 +2501,6 @@ Item {
                             }
                         }
                     }
-                }
-
                     Menu {
                         id: detailManagementMenu
                         title: "Manage title"
@@ -2541,6 +2539,7 @@ Item {
                             onTriggered: bridge.requestDeleteWork(bridge.selectedWork.id)
                         }
                     }
+                }
 
                 // Entity profile
                 Item {
