@@ -1111,6 +1111,7 @@ class MainWindow(QMainWindow):
         if self._qml_shell_enabled and self.qml_bridge is not None:
             self.qml_bridge.refreshTheme()
             self.qml_bridge.refreshVisiblePage()
+            return
 
         self.setStyleSheet(
             application_stylesheet()
