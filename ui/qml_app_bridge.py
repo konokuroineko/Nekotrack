@@ -355,6 +355,10 @@ class _ProfileWorker(QRunnable):
 class ApplicationBridge(LibraryBridge):
     """Single QML-facing facade; all persisted state and provider work stays in Python."""
 
+    # Qt/PySide requires a NOTIFY signal declared on the class adding each property.
+    # Preserve the base signal for base properties and forward it to this local one.
+    applicationThemeChanged = Signal()
+
     pageChanged = Signal()
     backgroundChanged = Signal()
     homeChanged = Signal()
@@ -445,6 +449,7 @@ class ApplicationBridge(LibraryBridge):
             library_loader=lambda: self._raw_groups,
             auto_refresh=False,
         )
+        self.themeChanged.connect(self.applicationThemeChanged.emit)
         if self._background_manager is not None:
             self._background_manager.background_changed.connect(self._background_changed)
             self._background_manager.images_changed.connect(self._background_changed)
@@ -457,15 +462,15 @@ class ApplicationBridge(LibraryBridge):
         self._theme_values["animationSpeed"] = int(get("animation_speed"))
         self._theme_values["uiScale"] = max(80, min(200, int(get("ui_scale"))))
 
-    @Property(bool, notify=LibraryBridge.themeChanged)
+    @Property(bool, notify=applicationThemeChanged)
     def resizeAnimation(self):
         return self._theme_values["resizeAnimation"]
 
-    @Property(int, notify=LibraryBridge.themeChanged)
+    @Property(int, notify=applicationThemeChanged)
     def animationSpeed(self):
         return self._theme_values["animationSpeed"]
 
-    @Property(int, notify=LibraryBridge.themeChanged)
+    @Property(int, notify=applicationThemeChanged)
     def uiScale(self):
         return self._theme_values["uiScale"]
 
@@ -495,11 +500,11 @@ class ApplicationBridge(LibraryBridge):
     def backgroundSource(self):
         return self._background_source
 
-    @Property(str, notify=LibraryBridge.themeChanged)
+    @Property(str, notify=applicationThemeChanged)
     def backgroundColor(self):
         return COLORS.get("background", "#17131e")
 
-    @Property(str, notify=LibraryBridge.themeChanged)
+    @Property(str, notify=applicationThemeChanged)
     def backgroundOverlayColor(self):
         if (
             self._background_manager is None
@@ -511,39 +516,39 @@ class ApplicationBridge(LibraryBridge):
         color.setAlpha(round(255 * self._background_manager.overlay_opacity / 100))
         return color.name(QColor.NameFormat.HexArgb)
 
-    @Property(str, notify=LibraryBridge.themeChanged)
+    @Property(str, notify=applicationThemeChanged)
     def sidebarFillColor(self):
         return surface_qml_color("sidebar")
 
-    @Property(str, notify=LibraryBridge.themeChanged)
+    @Property(str, notify=applicationThemeChanged)
     def surfaceFillColor(self):
         return surface_qml_color("surface")
 
-    @Property(str, notify=LibraryBridge.themeChanged)
+    @Property(str, notify=applicationThemeChanged)
     def surfaceAltFillColor(self):
         return surface_qml_color("surface_alt")
 
-    @Property(str, notify=LibraryBridge.themeChanged)
+    @Property(str, notify=applicationThemeChanged)
     def borderColor(self):
         return COLORS.get("border", "#51475f")
 
-    @Property(str, notify=LibraryBridge.themeChanged)
+    @Property(str, notify=applicationThemeChanged)
     def accentColor(self):
         return COLORS.get("accent", "#9271c5")
 
-    @Property(str, notify=LibraryBridge.themeChanged)
+    @Property(str, notify=applicationThemeChanged)
     def successColor(self):
         return COLORS.get("success", "#55b881")
 
-    @Property(str, notify=LibraryBridge.themeChanged)
+    @Property(str, notify=applicationThemeChanged)
     def dangerColor(self):
         return COLORS.get("danger", "#d85b70")
 
-    @Property(str, notify=LibraryBridge.themeChanged)
+    @Property(str, notify=applicationThemeChanged)
     def themePreset(self):
         return str(get("theme_preset") or "Neko")
 
-    @Property(bool, notify=LibraryBridge.themeChanged)
+    @Property(bool, notify=applicationThemeChanged)
     def lightMode(self):
         return bool(get("light_mode"))
 
@@ -573,27 +578,27 @@ class ApplicationBridge(LibraryBridge):
     def themePresets(self):
         return list(THEME_PRESETS.keys())
 
-    @Property(bool, notify=LibraryBridge.themeChanged)
+    @Property(bool, notify=applicationThemeChanged)
     def autoCheckUpdates(self):
         return bool(get("auto_check_updates"))
 
-    @Property(str, notify=LibraryBridge.themeChanged)
+    @Property(str, notify=applicationThemeChanged)
     def updateChannel(self):
         return str(get("update_channel") or "stable")
 
-    @Property(bool, notify=LibraryBridge.themeChanged)
+    @Property(bool, notify=applicationThemeChanged)
     def maximized(self):
         return bool(get("maximized"))
 
-    @Property(str, notify=LibraryBridge.themeChanged)
+    @Property(str, notify=applicationThemeChanged)
     def tmdbApiToken(self):
         return str(get("tmdb_api_token") or "")
 
-    @Property(str, notify=LibraryBridge.themeChanged)
+    @Property(str, notify=applicationThemeChanged)
     def recommendationVoiceLanguage(self):
         return str(get("recommendation_voice_language") or "ALL").upper()
 
-    @Property("QVariantList", notify=LibraryBridge.themeChanged)
+    @Property("QVariantList", notify=applicationThemeChanged)
     def bundleOptionGroups(self):
         return [
             {
