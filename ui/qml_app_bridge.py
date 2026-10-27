@@ -238,29 +238,27 @@ class _DetailSnapshotWorker(QRunnable):
                 progress_episodes += _optional_int(row_work.get("progress_episodes")) or 0
                 episode_total += _optional_int(row_work.get("episodes")) or 0
 
-                if member_id != selected_episode_id:
-                    continue
-                for source in snapshot.get("episodes") or []:
-                    if len(episodes) >= 300:
-                        break
-                    row = _plain(dict(source))
-                    number = _optional_int(row.get("episode_number"))
-                    if number is None:
-                        continue
-                    episodes.append({
-                        "workId": member_id,
-                        "workTitle": member_title,
-                        "episodeNumber": number,
-                        "title": str(row.get("title") or f"Episode {number}"),
-                        "description": str(row.get("description") or ""),
-                        "airDate": str(row.get("air_date") or ""),
-                        "watched": bool(row.get("watched")),
-                        "coverSource": _file_source(row.get("thumbnail_path") or row.get("image_path"))
-                            or _image_source({"cover_url": row.get("image_url")}),
-                    })
-
                 chapters, chapters_total = get_reading_progress(member_id, "chapter")
                 volumes, volumes_total = get_reading_progress(member_id, "volume")
+                if member_id == selected_episode_id:
+                    for source in snapshot.get("episodes") or []:
+                        if len(episodes) >= 300:
+                            break
+                        row = _plain(dict(source))
+                        number = _optional_int(row.get("episode_number"))
+                        if number is None:
+                            continue
+                        episodes.append({
+                            "workId": member_id,
+                            "workTitle": member_title,
+                            "episodeNumber": number,
+                            "title": str(row.get("title") or f"Episode {number}"),
+                            "description": str(row.get("description") or ""),
+                            "airDate": str(row.get("air_date") or ""),
+                            "watched": bool(row.get("watched")),
+                            "coverSource": _file_source(row.get("thumbnail_path") or row.get("image_path"))
+                                or _image_source({"cover_url": row.get("image_url)}),
+                        })
                 progress_chapters += _optional_int(chapters) or 0
                 chapter_total += _optional_int(chapters_total) or 0
                 progress_volumes += _optional_int(volumes) or 0
