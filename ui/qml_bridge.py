@@ -141,9 +141,12 @@ def _local_or_remote_cover(group, members, single_override=None):
     ))
     if selected_member is not None:
         path_candidates.extend((selected_member.get("cover_path"), selected_member.get("image_path")))
-    path_candidates.extend((group.get("cover_path"), group.get("image_path")))
-    if fallback_member is not group:
-        path_candidates.extend((fallback_member.get("cover_path"), fallback_member.get("image_path")))
+        if fallback_member is not group and fallback_member is not selected_member:
+            path_candidates.extend((fallback_member.get("cover_path"), fallback_member.get("image_path")))
+    else:
+        path_candidates.extend((group.get("cover_path"), group.get("image_path")))
+        if fallback_member is not group:
+            path_candidates.extend((fallback_member.get("cover_path"), fallback_member.get("image_path")))
     for raw_path in path_candidates:
         path = _resolved_path(raw_path)
         if path is not None:
@@ -155,15 +158,21 @@ def _local_or_remote_cover(group, members, single_override=None):
         selected_image = selected_member.get("coverImage")
         if isinstance(selected_image, dict):
             url_candidates.extend((selected_image.get("extraLarge"), selected_image.get("large")))
-    url_candidates.extend((group.get("cover_url"), group.get("image_url")))
-    group_image = group.get("coverImage")
-    if isinstance(group_image, dict):
-        url_candidates.extend((group_image.get("extraLarge"), group_image.get("large")))
-    if fallback_member is not group:
-        url_candidates.extend((fallback_member.get("cover_url"), fallback_member.get("image_url")))
-        fallback_image = fallback_member.get("coverImage")
-        if isinstance(fallback_image, dict):
-            url_candidates.extend((fallback_image.get("extraLarge"), fallback_image.get("large")))
+        if fallback_member is not group and fallback_member is not selected_member:
+            url_candidates.extend((fallback_member.get("cover_url"), fallback_member.get("image_url")))
+            fallback_image = fallback_member.get("coverImage")
+            if isinstance(fallback_image, dict):
+                url_candidates.extend((fallback_image.get("extraLarge"), fallback_image.get("large")))
+    else:
+        url_candidates.extend((group.get("cover_url"), group.get("image_url")))
+        group_image = group.get("coverImage")
+        if isinstance(group_image, dict):
+            url_candidates.extend((group_image.get("extraLarge"), group_image.get("large")))
+        if fallback_member is not group:
+            url_candidates.extend((fallback_member.get("cover_url"), fallback_member.get("image_url")))
+            fallback_image = fallback_member.get("coverImage")
+            if isinstance(fallback_image, dict):
+                url_candidates.extend((fallback_image.get("extraLarge"), fallback_image.get("large")))
     for raw_url in url_candidates:
         url = _remote_image_url(raw_url)
         if url:
@@ -516,7 +525,7 @@ class QmlApplicationBridge(QObject):
         """Persist remote poster art through the existing cover-path database field."""
         normalized_id = _optional_int(work_id)
         url = _remote_image_url(raw_url)
-        if normalized_id is None or normalized_id <= 0 or not url:
+        if normalized_id is None or normalized_id == 0 or not url:
             return
         if url in self._cover_cache_paths:
             self._save_cached_cover(normalized_id, url, self._cover_cache_paths[url])
