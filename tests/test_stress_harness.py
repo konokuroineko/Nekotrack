@@ -11,7 +11,7 @@ class StressHarnessTests(unittest.TestCase):
         timeout = subprocess.TimeoutExpired(
             cmd=["python", "-m", "unittest", "discover"],
             timeout=300,
-            output=b"test_previous_case (tests.test_sample) ... ok\\n",
+            output=b"test_previous_case (tests.test_sample) ... ok\n",
             stderr=b"test_stalled_case (tests.test_sample) ...",
         )
         with patch("stress_test.subprocess.run", side_effect=timeout):

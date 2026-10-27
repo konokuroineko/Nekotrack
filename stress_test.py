@@ -95,7 +95,7 @@ def run_full_regression_suite():
                 return value.decode("utf-8", errors="replace")
             return str(value)
 
-        partial_output = "\\n".join(
+        partial_output = "\n".join(
             part for part in (
                 captured_text(error.stdout),
                 captured_text(error.stderr),
@@ -117,7 +117,7 @@ def run_full_regression_suite():
             "output": output[-24000:],
         }
 
-    output = (completed.stdout + "\\n" + completed.stderr).strip()
+    output = (completed.stdout + "\n" + completed.stderr).strip()
     summary = re.search(r"(?m)^\s*Ran\s+(\d+)\s+tests?\s+in\s+[0-9.]+s\s*$", output)
     tests_run = int(summary.group(1)) if summary else 0
 
