@@ -138,7 +138,7 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
         self.assertIn('text: "Auto-bundle related works"', source)
         self.assertIn('text: "Add to bundle…"', source)
         self.assertIn('text: "Remove bundled item…"', source)
-        self.assertIn('text: "Customize title and cover…"', source)
+        self.assertIn('"Customize title and cover…"', source)
         self.assertIn("bridge.requestDeleteWork(bridge.selectedWork.id)", source)
         self.assertIn('bridge.requestDetailAction("customize_identity")', source)
         bridge = ApplicationBridge()

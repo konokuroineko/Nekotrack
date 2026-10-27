@@ -1231,14 +1231,19 @@ class UiStartupTests(unittest.TestCase):
                     try:
                         bridge = window.qml_bridge
                         self.assertIsNotNone(bridge)
-                        calendar_refresh.assert_not_called()
-                        favorites_refresh.assert_not_called()
-                        bridge.navigate("calendar")
+                        # Home uses the same local cached episode preview as Calendar,
+                        # so the calendar snapshot is fetched once during startup.
                         calendar_refresh.assert_called_once_with(bridge)
                         favorites_refresh.assert_not_called()
+
+                        bridge.navigate("calendar")
+                        self.assertEqual(calendar_refresh.call_count, 2)
+                        calendar_refresh.assert_called_with(bridge)
+                        favorites_refresh.assert_not_called()
+
                         bridge.navigate("favorites")
                         favorites_refresh.assert_called_once_with(bridge)
-                        calendar_refresh.assert_called_once_with(bridge)
+                        self.assertEqual(calendar_refresh.call_count, 2)
                     finally:
                         window.close()
                         window.deleteLater()
