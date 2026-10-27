@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import datetime
-import threading
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Property, QRunnable, QThreadPool, QUrl, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QFontMetrics
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QFileDialog
 
 from api import get_entity_profile
@@ -682,8 +681,8 @@ class ApplicationBridge(LibraryBridge):
     @Slot(int, int, bool)
     def setReminder(self, work_id, episode_number, enabled):
         try:
-            if set_release_reminder(work_id, episode_number, enabled):
-                self.refreshCalendar()
+            set_release_reminder(work_id, episode_number, enabled)
+            self.refreshCalendar()
         except Exception as error:
             log_exception("qml_bridge.reminder_save_failed", error, work_id=work_id, episode_number=episode_number)
 
@@ -892,15 +891,25 @@ class ApplicationBridge(LibraryBridge):
 
     @Slot(int, int, bool)
     def setEpisodeWatched(self, work_id, episode_number, watched):
-        current = [item["episodeNumber"] for item in self._episode_items if item["watched"]]
         number = _optional_int(episode_number)
         if number is None:
             return
-        if watched and number not in current:
-            current.append(number)
-        elif not watched and number in current:
-            current.remove(number)
         try:
+            # The visible detail list is capped for responsiveness. Read the full
+            # saved episode set before changing one item so higher-numbered episodes
+            # are not accidentally marked unwatched.
+            snapshot = get_episode_section_snapshot(work_id)
+            current = [
+                current_number
+                for row in snapshot.get("episodes") or []
+                if bool(dict(row).get("watched"))
+                for current_number in [_optional_int(dict(row).get("episode_number"))]
+                if current_number is not None
+            ]
+            if watched and number not in current:
+                current.append(number)
+            elif not watched and number in current:
+                current.remove(number)
             set_episode_progress(work_id, current)
         except Exception as error:
             log_exception("qml_bridge.episode_progress_save_failed", error, work_id=work_id, episode_number=number)
@@ -945,6 +954,21 @@ class ApplicationBridge(LibraryBridge):
         elif self._current_page == "favorites":
             self.refreshFavorites()
         elif self._current_page == "search":
-            if self._search_query:
-                self.searchCatalog(self._search_query, self._search_type, self._search_format)
+            # Returning from Details should not issue another provider search.
+            # Refresh the local membership/title snapshot while preserving result
+            # order, pagination and scroll position.
+            refreshed = []
+            for item in self._search_items:
+                row = dict(item)
+                raw = self._search_rows.get(_optional_int(row.get("workId") or row.get("id")))
+                if raw is not None:
+                    normalized = _normalize_group(raw)
+                    if normalized is not None:
+                        row["title"] = normalized.get("title") or row.get("title") or "Untitled"
+                        row["fullTitle"] = normalized.get("fullTitle") or row["title"]
+                        row["coverSource"] = normalized.get("coverSource") or row.get("coverSource") or ""
+                        row["isInLibrary"] = is_work_in_library(normalized["workId"])
+                refreshed.append(row)
+            self._search_items = refreshed
+            self.searchChanged.emit()
 
