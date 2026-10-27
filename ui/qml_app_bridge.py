@@ -2,27 +2,34 @@
 from __future__ import annotations
 
 import datetime
+import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Property, QRunnable, QThreadPool, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, Property, QRunnable, QThread, QThreadPool, QUrl, Signal, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QFileDialog
 
 from api import get_entity_profile
 from catalog_search import search_combined_media
 from database import (
+    get_all_library,
     get_entity_favorites,
     get_episode_section_snapshot,
     get_reading_progress,
+    get_recommendation_history,
     get_upcoming_library_episodes,
     is_work_in_library,
+    record_recommendation_impressions,
     set_entity_favorite,
     set_episode_progress,
     set_reading_progress_count,
+    set_recommendation_feedback,
     set_release_reminder,
 )
 from diagnostics import log_event, log_exception
+from recommendation_engine import inject_rare_exploration, rank_candidates
 from series import get_library_series, group_media_results
+from ui.pages.recommendations_page import RecommendationWorker
 from ui.preferences import apply_theme_preset, get, set_value
 from ui.qml_bridge import (
     QmlApplicationBridge as LibraryBridge,
@@ -165,6 +172,7 @@ class ApplicationBridge(LibraryBridge):
     pageChanged = Signal()
     backgroundChanged = Signal()
     homeChanged = Signal()
+    recommendationsChanged = Signal()
     searchChanged = Signal()
     calendarChanged = Signal()
     favoritesChanged = Signal()
@@ -189,6 +197,27 @@ class ApplicationBridge(LibraryBridge):
         self._previous_content_page = "home"
         self._home_items = []
         self._home_stats = {"all": 0, "inProgress": 0, "completed": 0, "planned": 0}
+        self._recommendation_snapshot = []
+        self._recommendation_raw_items = []
+        self._recommendation_items = []
+        self._recommendation_rows = {}
+        self._recommendation_candidate_ids = set()
+        self._recommendation_has_next = True
+        self._recommendation_next_page = 1
+        self._recommendation_loading = False
+        self._recommendation_error = ""
+        self._recommendation_refresh_cycle = 0
+        self._recommendation_worker = None
+        self._recommendation_thread = None
+        self._recommendation_stop_event = None
+        self._recommendation_pending_refresh = False
+        self._recommendation_shutting_down = False
+        self._recommendation_history = {}
+        self._recommendation_favorite_works = []
+        self._recommendation_favorite_entities = []
+        self._recommendation_credit_profile = {}
+        self._recommendation_voice_language = "ALL"
+        self._recommendation_impressed_ids = set()
         self._search_items = []
         self._search_rows = {}
         self._search_raw_items = []
@@ -352,10 +381,7 @@ class ApplicationBridge(LibraryBridge):
         if target == "collections":
             self.refreshAll()
         elif target == "home":
-            if not self._raw_groups:
-                self.refreshAll()
-            else:
-                self._refresh_home_items()
+            self.refreshHome()
         elif target == "calendar":
             self.refreshCalendar()
         elif target == "favorites":
@@ -452,6 +478,7 @@ class ApplicationBridge(LibraryBridge):
         else:
             self._library_model.refresh()
             self._refresh_home_items()
+        self.refreshRecommendations()
 
     def _refresh_home_items(self):
         all_rows = list(self._library_model._all_rows)
@@ -478,6 +505,296 @@ class ApplicationBridge(LibraryBridge):
     @Property("QVariantMap", notify=homeChanged)
     def homeStats(self):
         return dict(self._home_stats)
+
+    @Property("QVariantList", notify=recommendationsChanged)
+    def recommendationItems(self):
+        return list(self._recommendation_items)
+
+    @Property(bool, notify=recommendationsChanged)
+    def recommendationLoading(self):
+        return self._recommendation_loading
+
+    @Property(bool, notify=recommendationsChanged)
+    def recommendationHasNext(self):
+        return self._recommendation_has_next
+
+    @Property(str, notify=recommendationsChanged)
+    def recommendationError(self):
+        return self._recommendation_error
+
+    # ---- Personalized recommendations ------------------------------------------
+
+    @Slot()
+    def refreshRecommendations(self):
+        if self._recommendation_shutting_down:
+            return
+        if self._recommendation_thread is not None:
+            self._recommendation_pending_refresh = True
+            if self._recommendation_stop_event is not None:
+                self._recommendation_stop_event.set()
+            return
+        try:
+            rows = [
+                _plain(dict(row))
+                for row in (get_all_library() or [])
+                if isinstance(row, dict) or hasattr(row, "keys")
+            ]
+        except Exception as error:
+            log_exception("qml_bridge.recommendations_library_read_failed", error)
+            self._recommendation_error = "Your Library could not be read for recommendations."
+            self._recommendation_loading = False
+            self.recommendationsChanged.emit()
+            return
+
+        self._recommendation_snapshot = rows
+        self._recommendation_refresh_cycle += 1
+        self._recommendation_raw_items = []
+        self._recommendation_items = []
+        self._recommendation_rows = {}
+        self._recommendation_candidate_ids = set()
+        self._recommendation_next_page = 1
+        self._recommendation_has_next = True
+        self._recommendation_error = ""
+        self._recommendation_loading = True
+        self._recommendation_impressed_ids.clear()
+        self.recommendationsChanged.emit()
+        self._start_recommendation_worker(fetch_seeds=True)
+
+    @Slot()
+    def loadMoreRecommendations(self):
+        if (
+            self._recommendation_shutting_down
+            or self._recommendation_loading
+            or not self._recommendation_has_next
+            or self._recommendation_thread is not None
+        ):
+            return
+        self._recommendation_loading = True
+        self._recommendation_error = ""
+        self.recommendationsChanged.emit()
+        self._start_recommendation_worker(fetch_seeds=False)
+
+    def _start_recommendation_worker(self, fetch_seeds):
+        self._recommendation_stop_event = threading.Event()
+        worker = RecommendationWorker(
+            self._recommendation_snapshot,
+            self._recommendation_stop_event,
+            catalog_page=self._recommendation_next_page,
+            existing_ids=self._recommendation_candidate_ids,
+            refresh_cycle=self._recommendation_refresh_cycle,
+            fetch_seeds=fetch_seeds,
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._recommendations_ready)
+        worker.failed.connect(self._recommendations_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(lambda current=thread: self._recommendation_thread_finished(current))
+        thread.finished.connect(thread.deleteLater)
+        self._recommendation_worker = worker
+        self._recommendation_thread = thread
+        thread.start()
+
+    @staticmethod
+    def _recommendation_identity_ids(items):
+        return RecommendationWorker._results_identity_ids(items or [])
+
+    @Slot(object)
+    def _recommendations_ready(self, results):
+        worker = self._recommendation_worker
+        if worker is None or self._recommendation_shutting_down:
+            return
+        if self._recommendation_stop_event is not None and self._recommendation_stop_event.is_set():
+            return
+
+        incoming = [dict(item) for item in (results or []) if isinstance(item, dict)]
+        catalog_only = bool(worker.catalog_only)
+        self._recommendation_next_page = max(1, int(worker.catalog_next_page or 1))
+        self._recommendation_has_next = bool(worker.catalog_has_next)
+        self._recommendation_history = dict(worker.history or {})
+        self._recommendation_favorite_works = list(worker.favorite_works or [])
+        self._recommendation_favorite_entities = list(worker.favorite_entities or [])
+        self._recommendation_credit_profile = dict(worker.credit_profile or {})
+        self._recommendation_voice_language = str(worker.voice_language or "ALL")
+
+        ranking_options = {
+            "history": self._recommendation_history,
+            "favorite_works": self._recommendation_favorite_works,
+            "rotation": self._recommendation_refresh_cycle,
+            "credit_profile": self._recommendation_credit_profile,
+            "favorite_entities": self._recommendation_favorite_entities,
+            "voice_language": self._recommendation_voice_language,
+        }
+        if catalog_only:
+            existing_ids = self._recommendation_identity_ids(self._recommendation_raw_items)
+            new_batch = []
+            for item in incoming:
+                identity_ids = RecommendationWorker._result_identity_ids(item)
+                if identity_ids.intersection(existing_ids):
+                    continue
+                new_batch.append(item)
+                existing_ids.update(identity_ids)
+            ranked_new = rank_candidates(new_batch, **ranking_options)
+            ranked_new = inject_rare_exploration(
+                ranked_new,
+                rotation=self._recommendation_refresh_cycle,
+                fraction=0.04,
+            )
+            self._recommendation_raw_items.extend(ranked_new)
+        else:
+            ranked = rank_candidates(incoming, **ranking_options)
+            self._recommendation_raw_items = inject_rare_exploration(
+                ranked,
+                rotation=self._recommendation_refresh_cycle,
+                fraction=0.04,
+            )
+
+        self._recommendation_candidate_ids = self._recommendation_identity_ids(
+            self._recommendation_raw_items
+        )
+        self._recommendation_loading = False
+        self._recommendation_error = ""
+        self._map_recommendation_items()
+        self.recommendationsChanged.emit()
+
+    @Slot(str)
+    def _recommendations_failed(self, message):
+        if self._recommendation_shutting_down:
+            return
+        if self._recommendation_stop_event is not None and self._recommendation_stop_event.is_set():
+            return
+        worker = self._recommendation_worker
+        self._recommendation_loading = False
+        if worker is not None and worker.catalog_only and self._recommendation_raw_items:
+            self._recommendation_error = (
+                "More titles could not be loaded. Your current recommendations are still available."
+            )
+        else:
+            self._recommendation_error = str(message or "Recommendations could not be loaded.")
+            self._recommendation_has_next = False
+        self.recommendationsChanged.emit()
+
+    def _map_recommendation_items(self):
+        rows = []
+        by_id = {}
+        for raw_value in self._recommendation_raw_items:
+            raw = _plain(raw_value) if isinstance(raw_value, dict) else {}
+            normalized = _normalize_group(raw)
+            if normalized is None:
+                continue
+            work_id = int(normalized["workId"])
+            item = dict(normalized)
+            item["id"] = work_id
+            item["fullTitle"] = str(normalized.get("fullTitle") or normalized.get("title") or "Untitled")
+            item["coverSource"] = normalized.get("coverSource") or _image_source(raw)
+            item["isInLibrary"] = is_work_in_library(work_id)
+            item["recommendationReason"] = str(
+                raw.get("_recommendation_reason") or "Discovered from AniList"
+            )
+            rows.append(item)
+            by_id[work_id] = raw
+        self._recommendation_items = rows
+        self._recommendation_rows = by_id
+
+    @Slot(int)
+    def requestOpenRecommendation(self, work_id):
+        raw = self._recommendation_rows.get(_optional_int(work_id))
+        if raw is not None:
+            self.searchWorkRequested.emit(raw)
+
+    @Slot(int)
+    def requestAddRecommendation(self, work_id):
+        raw = self._recommendation_rows.get(_optional_int(work_id))
+        if raw is not None:
+            self.addToLibraryRequested.emit(raw)
+
+    @Slot(int, str)
+    def requestRecommendationFeedback(self, work_id, feedback):
+        raw = self._recommendation_rows.get(_optional_int(work_id))
+        if raw is None or feedback not in {"more_like_this", "less_like_this", "never_show"}:
+            return
+        if not set_recommendation_feedback(work_id, feedback, raw):
+            self._recommendation_error = "Your recommendation feedback couldn't be saved."
+            self.recommendationsChanged.emit()
+            return
+        try:
+            history = get_recommendation_history()
+            self._recommendation_history = history if isinstance(history, dict) else {}
+            ranking_options = {
+                "history": self._recommendation_history,
+                "favorite_works": self._recommendation_favorite_works,
+                "rotation": self._recommendation_refresh_cycle,
+                "credit_profile": self._recommendation_credit_profile,
+                "favorite_entities": self._recommendation_favorite_entities,
+                "voice_language": self._recommendation_voice_language,
+            }
+            self._recommendation_raw_items = rank_candidates(
+                self._recommendation_raw_items, **ranking_options
+            )
+            self._recommendation_raw_items = inject_rare_exploration(
+                self._recommendation_raw_items,
+                rotation=self._recommendation_refresh_cycle,
+                fraction=0.04,
+            )
+            self._recommendation_candidate_ids = self._recommendation_identity_ids(
+                self._recommendation_raw_items
+            )
+            self._recommendation_error = ""
+            self._map_recommendation_items()
+            self.recommendationsChanged.emit()
+        except Exception as error:
+            log_exception(
+                "qml_bridge.recommendation_feedback_failed",
+                error,
+                work_id=work_id,
+                feedback=feedback,
+            )
+
+    @Slot(int)
+    def recordRecommendationImpression(self, work_id):
+        normalized_id = _optional_int(work_id)
+        if (
+            normalized_id is None
+            or normalized_id in self._recommendation_impressed_ids
+            or normalized_id not in self._recommendation_rows
+        ):
+            return
+        raw = self._recommendation_rows[normalized_id]
+        try:
+            if record_recommendation_impressions([raw]):
+                self._recommendation_impressed_ids.add(normalized_id)
+        except Exception as error:
+            log_exception(
+                "qml_bridge.recommendation_impression_failed",
+                error,
+                work_id=normalized_id,
+            )
+
+    @Slot()
+    def requestShutdown(self):
+        self._recommendation_shutting_down = True
+        self._recommendation_pending_refresh = False
+        if self._recommendation_stop_event is not None:
+            self._recommendation_stop_event.set()
+        if self._recommendation_thread is not None:
+            try:
+                self._recommendation_thread.quit()
+            except RuntimeError:
+                pass
+
+    def _recommendation_thread_finished(self, thread):
+        if thread is not self._recommendation_thread:
+            return
+        self._recommendation_thread = None
+        self._recommendation_worker = None
+        self._recommendation_stop_event = None
+        pending = self._recommendation_pending_refresh
+        self._recommendation_pending_refresh = False
+        if pending and not self._recommendation_shutting_down:
+            QTimer.singleShot(0, self.refreshRecommendations)
 
     @Slot(int, result=bool)
     def requestOpenWork(self, work_id):
