@@ -391,6 +391,7 @@ class ApplicationBridge(LibraryBridge):
         self._groups_loaded = False
         self._groups_loading = False
         self._startup_ready = False
+        self._initial_recommendations_started = False
         self._groups_refresh_requested = False
         self._groups_generation = 0
         self._groups_workers = {}
@@ -914,9 +915,6 @@ class ApplicationBridge(LibraryBridge):
         self._library_model.refresh(self._raw_groups)
         self._refresh_home_items()
 
-        if self._current_page == "home" and self._startup_ready:
-            self.refreshRecommendations()
-
     @Slot()
     def refreshAll(self):
         self._load_groups(force=self._groups_loaded)
@@ -929,6 +927,11 @@ class ApplicationBridge(LibraryBridge):
     def markStartupReady(self):
         self._startup_ready = True
         self.refreshHome()
+        # Recommendations use their own worker and local Library snapshot.
+        # Do not make the feed wait for the separate Library grouping worker.
+        if not self._initial_recommendations_started:
+            self._initial_recommendations_started = True
+            self.refreshRecommendations()
 
     @Slot()
     def refreshHome(self):
@@ -939,13 +942,6 @@ class ApplicationBridge(LibraryBridge):
             return
         self._library_model.refresh(self._raw_groups)
         self._refresh_home_items()
-        # A screen revisit must not cancel an in-flight recommendations request.
-        if (
-            self._startup_ready
-            and self._current_page == "home"
-            and self._recommendation_thread is None
-        ):
-            self.refreshRecommendations()
 
     @staticmethod
     def _home_progress_caption(row, home_status):
@@ -1106,6 +1102,11 @@ class ApplicationBridge(LibraryBridge):
 
         self._recommendation_snapshot = rows
         self._recommendation_refresh_cycle += 1
+        log_event(
+            "qml_bridge.recommendations_start_requested",
+            library_count=len(rows),
+            refresh_cycle=self._recommendation_refresh_cycle,
+        )
         self._recommendation_raw_items = []
         self._recommendation_items = []
         self._recommendation_rows = {}
@@ -2282,6 +2283,14 @@ class ApplicationBridge(LibraryBridge):
             self.refreshAll()
         elif self._current_page == "home":
             self.refreshHome()
+            # Re-entering Home starts a new feed cycle when no request is running.
+            if (
+                self._startup_ready
+                and self._initial_recommendations_started
+                and self._recommendation_thread is None
+                and not self._recommendation_loading
+            ):
+                self.refreshRecommendations()
         elif self._current_page == "calendar":
             self.refreshCalendar()
         elif self._current_page == "favorites":
