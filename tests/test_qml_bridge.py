@@ -245,6 +245,31 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         self.assertEqual(bridge.animationSpeed, 260)
         self.assertEqual(bridge.uiScale, 100)
 
+
+    def test_application_bridge_exposes_update_and_discovery_defaults(self):
+        from ui.qml_app_bridge import ApplicationBridge
+
+        bridge = ApplicationBridge()
+        self.assertTrue(bridge.autoCheckUpdates)
+        self.assertEqual(bridge.updateChannel, "stable")
+        self.assertEqual(bridge.recommendationVoiceLanguage, "ALL")
+        self.assertEqual(bridge.tmdbApiToken, "")
+        self.assertTrue(bridge.maximized)
+        groups = bridge.bundleOptionGroups
+        self.assertEqual([group["title"] for group in groups], ["ANIME EXTRAS", "MANGA & LITERATURE"])
+        self.assertEqual(
+            [option["key"] for group in groups for option in group["options"]],
+            [
+                "bundle_include_movies",
+                "bundle_include_ovas",
+                "bundle_include_onas",
+                "bundle_include_specials",
+                "bundle_include_manga",
+                "bundle_include_novels",
+                "bundle_include_one_shots",
+            ],
+        )
+
     def test_refresh_errors_are_reported_without_crashing_the_host(self):
         def fail_loader():
             raise RuntimeError("synthetic database read failure")

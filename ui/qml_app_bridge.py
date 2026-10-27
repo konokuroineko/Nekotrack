@@ -678,6 +678,10 @@ class ApplicationBridge(LibraryBridge):
             self.refreshTheme()
             self._background_changed()
             self.settingsChanged.emit(key)
+            if key in BUNDLE_OPTION_KEYS:
+                self.forceRefreshAll()
+            elif key == "recommendation_voice_language":
+                self.refreshRecommendations()
             log_event("qml_bridge.preference_changed", preference=key)
         except Exception as error:
             log_exception("qml_bridge.preference_change_failed", error, preference=key)
@@ -725,6 +729,8 @@ class ApplicationBridge(LibraryBridge):
             refresh_theme()
             self.refreshTheme()
             self._background_changed()
+            self.forceRefreshAll()
+            self.refreshRecommendations()
             self.settingsChanged.emit("reset")
             log_event("qml_bridge.preferences_reset")
         except Exception as error:

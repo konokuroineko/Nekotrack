@@ -1207,7 +1207,7 @@ class MainWindow(QMainWindow):
         if self._qml_shell_enabled and self.qml_bridge is not None:
             self.qml_bridge.refreshTheme()
             self.qml_bridge.refreshVisiblePage()
-            if changed_key == "maximized":
+            if changed_key in {"maximized", "reset"}:
                 self.showMaximized() if get("maximized") else self.showNormal()
             return
         current_page = "home"
