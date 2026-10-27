@@ -21,6 +21,7 @@ from database import (
     get_episode_section_snapshot,
     get_reading_progress,
     get_recommendation_history,
+    get_release_reminders,
     get_upcoming_library_episodes,
     is_work_in_library,
     record_recommendation_impressions,
@@ -425,6 +426,7 @@ class ApplicationBridge(LibraryBridge):
         self._search_generation = 0
         self._search_workers = {}
         self._calendar_items = []
+        self._release_reminder_count = 0
         self._favorites_items = []
         self._selected_work = {}
         self._selected_work_raw = {}
@@ -1436,6 +1438,10 @@ class ApplicationBridge(LibraryBridge):
     def calendarItems(self):
         return list(self._calendar_items)
 
+    @Property(int, notify=calendarChanged)
+    def releaseReminderCount(self):
+        return int(self._release_reminder_count)
+
     @Slot()
     def refreshCalendar(self):
         today = datetime.date.today()
@@ -1445,6 +1451,11 @@ class ApplicationBridge(LibraryBridge):
                 today.isoformat(),
                 (last_day + datetime.timedelta(days=1)).isoformat(),
             )
+            try:
+                self._release_reminder_count = len(get_release_reminders() or [])
+            except Exception as reminder_error:
+                self._release_reminder_count = 0
+                log_exception("qml_bridge.calendar_reminder_count_failed", reminder_error)
             items = []
             for source in rows or []:
                 row = _plain(dict(source))
@@ -1472,6 +1483,11 @@ class ApplicationBridge(LibraryBridge):
                     "reminderEnabled": bool(row.get("reminder_enabled")),
                     "coverSource": cover,
                 })
+            items.sort(key=lambda item: (
+                item["airDate"],
+                str(item["workTitle"] or "").casefold(),
+                item["episodeNumber"],
+            ))
             items.sort(key=lambda item: (
                 item["airDate"],
                 str(item["workTitle"] or "").casefold(),
@@ -1511,6 +1527,8 @@ class ApplicationBridge(LibraryBridge):
                 item["entity_type"] = kind
                 item["entity_id"] = entity_id
                 item["entity_name"] = str(item.get("entity_name") or "").strip()
+                item["imageSource"] = _image_source(item)
+                item["languageLabel"] = str(item.get("language") or "").replace("_", " ").replace("-", " ").title()
                 item["kindLabel"] = {
                     "character": "Character",
                     "voice_actor": "Voice actor",
@@ -1541,8 +1559,7 @@ class ApplicationBridge(LibraryBridge):
             "entity_type": kind,
             "name": str(name or "").strip() or f"{kind.title()} {numeric_id}",
         }
-        self._selected_profile = profile
-        self.selectedProfileChanged.emit()
+        # MainWindow starts the single profile-loading worker for this route.
         self.profileRequested.emit(profile)
 
     @Property("QVariantMap", notify=selectedProfileChanged)

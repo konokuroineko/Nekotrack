@@ -1064,7 +1064,9 @@ Item {
                         Text {
                             anchors.centerIn: parent
                             visible: bridge.calendarItems.length === 0
-                            text: "No upcoming episode dates cached.\n\nThe calendar populates from saved episode air dates."
+                            text: "No upcoming episode dates cached.\n\nThe calendar populates from saved episode air dates.\n\n"
+                                + bridge.releaseReminderCount + " saved reminder"
+                                + (bridge.releaseReminderCount === 1 ? "" : "s")
                             color: bridge.mutedColor
                             horizontalAlignment: Text.AlignHCenter
                             wrapMode: Text.WordWrap
@@ -1125,8 +1127,18 @@ Item {
                                         Layout.preferredHeight: 68
                                         radius: 9
                                         color: bridge.accentSoftColor
+                                        clip: true
+                                        Image {
+                                            anchors.fill: parent
+                                            source: modelData.imageSource || ""
+                                            fillMode: Image.PreserveAspectCrop
+                                            asynchronous: true
+                                            cache: true
+                                            visible: source.toString().length > 0
+                                        }
                                         Text {
                                             anchors.centerIn: parent
+                                            visible: !modelData.imageSource || modelData.imageSource.length === 0
                                             text: (modelData.entity_name || "?").slice(0, 1).toUpperCase()
                                             color: bridge.accentColor
                                             font.pixelSize: 24
@@ -1151,6 +1163,13 @@ Item {
                                             color: bridge.mutedColor
                                             font.pixelSize: 10
                                         }
+                                        Text {
+                                            visible: modelData.entity_type === "voice_actor"
+                                                && modelData.languageLabel.length > 0
+                                            text: modelData.languageLabel
+                                            color: bridge.mutedColor
+                                            font.pixelSize: 9
+                                        }
                                         RowLayout {
                                             spacing: 6
                                             Button {
@@ -1167,14 +1186,23 @@ Item {
                             }
                         }
 
-                        Text {
+                        ColumnLayout {
                             anchors.centerIn: parent
                             visible: bridge.favoritesItems.length === 0
                             width: Math.min(parent.width - 40, 450)
-                            text: "No saved profiles yet.\n\nOpen a character or staff profile and favorite it to keep it here."
-                            color: bridge.mutedColor
-                            horizontalAlignment: Text.AlignHCenter
-                            wrapMode: Text.WordWrap
+                            spacing: 12
+                            Text {
+                                Layout.fillWidth: true
+                                text: "No saved profiles yet.\n\nOpen a character, voice actor, or production staff profile and favorite it to keep it here."
+                                color: bridge.mutedColor
+                                horizontalAlignment: Text.AlignHCenter
+                                wrapMode: Text.WordWrap
+                            }
+                            Button {
+                                text: "Explore titles"
+                                Layout.alignment: Qt.AlignHCenter
+                                onClicked: bridge.navigate("search")
+                            }
                         }
                     }
                 }
