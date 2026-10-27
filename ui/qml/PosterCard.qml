@@ -45,7 +45,7 @@ Item {
     TextMetrics {
         id: titleMetrics
         font.family: "Segoe UI"
-        font.pointSize: bridge.fontSize
+        font.pixelSize: bridge.fontSize
         font.weight: Font.Bold
     }
 

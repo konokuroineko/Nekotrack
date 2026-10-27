@@ -1943,14 +1943,30 @@ Item {
                                         font.pixelSize: 12
                                     }
                                     Text {
-                                        text: bridge.selectedWork.isInLibrary
-                                            ? ("Progress: " + (bridge.selectedWork.progressEpisodes || 0)
-                                                + (bridge.selectedWork.episodeTotal
-                                                    ? " / " + bridge.selectedWork.episodeTotal + " episodes"
-                                                    : " episodes"))
-                                            : "Not in your Library yet"
+                                        text: {
+                                            if (!(bridge.selectedWork.isInLibrary || false))
+                                                return "Not in your Library yet"
+                                            var parts = []
+                                            if (bridge.selectedWork.mediaType === "ANIME") {
+                                                parts.push("Episodes: " + (bridge.selectedWork.progressEpisodes || 0)
+                                                    + (bridge.selectedWork.episodeTotal
+                                                        ? " / " + bridge.selectedWork.episodeTotal
+                                                        : ""))
+                                            }
+                                            if ((bridge.selectedWork.readingMembers || []).length > 0) {
+                                                parts.push("Chapters: " + (bridge.selectedWork.progressChapters || 0)
+                                                    + (bridge.selectedWork.chapterTotal
+                                                        ? " / " + bridge.selectedWork.chapterTotal : ""))
+                                                parts.push("Volumes: " + (bridge.selectedWork.progressVolumes || 0)
+                                                    + (bridge.selectedWork.volumeTotal
+                                                        ? " / " + bridge.selectedWork.volumeTotal : ""))
+                                            }
+                                            return parts.length > 0 ? parts.join(" · ") : "Saved in your Library"
+                                        }
                                         color: bridge.secondaryColor
                                         font.pixelSize: 12
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
                                     }
                                     Text {
                                         visible: bridge.selectedWork.detailsLoading || false

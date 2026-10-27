@@ -2037,8 +2037,14 @@ class ApplicationBridge(LibraryBridge):
             self._selected_work["progressChapters"] = _optional_int(
                 payload.get("progressChapters")
             ) or 0
+            self._selected_work["chapterTotal"] = _optional_int(
+                payload.get("chapterTotal")
+            ) or 0
             self._selected_work["progressVolumes"] = _optional_int(
                 payload.get("progressVolumes")
+            ) or 0
+            self._selected_work["volumeTotal"] = _optional_int(
+                payload.get("volumeTotal")
             ) or 0
             aggregate_episode_total = _optional_int(payload.get("episodeTotal")) or 0
             if aggregate_episode_total > 0:

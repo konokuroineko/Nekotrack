@@ -59,7 +59,7 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
         source = (ROOT / "ui" / "qml" / "PosterCard.qml").read_text(encoding="utf-8")
         self.assertIn("Math.max(1, posterWidth - 4", source)
         self.assertIn('font.family: "Segoe UI"', source)
-        self.assertIn("font.pointSize: bridge.fontSize", source)
+        self.assertIn("font.pixelSize: bridge.fontSize", source)
         self.assertIn('return first + "\\n" + second', source)
         self.assertIn("readonly property int posterWidth: bridge.cardSize", source)
         self.assertIn("readonly property int posterHeight: bridge.coverHeight", source)
