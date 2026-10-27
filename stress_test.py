@@ -73,15 +73,51 @@ def run_full_regression_suite():
     """Run the entire repository test suite once before the soak loop."""
     env = os.environ.copy()
     env.pop("NEKOTRACK_FUZZ_SEED", None)
-    completed = subprocess.run(
-        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        timeout=300,
-        env=env,
-    )
-    output = (completed.stdout + "\n" + completed.stderr).strip()
+    timeout_seconds = 300
+    command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as error:
+        # TimeoutExpired may contain bytes even when text=True. Preserve that
+        # partial unittest output so CI reports which test ran last instead of
+        # swallowing the useful part of the failure behind a traceback.
+        def captured_text(value):
+            if value is None:
+                return ""
+            if isinstance(value, bytes):
+                return value.decode("utf-8", errors="replace")
+            return str(value)
+
+        partial_output = "\\n".join(
+            part for part in (
+                captured_text(error.stdout),
+                captured_text(error.stderr),
+            ) if part
+        ).strip()
+        if not partial_output:
+            partial_output = "The timed-out subprocess did not provide partial test output."
+        output = (
+            f"Regression test suite timed out after {timeout_seconds} seconds. "
+            "Partial unittest output follows:\\n"
+            + partial_output
+        )
+        return {
+            "status": "FAIL",
+            "exit_code": 124,
+            "tests_run": 0,
+            "timed_out": True,
+            "timeout_seconds": timeout_seconds,
+            "output": output[-24000:],
+        }
+
+    output = (completed.stdout + "\\n" + completed.stderr).strip()
     summary = re.search(r"(?m)^\s*Ran\s+(\d+)\s+tests?\s+in\s+[0-9.]+s\s*$", output)
     tests_run = int(summary.group(1)) if summary else 0
 

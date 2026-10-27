@@ -1,5 +1,9 @@
 name: Python checks
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches:
@@ -14,6 +18,7 @@ permissions:
 
 jobs:
   test:
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -55,6 +60,7 @@ jobs:
         run: python stress_test.py --seconds 1 --seed 17 --report "${{ runner.temp }}/nekotrack-stress-smoke.json"
 
   rust-native:
+    timeout-minutes: 30
     name: Rust extension parity (${{ matrix.os }}, Python ${{ matrix.python-version }})
     strategy:
       fail-fast: false
