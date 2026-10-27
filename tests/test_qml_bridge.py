@@ -217,17 +217,20 @@ class QmlApplicationBridgeTests(unittest.TestCase):
             bridge.navigate("collections")
         load_groups.assert_not_called()
 
-    def test_startup_does_not_start_recommendations_until_visible(self):
+    def test_startup_starts_recommendations_without_waiting_for_library_snapshot(self):
         from unittest.mock import patch
 
         from ui.qml_app_bridge import ApplicationBridge
 
         bridge = ApplicationBridge()
-        bridge._groups_loaded = True
-        with patch.object(bridge, "refreshRecommendations") as refresh_recommendations:
+        bridge._groups_loaded = False
+        with patch.object(bridge, "refreshCalendar"), \
+             patch.object(bridge, "_load_groups") as load_groups, \
+             patch.object(bridge, "refreshRecommendations") as refresh_recommendations:
             bridge.refreshHome()
             refresh_recommendations.assert_not_called()
             bridge.markStartupReady()
+            load_groups.assert_called()
             refresh_recommendations.assert_called_once_with()
 
     def test_exact_default_theme_geometry_values(self):
