@@ -366,6 +366,7 @@ class ApplicationBridge(LibraryBridge):
         super()._sync_theme_values()
         self._theme_values["resizeAnimation"] = bool(get("resize_animation"))
         self._theme_values["animationSpeed"] = int(get("animation_speed"))
+        self._theme_values["uiScale"] = max(80, min(200, int(get("ui_scale"))))
 
     @Property(bool, notify=themeChanged)
     def resizeAnimation(self):
@@ -374,6 +375,14 @@ class ApplicationBridge(LibraryBridge):
     @Property(int, notify=themeChanged)
     def animationSpeed(self):
         return self._theme_values["animationSpeed"]
+
+    @Property(int, notify=themeChanged)
+    def uiScale(self):
+        return self._theme_values["uiScale"]
+
+    @Property(float, notify=themeChanged)
+    def uiScaleFactor(self):
+        return self._theme_values["uiScale"] / 100.0
 
     # ---- Global shell and theme -------------------------------------------------
 
@@ -548,7 +557,7 @@ class ApplicationBridge(LibraryBridge):
     @Slot(str, "QVariant")
     def setPreference(self, key, value):
         allowed = {
-            "theme_preset", "light_mode", "card_size", "card_gap",
+            "theme_preset", "light_mode", "ui_scale", "card_size", "card_gap",
             "corner_radius", "font_size", "hover_highlight",
             "resize_animation", "animation_speed", "background_overlay_opacity",
             "background_slideshow_interval",

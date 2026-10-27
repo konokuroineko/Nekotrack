@@ -34,7 +34,11 @@ Item {
     }
 
     RowLayout {
-        anchors.fill: parent
+        id: shellContent
+        width: parent.width / bridge.uiScaleFactor
+        height: parent.height / bridge.uiScaleFactor
+        anchors.centerIn: parent
+        scale: bridge.uiScaleFactor
         spacing: 0
 
         Rectangle {
@@ -1091,7 +1095,7 @@ Item {
 
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 390
+                            Layout.preferredHeight: 430
                             radius: 13
                             color: bridge.surfaceFillColor
                             border.width: 1
@@ -1101,6 +1105,22 @@ Item {
                                 anchors.margins: 16
                                 spacing: 7
 
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        text: "Interface scale"
+                                        color: bridge.primaryColor
+                                        font.pixelSize: 14
+                                        font.weight: Font.Bold
+                                        Layout.fillWidth: true
+                                    }
+                                    ComboBox {
+                                        Layout.preferredWidth: 115
+                                        model: [80, 90, 100, 110, 125, 150, 175, 200]
+                                        currentIndex: Math.max(0, model.indexOf(bridge.uiScale))
+                                        onActivated: bridge.setPreference("ui_scale", model[currentIndex])
+                                    }
+                                }
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text {

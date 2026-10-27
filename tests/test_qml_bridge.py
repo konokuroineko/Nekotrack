@@ -182,6 +182,7 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         self.assertEqual(bridge._search_page, 1)
         start_search.assert_called_once_with(1, 1)
         self.assertTrue(bridge.animationSpeed >= 0)
+        self.assertIn(bridge.uiScale, {80, 90, 100, 110, 125, 150, 175, 200})
 
     def test_refresh_errors_are_reported_without_crashing_the_host(self):
         def fail_loader():
