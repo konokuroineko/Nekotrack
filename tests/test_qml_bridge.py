@@ -365,6 +365,28 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         self.assertEqual(payload["readingProgressByWork"]["101"]["chapters"], 0)
         self.assertEqual(payload["readingProgressByWork"]["202"]["volumes"], 0)
 
+
+    def test_active_ui_scale_requires_restart_after_scale_preference_changes(self):
+        from unittest.mock import patch
+
+        from ui.preferences import defaults
+        from ui.qml_app_bridge import ApplicationBridge
+
+        default_values = defaults()
+        with patch.dict("os.environ", {"QT_SCALE_FACTOR": "1.0"}), \
+             patch("ui.qml_bridge.get", side_effect=lambda key: default_values[key]), \
+             patch("ui.qml_app_bridge.get", side_effect=lambda key: default_values[key]):
+            bridge = ApplicationBridge()
+            self.assertEqual(bridge.activeUiScale, 100)
+            bridge.setPreference("ui_scale", 125)
+            self.assertEqual(bridge.uiScale, 125)
+            self.assertEqual(bridge.activeUiScale, 100)
+            requested = []
+            bridge.restartRequested.connect(lambda: requested.append(True))
+            bridge.requestRestart()
+
+        self.assertEqual(requested, [True])
+
     def test_refresh_errors_are_reported_without_crashing_the_host(self):
         def fail_loader():
             raise RuntimeError("synthetic database read failure")

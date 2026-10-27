@@ -929,6 +929,7 @@ class MainWindow(QMainWindow):
         bridge.diagnosticsExportRequested.connect(self._qml_export_diagnostics)
         bridge.settingsChanged.connect(self.apply_settings)
         bridge.rollbackRequested.connect(self.rollback_requested.emit)
+        bridge.restartRequested.connect(self._restart_application)
 
         qml_path = Path(__file__).resolve().parent / "qml" / "ApplicationShell.qml"
         quick.setSource(QUrl.fromLocalFile(str(qml_path)))

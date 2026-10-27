@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import os
 import threading
 from pathlib import Path
 
@@ -373,6 +374,7 @@ class ApplicationBridge(LibraryBridge):
     updateRequested = Signal()
     diagnosticsExportRequested = Signal()
     rollbackRequested = Signal()
+    restartRequested = Signal()
     bundleEditRequested = Signal(int)
     bundleDeleteRequested = Signal(int)
 
@@ -434,6 +436,7 @@ class ApplicationBridge(LibraryBridge):
         self._profile_workers = {}
         self._background_manager = background_manager
         self._background_source = ""
+        self._active_ui_scale = self._read_active_ui_scale()
         super().__init__(
             parent=parent,
             library_loader=lambda: self._raw_groups,
@@ -463,9 +466,21 @@ class ApplicationBridge(LibraryBridge):
     def uiScale(self):
         return self._theme_values["uiScale"]
 
-    @Property(float, notify=themeChanged)
-    def uiScaleFactor(self):
-        return self._theme_values["uiScale"] / 100.0
+    @Property(int, constant=True)
+    def activeUiScale(self):
+        return self._active_ui_scale
+
+    @staticmethod
+    def _read_active_ui_scale():
+        configured = int(get("ui_scale"))
+        factor_text = os.environ.get("QT_SCALE_FACTOR")
+        if factor_text is None:
+            return configured
+        try:
+            active = int(round(float(factor_text) * 100))
+        except (TypeError, ValueError, OverflowError):
+            return configured
+        return active if active in UI_SCALE_OPTIONS else configured
 
     # ---- Global shell and theme -------------------------------------------------
 
@@ -767,6 +782,10 @@ class ApplicationBridge(LibraryBridge):
     @Slot()
     def requestRollback(self):
         self.rollbackRequested.emit()
+
+    @Slot()
+    def requestRestart(self):
+        self.restartRequested.emit()
 
     @Slot()
     def resetPreferences(self):

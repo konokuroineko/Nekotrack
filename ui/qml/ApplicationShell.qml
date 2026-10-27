@@ -35,10 +35,7 @@ Item {
 
     RowLayout {
         id: shellContent
-        width: parent.width / bridge.uiScaleFactor
-        height: parent.height / bridge.uiScaleFactor
-        anchors.centerIn: parent
-        scale: bridge.uiScaleFactor
+        anchors.fill: parent
         spacing: 0
 
         Rectangle {
@@ -1157,7 +1154,7 @@ Item {
 
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 430
+                            Layout.preferredHeight: 480
                             radius: 13
                             color: bridge.surfaceFillColor
                             border.width: 1
@@ -1181,6 +1178,21 @@ Item {
                                         model: [80, 90, 100, 110, 125, 150, 175, 200]
                                         currentIndex: Math.max(0, model.indexOf(bridge.uiScale))
                                         onActivated: bridge.setPreference("ui_scale", model[currentIndex])
+                                    }
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: bridge.uiScale !== bridge.activeUiScale
+                                    Text {
+                                        text: "Saved. Restart NekoTrack to apply this scale."
+                                        color: bridge.secondaryColor
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+                                    Button {
+                                        text: "Restart now"
+                                        onClicked: bridge.requestRestart()
                                     }
                                 }
                                 RowLayout {
