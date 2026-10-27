@@ -1885,6 +1885,17 @@ Item {
                             RowLayout {
                                 Layout.fillWidth: true
                                 Button { text: "← Back"; onClicked: bridge.goBack() }
+                                Button {
+                                    visible: (bridge.selectedWork.isInLibrary || false)
+                                        && (bridge.selectedWork.seriesCount || 1) > 1
+                                    text: "Edit bundle"
+                                    onClicked: bridge.requestEditBundle(bridge.selectedWork.id)
+                                }
+                                Button {
+                                    visible: bridge.selectedWork.isInLibrary || false
+                                    text: "Delete from Library"
+                                    onClicked: bridge.requestDeleteWork(bridge.selectedWork.id)
+                                }
                                 Item { Layout.fillWidth: true }
                                 Button {
                                     text: "Refresh details"

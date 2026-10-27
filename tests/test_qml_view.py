@@ -68,6 +68,10 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
         self._load_qml("LibraryView.qml", self.bridge)
 
     def test_production_application_shell_loads_with_the_application_bridge(self):
+        source = (ROOT / "ui" / "qml" / "ApplicationShell.qml").read_text(encoding="utf-8")
+        self.assertIn('text: "Edit bundle"', source)
+        self.assertIn('text: "Delete from Library"', source)
+        self.assertIn("bridge.requestDeleteWork(bridge.selectedWork.id)", source)
         bridge = ApplicationBridge()
         self.addCleanup(bridge.deleteLater)
         self._load_qml("ApplicationShell.qml", bridge)
