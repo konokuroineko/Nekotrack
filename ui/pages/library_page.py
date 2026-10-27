@@ -298,7 +298,16 @@ class LibraryPage(QWidget):
                 detail = "; ".join(error.toString() for error in quick.errors())
                 raise RuntimeError(detail or "The QML Library view did not load.")
 
-            root = QVBoxLayout(self)
+            root = self.layout()
+            if root is None:
+                root = QVBoxLayout(self)
+            else:
+                while root.count():
+                    item = root.takeAt(0)
+                    widget = item.widget()
+                    if widget is not None:
+                        widget.setParent(None)
+                        widget.deleteLater()
             root.setContentsMargins(0, 0, 0, 0)
             root.setSpacing(0)
             root.addWidget(quick)
