@@ -1039,9 +1039,13 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # These dialogs can write bundle memberships or display overrides.
+        # Bundle membership changes refresh the selected QML detail when the
+        # async Library snapshot is ready. Avoid starting a second detail worker.
+        # A non-Library item has no refreshed group signal to trigger that path,
+        # so reload its detail snapshot explicitly after a display override.
         bridge.forceRefreshAll()
-        bridge.refreshSelectedWork()
+        if action == "customize_identity" and group is None:
+            bridge.refreshSelectedWork()
 
     def _qml_library_refreshed(self, _item_count=0):
         bridge = self.qml_bridge

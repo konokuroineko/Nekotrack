@@ -78,6 +78,13 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
         self.assertIn("self.library_page._delete_item(group, refresh=False)", main_source)
         self.assertIn("QTimer.singleShot(0, bridge.forceRefreshAll)", main_source)
 
+
+    def test_qml_bundle_actions_wait_for_library_refresh_without_duplicate_detail_load(self):
+        main_source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
+        self.assertIn("bridge.forceRefreshAll()", main_source)
+        self.assertIn('if action == "customize_identity" and group is None:', main_source)
+        self.assertIn("bridge.refreshSelectedWork()", main_source)
+
     def test_production_application_shell_loads_with_the_application_bridge(self):
         source = (ROOT / "ui" / "qml" / "ApplicationShell.qml").read_text(encoding="utf-8")
         self.assertIn('text: "Edit bundle"', source)
