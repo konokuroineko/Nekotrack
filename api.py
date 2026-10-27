@@ -1715,10 +1715,13 @@ def get_media_details(media_id, stop_event=None):
             )
         elif linked_anilist_id is not None:
             try:
-                linked_details = get_media_details(
-                    linked_anilist_id,
-                    stop_event=stop_event,
-                )
+                if stop_event is None:
+                    linked_details = get_media_details(linked_anilist_id)
+                else:
+                    linked_details = get_media_details(
+                        linked_anilist_id,
+                        stop_event=stop_event,
+                    )
                 characters = linked_details.get("characters")
                 staff = linked_details.get("staff")
                 relations = linked_details.get("relations")

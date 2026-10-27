@@ -1224,33 +1224,28 @@ class UiStartupTests(unittest.TestCase):
                 os.chdir(directory)
                 with (
                     patch.object(preferences, "QSettings", MemorySettings),
-                    patch.object(CalendarPage, "refresh", autospec=True) as calendar_refresh,
-                    patch.object(FavoritesPage, "refresh", autospec=True) as favorites_refresh,
-                    patch.object(LibraryPage, "refresh", autospec=True) as library_refresh,
+                    patch("ui.qml_app_bridge.ApplicationBridge.refreshCalendar", autospec=True) as calendar_refresh,
+                    patch("ui.qml_app_bridge.ApplicationBridge.refreshFavorites", autospec=True) as favorites_refresh,
                 ):
                     window = MainWindow()
                     try:
+                        bridge = window.qml_bridge
+                        self.assertIsNotNone(bridge)
                         calendar_refresh.assert_not_called()
                         favorites_refresh.assert_not_called()
-                        library_refresh.assert_not_called()
-
-                        window.navigation.show("calendar")
-                        calendar_refresh.assert_called_once_with(window.calendar_page)
+                        bridge.navigate("calendar")
+                        calendar_refresh.assert_called_once_with(bridge)
                         favorites_refresh.assert_not_called()
-                        library_refresh.assert_not_called()
-
-                        window.navigation.show("favorites")
-                        favorites_refresh.assert_called_once_with(window.favorites_page)
-                        library_refresh.assert_not_called()
-
-                        window.navigation.show("collections")
-                        library_refresh.assert_called_once_with(window.library_page)
+                        bridge.navigate("favorites")
+                        favorites_refresh.assert_called_once_with(bridge)
+                        calendar_refresh.assert_called_once_with(bridge)
                     finally:
                         window.close()
                         window.deleteLater()
                         self.app.processEvents()
             finally:
                 os.chdir(old_cwd)
+
 
     def test_main_window_builds_with_only_registered_pages(self):
         from ui.branding import WordmarkLabel
@@ -1344,11 +1339,7 @@ class UiStartupTests(unittest.TestCase):
                 "languages": ["Japanese"],
                 "image_path": None,
                 "image_url": None,
-                "credits": [{
-                    "work_id": 101,
-                    "work_title": "Adaptation 101",
-                    "language": "Japanese",
-                }],
+                "credits": [{"work_id": 101, "work_title": "Adaptation 101", "language": "Japanese"}],
             },
             {
                 "person_id": 7002,
@@ -1357,53 +1348,44 @@ class UiStartupTests(unittest.TestCase):
                 "languages": ["English"],
                 "image_path": None,
                 "image_url": None,
-                "credits": [{
-                    "work_id": 102,
-                    "work_title": "Adaptation 102",
-                    "language": "English",
-                }],
+                "credits": [{"work_id": 102, "work_title": "Adaptation 102", "language": "English"}],
             },
         ]
+
+        def fake_profile(entity_type, entity_id):
+            return {"id": entity_id, "name": {"full": f"Profile {entity_id}"}}
+
         window = None
         with tempfile.TemporaryDirectory() as directory:
             old_cwd = os.getcwd()
             try:
                 os.chdir(directory)
-                with patch.object(preferences, "QSettings", MemorySettings), \
-                     patch("ui.main_window.get_bundle_character_voice_actors", return_value=actors) as get_actors, \
-                     patch("ui.pages.entity_profile_page.EntityProfilePage._start_profile_load"):
+                with (
+                    patch.object(preferences, "QSettings", MemorySettings),
+                    patch("ui.main_window.get_bundle_character_voice_actors", return_value=actors) as get_actors,
+                    patch("ui.qml_app_bridge.get_entity_profile", side_effect=fake_profile),
+                ):
                     window = MainWindow()
                     window.work_detail_page.work = {
                         "id": 101,
                         "_series_members": [{"id": 101}, {"id": 102}],
                     }
-                    window.show_entity_profile(
-                        "character",
-                        {"id": 501, "character_name": "Example Character"},
-                    )
+                    window.show_entity_profile("character", {"id": 501, "character_name": "Example Character"})
+                    bridge = window.qml_bridge
+                    self.assertEqual(get_actors.call_args.args, ([101, 102], 501))
                     self.assertEqual(
-                        get_actors.call_args.args,
-                        ([101, 102], 501),
-                    )
-
-                    window.show()
-                    self.app.processEvents()
-                    cards = window.entity_profile_page.findChildren(PersonCard)
-                    self.assertEqual(
-                        {card.person["person_id"] for card in cards},
+                        {item["personId"] for item in bridge.selectedProfile["voiceActorItems"]},
                         {7001, 7002},
                     )
-                    QTest.mouseClick(cards[0], Qt.LeftButton)
-                    self.assertEqual(window.entity_profile_page.current_type, "voice_actor")
-                    self.assertIn(
-                        window.entity_profile_page.current_record.get("person_id"),
-                        {7001, 7002},
-                    )
-
-                    window._back_from_entity_profile()
-                    self.assertEqual(window.entity_profile_page.current_type, "character")
+                    bridge.requestOpenProfile("voice_actor", 7001, "Japanese Actor")
+                    self.assertEqual(bridge.currentPage, "entity_profile")
+                    self.assertEqual(bridge.selectedProfile["entity_type"], "voice_actor")
+                    self.assertEqual(bridge.selectedProfile["id"], 7001)
+                    bridge.goBack()
+                    self.assertEqual(bridge.selectedProfile["entity_type"], "character")
+                    self.assertEqual(bridge.selectedProfile["id"], 501)
                     self.assertEqual(
-                        {actor["person_id"] for actor in window.entity_profile_page.voice_actors},
+                        {item["personId"] for item in bridge.selectedProfile["voiceActorItems"]},
                         {7001, 7002},
                     )
             finally:
@@ -1412,6 +1394,7 @@ class UiStartupTests(unittest.TestCase):
                     window.deleteLater()
                     self.app.processEvents()
                 os.chdir(old_cwd)
+
 
     def test_missing_character_voice_actor_triggers_targeted_refresh_and_updates_profile(self):
         MemorySettings.stores = {
@@ -1442,7 +1425,7 @@ class UiStartupTests(unittest.TestCase):
             try:
                 os.chdir(directory)
                 with patch.object(preferences, "QSettings", MemorySettings), \
-                     patch("ui.pages.entity_profile_page.EntityProfilePage._start_profile_load"), \
+                     patch("ui.qml_app_bridge.get_entity_profile", return_value={"id": 90185, "name": {"full": "Crusch Karsten"}}), \
                      patch("ui.main_window.get_bundle_character_voice_actors", side_effect=[[], [actor]]), \
                      patch("ui.main_window.get_work", side_effect=lambda work_id: {"id": work_id, "type": "ANIME"}), \
                      patch(
@@ -1469,18 +1452,18 @@ class UiStartupTests(unittest.TestCase):
 
                     invalidate.assert_called_once_with([21355, 108632])
                     queue_imports.assert_called_once_with([21355, 108632])
-                    self.assertEqual(window.entity_profile_page.voice_actors, [])
+                    self.assertEqual(window.qml_bridge.selectedProfile["voiceActorItems"], [])
 
                     window._complete_pending_character_cast_refresh(21355)
-                    self.assertEqual(window.entity_profile_page.voice_actors, [])
+                    self.assertEqual(window.qml_bridge.selectedProfile["voiceActorItems"], [])
                     window._complete_pending_character_cast_refresh(108632)
 
                     self.assertEqual(
-                        [item["person_id"] for item in window.entity_profile_page.voice_actors],
+                        [item["personId"] for item in window.qml_bridge.selectedProfile["voiceActorItems"]],
                         [901],
                     )
                     self.assertEqual(
-                        window.entity_profile_page.current_record["voice_actors"][0]["name"],
+                        window.qml_bridge.selectedProfile["voiceActorItems"][0]["name"],
                         "Recovered Voice Actor",
                     )
                     self.assertFalse(window._pending_character_cast_refreshes)

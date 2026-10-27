@@ -439,6 +439,8 @@ class ApplicationBridge(LibraryBridge):
         self._detail_generation = 0
         self._detail_workers = {}
         self._selected_profile = {}
+        self._profile_history = []
+        self._restoring_profile_history = False
         self._profile_generation = 0
         self._profile_workers = {}
         self._background_manager = background_manager
@@ -689,6 +691,14 @@ class ApplicationBridge(LibraryBridge):
 
     @Slot()
     def goBack(self):
+        if self._current_page == "entity_profile" and self._profile_history:
+            previous_profile = self._profile_history.pop()
+            self._restoring_profile_history = True
+            try:
+                self.setSelectedProfile(previous_profile)
+            finally:
+                self._restoring_profile_history = False
+            return
         target = self._previous_content_page
         if target in {"work_detail", "entity_profile", "relation"}:
             target = "home"
@@ -1826,11 +1836,56 @@ class ApplicationBridge(LibraryBridge):
                         item["role"] = " · ".join(filter(None, [item.get("role"), role_text]))
                     item["characters"] = list(dict.fromkeys(item.get("characters", []) + character_names))
         profile["workItems"] = work_items[:36]
+        voice_actor_items = []
+        raw_voice_actors = profile.get("voice_actors")
+        if isinstance(raw_voice_actors, list):
+            for source in raw_voice_actors:
+                if not isinstance(source, dict) and not hasattr(source, "keys"):
+                    continue
+                actor = _plain(dict(source))
+                person_id = _optional_int(actor.get("person_id") or actor.get("id"))
+                if person_id is None or person_id <= 0:
+                    continue
+                languages = actor.get("languages")
+                if isinstance(languages, (list, tuple)):
+                    language_label = " · ".join(
+                        str(item).replace("_", " ").replace("-", " ").title()
+                        for item in languages if str(item or "").strip()
+                    )
+                else:
+                    language_label = str(
+                        actor.get("language") or actor.get("person_language") or ""
+                    ).replace("_", " ").replace("-", " ").title()
+                voice_actor_items.append({
+                    "personId": person_id,
+                    "name": str(actor.get("name") or actor.get("person_name") or f"Voice actor {person_id}"),
+                    "languageLabel": language_label,
+                    "imageSource": _image_source({
+                        "image_path": actor.get("image_path") or actor.get("person_image_path"),
+                        "image_url": actor.get("image_url") or actor.get("person_image_url"),
+                    }),
+                })
+        profile["voiceActorItems"] = voice_actor_items
 
     @Slot(object)
     def setSelectedProfile(self, profile):
         if not isinstance(profile, dict):
             return
+        if (
+            not self._restoring_profile_history
+            and self._current_page == "entity_profile"
+            and self._selected_profile
+        ):
+            previous_identity = (
+                str(self._selected_profile.get("entity_type") or "").casefold(),
+                _optional_int(self._selected_profile.get("id")),
+            )
+            new_identity = (
+                str(profile.get("entity_type") or "").casefold(),
+                _optional_int(profile.get("id")),
+            )
+            if previous_identity != new_identity:
+                self._profile_history.append(_plain(self._selected_profile))
         self._selected_profile = _plain(profile)
         self._selected_profile["profileLoading"] = True
         self._selected_profile["profileError"] = ""
@@ -1847,6 +1902,22 @@ class ApplicationBridge(LibraryBridge):
         else:
             self._selected_profile["profileLoading"] = False
             self.selectedProfileChanged.emit()
+
+    @Slot(int, object)
+    def setCharacterVoiceActors(self, character_id, voice_actors):
+        try:
+            normalized_id = int(character_id)
+            selected_id = int(self._selected_profile.get("id"))
+        except (TypeError, ValueError, OverflowError, AttributeError):
+            return
+        if (
+            str(self._selected_profile.get("entity_type") or "").casefold() != "character"
+            or selected_id != normalized_id
+        ):
+            return
+        self._selected_profile["voice_actors"] = _plain(voice_actors or [])
+        self._decorate_selected_profile()
+        self.selectedProfileChanged.emit()
 
     @Slot(int, object, object)
     def _profile_finished(self, generation, profile, error):

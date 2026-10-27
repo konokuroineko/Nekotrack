@@ -1723,8 +1723,24 @@ class MainWindow(QMainWindow):
             except (TypeError, ValueError):
                 record = {"name": str(entity)}
             record["entity_type"] = kind
+            detail_work_ids = []
+            voice_actors = None
+            if kind == "character" and not from_favorites:
+                try:
+                    detail_work_ids = self.work_detail_page._detail_work_ids()
+                    character_id = record.get("id")
+                    voice_actors = (
+                        get_bundle_character_voice_actors(detail_work_ids, character_id)
+                        if character_id is not None else []
+                    ) or []
+                except (KeyError, TypeError, ValueError, OverflowError) as error:
+                    log_exception("character.voice_actor_profile_load_failed", error)
+                    voice_actors = []
+                record["voice_actors"] = voice_actors
             self.qml_bridge.setSelectedProfile(record)
-            self.navigation.show("entity_profile", record_history=False)
+            self.qml_bridge.navigate("entity_profile")
+            if kind == "character" and not voice_actors and not from_favorites:
+                self._queue_missing_character_voice_actor_refresh(record, detail_work_ids)
             return
         # Preserve whichever profile launched this one, including character
         # links opened from a voice actor's voice-acting credits. Back returns
@@ -1918,6 +1934,8 @@ class MainWindow(QMainWindow):
             dict(actor) for actor in (voice_actors or [])
             if isinstance(actor, dict) or hasattr(actor, "keys")
         ]
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            self.qml_bridge.setCharacterVoiceActors(character_id, actors)
 
         def matches(state):
             if not isinstance(state, dict) or state.get("entity_type") != "character":

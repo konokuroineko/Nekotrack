@@ -2797,6 +2797,84 @@ Item {
 
                             ColumnLayout {
                                 Layout.fillWidth: true
+                                visible: bridge.selectedProfile.entity_type === "character"
+                                    && (bridge.selectedProfile.voiceActorItems || []).length > 0
+                                spacing: 8
+                                Text {
+                                    text: "Voice actors"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 17
+                                    font.weight: Font.Bold
+                                }
+                                GridView {
+                                    id: profileVoiceActorsGrid
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: Math.min(
+                                        190,
+                                        Math.max(1, Math.ceil((bridge.selectedProfile.voiceActorItems || []).length
+                                            / Math.max(1, Math.floor(width / 220)))) * 92
+                                    )
+                                    cellWidth: Math.max(190, width / 3)
+                                    cellHeight: 92
+                                    clip: true
+                                    interactive: false
+                                    model: bridge.selectedProfile.voiceActorItems || []
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        width: profileVoiceActorsGrid.cellWidth - 8
+                                        height: 84
+                                        radius: 10
+                                        color: bridge.surfaceFillColor
+                                        border.width: 1
+                                        border.color: bridge.frameColor
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 8
+                                            spacing: 9
+                                            Image {
+                                                Layout.preferredWidth: 48
+                                                Layout.preferredHeight: 64
+                                                visible: !!modelData.imageSource
+                                                source: modelData.imageSource || ""
+                                                fillMode: Image.PreserveAspectCrop
+                                                asynchronous: true
+                                                cache: true
+                                            }
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 3
+                                                Text {
+                                                    Layout.fillWidth: true
+                                                    text: modelData.name || "Unknown voice actor"
+                                                    color: bridge.primaryColor
+                                                    font.pixelSize: 11
+                                                    font.weight: Font.DemiBold
+                                                    wrapMode: Text.WordWrap
+                                                    maximumLineCount: 2
+                                                    elide: Text.ElideRight
+                                                }
+                                                Text {
+                                                    Layout.fillWidth: true
+                                                    text: modelData.languageLabel || ""
+                                                    color: bridge.mutedColor
+                                                    font.pixelSize: 9
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: bridge.requestOpenProfile(
+                                                "voice_actor", modelData.personId, modelData.name
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
                                 visible: (bridge.selectedProfile.workItems || []).length > 0
                                 spacing: 8
                                 Text {

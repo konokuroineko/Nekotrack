@@ -129,7 +129,8 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
 
     def test_production_application_shell_loads_with_the_application_bridge(self):
         source = (ROOT / "ui" / "qml" / "ApplicationShell.qml").read_text(encoding="utf-8")
-        self.assertIn('text: "Edit bundle"', source)
+        self.assertIn('text: (bridge.selectedWork.seriesCount || 1) > 1', source)
+        self.assertIn('"Edit bundle appearance…"', source)
         self.assertIn('text: "Delete from Library"', source)
         self.assertIn('text: "Mark all watched"', source)
         self.assertIn('text: "Clear progress"', source)

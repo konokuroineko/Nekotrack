@@ -384,10 +384,15 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         from ui.preferences import defaults
         from ui.qml_app_bridge import ApplicationBridge
 
-        default_values = defaults()
+        default_values = defaults().copy()
+
+        def save_preference(key, value):
+            default_values[key] = value
+
         with patch.dict("os.environ", {"QT_SCALE_FACTOR": "1.0"}), \
              patch("ui.qml_bridge.get", side_effect=lambda key: default_values[key]), \
-             patch("ui.qml_app_bridge.get", side_effect=lambda key: default_values[key]):
+             patch("ui.qml_app_bridge.get", side_effect=lambda key: default_values[key]), \
+             patch("ui.qml_app_bridge.set_value", side_effect=save_preference):
             bridge = ApplicationBridge()
             self.assertEqual(bridge.activeUiScale, 100)
             bridge.setPreference("ui_scale", 125)
