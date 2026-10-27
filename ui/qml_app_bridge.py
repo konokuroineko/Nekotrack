@@ -1524,7 +1524,7 @@ class ApplicationBridge(LibraryBridge):
         else:
             add_fact("Occupation", profile.get("primaryOccupations"))
             if not profile.get("primaryOccupations"):
-                add_fact("Credits in this bundle", str(local_role or "").replace("\\n", " · "))
+                add_fact("Credits in this bundle", str(local_role or "").replace("\n", " · "))
             add_fact("Language", profile.get("languageV2") or profile.get("language"))
 
         for label, key in (
@@ -1583,7 +1583,7 @@ class ApplicationBridge(LibraryBridge):
                     or f"Untitled · {work_id}"
                 ).strip()
                 start_date = node.get("startDate") if isinstance(node.get("startDate"), dict) else {}
-                role_text = str(edge.get(role_key) or edge.get("role") or "").replace("\\n", " · ").strip()
+                role_text = str(edge.get(role_key) or edge.get("role") or "").replace("\n", " · ").strip()
                 character_names = []
                 for character in edge.get("characters") or []:
                     if not isinstance(character, dict):

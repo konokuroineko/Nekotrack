@@ -276,6 +276,47 @@ class QmlApplicationBridgeTests(unittest.TestCase):
             ],
         )
 
+
+    def test_profile_decorator_maps_favorite_state_and_linked_works(self):
+        from unittest.mock import patch
+
+        from ui.qml_app_bridge import ApplicationBridge
+
+        bridge = ApplicationBridge()
+        bridge._selected_profile = {
+            "id": 88,
+            "entity_type": "character",
+            "name": {"full": "Example Character"},
+            "gender": "Female",
+            "media": {
+                "edges": [{
+                    "characterRole": "MAIN",
+                    "node": {
+                        "id": 123,
+                        "type": "ANIME",
+                        "format": "TV",
+                        "title": {"english": "Example Series"},
+                        "coverImage": {"large": "https://images.example.invalid/cover.jpg"},
+                        "startDate": {"year": 2020},
+                    },
+                }],
+            },
+        }
+        with patch("ui.qml_app_bridge.is_entity_favorite", return_value=True):
+            bridge._decorate_selected_profile()
+
+        self.assertEqual(bridge._selected_profile["displayName"], "Example Character")
+        self.assertTrue(bridge._selected_profile["isFavorite"])
+        self.assertEqual(bridge._selected_profile["factItems"][0], {
+            "label": "Gender", "value": "Female"
+        })
+        work = bridge._selected_profile["workItems"][0]
+        self.assertEqual(work["title"], "Example Series")
+        self.assertEqual(work["section"], "Appears in")
+        self.assertEqual(work["mediaType"], "ANIME")
+        self.assertEqual(work["startYear"], 2020)
+        self.assertEqual(work["coverSource"], "https://images.example.invalid/cover.jpg")
+
     def test_refresh_errors_are_reported_without_crashing_the_host(self):
         def fail_loader():
             raise RuntimeError("synthetic database read failure")
