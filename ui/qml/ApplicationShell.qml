@@ -59,24 +59,17 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 72
 
-                    Row {
-                        anchors.fill: parent
+                    Image {
+                        anchors.left: parent.left
                         anchors.leftMargin: 4
-                        spacing: 0
-                        Text {
-                            text: "Neko"
-                            color: bridge.accentColor
-                            font.pixelSize: 29
-                            font.weight: Font.Black
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                        Text {
-                            text: "Track"
-                            color: bridge.primaryColor
-                            font.pixelSize: 29
-                            font.weight: Font.Bold
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 222
+                        height: 58
+                        source: bridge.brandWordmarkSource
+                        fillMode: Image.PreserveAspectFit
+                        smooth: true
+                        cache: true
+                        asynchronous: false
                     }
 
                     Rectangle {
@@ -1288,6 +1281,7 @@ Item {
                 // Settings
                 Flickable {
                     id: settingsPage
+                    property string settingsCategory: "General"
                     clip: true
                     contentWidth: width
                     contentHeight: settingsColumn.implicitHeight + 60
@@ -1316,9 +1310,33 @@ Item {
                             }
                         }
 
-                        Rectangle {
+                        Flow {
+                            id: settingsCategoryTabs
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 228
+                            spacing: 8
+
+                            Repeater {
+                                model: ["General", "Appearance", "Library", "Discovery", "Integrations", "Data & Storage", "Advanced"]
+                                delegate: Button {
+                                    required property string modelData
+                                    text: modelData
+                                    width: Math.max(84, implicitWidth)
+                                    height: 36
+                                    checkable: true
+                                    checked: settingsPage.settingsCategory === modelData
+                                    font.pixelSize: 12
+                                    onClicked: {
+                                        settingsPage.settingsCategory = modelData
+                                        settingsPage.contentY = 0
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            visible: settingsPage.settingsCategory === "General"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 258
                             radius: 13
                             color: bridge.surfaceFillColor
                             border.width: 1
@@ -1332,6 +1350,11 @@ Item {
                                     color: bridge.primaryColor
                                     font.pixelSize: 16
                                     font.weight: Font.Bold
+                                }
+                                CheckBox {
+                                    text: "Open maximized"
+                                    checked: bridge.maximized
+                                    onToggled: bridge.setPreference("maximized", checked)
                                 }
                                 CheckBox {
                                     text: "Check for updates at startup"
@@ -1368,8 +1391,9 @@ Item {
                         }
 
                         Rectangle {
+                            visible: settingsPage.settingsCategory === "Appearance"
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 150
+                            Layout.preferredHeight: Math.max(160, bridge.themePresetItems.length * 86 + 98)
                             radius: 13
                             color: bridge.surfaceFillColor
                             border.width: 1
@@ -1377,36 +1401,95 @@ Item {
                             ColumnLayout {
                                 anchors.fill: parent
                                 anchors.margins: 16
-                                spacing: 12
+                                spacing: 10
                                 Text {
                                     text: "Theme"
                                     color: bridge.primaryColor
                                     font.pixelSize: 16
                                     font.weight: Font.Bold
                                 }
-                                RowLayout {
+                                ColumnLayout {
                                     Layout.fillWidth: true
                                     spacing: 8
                                     Repeater {
-                                        model: bridge.themePresets
+                                        model: bridge.themePresetItems
                                         delegate: Button {
-                                            required property string modelData
+                                            id: themePresetButton
+                                            required property var modelData
                                             Layout.fillWidth: true
-                                            text: modelData
-                                            highlighted: bridge.themePreset === modelData
-                                            onClicked: bridge.setPreference("theme_preset", modelData)
+                                            Layout.preferredHeight: 78
+                                            checkable: true
+                                            checked: bridge.themePreset === modelData.name
+                                            background: Rectangle {
+                                                radius: 12
+                                                color: themePresetButton.checked ? bridge.accentSoftColor : bridge.surfaceAltFillColor
+                                                border.width: themePresetButton.checked ? 2 : 1
+                                                border.color: themePresetButton.checked ? bridge.accentColor : modelData.border
+                                            }
+                                            contentItem: RowLayout {
+                                                spacing: 12
+                                                Rectangle {
+                                                    Layout.preferredWidth: 56
+                                                    Layout.preferredHeight: 56
+                                                    radius: 12
+                                                    color: modelData.background
+                                                    border.width: 1
+                                                    border.color: modelData.border
+                                                    ColumnLayout {
+                                                        anchors.fill: parent
+                                                        anchors.margins: 7
+                                                        spacing: 5
+                                                        Rectangle {
+                                                            Layout.fillWidth: true
+                                                            Layout.fillHeight: true
+                                                            radius: 4
+                                                            color: modelData.accent
+                                                        }
+                                                        Rectangle {
+                                                            Layout.fillWidth: true
+                                                            Layout.fillHeight: true
+                                                            radius: 4
+                                                            color: modelData.surface
+                                                        }
+                                                    }
+                                                }
+                                                ColumnLayout {
+                                                    Layout.fillWidth: true
+                                                    spacing: 2
+                                                    Text {
+                                                        text: modelData.name
+                                                        color: bridge.primaryColor
+                                                        font.pixelSize: 13
+                                                        font.weight: Font.Bold
+                                                    }
+                                                    Text {
+                                                        text: modelData.description
+                                                        color: bridge.secondaryColor
+                                                        font.pixelSize: 10
+                                                        wrapMode: Text.WordWrap
+                                                        Layout.fillWidth: true
+                                                    }
+                                                }
+                                                Text {
+                                                    text: themePresetButton.checked ? "✓" : ""
+                                                    color: bridge.accentColor
+                                                    font.pixelSize: 18
+                                                    font.weight: Font.Bold
+                                                }
+                                            }
+                                            onClicked: bridge.setPreference("theme_preset", modelData.name)
                                         }
                                     }
                                 }
                                 CheckBox {
-                                    text: "Light mode"
+                                    text: "White mode"
                                     checked: bridge.lightMode
                                     onToggled: bridge.setPreference("light_mode", checked)
                                 }
                             }
                         }
-
                         Rectangle {
+                            visible: settingsPage.settingsCategory === "Appearance"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 480
                             radius: 13
@@ -1429,9 +1512,9 @@ Item {
                                     }
                                     ComboBox {
                                         Layout.preferredWidth: 115
-                                        model: [80, 90, 100, 110, 125, 150, 175, 200]
-                                        currentIndex: Math.max(0, model.indexOf(bridge.uiScale))
-                                        onActivated: bridge.setPreference("ui_scale", model[currentIndex])
+                                        model: ["80%", "90%", "100%", "110%", "125%", "150%", "175%", "200%"]
+                                        currentIndex: Math.max(0, [80, 90, 100, 110, 125, 150, 175, 200].indexOf(bridge.uiScale))
+                                        onActivated: bridge.setPreference("ui_scale", [80, 90, 100, 110, 125, 150, 175, 200][currentIndex])
                                     }
                                 }
                                 RowLayout {
@@ -1452,7 +1535,7 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text {
-                                        text: "Poster size"
+                                        text: "Card size"
                                         color: bridge.primaryColor
                                         font.pixelSize: 14
                                         font.weight: Font.Bold
@@ -1460,7 +1543,7 @@ Item {
                                     }
                                     ComboBox {
                                         Layout.preferredWidth: 165
-                                        model: ["Compact (180 px)", "Default (210 px)", "Large (240 px)", "Huge (270 px)"]
+                                        model: ["Compact", "Default", "Large", "Huge"]
                                         currentIndex: {
                                             switch (bridge.cardSize) {
                                             case 180: return 0
@@ -1476,7 +1559,7 @@ Item {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text {
-                                        text: "Text size"
+                                        text: "Interface text size"
                                         color: bridge.primaryColor
                                         font.pixelSize: 14
                                         font.weight: Font.Bold
@@ -1484,7 +1567,7 @@ Item {
                                     }
                                     ComboBox {
                                         Layout.preferredWidth: 165
-                                        model: ["Small (12 px)", "Default (13 px)", "Large (14 px)", "Very large (15 px)"]
+                                        model: ["Small", "Default", "Large", "Very large"]
                                         currentIndex: Math.max(0, [12, 13, 14, 15].indexOf(bridge.fontSize))
                                         onActivated: bridge.setPreference("font_size", [12, 13, 14, 15][currentIndex])
                                     }
@@ -1523,22 +1606,18 @@ Item {
                                     }
                                     ComboBox {
                                         Layout.preferredWidth: 165
-                                        model: ["Sharp (6)", "Soft (10)", "Rounded (12)", "Very rounded (16)", "Pill-like (20)"]
+                                        model: ["Sharp", "Soft", "Rounded", "Very rounded", "Pill-like"]
                                         currentIndex: Math.max(0, [6, 10, 12, 16, 20].indexOf(bridge.cornerRadius))
                                         onActivated: bridge.setPreference("corner_radius", [6, 10, 12, 16, 20][currentIndex])
                                     }
-                                }
-                                CheckBox {
-                                    text: "Highlight cards on hover"
-                                    checked: bridge.hoverHighlight
-                                    onToggled: bridge.setPreference("hover_highlight", checked)
                                 }
                             }
                         }
 
                         Rectangle {
+                            visible: settingsPage.settingsCategory === "Library"
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 136
+                            Layout.preferredHeight: 166
                             radius: 13
                             color: bridge.surfaceFillColor
                             border.width: 1
@@ -1554,7 +1633,12 @@ Item {
                                     font.weight: Font.Bold
                                 }
                                 CheckBox {
-                                    text: "Enable resize animations"
+                                    text: "Hover highlighting"
+                                    checked: bridge.hoverHighlight
+                                    onToggled: bridge.setPreference("hover_highlight", checked)
+                                }
+                                CheckBox {
+                                    text: "Smooth resize animation"
                                     checked: bridge.resizeAnimation
                                     onToggled: bridge.setPreference("resize_animation", checked)
                                 }
@@ -1568,7 +1652,7 @@ Item {
                                     }
                                     ComboBox {
                                         Layout.preferredWidth: 165
-                                        model: ["Instant (0 ms)", "Fast (180 ms)", "Default (260 ms)", "Smooth (380 ms)", "Slow (520 ms)"]
+                                        model: ["Instant", "Fast", "Default", "Smooth", "Slow"]
                                         currentIndex: Math.max(0, [0, 180, 260, 380, 520].indexOf(bridge.animationSpeed))
                                         onActivated: bridge.setPreference("animation_speed", [0, 180, 260, 380, 520][currentIndex])
                                     }
@@ -1577,6 +1661,7 @@ Item {
                         }
 
                         Rectangle {
+                            visible: settingsPage.settingsCategory === "Library"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 405
                             radius: 13
@@ -1629,6 +1714,7 @@ Item {
                         }
 
                         Rectangle {
+                            visible: settingsPage.settingsCategory === "Discovery"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 145
                             radius: 13
@@ -1670,6 +1756,7 @@ Item {
                         }
 
                         Rectangle {
+                            visible: settingsPage.settingsCategory === "Integrations"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 150
                             radius: 13
@@ -1712,6 +1799,7 @@ Item {
                         }
 
                         Rectangle {
+                            visible: settingsPage.settingsCategory === "Appearance"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 292
                             radius: 13
@@ -1832,6 +1920,7 @@ Item {
                         }
 
                         Rectangle {
+                            visible: settingsPage.settingsCategory === "Advanced"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 170
                             radius: 13
@@ -1848,16 +1937,91 @@ Item {
                                     font.pixelSize: 16
                                     font.weight: Font.Bold
                                 }
-                                CheckBox {
-                                    text: "Open maximized"
-                                    checked: bridge.maximized
-                                    onToggled: bridge.setPreference("maximized", checked)
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Button { text: "Run setup wizard again"; onClicked: bridge.requestSetup() }
+                                    Button { text: "Restore defaults"; onClicked: bridge.resetPreferences() }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 360
+                            visible: settingsPage.settingsCategory === "Data & Storage"
+                            radius: 13
+                            color: bridge.surfaceFillColor
+                            border.width: 1
+                            border.color: bridge.frameColor
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 16
+                                spacing: 10
+                                Text {
+                                    text: "Local data"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 16
+                                    font.weight: Font.Bold
+                                }
+                                Text {
+                                    text: "Your library and progress are stored in a local SQLite database. Downloaded artwork stays cached on this device."
+                                    color: bridge.secondaryColor
+                                    font.pixelSize: 12
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+                                Repeater {
+                                    model: [
+                                        { label: "Library", value: bridge.homeStats.all + " saved titles" },
+                                        { label: "Database", value: "Local SQLite · anime_tracker.db" },
+                                        { label: "Artwork", value: "Cached on this device when downloaded" },
+                                        { label: "Catalog metadata", value: "AniList + MangaBaka + TMDB" }
+                                    ]
+                                    delegate: RowLayout {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        spacing: 12
+                                        Text {
+                                            text: modelData.label
+                                            color: bridge.primaryColor
+                                            font.pixelSize: 12
+                                            font.weight: Font.DemiBold
+                                            Layout.preferredWidth: 150
+                                        }
+                                        Text {
+                                            text: modelData.value
+                                            color: bridge.secondaryColor
+                                            font.pixelSize: 12
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 1
+                                    color: bridge.frameColor
+                                    opacity: 0.7
+                                }
+                                Text {
+                                    text: "Troubleshooting report"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 13
+                                    font.weight: Font.Bold
+                                }
+                                Text {
+                                    text: "Exports the retained logs as one redacted report. The library database and cached artwork are excluded; review the report before sharing."
+                                    color: bridge.secondaryColor
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    Button { text: "Setup wizard"; onClicked: bridge.requestSetup() }
-                                    Button { text: "Restore defaults"; onClicked: bridge.resetPreferences() }
-                                    Button { text: "Export diagnostics"; onClicked: bridge.requestDiagnosticsExport() }
+                                    Button {
+                                        text: "Export diagnostics report"
+                                        onClicked: bridge.requestDiagnosticsExport()
+                                    }
+                                    Item { Layout.fillWidth: true }
                                 }
                             }
                         }
