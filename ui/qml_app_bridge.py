@@ -833,6 +833,28 @@ class ApplicationBridge(LibraryBridge):
         self._recommendation_items = rows
         self._recommendation_rows = by_id
 
+    @Slot(int, str, str, str, str)
+    def requestOpenRelatedWork(self, work_id, title, media_type="", media_format="", cover_source=""):
+        target_id = _optional_int(work_id)
+        if target_id is None or target_id == 0:
+            return
+        group = self._group_for_id(target_id)
+        if group is not None:
+            self.openWorkRequested.emit(target_id)
+            return
+        raw = {
+            "id": target_id,
+            "title": {"romaji": str(title or f"Untitled · {target_id}")},
+            "type": str(media_type or "UNKNOWN"),
+            "format": str(media_format or ""),
+        }
+        source = str(cover_source or "")
+        if source.startswith(("https://", "http://")):
+            raw["cover_url"] = source
+        elif source.startswith("file:"):
+            raw["cover_path"] = QUrl(source).toLocalFile()
+        self.searchWorkRequested.emit(raw)
+
     @Slot(int)
     def requestOpenRecommendation(self, work_id):
         raw = self._recommendation_rows.get(_optional_int(work_id))

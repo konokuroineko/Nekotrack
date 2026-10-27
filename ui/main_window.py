@@ -1991,6 +1991,36 @@ class MainWindow(QMainWindow):
         if self._shutdown_event.is_set():
             return
 
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            selected = self.qml_bridge.selectedWork
+            current_ids = {
+                int(value)
+                for value in (selected.get("memberIds") or [selected.get("id")])
+                if value is not None
+            }
+            if int(work_id) not in current_ids:
+                return
+            pending_ids = current_ids.intersection(self._detail_enrichment_ids)
+            if pending_ids:
+                log_event(
+                    "library.import.qml_detail_refresh_deferred",
+                    work_id=work_id,
+                    pending_member_ids=sorted(pending_ids),
+                )
+                return
+            raw_work = self.qml_bridge._selected_work_raw
+            QTimer.singleShot(
+                0,
+                lambda current=raw_work, bridge=self.qml_bridge:
+                    bridge.setSelectedWork(current) if bridge is not None else None,
+            )
+            log_event(
+                "library.import.qml_detail_refresh_queued",
+                work_id=work_id,
+                member_count=len(current_ids),
+            )
+            return
+
         current_work = getattr(self.work_detail_page, "work", None)
         if current_work is None:
             return
