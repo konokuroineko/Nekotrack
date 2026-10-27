@@ -56,6 +56,34 @@ class LibraryListModelTests(unittest.TestCase):
         self.assertEqual(model.data(index, model.BundleSummaryRole), "2 seasons")
         self.assertEqual(model.data(index, model.MemberIdsRole), [101, 102])
 
+
+    def test_member_ids_preserve_canonical_member_order(self):
+        model = LibraryListModel(library_loader=lambda: [{
+            "id": 99,
+            "title": "Older representative",
+            "_series_members": [
+                {"id": 99, "title": "Older representative"},
+                {"id": 5, "title": "Newer entry"},
+                {"id": 42, "title": "Middle entry"},
+            ],
+            "_series_count": 3,
+        }])
+        self.assertEqual(model.refresh(), 1)
+        self.assertEqual(model.data(model.index(0, 0), model.MemberIdsRole), [99, 5, 42])
+
+    def test_status_filter_maps_planned_to_planning_and_restores_all(self):
+        model = LibraryListModel(library_loader=lambda: [
+            {"id": 1, "title": "Watching", "status": "Watching"},
+            {"id": 2, "title": "Completed", "status": "Completed"},
+            {"id": 3, "title": "Planned", "status": "Planning"},
+        ])
+        self.assertEqual(model.refresh(), 3)
+        self.assertTrue(model.set_filter("Planned"))
+        self.assertEqual(model.rowCount(), 1)
+        self.assertEqual(model.data(model.index(0, 0), model.WorkIdRole), 3)
+        self.assertTrue(model.set_filter("All"))
+        self.assertEqual(model.rowCount(), 3)
+
     def test_cached_cover_path_wins_over_remote_url_when_file_exists(self):
         with tempfile.TemporaryDirectory() as directory:
             cover = Path(directory) / "cover.jpg"
