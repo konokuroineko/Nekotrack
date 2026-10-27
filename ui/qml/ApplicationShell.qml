@@ -2163,91 +2163,257 @@ Item {
 
                 // Entity profile
                 Item {
-                    ColumnLayout {
+                    id: entityProfilePage
+                    Flickable {
+                        id: profileScroll
                         anchors.fill: parent
-                        anchors.leftMargin: 34
-                        anchors.rightMargin: 34
-                        anchors.topMargin: 28
-                        anchors.bottomMargin: 30
-                        spacing: 15
+                        clip: true
+                        contentWidth: width
+                        contentHeight: profileColumn.implicitHeight + 60
+                        boundsBehavior: Flickable.StopAtBounds
 
-                        RowLayout {
-                            Button { text: "← Back"; onClicked: bridge.goBack() }
-                            Item { Layout.fillWidth: true }
-                        }
+                        ColumnLayout {
+                            id: profileColumn
+                            x: 34
+                            y: 28
+                            width: Math.max(1, profileScroll.width - 68)
+                            spacing: 16
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 18
-                            Rectangle {
-                                Layout.preferredWidth: 92
-                                Layout.preferredHeight: 110
-                                radius: 12
-                                color: bridge.accentSoftColor
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Button { text: "← Back"; onClicked: bridge.goBack() }
+                                Item { Layout.fillWidth: true }
+                                Button {
+                                    text: bridge.selectedProfile.isFavorite ? "★ Remove from favorites" : "☆ Add to favorites"
+                                    enabled: (bridge.selectedProfile.id || 0) > 0
+                                    onClicked: bridge.toggleSelectedProfileFavorite()
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 18
                                 Image {
-                                    anchors.fill: parent
-                                    anchors.margins: 2
-                                    source: bridge.selectedProfile.image && bridge.selectedProfile.image.large
-                                        ? bridge.selectedProfile.image.large : ""
+                                    Layout.preferredWidth: 180
+                                    Layout.preferredHeight: 240
+                                    source: bridge.selectedProfile.imageSource || ""
                                     fillMode: Image.PreserveAspectCrop
                                     asynchronous: true
-                                    visible: source.toString().length > 0
+                                    cache: true
+                                    layer.enabled: true
+                                    layer.effect: MultiEffect {
+                                        maskEnabled: true
+                                        autoPaddingEnabled: false
+                                        maskSource: Rectangle {
+                                            width: 180
+                                            height: 240
+                                            radius: bridge.cornerRadius
+                                            color: "white"
+                                            layer.enabled: true
+                                        }
+                                    }
                                 }
-                                Text {
-                                    anchors.centerIn: parent
-                                    visible: !bridge.selectedProfile.image || !bridge.selectedProfile.image.large
-                                    text: (bridge.selectedProfile.name || "?").toString().slice(0, 1).toUpperCase()
-                                    color: bridge.accentColor
-                                    font.pixelSize: 30
-                                    font.weight: Font.Black
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    spacing: 8
+                                    Text {
+                                        text: bridge.selectedProfile.displayName || "Profile"
+                                        color: bridge.primaryColor
+                                        font.pixelSize: 25
+                                        font.weight: Font.Black
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+                                    Text {
+                                        text: (bridge.selectedProfile.entity_type || "profile").toString().replace("_", " ").toUpperCase()
+                                        color: bridge.mutedColor
+                                        font.pixelSize: 12
+                                    }
+                                    Text {
+                                        visible: !!bridge.selectedProfile.siteUrl
+                                        text: bridge.selectedProfile.siteUrl || ""
+                                        color: bridge.accentColor
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+                                    Text {
+                                        visible: bridge.selectedProfile.profileLoading || false
+                                        text: "Loading profile details…"
+                                        color: bridge.mutedColor
+                                        font.pixelSize: 11
+                                    }
+                                    Text {
+                                        visible: !!bridge.selectedProfile.profileError
+                                        text: bridge.selectedProfile.profileError || ""
+                                        color: bridge.dangerColor
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
                                 }
                             }
+
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                spacing: 5
+                                visible: (bridge.selectedProfile.factItems || []).length > 0
+                                spacing: 8
                                 Text {
-                                    text: {
-                                        var name = bridge.selectedProfile.name
-                                        if (name && typeof name === "object")
-                                            return name.full || name.native || "Profile"
-                                        return name || bridge.selectedProfile.entity_name || "Profile"
-                                    }
+                                    text: "Profile facts"
                                     color: bridge.primaryColor
-                                    font.pixelSize: 25
-                                    font.weight: Font.Black
-                                    wrapMode: Text.WordWrap
+                                    font.pixelSize: 17
+                                    font.weight: Font.Bold
+                                }
+                                GridView {
+                                    id: profileFactsGrid
                                     Layout.fillWidth: true
-                                }
-                                Text {
-                                    text: (bridge.selectedProfile.entity_type || "profile").toString().replace("_", " ")
-                                    color: bridge.mutedColor
-                                    font.pixelSize: 12
-                                }
-                                Text {
-                                    text: bridge.selectedProfile.siteUrl || ""
-                                    color: bridge.accentColor
-                                    font.pixelSize: 11
+                                    Layout.preferredHeight: Math.min(
+                                        250,
+                                        Math.ceil((bridge.selectedProfile.factItems || []).length
+                                            / Math.max(1, Math.floor(width / Math.max(190, width / 3)))) * 58
+                                    )
+                                    cellWidth: Math.max(190, width / 3)
+                                    cellHeight: 58
+                                    interactive: false
+                                    clip: true
+                                    model: bridge.selectedProfile.factItems || []
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        width: profileFactsGrid.cellWidth - 8
+                                        height: 52
+                                        radius: 9
+                                        color: bridge.surfaceFillColor
+                                        border.width: 1
+                                        border.color: bridge.frameColor
+                                        Column {
+                                            anchors.fill: parent
+                                            anchors.margins: 8
+                                            spacing: 2
+                                            Text {
+                                                text: modelData.label
+                                                color: bridge.mutedColor
+                                                font.pixelSize: 9
+                                                font.weight: Font.Bold
+                                                elide: Text.ElideRight
+                                                width: parent.width
+                                            }
+                                            Text {
+                                                text: modelData.value
+                                                color: bridge.primaryColor
+                                                font.pixelSize: 11
+                                                wrapMode: Text.WordWrap
+                                                maximumLineCount: 2
+                                                elide: Text.ElideRight
+                                                width: parent.width
+                                            }
+                                        }
+                                    }
                                 }
                             }
-                        }
 
-                        Rectangle { Layout.fillWidth: true; height: 1; color: bridge.frameColor }
+                            Rectangle { Layout.fillWidth: true; height: 1; color: bridge.frameColor }
 
-                        Text {
-                            text: "About"
-                            color: bridge.primaryColor
-                            font.pixelSize: 17
-                            font.weight: Font.Bold
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            text: (bridge.selectedProfile.description || "").toString().replace(/<[^>]*>/g, "")
-                            color: bridge.secondaryColor
-                            font.pixelSize: 12
-                            wrapMode: Text.WordWrap
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Text {
+                                    text: "About"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 17
+                                    font.weight: Font.Bold
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: (bridge.selectedProfile.description || "").toString().replace(/<[^>]*>/g, "")
+                                    color: bridge.secondaryColor
+                                    font.pixelSize: 12
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                visible: (bridge.selectedProfile.workItems || []).length > 0
+                                spacing: 8
+                                Text {
+                                    text: "Appearances and credits"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 17
+                                    font.weight: Font.Bold
+                                }
+                                GridView {
+                                    id: profileWorksGrid
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: Math.min(
+                                        560,
+                                        Math.max(1, Math.ceil((bridge.selectedProfile.workItems || []).length
+                                            / Math.max(1, Math.floor(width / cellWidth)))) * cellHeight
+                                    )
+                                    cellWidth: bridge.cardSize + bridge.cardGap + 8
+                                    cellHeight: bridge.coverHeight + bridge.titleHeight
+                                        + bridge.seriesHeight + bridge.metadataHeight + 42
+                                    clip: true
+                                    interactive: false
+                                    model: bridge.selectedProfile.workItems || []
+                                    delegate: Item {
+                                        required property var modelData
+                                        width: profileWorksGrid.cellWidth
+                                        height: profileWorksGrid.cellHeight
+                                        Column {
+                                            anchors.fill: parent
+                                            spacing: 2
+                                            Text {
+                                                width: parent.width
+                                                height: 26
+                                                text: [modelData.section || "", modelData.role || ""].filter(Boolean).join(" · ")
+                                                color: bridge.mutedColor
+                                                font.pixelSize: 9
+                                                elide: Text.ElideRight
+                                                verticalAlignment: Text.AlignVCenter
+                                            }
+                                            PosterCard {
+                                                bridge: root.bridge
+                                                workId: modelData.id
+                                                title: modelData.title || "Untitled"
+                                                fullTitle: modelData.title || "Untitled"
+                                                coverSource: modelData.coverSource || ""
+                                                coverCacheWorkId: modelData.id
+                                                mediaType: modelData.mediaType || ""
+                                                format: modelData.format || ""
+                                                startYear: modelData.startYear || 0
+                                                seriesCount: 1
+                                                isInLibrary: false
+                                                showMenu: false
+                                                onActivated: function(workId) {
+                                                    bridge.requestOpenRelatedWork(
+                                                        workId,
+                                                        modelData.title,
+                                                        modelData.mediaType,
+                                                        modelData.format,
+                                                        modelData.coverSource
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                visible: !(bridge.selectedProfile.workItems || []).length
+                                    && !(bridge.selectedProfile.profileLoading || false)
+                                text: "No related titles were returned for this profile."
+                                color: bridge.mutedColor
+                                font.pixelSize: 11
+                            }
                         }
                     }
                 }
+
+
             }
         }
     }

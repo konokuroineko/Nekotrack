@@ -23,6 +23,7 @@ from database import (
     get_upcoming_library_episodes,
     is_work_in_library,
     record_recommendation_impressions,
+    is_entity_favorite,
     set_entity_favorite,
     set_episode_progress,
     set_reading_progress_count,
@@ -1467,19 +1468,175 @@ class ApplicationBridge(LibraryBridge):
     def selectedProfile(self):
         return dict(self._selected_profile)
 
+    def _decorate_selected_profile(self):
+        profile = self._selected_profile
+        if not isinstance(profile, dict):
+            return
+        kind = str(profile.get("entity_type") or "").casefold()
+        entity_id = _optional_int(profile.get("id"))
+        name_value = profile.get("name") or profile.get("entity_name") or profile.get("character_name")
+        if isinstance(name_value, dict):
+            display_name = str(
+                name_value.get("full")
+                or name_value.get("english")
+                or name_value.get("romaji")
+                or name_value.get("native")
+                or name_value.get("alternative")
+                or "Unknown profile"
+            ).strip()
+        else:
+            display_name = str(name_value or "Unknown profile").strip()
+        profile["displayName"] = display_name or "Unknown profile"
+
+        profile["imageSource"] = (
+            _image_source(profile)
+            or _image_source({
+                "image_path": profile.get("image_path") or profile.get("character_image_path"),
+                "image_url": profile.get("image_url") or profile.get("character_image_url"),
+            })
+        )
+
+        if kind in {"character", "staff", "voice_actor"} and entity_id is not None and entity_id > 0:
+            try:
+                profile["isFavorite"] = bool(is_entity_favorite(kind, entity_id))
+            except Exception as error:
+                log_exception(
+                    "qml_bridge.profile_favorite_read_failed",
+                    error,
+                    entity_type=kind,
+                    entity_id=entity_id,
+                )
+                profile["isFavorite"] = False
+        else:
+            profile["isFavorite"] = False
+
+        facts = []
+        def add_fact(label, value):
+            if isinstance(value, (list, tuple)):
+                value = " · ".join(str(item).strip() for item in value if str(item or "").strip())
+            value = str(value or "").strip()
+            if value and value.casefold() not in {"none", "unknown", "n/a"}:
+                facts.append({"label": str(label), "value": value})
+
+        local_role = profile.get("character_role") or profile.get("role")
+        if kind == "character":
+            add_fact("Role in this bundle", str(local_role or "").replace("_", " ").title())
+        else:
+            add_fact("Occupation", profile.get("primaryOccupations"))
+            if not profile.get("primaryOccupations"):
+                add_fact("Credits in this bundle", str(local_role or "").replace("\\n", " · "))
+            add_fact("Language", profile.get("languageV2") or profile.get("language"))
+
+        for label, key in (
+            ("Gender", "gender"),
+            ("Age", "age"),
+            ("Blood type", "bloodType"),
+            ("Hometown", "homeTown"),
+        ):
+            add_fact(label, profile.get(key))
+
+        for label, key in (("Born", "dateOfBirth"), ("Died", "dateOfDeath")):
+            date_value = profile.get(key)
+            if isinstance(date_value, dict):
+                date_parts = [
+                    str(date_value.get(part))
+                    for part in ("year", "month", "day")
+                    if date_value.get(part) not in (None, 0, "")
+                ]
+                add_fact(label, "-".join(date_parts))
+
+        years_active = profile.get("yearsActive")
+        if isinstance(years_active, list):
+            add_fact("Years active", years_active)
+        favourites_count = _optional_int(profile.get("favourites"))
+        if favourites_count and favourites_count > 0:
+            add_fact("Favourites", f"{favourites_count:,}")
+        profile["factItems"] = facts
+
+        work_items = []
+        work_index = {}
+        connections = []
+        if kind == "character":
+            connections.append(("Appears in", profile.get("media"), "characterRole"))
+        else:
+            connections.extend([
+                ("Staff credits", profile.get("staffMedia"), "staffRole"),
+                ("Character roles", profile.get("characterMedia"), "characterRole"),
+            ])
+
+        for section_title, connection, role_key in connections:
+            edges = connection.get("edges") if isinstance(connection, dict) else None
+            for edge in edges if isinstance(edges, list) else []:
+                if not isinstance(edge, dict):
+                    continue
+                node = edge.get("node")
+                if not isinstance(node, dict):
+                    continue
+                work_id = _optional_int(node.get("id"))
+                if work_id is None or work_id <= 0:
+                    continue
+                title_value = node.get("title") if isinstance(node.get("title"), dict) else {}
+                work_title = str(
+                    title_value.get("english")
+                    or title_value.get("romaji")
+                    or title_value.get("native")
+                    or f"Untitled · {work_id}"
+                ).strip()
+                start_date = node.get("startDate") if isinstance(node.get("startDate"), dict) else {}
+                role_text = str(edge.get(role_key) or edge.get("role") or "").replace("\\n", " · ").strip()
+                character_names = []
+                for character in edge.get("characters") or []:
+                    if not isinstance(character, dict):
+                        continue
+                    char_name = character.get("name")
+                    if isinstance(char_name, dict):
+                        char_name = char_name.get("full") or char_name.get("native")
+                    char_name = str(char_name or "").strip()
+                    if char_name and char_name not in character_names:
+                        character_names.append(char_name)
+
+                key = (work_id, section_title)
+                item = work_index.get(key)
+                if item is None:
+                    item = {
+                        "id": work_id,
+                        "title": work_title,
+                        "mediaType": str(node.get("type") or "UNKNOWN").upper(),
+                        "format": str(node.get("format") or "").upper(),
+                        "startYear": _optional_int(start_date.get("year")) or 0,
+                        "coverSource": _image_source(node),
+                        "section": section_title,
+                        "role": role_text,
+                        "characters": character_names,
+                    }
+                    work_index[key] = item
+                    work_items.append(item)
+                else:
+                    if role_text and role_text not in str(item.get("role") or "").split(" · "):
+                        item["role"] = " · ".join(filter(None, [item.get("role"), role_text]))
+                    item["characters"] = list(dict.fromkeys(item.get("characters", []) + character_names))
+        profile["workItems"] = work_items[:36]
+
     @Slot(object)
     def setSelectedProfile(self, profile):
-        if isinstance(profile, dict):
-            self._selected_profile = _plain(profile)
+        if not isinstance(profile, dict):
+            return
+        self._selected_profile = _plain(profile)
+        self._selected_profile["profileLoading"] = True
+        self._selected_profile["profileError"] = ""
+        self._decorate_selected_profile()
+        self.selectedProfileChanged.emit()
+        kind = str(self._selected_profile.get("entity_type") or "").casefold()
+        entity_id = _optional_int(self._selected_profile.get("id"))
+        if kind in {"character", "staff", "voice_actor"} and entity_id and entity_id > 0:
+            self._profile_generation += 1
+            worker = _ProfileWorker(self._profile_generation, kind, entity_id)
+            worker.signals.finished.connect(self._profile_finished)
+            self._profile_workers[self._profile_generation] = worker
+            QThreadPool.globalInstance().start(worker)
+        else:
+            self._selected_profile["profileLoading"] = False
             self.selectedProfileChanged.emit()
-            kind = str(self._selected_profile.get("entity_type") or "").casefold()
-            entity_id = _optional_int(self._selected_profile.get("id"))
-            if kind in {"character", "staff", "voice_actor"} and entity_id and entity_id > 0:
-                self._profile_generation += 1
-                worker = _ProfileWorker(self._profile_generation, kind, entity_id)
-                worker.signals.finished.connect(self._profile_finished)
-                self._profile_workers[self._profile_generation] = worker
-                QThreadPool.globalInstance().start(worker)
 
     @Slot(int, object, object)
     def _profile_finished(self, generation, profile, error):
@@ -1487,11 +1644,44 @@ class ApplicationBridge(LibraryBridge):
         if generation != self._profile_generation:
             return
         if error:
+            self._selected_profile["profileLoading"] = False
+            self._selected_profile["profileError"] = "Profile details could not be loaded right now."
+            self._decorate_selected_profile()
             log_event("qml_bridge.profile_load_failed", error=str(error)[:500])
+            self.selectedProfileChanged.emit()
             return
         if isinstance(profile, dict):
+            entity_type = self._selected_profile.get("entity_type")
             self._selected_profile.update(_plain(profile))
+            self._selected_profile["entity_type"] = entity_type
+            self._selected_profile["profileLoading"] = False
+            self._selected_profile["profileError"] = ""
+            self._decorate_selected_profile()
             self.selectedProfileChanged.emit()
+
+    @Slot()
+    def toggleSelectedProfileFavorite(self):
+        profile = self._selected_profile
+        kind = str(profile.get("entity_type") or "").casefold()
+        entity_id = _optional_int(profile.get("id"))
+        if kind not in {"character", "staff", "voice_actor"} or entity_id is None or entity_id <= 0:
+            return
+        favorite = not bool(profile.get("isFavorite"))
+        name = str(profile.get("displayName") or profile.get("entity_name") or profile.get("character_name") or "")
+        language = profile.get("languageV2") or profile.get("language")
+        try:
+            saved = set_entity_favorite(kind, entity_id, favorite, name=name, language=language)
+            if not saved:
+                raise RuntimeError("The favorite state was not saved.")
+        except Exception as error:
+            log_exception("qml_bridge.profile_favorite_save_failed", error, entity_type=kind, entity_id=entity_id)
+            profile["profileError"] = "Favorite state could not be saved."
+            self.selectedProfileChanged.emit()
+            return
+        profile["isFavorite"] = favorite
+        profile["profileError"] = ""
+        self.selectedProfileChanged.emit()
+        self.refreshFavorites()
 
     @Slot(int)
     def requestOpenProfileWork(self, work_id):
