@@ -129,6 +129,15 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
 
     def test_production_application_shell_loads_with_the_application_bridge(self):
         source = (ROOT / "ui" / "qml" / "ApplicationShell.qml").read_text(encoding="utf-8")
+        self.assertNotIn('text: "Your anime, manga and light novels in one place."', source)
+        self.assertNotIn('text: "In progress"', source)
+        self.assertIn('text: "Continue watching or reading"', source)
+        self.assertIn("orientation: ListView.Horizontal", source)
+        self.assertIn("recommendationGrid.contentHeight + 8", source)
+        self.assertIn("model: bridge.recommendationItems", source)
+        self.assertIn("A learning feed built from your collection, saved favorites, feedback, and the wider anime catalog.", source)
+        self.assertIn("recommendationLoading && bridge.recommendationItems.length === 0", source)
+        self.assertIn("bridge.loadMoreRecommendations()", source)
         self.assertIn('text: (bridge.selectedWork.seriesCount || 1) > 1', source)
         self.assertIn('"Edit bundle appearance…"', source)
         self.assertIn('text: "Delete from Library"', source)
