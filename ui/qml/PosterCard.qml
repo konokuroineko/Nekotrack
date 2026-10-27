@@ -43,10 +43,10 @@ Item {
     readonly property int contentHeight: posterHeight + 8 + titleHeight
         + (recommendationReason.length > 0
             ? 5 + reasonHeight + ((seriesCount > 1 || hasMetadata) ? 5 : 0)
+                + (seriesCount > 1 ? seriesHeight : 0)
+                + ((seriesCount > 1 && hasMetadata) ? 5 : 0)
             : ((seriesCount > 1 || hasMetadata) ? seriesHeight : 0))
-        + (seriesCount > 1 ? seriesHeight : 0)
         + (hasMetadata ? metaHeight : 0)
-        + ((recommendationReason.length > 0 && seriesCount > 1 && hasMetadata) ? 5 : 0)
         + 4
     readonly property int fixedHeight: contentHeight + (showAddButton ? 38 : 0)
 
