@@ -230,7 +230,7 @@ def _normalize_group(raw_group):
 
     return {
         "workId": work_id,
-        "title": title or f"Untitled · {work_id}",
+        "title": title or "Untitled",
         "mediaType": str(group.get("type") or "UNKNOWN").upper(),
         "format": str(group.get("format") or "").upper(),
         "startYear": start_year or 0,
@@ -375,7 +375,7 @@ class QmlApplicationBridge(QObject):
         super().__init__(parent)
         self._library_model = LibraryListModel(library_loader=library_loader, parent=self)
         self._library_model.rowsReloaded.connect(self.libraryChanged)
-        self._cover_network = QNetworkAccessManager(self)
+        self._cover_network = None
         self._cover_urls_inflight = set()
         self._cover_waiters = {}
         self._cover_cache_paths = {}
@@ -534,6 +534,8 @@ class QmlApplicationBridge(QObject):
         if url in self._cover_urls_inflight:
             return
         self._cover_urls_inflight.add(url)
+        if self._cover_network is None:
+            self._cover_network = QNetworkAccessManager(self)
         reply = self._cover_network.get(QNetworkRequest(QUrl(url)))
         reply.finished.connect(
             lambda current=reply, source=url: self._cover_download_finished(current, source)

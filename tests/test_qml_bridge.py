@@ -116,12 +116,13 @@ class LibraryListModelTests(unittest.TestCase):
 
 class QmlApplicationBridgeTests(unittest.TestCase):
     def test_bridge_exposes_model_and_emits_signed_work_ids(self):
-        bridge = QmlApplicationBridge(library_loader=lambda: [], auto_refresh=True)
+        bridge = QmlApplicationBridge(library_loader=lambda: [], auto_refresh=False)
         requested = []
         changed = []
         bridge.openWorkRequested.connect(requested.append)
         bridge.libraryChanged.connect(changed.append)
 
+        self.assertEqual(bridge.refreshLibrary(), 0)
         self.assertEqual(bridge.libraryModel.rowCount(), 0)
         self.assertTrue(bridge.requestOpenWork(42))
         self.assertTrue(bridge.requestOpenWork(-73))
