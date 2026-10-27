@@ -50,7 +50,17 @@ from ui.backgrounds import BackgroundCanvas, BackgroundManager
 from ui.branding import application_icon, navigation_icon, WordmarkLabel
 from ui.navigation import NavigationController
 from ui.preferences import get
-from ui.qml_app_bridge import ApplicationBridge
+try:
+    from ui.qml_app_bridge import ApplicationBridge
+except Exception as qml_bridge_import_error:
+    # The QML migration must not stop the established Widgets UI from launching.
+    ApplicationBridge = None
+    _QML_BRIDGE_IMPORT_ERROR = (
+        f"{type(qml_bridge_import_error).__name__}: {qml_bridge_import_error}"
+    )
+    log_event("qml_shell.bridge_import_failed", error=_QML_BRIDGE_IMPORT_ERROR)
+else:
+    _QML_BRIDGE_IMPORT_ERROR = ""
 from ui.setup_wizard import SetupWizard
 from ui.theme import COLORS, application_stylesheet, refresh_theme, surface_rgba
 from ui.pages.calendar_page import CalendarPage
@@ -907,7 +917,23 @@ class MainWindow(QMainWindow):
 
     def _install_qml_shell(self, initial_page="home"):
         """Make one QML root responsible for the visible shell and every main route."""
-        bridge = ApplicationBridge(parent=self, background_manager=self.background_manager)
+        if ApplicationBridge is None:
+            log_event(
+                "qml_shell.bridge_unavailable",
+                error=_QML_BRIDGE_IMPORT_ERROR or "The QML bridge could not be imported.",
+            )
+            return False
+        try:
+            bridge = ApplicationBridge(
+                parent=self,
+                background_manager=self.background_manager,
+            )
+        except Exception as error:
+            log_event(
+                "qml_shell.bridge_initialization_failed",
+                error=f"{type(error).__name__}: {error}",
+            )
+            return False
         quick = QQuickWidget(self)
         quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
         quick.setClearColor(QColor(COLORS["background"]))

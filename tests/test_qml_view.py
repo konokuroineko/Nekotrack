@@ -79,6 +79,14 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
         self._load_qml("LibraryView.qml", self.bridge)
 
 
+    def test_failed_qml_bridge_import_keeps_legacy_startup_available(self):
+        from unittest.mock import patch
+        from ui.main_window import MainWindow
+
+        with patch("ui.main_window.ApplicationBridge", None), patch("ui.main_window.log_event"):
+            self.assertFalse(MainWindow._install_qml_shell(object()))
+
+
     def test_qml_manage_actions_skip_duplicate_hidden_library_refreshes(self):
         library_source = (ROOT / "ui" / "pages" / "library_page.py").read_text(encoding="utf-8")
         main_source = (ROOT / "ui" / "main_window.py").read_text(encoding="utf-8")
