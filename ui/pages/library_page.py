@@ -260,6 +260,8 @@ class LibraryPage(QWidget):
         self._resize_timer = QTimer(self); self._resize_timer.setSingleShot(True); self._resize_timer.setInterval(140); self._resize_timer.timeout.connect(self._finish_resize)
         self._resize_layout_was_enabled = True; self._last_target_positions = None; self._animations = []
         self._defer_qml_load = bool(defer_initial_refresh)
+        self._qml_disabled = False
+        self._qml_failure_queued = False
         if defer_initial_refresh:
             self.qml_bridge = None
             self.qml_widget = None
@@ -280,6 +282,10 @@ class LibraryPage(QWidget):
         self.qml_bridge = None
         self.qml_widget = None
         self._using_qml = False
+        if self._qml_disabled:
+            self._build_legacy_shell()
+            return
+
         bridge = None
         quick = None
         try:
@@ -292,11 +298,21 @@ class LibraryPage(QWidget):
             quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
             quick.setClearColor(QColor(0, 0, 0, 0))
             quick.rootContext().setContextProperty("qmlBridge", bridge)
-            qml_path = Path(__file__).resolve().parents[1] / "qml" / "LibraryView.qml"
-            quick.setSource(QUrl.fromLocalFile(str(qml_path)))
-            if quick.status() == QQuickWidget.Status.Error:
-                detail = "; ".join(error.toString() for error in quick.errors())
-                raise RuntimeError(detail or "The QML Library view did not load.")
+
+            # Connect this before loading QML; Qt Quick may terminate the host
+            # process on a scene-graph failure without an explicit handler.
+            quick.statusChanged.connect(self._qml_status_changed)
+            scene_graph_error = getattr(quick, "sceneGraphError", None)
+            if scene_graph_error is not None:
+                scene_graph_error.connect(self._qml_scene_graph_error)
+
+            self.qml_bridge = bridge
+            self.qml_widget = quick
+            self._using_qml = True
+            bridge.openWorkRequested.connect(self._open_qml_work)
+            bridge.editBundleRequested.connect(self._edit_qml_bundle)
+            bridge.deleteWorkRequested.connect(self._delete_qml_work)
+            bridge.filterChanged.connect(self._on_qml_filter_changed)
 
             root = self.layout()
             if root is None:
@@ -311,24 +327,29 @@ class LibraryPage(QWidget):
             root.setContentsMargins(0, 0, 0, 0)
             root.setSpacing(0)
             root.addWidget(quick)
-            self.qml_bridge = bridge
-            self.qml_widget = quick
-            self._using_qml = True
-            bridge.openWorkRequested.connect(self._open_qml_work)
-            bridge.editBundleRequested.connect(self._edit_qml_bundle)
-            bridge.deleteWorkRequested.connect(self._delete_qml_work)
-            bridge.filterChanged.connect(self._on_qml_filter_changed)
-            quick.statusChanged.connect(self._qml_status_changed)
+
+            qml_path = Path(__file__).resolve().parents[1] / "qml" / "LibraryView.qml"
+            quick.setSource(QUrl.fromLocalFile(str(qml_path)))
+            if self._qml_disabled or quick.status() == QQuickWidget.Status.Error:
+                self._queue_qml_fallback(
+                    "QML Library view failed while loading: "
+                    + "; ".join(error.toString() for error in quick.errors())
+                )
+                return
+
             log_event("qml_bridge.library_view_loaded")
             return
         except Exception as error:
+            self._qml_disabled = True
+            self._using_qml = False
+            self.qml_widget = None
+            self.qml_bridge = None
             if quick is not None:
                 quick.deleteLater()
             if bridge is not None:
                 bridge.deleteLater()
             log_exception("qml_bridge.library_view_unavailable", error)
 
-        self._using_qml = False
         self._build_legacy_shell()
 
     def _build_legacy_shell(self):
@@ -411,15 +432,39 @@ class LibraryPage(QWidget):
     def _on_qml_filter_changed(self, value):
         self.current_filter = value
 
+    def _queue_qml_fallback(self, reason, *, scene_graph_error=False):
+        """Queue one safe fallback rather than allowing Qt Quick to exit the process."""
+        if self._qml_failure_queued or (self._qml_disabled and self.qml_widget is None):
+            return
+        self._qml_failure_queued = True
+        self._qml_disabled = True
+        self._using_qml = False
+        log_event(
+            "qml_bridge.library_view_fallback_queued",
+            reason=str(reason or "")[:2000],
+            scene_graph_error=bool(scene_graph_error),
+        )
+        QTimer.singleShot(0, self._fallback_to_legacy)
+
+    def _qml_scene_graph_error(self, error, message):
+        """Handle Qt Quick renderer errors before Qt's fatal default is invoked."""
+        self._queue_qml_fallback(
+            f"Qt Quick scene-graph error {error}: {message}",
+            scene_graph_error=True,
+        )
+
     def _qml_status_changed(self, status):
-        if status != QQuickWidget.Status.Error or not self._using_qml:
+        if status != QQuickWidget.Status.Error:
             return
         errors = []
         if self.qml_widget is not None:
             errors = [error.toString() for error in self.qml_widget.errors()]
-        log_event("qml_bridge.library_view_failed_after_load", errors=errors[:20])
+        self._queue_qml_fallback(
+            "QML Library view load failed: " + "; ".join(errors[:20])
+        )
+
+    def _fallback_to_legacy(self):
         previous_filter = self.current_filter
-        self._using_qml = False
         layout = self.layout()
         if layout is not None and self.qml_widget is not None:
             layout.removeWidget(self.qml_widget)
@@ -429,6 +474,8 @@ class LibraryPage(QWidget):
             self.qml_bridge.deleteLater()
         self.qml_widget = None
         self.qml_bridge = None
+        self._using_qml = False
+        self._qml_failure_queued = False
         self._build_legacy_shell()
         self._set_filter(
             previous_filter

@@ -468,7 +468,8 @@ class QmlApplicationBridge(QObject):
             "accentSoftColor": COLORS.get("accent_soft", "#3b304b"),
             "selectedTextColor": COLORS.get("nav_selected_text", "#ede5ff"),
             "selectedFrameColor": COLORS.get("nav_selected_frame", "#9271c5"),
-            "cardSize": max(120, min(480, int(get("card_size")))),
+            # Match WorkCard: preserve its 80..270 poster-width clamp.
+            "cardSize": min(270, max(80, int(get("card_size")))),
             "cardGap": max(0, min(120, int(get("card_gap")))),
             "cornerRadius": max(0, min(64, int(get("corner_radius")))),
             "fontSize": max(8, min(36, int(get("font_size")))),
