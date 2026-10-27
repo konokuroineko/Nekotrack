@@ -478,7 +478,9 @@ class ApplicationBridge(LibraryBridge):
         else:
             self._library_model.refresh()
             self._refresh_home_items()
-        self.refreshRecommendations()
+        # A screen revisit must not cancel an in-flight recommendations request.
+        if self._recommendation_thread is None:
+            self.refreshRecommendations()
 
     def _refresh_home_items(self):
         all_rows = list(self._library_model._all_rows)
@@ -599,8 +601,30 @@ class ApplicationBridge(LibraryBridge):
         thread.start()
 
     @staticmethod
-    def _recommendation_identity_ids(items):
-        return RecommendationWorker._results_identity_ids(items or [])
+    def _recommendation_result_identity_ids(work):
+        """Include every bundle member so pages cannot recommend duplicate entries."""
+        ids = set()
+        if not isinstance(work, dict):
+            return ids
+        work_id = _optional_int(work.get("id"))
+        if work_id is not None and work_id > 0:
+            ids.add(work_id)
+        members = work.get("_series_members")
+        if isinstance(members, list):
+            for member in members:
+                if not isinstance(member, dict):
+                    continue
+                member_id = _optional_int(member.get("id"))
+                if member_id is not None and member_id > 0:
+                    ids.add(member_id)
+        return ids
+
+    @classmethod
+    def _recommendation_identity_ids(cls, items):
+        ids = set()
+        for item in items or []:
+            ids.update(cls._recommendation_result_identity_ids(item))
+        return ids
 
     @Slot(object)
     def _recommendations_ready(self, results):
@@ -632,7 +656,7 @@ class ApplicationBridge(LibraryBridge):
             existing_ids = self._recommendation_identity_ids(self._recommendation_raw_items)
             new_batch = []
             for item in incoming:
-                identity_ids = RecommendationWorker._result_identity_ids(item)
+                identity_ids = self._recommendation_result_identity_ids(item)
                 if identity_ids.intersection(existing_ids):
                     continue
                 new_batch.append(item)

@@ -1033,8 +1033,8 @@ class MainWindow(QMainWindow):
         home = getattr(self, "home_page", None)
         if home is not None and not self._qml_shell_enabled:
             home.start_initial_recommendations_load()
-        elif self._qml_shell_enabled and self.qml_bridge is not None:
-            QTimer.singleShot(0, self.qml_bridge.refreshHome)
+        # The QML root already initialized the visible Home route; do not start
+        # a second recommendation worker during the startup handoff.
         if not self._startup_preload_scheduled:
             self._startup_preload_scheduled = True
             QTimer.singleShot(1_000, self._start_existing_library_episode_preload)
@@ -2159,6 +2159,8 @@ class MainWindow(QMainWindow):
 
         self._shutdown_requested = True
         self._shutdown_event.set()
+        if self.qml_bridge is not None:
+            self.qml_bridge.requestShutdown()
         request_api_shutdown()
         self._library_import_queue.close()
 
