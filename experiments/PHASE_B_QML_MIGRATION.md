@@ -43,7 +43,8 @@ These values are sourced from the app's current preferences and the QML bridge. 
 - Bundle episodes retain their owning work ID and are labeled by member/season. The visible list is bounded to `300` rows, and progress changes save to the correct member. “Mark all watched” processes each bundle member.
 - Manga/novel tracking uses per-member chapter/volume progress; progress summaries label episodes separately from chapters and volumes.
 - Character/staff/voice-actor profiles use the existing AniList profile API, show profile facts and linked works, and save favorites through the existing favorites table.
-- Work Details exposes refresh, bundle edit, and safe delete actions. Some detailed bundle-manipulation and title/cover editing actions remain legacy-page functionality and must be reviewed for parity before the draft is declared complete.
+- Work Details exposes refresh and a Manage menu for auto-bundling, adding/removing bundled members, bundle appearance, custom title/cover, and safe delete. These options reuse the existing Python dialog/database logic instead of duplicating it in QML.
+- The hidden legacy detail widget is used only as an action/dialog host for those options; it is not the visible Work Details interface. Bundle refreshes reload the open QML detail snapshot, and deleting the selected item returns the user to Library.
 
 ### Settings and packaging
 

@@ -454,6 +454,28 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         self.assertEqual(bridge.homeStats["all"], 2)
         self.assertEqual(bridge.homeStats["inProgress"], 1)
 
+
+    def test_detail_management_actions_emit_only_supported_work_actions(self):
+        from ui.qml_app_bridge import ApplicationBridge
+
+        bridge = ApplicationBridge()
+        bridge._selected_work = {"id": 123}
+        actions = []
+        bridge.detailActionRequested.connect(
+            lambda action, work_id: actions.append((action, work_id))
+        )
+
+        for action in ("auto_bundle", "add_to_bundle", "remove_from_bundle", "customize_identity"):
+            bridge.requestDetailAction(action)
+        bridge.requestDetailAction("delete")
+
+        self.assertEqual(actions, [
+            ("auto_bundle", 123),
+            ("add_to_bundle", 123),
+            ("remove_from_bundle", 123),
+            ("customize_identity", 123),
+        ])
+
     def test_refresh_errors_are_reported_without_crashing_the_host(self):
         def fail_loader():
             raise RuntimeError("synthetic database read failure")
