@@ -1152,6 +1152,11 @@ class ApplicationBridge(LibraryBridge):
         if work is not None:
             self.addToLibraryRequested.emit(work)
 
+    @Slot()
+    def requestAddSelectedWork(self):
+        if self._selected_work_raw:
+            self.addToLibraryRequested.emit(self._selected_work_raw)
+
     # ---- Calendar and reminders -------------------------------------------------
 
     @Property("QVariantList", notify=calendarChanged)

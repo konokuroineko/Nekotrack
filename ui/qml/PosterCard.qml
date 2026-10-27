@@ -38,8 +38,86 @@ Item {
     readonly property int seriesHeight: bridge.seriesHeight
     readonly property int metaHeight: bridge.metadataHeight
     readonly property bool hasMetadata: format.length > 0 || startYear > 0
+    property string displayTitle: ""
     readonly property int reasonHeight: recommendationReason.length > 0
         ? Math.min(48, reasonLabel.implicitHeight) : 0
+
+    TextMetrics {
+        id: titleMetrics
+        font.family: "Segoe UI"
+        font.pointSize: bridge.fontSize
+        font.weight: Font.Bold
+    }
+
+    function fitTitleToTwoLines(sourceText, availableWidth) {
+        var normalized = String(sourceText || "").replace(/\\s+/g, " ").trim()
+        if (!normalized)
+            return ""
+
+        var words = normalized.split(" ")
+        var first = ""
+        var firstEnd = 0
+        titleMetrics.elide = Text.ElideNone
+        for (var index = 0; index < words.length; index++) {
+            var candidate = first.length > 0 ? first + " " + words[index] : words[index]
+            titleMetrics.text = candidate
+            if (titleMetrics.advanceWidth <= availableWidth) {
+                first = candidate
+                firstEnd = index + 1
+            } else {
+                break
+            }
+        }
+        if (firstEnd >= words.length)
+            return first
+
+        var second = ""
+        var secondEnd = firstEnd
+        for (var secondIndex = firstEnd; secondIndex < words.length; secondIndex++) {
+            var secondCandidate = second.length > 0
+                ? second + " " + words[secondIndex] : words[secondIndex]
+            titleMetrics.text = secondCandidate
+            if (titleMetrics.advanceWidth <= availableWidth) {
+                second = secondCandidate
+                secondEnd = secondIndex + 1
+            } else {
+                break
+            }
+        }
+
+        if (secondEnd < words.length) {
+            var overflow = words.slice(secondEnd).join(" ")
+            titleMetrics.text = second.length > 0 ? second + " " + overflow : overflow
+            titleMetrics.elide = Text.ElideRight
+            titleMetrics.elideWidth = availableWidth
+            second = titleMetrics.elidedText
+        }
+        if (!second) {
+            titleMetrics.text = words.slice(firstEnd).join(" ")
+            titleMetrics.elide = Text.ElideRight
+            titleMetrics.elideWidth = availableWidth
+            second = titleMetrics.elidedText
+        }
+        return first + "\\n" + second
+    }
+
+    function refreshFittedTitle() {
+        displayTitle = fitTitleToTwoLines(
+            fullTitle,
+            Math.max(1, posterWidth - 4 - (showRecommendationFeedback ? 32 : 0))
+        )
+    }
+
+    onTitleChanged: refreshFittedTitle()
+    onFullTitleChanged: refreshFittedTitle()
+    onPosterWidthChanged: refreshFittedTitle()
+    onShowRecommendationFeedbackChanged: refreshFittedTitle()
+    Component.onCompleted: refreshFittedTitle()
+
+    Connections {
+        target: root.bridge
+        function onThemeChanged() { root.refreshFittedTitle() }
+    }
     readonly property int contentHeight: posterHeight + 8 + titleHeight
         + (recommendationReason.length > 0
             ? 5 + reasonHeight + ((seriesCount > 1 || hasMetadata) ? 5 : 0)
@@ -135,14 +213,15 @@ Item {
         Item { width: 1; height: 8 }
 
         Text {
-            width: root.posterWidth - (root.showRecommendationFeedback ? 30 : 0)
+            width: root.posterWidth + 4
             height: root.titleHeight
-            text: root.title
+            text: root.displayTitle
             color: bridge.primaryColor
+            font.family: "Segoe UI"
             font.pixelSize: bridge.fontSize
-            font.weight: Font.Bold
+            font.weight: 760
             wrapMode: Text.NoWrap
-            elide: Text.ElideRight
+            elide: Text.ElideNone
             verticalAlignment: Text.AlignTop
             ToolTip.visible: root.isHovered
             ToolTip.text: root.fullTitle

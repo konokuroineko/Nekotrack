@@ -138,6 +138,26 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         self.assertEqual(changed, [0])
 
 
+    def test_exact_default_card_geometry_matches_work_card(self):
+        from unittest.mock import patch
+
+        values = {
+            "card_size": 210,
+            "card_gap": 24,
+            "corner_radius": 12,
+            "font_size": 13,
+            "hover_highlight": True,
+        }
+        with patch("ui.qml_bridge.get", side_effect=lambda key: values[key]):
+            bridge = QmlApplicationBridge(library_loader=lambda: [], auto_refresh=False)
+
+        self.assertEqual(bridge.cardSize, 210)
+        self.assertEqual(bridge.coverHeight, 284)
+        self.assertEqual(bridge.cardGap, 24)
+        self.assertEqual(bridge.cornerRadius, 12)
+        self.assertEqual(bridge.fontSize, 13)
+        self.assertTrue(bridge.hoverHighlight)
+
     def test_card_width_and_poster_height_match_the_original_work_card(self):
         from unittest.mock import patch
 

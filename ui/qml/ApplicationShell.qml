@@ -1498,7 +1498,7 @@ Item {
                                         Button {
                                             visible: !(bridge.selectedWork.isInLibrary || false)
                                             text: "Add to Library"
-                                            onClicked: bridge.requestAddSearchWork(bridge.selectedWork.id)
+                                            onClicked: bridge.requestAddSelectedWork()
                                         }
                                         Button {
                                             visible: bridge.selectedWork.isInLibrary

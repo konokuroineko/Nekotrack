@@ -40,7 +40,9 @@ class InstallerConfigurationTests(unittest.TestCase):
         self.assertIn('Join-Path $repoRoot "ui\\qml"', script)
         self.assertIn('--add-data "ui\\qml;ui\\qml"', script)
         self.assertIn('--add-data "$qtQmlDirectory;PySide6/Qt/qml"', script)
-        self.assertIn('Join-Path $qmlSourceDirectory "LibraryView.qml"', script)
+        self.assertIn('$qmlFile in @("LibraryView.qml", "ApplicationShell.qml", "PosterCard.qml")', script)
+        self.assertIn('--add-data "ui\\qml;ui\\qml"', script)
+        self.assertIn('--add-data "$qtQmlDirectory;PySide6/Qt/qml"', script)
 
     def test_installer_keeps_the_custom_executable_icon(self):
         script = (ROOT / "installer" / "build-installer.ps1").read_text(encoding="utf-8")

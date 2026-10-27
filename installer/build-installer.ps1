@@ -39,8 +39,10 @@ try {
     }
 
     $qmlSourceDirectory = Join-Path $repoRoot "ui\qml"
-    if (-not (Test-Path -LiteralPath (Join-Path $qmlSourceDirectory "LibraryView.qml") -PathType Leaf)) {
-        throw "The QML Library view is missing from ui\qml."
+    foreach ($qmlFile in @("LibraryView.qml", "ApplicationShell.qml", "PosterCard.qml")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $qmlSourceDirectory $qmlFile) -PathType Leaf)) {
+            throw "A required production QML file is missing from ui\qml: $qmlFile"
+        }
     }
 
     # PyInstaller does not reliably collect Qt's QML import modules by itself.
