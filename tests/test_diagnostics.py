@@ -22,6 +22,12 @@ class DiagnosticRedactionTests(unittest.TestCase):
                 "nekotrack.test", logging.INFO, __file__, 2, "second-line", (), None
             )
             try:
+                # Current Python versions intentionally skip rollover for an empty
+                # log file. Seed it first so the next record exercises locked rotation.
+                seed = logging.LogRecord(
+                    "nekotrack.test", logging.INFO, __file__, 0, "seed-line", (), None
+                )
+                handler.emit(seed)
                 with patch.object(handler, "rotate", side_effect=PermissionError("file locked")) as rotate:
                     handler.emit(first)
                     self.assertIsNotNone(handler.stream)
