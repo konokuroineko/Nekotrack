@@ -14,6 +14,7 @@ from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtWidgets import QApplication
 
 from ui.qml_bridge import QmlApplicationBridge
+from ui.qml_app_bridge import ApplicationBridge
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +29,7 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
             auto_refresh=False,
         )
 
-    def test_production_library_qml_loads_with_the_python_bridge(self):
+    def _load_qml(self, file_name, bridge):
         widget = QQuickWidget()
         self.addCleanup(widget.deleteLater)
         widget.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
@@ -39,10 +40,11 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
             scene_graph_error.connect(
                 lambda error, message: scene_graph_errors.append((error, message))
             )
-        widget.rootContext().setContextProperty("qmlBridge", self.bridge)
-        qml_path = ROOT / "ui" / "qml" / "LibraryView.qml"
+        context = widget.rootContext()
+        context.setContextProperty("qmlBridge", bridge)
+        context.setContextProperty("appBridge", bridge)
+        qml_path = ROOT / "ui" / "qml" / file_name
         widget.setSource(QUrl.fromLocalFile(str(qml_path)))
-
         self.app.processEvents()
         self.assertEqual(
             widget.status(),
@@ -50,6 +52,15 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
             "\n".join(error.toString() for error in widget.errors()),
         )
         self.assertIsNotNone(widget.rootObject())
+        return widget
+
+    def test_production_library_qml_loads_with_the_python_bridge(self):
+        self._load_qml("LibraryView.qml", self.bridge)
+
+    def test_production_application_shell_loads_with_the_application_bridge(self):
+        bridge = ApplicationBridge()
+        self.addCleanup(bridge.deleteLater)
+        self._load_qml("ApplicationShell.qml", bridge)
 
 
 if __name__ == "__main__":

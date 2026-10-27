@@ -65,7 +65,10 @@ Item {
 
             Image {
                 id: cover
-                anchors.fill: parent
+                x: 2
+                y: 2
+                width: parent.width - 4
+                height: parent.height - 4
                 source: root.coverSource
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
@@ -99,7 +102,10 @@ Item {
             }
 
             Rectangle {
-                anchors.fill: parent
+                x: 2
+                y: 2
+                width: parent.width - 4
+                height: parent.height - 4
                 radius: bridge.cornerRadius
                 color: "transparent"
                 border.width: 3
@@ -133,9 +139,9 @@ Item {
 
         Item {
             width: 1
-            height: ((root.seriesCount <= 1
-                      && (root.format.length > 0 || root.startYear > 0))
-                      || root.seriesCount > 1) ? root.seriesHeight : 0
+            height: (root.seriesCount <= 1
+                     && (root.format.length > 0 || root.startYear > 0))
+                     ? root.seriesHeight : 0
         }
 
         Text {

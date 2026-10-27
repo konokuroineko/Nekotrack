@@ -349,6 +349,7 @@ class ApplicationBridge(LibraryBridge):
             return
         self._current_page = target
         self.pageChanged.emit()
+        self.navigationRequested.emit(target)
         if target == "collections":
             self.refreshAll()
         elif target == "home":

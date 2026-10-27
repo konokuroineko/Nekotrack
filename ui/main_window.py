@@ -729,6 +729,7 @@ class MainWindow(QMainWindow):
         self._qml_shell_enabled = False
         self._qml_shell_widget = None
         self.qml_bridge = None
+        self._qml_navigation_sync = False
         self.background_manager = BackgroundManager(self)
         self._release_reminder_tray = QSystemTrayIcon(application_icon(), self)
         self._release_reminder_tray.setToolTip("NekoTrack release reminders")
@@ -958,8 +959,13 @@ class MainWindow(QMainWindow):
     def _qml_navigation_requested(self, page_name):
         if not self._qml_shell_enabled:
             return
-        if page_name in getattr(self.navigation, "pages", {}):
+        if page_name not in getattr(self.navigation, "pages", {}):
+            return
+        self._qml_navigation_sync = True
+        try:
             self.navigation.show(page_name, record_history=False)
+        finally:
+            self._qml_navigation_sync = False
 
     def _qml_open_library_work(self, work_id):
         if not self._qml_shell_enabled or self.qml_bridge is None:
@@ -1041,6 +1047,9 @@ class MainWindow(QMainWindow):
 
     def _page_changed(self, page_name):
         if self._qml_shell_enabled and self.qml_bridge is not None:
+            if self._qml_navigation_sync:
+                self._last_navigation_page = page_name
+                return
             self.qml_bridge.setCurrentPage(page_name)
             self.qml_bridge.refreshVisiblePage()
             self._last_navigation_page = page_name

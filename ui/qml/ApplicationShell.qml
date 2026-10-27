@@ -836,7 +836,7 @@ Item {
                                     to: 270
                                     stepSize: 5
                                     value: bridge.cardSize
-                                    onMoved: bridge.setPreference("card_size", value)
+                                    onPressedChanged: if (!pressed) bridge.setPreference("card_size", value)
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true
@@ -859,7 +859,7 @@ Item {
                                     to: 36
                                     stepSize: 1
                                     value: bridge.fontSize
-                                    onMoved: bridge.setPreference("font_size", value)
+                                    onPressedChanged: if (!pressed) bridge.setPreference("font_size", value)
                                 }
                             }
                         }
@@ -1015,7 +1015,7 @@ Item {
                                     Button {
                                         visible: bridge.selectedWork.isInLibrary && bridge.selectedWork.mediaType === "ANIME"
                                         text: "Mark all watched"
-                                        onClicked: bridge.setEpisodeWatched(bridge.selectedWork.id, 1, true)
+                                        onClicked: bridge.markAllEpisodesWatched(bridge.selectedWork.id, true)
                                     }
                                     Item { Layout.fillWidth: true }
                                 }
@@ -1042,6 +1042,39 @@ Item {
                             font.pixelSize: 12
                             wrapMode: Text.WordWrap
                             clip: true
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: bridge.selectedWork.mediaType === "MANGA"
+                                || bridge.selectedWork.format === "NOVEL"
+                                || bridge.selectedWork.format === "LIGHT_NOVEL"
+                            spacing: 12
+                            Text {
+                                text: "Chapters read"
+                                color: bridge.primaryColor
+                                font.pixelSize: 12
+                                Layout.fillWidth: true
+                            }
+                            SpinBox {
+                                from: 0
+                                to: 100000
+                                editable: true
+                                value: bridge.selectedWork.progressChapters || 0
+                                onValueModified: bridge.setReadingProgress(bridge.selectedWork.id, "chapter", value)
+                            }
+                            Text {
+                                text: "Volumes read"
+                                color: bridge.primaryColor
+                                font.pixelSize: 12
+                            }
+                            SpinBox {
+                                from: 0
+                                to: 100000
+                                editable: true
+                                value: bridge.selectedWork.progressVolumes || 0
+                                onValueModified: bridge.setReadingProgress(bridge.selectedWork.id, "volume", value)
+                            }
                         }
 
                         RowLayout {
