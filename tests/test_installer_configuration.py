@@ -35,6 +35,13 @@ class InstallerConfigurationTests(unittest.TestCase):
         self.assertIn('Programs\\Inno Setup 7\\ISCC.exe', script)
         self.assertIn('$isccPath = $candidatePaths |', script)
 
+    def test_build_script_bundles_the_production_qml_view_and_qt_import_modules(self):
+        script = (ROOT / "installer" / "build-installer.ps1").read_text(encoding="utf-8")
+        self.assertIn('Join-Path $repoRoot "ui\\qml"', script)
+        self.assertIn('--add-data "ui\\qml;ui\\qml"', script)
+        self.assertIn('--add-data "$qtQmlDirectory;PySide6/Qt/qml"', script)
+        self.assertIn('Join-Path $qmlSourceDirectory "LibraryView.qml"', script)
+
     def test_installer_keeps_the_custom_executable_icon(self):
         script = (ROOT / "installer" / "build-installer.ps1").read_text(encoding="utf-8")
         self.assertIn('--icon "assets\\NekoTrack.ico"', script)
