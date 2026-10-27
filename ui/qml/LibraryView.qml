@@ -179,6 +179,8 @@ Item {
                                     radius: bridge.cornerRadius
                                     color: "white"
                                     antialiasing: true
+                                    visible: false
+                                    layer.enabled: true
                                 }
                             }
                             Rectangle {
@@ -220,7 +222,7 @@ Item {
                         }
                         Item {
                             width: 1
-                            height: (card.seriesCount <= 1 && (card.format.length > 0 || card.startYear > 0)) ? 12 : 0
+                            height: (card.seriesCount <= 1 && card.hasMetadata) ? bridge.seriesHeight : 0
                         }
 
                         Text {

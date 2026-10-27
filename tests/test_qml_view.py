@@ -1,5 +1,6 @@
 """Headless smoke test for the production QML Library view."""
 import os
+os.environ.setdefault("QT_QUICK_BACKEND", "software")
 from pathlib import Path
 import unittest
 
