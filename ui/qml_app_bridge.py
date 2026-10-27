@@ -185,7 +185,8 @@ class _DetailSignals(QObject):
 class _DetailSnapshotWorker(QRunnable):
     """Build QML detail snapshots from SQLite without blocking the GUI thread."""
 
-    def __init__(self, generation, work_id, member_ids, member_titles=None):
+    def __init__(self, generation, work_id, member_ids, member_titles=None,
+                 selected_episode_work_id=None, include_mangabaka=False):
         super().__init__()
         self.generation = int(generation)
         self.work_id = int(work_id)
@@ -198,6 +199,8 @@ class _DetailSnapshotWorker(QRunnable):
             for key, value in (member_titles or {}).items()
             if _optional_int(key) not in (None, 0)
         }
+        self.selected_episode_work_id = _optional_int(selected_episode_work_id)
+        self.include_mangabaka = bool(include_mangabaka)
         self.signals = _DetailSignals()
 
     @Slot()
@@ -214,10 +217,14 @@ class _DetailSnapshotWorker(QRunnable):
             volume_total = 0
             reading_progress_by_work = {}
 
-            # Fetch episode rows independently for every member. Bundle ids are
-            # kept in the canonical series order and every episode retains its
-            # owning id so the QML checkbox writes progress to the right season.
-            # Keep the visible snapshot bounded even for large bundles.
+            # Keep all bundle members for aggregate counters and related credits,
+            # but present only the selected member's episode catalog, as the legacy
+            # page did with its season selector.
+            selected_episode_id = (
+                self.selected_episode_work_id
+                if self.selected_episode_work_id in member_ids
+                else member_ids[0]
+            )
             for member_id in member_ids:
                 snapshot = get_episode_section_snapshot(member_id)
                 local_work = snapshot.get("work")
@@ -231,6 +238,8 @@ class _DetailSnapshotWorker(QRunnable):
                 progress_episodes += _optional_int(row_work.get("progress_episodes")) or 0
                 episode_total += _optional_int(row_work.get("episodes")) or 0
 
+                if member_id != selected_episode_id:
+                    continue
                 for source in snapshot.get("episodes") or []:
                     if len(episodes) >= 300:
                         break
@@ -309,6 +318,32 @@ class _DetailSnapshotWorker(QRunnable):
                     "relationTypes": str(row.get("relation_types") or row.get("relation_type") or "RELATED"),
                 })
 
+            mangabaka_metadata = {}
+            mangabaka_volumes = []
+            mangabaka_news = []
+            if self.include_mangabaka:
+                try:
+                    from database import get_provider_metadata_batch
+                    metadata_by_work = get_provider_metadata_batch(
+                        member_ids,
+                        ("mangabaka", "mangabaka_volumes", "mangabaka_news"),
+                    ) or {}
+                    for candidate_id in member_ids:
+                        candidate = metadata_by_work.get(int(candidate_id), {})
+                        if not isinstance(candidate, dict):
+                            continue
+                        record = candidate.get("mangabaka")
+                        if isinstance(record, dict):
+                            mangabaka_metadata = record
+                            volumes = candidate.get("mangabaka_volumes")
+                            news = candidate.get("mangabaka_news")
+                            mangabaka_volumes = volumes if isinstance(volumes, list) else []
+                            mangabaka_news = news if isinstance(news, list) else []
+                            break
+                except Exception:
+                    # Provider-only metadata must never prevent the core detail page from loading.
+                    pass
+
             payload = {
                 "episodes": episodes,
                 "characters": characters,
@@ -323,6 +358,9 @@ class _DetailSnapshotWorker(QRunnable):
                 "chapterTotal": chapter_total,
                 "progressVolumes": progress_volumes,
                 "volumeTotal": volume_total,
+                "mangabakaMetadata": mangabaka_metadata,
+                "mangabakaVolumeRecords": mangabaka_volumes,
+                "mangabakaNews": mangabaka_news,
             }
             self.signals.finished.emit(self.generation, payload, None)
         except Exception as error:
@@ -2075,6 +2113,12 @@ class ApplicationBridge(LibraryBridge):
             if str(member.get("mediaType") or "").upper() == "MANGA"
             or str(member.get("format") or "").upper() in {"NOVEL", "LIGHT_NOVEL"}
         ]
+        previous_work_id = _optional_int(self._selected_work.get("id"))
+        selected_episode_id = _optional_int(getattr(self, "_selected_episode_work_id", None))
+        if previous_work_id != work_id or selected_episode_id not in member_ids:
+            selected_episode_id = member_ids[0] if member_ids else work_id
+        self._selected_episode_work_id = selected_episode_id
+        raw_title_data = raw.get("title") if isinstance(raw.get("title"), dict) else {}
         detail_data = {
             "id": work_id,
             "title": str(title),
@@ -2084,6 +2128,8 @@ class ApplicationBridge(LibraryBridge):
             "format": fmt,
             "startYear": start_year,
             "synopsis": synopsis,
+            "nativeTitle": str(raw.get("native") or raw.get("title_native") or raw_title_data.get("native") or ""),
+            "score": _optional_int(raw.get("averageScore") or raw.get("score")) or 0,
             "status": str(raw.get("status") or (local_group or {}).get("status") or "Planning"),
             "isInLibrary": is_in_library,
             "progressEpisodes": _optional_int(raw.get("progress_episodes") or raw.get("_series_progress")) or 0,
@@ -2095,6 +2141,10 @@ class ApplicationBridge(LibraryBridge):
             "memberIds": member_ids,
             "bundleMembers": bundle_members,
             "readingMembers": reading_members,
+            "selectedEpisodeWorkId": selected_episode_id,
+            "mangabakaMetadata": _plain(raw.get("_mangabaka")) if isinstance(raw.get("_mangabaka"), dict) else {},
+            "mangabakaVolumeRecords": [],
+            "mangabakaNews": [],
             "characters": [],
             "staff": [],
             "relations": [],
@@ -2119,6 +2169,8 @@ class ApplicationBridge(LibraryBridge):
                 for member in bundle_members
                 if _optional_int(member.get("id")) is not None
             },
+            selected_episode_id,
+            bool(reading_members),
         )
         worker.signals.finished.connect(self._detail_snapshot_ready)
         self._detail_workers[generation] = worker
@@ -2175,6 +2227,15 @@ class ApplicationBridge(LibraryBridge):
         self._selected_work["characters"] = payload.get("characters") or []
         self._selected_work["staff"] = payload.get("staff") or []
         self._selected_work["relations"] = payload.get("relations") or []
+        metadata = payload.get("mangabakaMetadata")
+        if isinstance(metadata, dict) and metadata:
+            self._selected_work["mangabakaMetadata"] = metadata
+        volumes = payload.get("mangabakaVolumeRecords")
+        if isinstance(volumes, list):
+            self._selected_work["mangabakaVolumeRecords"] = volumes
+        news = payload.get("mangabakaNews")
+        if isinstance(news, list):
+            self._selected_work["mangabakaNews"] = news
         self._selected_work["detailsLoading"] = False
         self._episode_items = payload.get("episodes") or []
         self.selectedWorkChanged.emit()
@@ -2187,6 +2248,55 @@ class ApplicationBridge(LibraryBridge):
             staff_count=len(self._selected_work["staff"]),
             relation_count=len(self._selected_work["relations"]),
         )
+
+    @Slot(int)
+    def selectEpisodeMember(self, work_id):
+        selected_id = _optional_int(work_id)
+        if selected_id in (None, 0):
+            return
+        member_ids = [
+            _optional_int(value)
+            for value in self._selected_work.get("memberIds") or []
+        ]
+        member_ids = [value for value in member_ids if value not in (None, 0)]
+        if selected_id not in member_ids or selected_id == self._selected_episode_work_id:
+            return
+        self._selected_episode_work_id = selected_id
+        self.setSelectedWork(self._selected_work_raw)
+
+    @Slot(int, int)
+    def setEpisodeProgressThrough(self, work_id, watched_through):
+        selected_id = _optional_int(work_id)
+        count = _optional_int(watched_through)
+        if selected_id in (None, 0) or count is None:
+            return
+        member_ids = [
+            _optional_int(value)
+            for value in self._selected_work.get("memberIds") or []
+        ]
+        member_ids = [value for value in member_ids if value not in (None, 0)]
+        if selected_id not in member_ids:
+            return
+        try:
+            snapshot = get_episode_section_snapshot(selected_id)
+            numbers = sorted(
+                number
+                for row in snapshot.get("episodes") or []
+                for number in [_optional_int(dict(row).get("episode_number"))]
+                if number is not None
+            )
+            numbers = numbers[:max(0, min(int(count), len(numbers)))]
+            set_episode_progress(selected_id, numbers)
+        except Exception as error:
+            log_exception(
+                "qml_bridge.episode_progress_through_save_failed",
+                error,
+                work_id=selected_id,
+                watched_through=count,
+            )
+            return
+        self.setSelectedWork(self._selected_work_raw)
+        self.refreshHome()
 
     @Slot(int, bool)
     def markAllEpisodesWatched(self, work_id, watched):
