@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import QtQuick.Layouts
 
 Item {
@@ -96,13 +97,14 @@ Item {
                 boundsBehavior: Flickable.StopAtBounds
                 model: bridge.libraryModel
                 cellWidth: bridge.cardSize + bridge.cardGap + 8
-                cellHeight: Math.round(bridge.cardSize * 284 / 210 + Math.max(73, bridge.fontSize * 2.6 + 39) + bridge.cardGap)
+                cellHeight: bridge.coverHeight + 8 + bridge.titleHeight + bridge.seriesHeight + bridge.metadataHeight + 4 + 30
                 reuseItems: true
 
                 delegate: Item {
                     id: card
                     required property int workId
                     required property string title
+                    required property string fullTitle
                     required property string mediaType
                     required property string format
                     required property int startYear
@@ -112,14 +114,12 @@ Item {
                     required property int seriesCount
                     required property string bundleSummary
                     width: grid.cellWidth - bridge.cardGap
-                    height: grid.cellHeight - bridge.cardGap
+                    height: grid.cellHeight - 30
                     property bool hovered: false
                     property bool hasMetadata: format.length > 0 || startYear > 0
-                    property real visualHeight: Math.ceil(
-                        bridge.cardSize * 284 / 210 + 8 + bridge.fontSize * 2.6
-                        + (seriesCount > 1 ? 13 : (hasMetadata ? 12 : 0))
-                        + (hasMetadata ? 14 : 0) + 4
-                    )
+                    property real visualHeight: bridge.coverHeight + 8 + bridge.titleHeight
+                        + ((seriesCount > 1 || hasMetadata) ? bridge.seriesHeight : 0)
+                        + (hasMetadata ? bridge.metadataHeight : 0) + 4
 
                     Rectangle {
                         anchors.left: parent.left
@@ -139,15 +139,19 @@ Item {
 
                         Item {
                             width: bridge.cardSize
-                            height: bridge.cardSize * 284 / 210
+                            height: bridge.coverHeight
 
                             Image {
                                 id: cover
-                                anchors.fill: parent
+                                x: 2
+                                y: 2
+                                width: parent.width - 4
+                                height: parent.height - 4
                                 source: card.coverSource
                                 fillMode: Image.PreserveAspectCrop
                                 asynchronous: true
                                 cache: true
+                                visible: false
                                 property bool cacheRequested: false
                                 onSourceChanged: cacheRequested = false
                                 onStatusChanged: {
@@ -160,11 +164,31 @@ Item {
                                     }
                                 }
                             }
+                            MultiEffect {
+                                id: roundedCover
+                                x: cover.x
+                                y: cover.y
+                                width: cover.width
+                                height: cover.height
+                                source: cover
+                                maskEnabled: true
+                                autoPaddingEnabled: false
+                                maskSource: Rectangle {
+                                    width: cover.width
+                                    height: cover.height
+                                    radius: bridge.cornerRadius
+                                    color: "white"
+                                    antialiasing: true
+                                }
+                            }
                             Rectangle {
-                                anchors.fill: parent
+                                x: 2
+                                y: 2
+                                width: parent.width - 4
+                                height: parent.height - 4
                                 radius: bridge.cornerRadius
                                 color: "transparent"
-                                border.width: 2
+                                border.width: 3
                                 border.color: bridge.frameColor
                             }
                             Text {
@@ -183,15 +207,16 @@ Item {
 
                         Text {
                             width: bridge.cardSize - 4
-                            height: bridge.fontSize * 2.6
+                            height: bridge.titleHeight
                             text: card.title
                             color: bridge.primaryColor
                             font.pixelSize: bridge.fontSize
                             font.weight: Font.Bold
-                            wrapMode: Text.WordWrap
-                            maximumLineCount: 2
-                            elide: Text.ElideRight
+                            wrapMode: Text.NoWrap
+                            elide: Text.ElideNone
                             verticalAlignment: Text.AlignTop
+                            ToolTip.visible: card.hovered
+                            ToolTip.text: card.fullTitle
                         }
                         Item {
                             width: 1
@@ -200,7 +225,7 @@ Item {
 
                         Text {
                             width: bridge.cardSize - 4
-                            height: visible ? 13 : 0
+                            height: visible ? bridge.seriesHeight : 0
                             visible: card.seriesCount > 1
                             text: card.bundleSummary.length > 0 ? card.bundleSummary : (card.seriesCount + " entries")
                             color: bridge.primaryColor
@@ -211,7 +236,7 @@ Item {
                         }
                         Text {
                             width: bridge.cardSize - 4
-                            height: visible ? 14 : 0
+                            height: visible ? bridge.metadataHeight : 0
                             visible: card.hasMetadata
                             text: {
                                 var parts = []

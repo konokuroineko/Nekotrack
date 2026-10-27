@@ -438,7 +438,6 @@ class LibraryPage(QWidget):
             return
         self._qml_failure_queued = True
         self._qml_disabled = True
-        self._using_qml = False
         log_event(
             "qml_bridge.library_view_fallback_queued",
             reason=str(reason or "")[:2000],

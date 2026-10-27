@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import (
     QAbstractListModel, QModelIndex, QObject, Property, QUrl, Qt, Signal, Slot,
 )
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QFont, QFontMetrics, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 
 from database import save_cover_path
@@ -69,6 +69,43 @@ def _member_rows(group, work_id):
     if not members:
         members = [group]
     return members, [int(member["id"]) for member in members]
+
+
+def _fit_title_to_two_lines(text, width, font):
+    """Keep the same two-line title fitting used by the original WorkCard."""
+    text = " ".join(str(text).split())
+    if not text:
+        return ""
+    metrics = QFontMetrics(font)
+    words = text.split()
+    first = ""
+    first_end = 0
+    for index, word in enumerate(words):
+        candidate = word if not first else f"{first} {word}"
+        if metrics.horizontalAdvance(candidate) <= width:
+            first = candidate
+            first_end = index + 1
+        else:
+            break
+    if first_end >= len(words):
+        return first
+    second = ""
+    second_end = first_end
+    for index in range(first_end, len(words)):
+        candidate = words[index] if not second else f"{second} {words[index]}"
+        if metrics.horizontalAdvance(candidate) <= width:
+            second = candidate
+            second_end = index + 1
+        else:
+            break
+    if second_end < len(words):
+        overflow = " ".join(words[second_end:])
+        second = metrics.elidedText(
+            f"{second} {overflow}" if second else overflow,
+            Qt.TextElideMode.ElideRight,
+            width,
+        )
+    return f"{first}\n{second}" if second else f"{first}\n{metrics.elidedText(' '.join(words[first_end:]), Qt.TextElideMode.ElideRight, width)}"
 
 
 def _display_title(value, group=None):
@@ -228,9 +265,16 @@ def _normalize_group(raw_group):
     if cover_work_id is None:
         cover_work_id = work_id
 
+    full_title = title or f"Untitled · {work_id}"
+    title_font_size = max(8, int(get("font_size") or 13))
+    title_font = QFont("Segoe UI", title_font_size)
+    title_font.setWeight(QFont.Weight.Bold)
+    fitted_title = _fit_title_to_two_lines(full_title, max(1, min(270, max(80, int(get("card_size")))) - 4), title_font)
+
     return {
         "workId": work_id,
-        "title": title or "Untitled",
+        "title": fitted_title,
+        "fullTitle": full_title,
         "mediaType": str(group.get("type") or "UNKNOWN").upper(),
         "format": str(group.get("format") or "").upper(),
         "startYear": start_year or 0,
@@ -265,6 +309,7 @@ class LibraryListModel(QAbstractListModel):
     SeriesCountRole = ProgressVolumesRole + 1
     BundleSummaryRole = SeriesCountRole + 1
     MemberIdsRole = BundleSummaryRole + 1
+    FullTitleRole = MemberIdsRole + 1
 
     _ROLE_NAMES = {
         WorkIdRole: b"workId",
@@ -282,6 +327,7 @@ class LibraryListModel(QAbstractListModel):
         SeriesCountRole: b"seriesCount",
         BundleSummaryRole: b"bundleSummary",
         MemberIdsRole: b"memberIds",
+        FullTitleRole: b"fullTitle",
     }
     rowsReloaded = Signal(int)
 
@@ -473,8 +519,36 @@ class QmlApplicationBridge(QObject):
             "cardGap": max(0, min(120, int(get("card_gap")))),
             "cornerRadius": max(0, min(64, int(get("corner_radius")))),
             "fontSize": max(8, min(36, int(get("font_size")))),
+            "coverHeight": round(min(270, max(80, int(get("card_size")))) * 284 / 210),
+            "titleHeight": QFontMetrics(
+                QFont("Segoe UI", max(8, int(get("font_size") or 13)))
+            ).lineSpacing() * 2,
+            "seriesHeight": QFontMetrics(QFont("Segoe UI", 10)).height(),
+            "metadataHeight": self._metadata_height(),
             "hoverHighlight": bool(get("hover_highlight")),
         }
+
+    @staticmethod
+    def _metadata_height():
+        font = QFont("Segoe UI")
+        font.setPixelSize(11)
+        return QFontMetrics(font).height()
+
+    @Property(int, notify=themeChanged)
+    def coverHeight(self):
+        return self._theme_values["coverHeight"]
+
+    @Property(int, notify=themeChanged)
+    def titleHeight(self):
+        return self._theme_values["titleHeight"]
+
+    @Property(int, notify=themeChanged)
+    def seriesHeight(self):
+        return self._theme_values["seriesHeight"]
+
+    @Property(int, notify=themeChanged)
+    def metadataHeight(self):
+        return self._theme_values["metadataHeight"]
 
     @Slot()
     def refreshTheme(self):

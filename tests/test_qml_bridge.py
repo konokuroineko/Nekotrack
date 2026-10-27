@@ -108,7 +108,7 @@ class LibraryListModelTests(unittest.TestCase):
         ])
 
         self.assertEqual(model.refresh(), 1)
-        self.assertEqual(model.data(model.index(0, 0), model.TitleRole), "Untitled")
+        self.assertEqual(model.data(model.index(0, 0), model.TitleRole), "Untitled · 9")
         self.assertEqual(model.roleNames()[model.WorkIdRole], b"workId")
         self.assertEqual(model.roleNames()[model.MemberIdsRole], b"memberIds")
         self.assertIsNone(model.data(model.index(4, 0), model.TitleRole))
@@ -129,6 +129,23 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         self.assertFalse(bridge.requestOpenWork(0))
         self.assertEqual(requested, [42, -73])
         self.assertEqual(changed, [0])
+
+
+    def test_card_width_and_poster_height_match_the_original_work_card(self):
+        from unittest.mock import patch
+
+        values = {
+            "card_size": 400,
+            "card_gap": 24,
+            "corner_radius": 12,
+            "font_size": 13,
+            "hover_highlight": True,
+        }
+        with patch("ui.qml_bridge.get", side_effect=lambda key: values[key]):
+            bridge = QmlApplicationBridge(library_loader=lambda: [], auto_refresh=False)
+
+        self.assertEqual(bridge.cardSize, 270)
+        self.assertEqual(bridge.coverHeight, round(270 * 284 / 210))
 
     def test_refresh_errors_are_reported_without_crashing_the_host(self):
         def fail_loader():
