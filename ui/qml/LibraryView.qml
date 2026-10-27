@@ -96,7 +96,7 @@ Item {
                 boundsBehavior: Flickable.StopAtBounds
                 model: bridge.libraryModel
                 cellWidth: bridge.cardSize + bridge.cardGap + 8
-                cellHeight: Math.round(bridge.cardSize * 284 / 210 + Math.max(86, bridge.fontSize * 2.6 + 39) + bridge.cardGap)
+                cellHeight: Math.round(bridge.cardSize * 284 / 210 + Math.max(73, bridge.fontSize * 2.6 + 39) + bridge.cardGap)
                 reuseItems: true
 
                 delegate: Item {
@@ -114,9 +114,18 @@ Item {
                     width: grid.cellWidth - bridge.cardGap
                     height: grid.cellHeight - bridge.cardGap
                     property bool hovered: false
+                    property bool hasMetadata: format.length > 0 || startYear > 0
+                    property real visualHeight: Math.ceil(
+                        bridge.cardSize * 284 / 210 + 8 + bridge.fontSize * 2.6
+                        + (seriesCount > 1 ? 13 : (hasMetadata ? 12 : 0))
+                        + (hasMetadata ? 14 : 0) + 4
+                    )
 
                     Rectangle {
-                        anchors.fill: parent
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        height: card.visualHeight
                         radius: bridge.cornerRadius + 2
                         color: card.hovered && bridge.hoverHighlight ? bridge.surfaceHoverColor : "transparent"
                         border.width: 2
@@ -203,7 +212,7 @@ Item {
                         Text {
                             width: bridge.cardSize - 4
                             height: visible ? 14 : 0
-                            visible: card.format.length > 0 || card.startYear > 0
+                            visible: card.hasMetadata
                             text: {
                                 var parts = []
                                 if (card.format.length > 0)
@@ -232,7 +241,10 @@ Item {
                     }
 
                     MouseArea {
-                        anchors.fill: parent
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        height: card.visualHeight
                         z: 2
                         hoverEnabled: true
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
