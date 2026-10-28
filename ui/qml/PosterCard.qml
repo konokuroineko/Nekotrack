@@ -163,13 +163,15 @@ Item {
                     width: root.posterWidth
                     height: root.posterHeight
 
-                    Image {
+                    NekoImage {
+
+                        imageBridge: root.bridge
                         id: cover
                         x: 2
                         y: 2
                         width: parent.width - 4
                         height: parent.height - 4
-                        source: root.coverSource
+                        url: root.coverSource
                         fillMode: Image.PreserveAspectCrop
                         smooth: true
                         asynchronous: true

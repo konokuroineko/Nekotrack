@@ -1,5 +1,6 @@
 """Headless smoke test for the production QML Library view."""
 import os
+import tempfile
 os.environ.setdefault("QT_QUICK_BACKEND", "software")
 from pathlib import Path
 import unittest
@@ -14,7 +15,8 @@ from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtWidgets import QApplication
 
 from ui.qml_bridge import QmlApplicationBridge
-from ui.qml_app_bridge import ApplicationBridge
+from ui.qml_app_bridge import ApplicationBridge, _file_source
+from ui.qml_bridge import _resolved_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +56,31 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
         self.assertIsNotNone(widget.rootObject())
         return widget
 
+
+
+    def test_qml_image_paths_accept_file_urls_and_have_remote_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "cover.jpg"
+            image_path.write_bytes(b"test-image-placeholder")
+            file_url = QUrl.fromLocalFile(str(image_path)).toString()
+            self.assertEqual(_resolved_path(file_url), image_path.resolve())
+            resolved_url = _file_source(file_url)
+            self.assertEqual(Path(QUrl(resolved_url).toLocalFile()), image_path.resolve())
+
+        image_component = (ROOT / "ui" / "qml" / "NekoImage.qml").read_text(encoding="utf-8")
+        bridge_source = (ROOT / "ui" / "qml_bridge.py").read_text(encoding="utf-8")
+        self.assertIn("imageBridge.requestImageCache(remote)", image_component)
+        self.assertIn("def requestImageCache(self, raw_url):", bridge_source)
+        self.assertIn('self.imageCached.emit(url, QUrl.fromLocalFile(str(path.resolve())).toString())', bridge_source)
+
+    def test_application_shell_uses_styled_checkboxes_spinboxes_and_cached_images(self):
+        source = (ROOT / "ui" / "qml" / "ApplicationShell.qml").read_text(encoding="utf-8")
+        self.assertIn("NekoCheckBox {", source)
+        self.assertIn("NekoSpinBox {", source)
+        self.assertIn("NekoImage {", source)
+        self.assertNotIn("\n                                CheckBox {", source)
+        self.assertNotIn("\n                                        CheckBox {", source)
+        self.assertNotIn("\n                                        SpinBox {", source)
 
     def test_qml_cover_mask_keeps_legacy_crop_insets_and_separate_effect(self):
         source = (ROOT / "ui" / "qml" / "PosterCard.qml").read_text(encoding="utf-8")

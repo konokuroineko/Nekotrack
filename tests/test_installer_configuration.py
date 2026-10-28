@@ -40,7 +40,7 @@ class InstallerConfigurationTests(unittest.TestCase):
         self.assertIn('Join-Path $repoRoot "ui\\qml"', script)
         self.assertIn('--add-data "ui\\qml;ui\\qml"', script)
         self.assertIn('--add-data "$qtQmlDirectory;PySide6/Qt/qml"', script)
-        self.assertIn('$qmlFile in @("LibraryView.qml", "ApplicationShell.qml", "PosterCard.qml")', script)
+        self.assertIn('$qmlFile in @("LibraryView.qml", "ApplicationShell.qml", "PosterCard.qml", "NekoImage.qml", "NekoCheckBox.qml", "NekoSpinBox.qml")', script)
         self.assertIn('--add-data "ui\\qml;ui\\qml"', script)
         self.assertIn('--add-data "$qtQmlDirectory;PySide6/Qt/qml"', script)
 

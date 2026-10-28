@@ -84,7 +84,14 @@ def _title(value):
 
 def _file_source(path):
     try:
-        candidate = Path(str(path or "")).expanduser().resolve()
+        raw = str(path or "").strip()
+        if not raw or raw.casefold().startswith(("http://", "https://")):
+            return ""
+        if raw.casefold().startswith("file:"):
+            raw = QUrl(raw).toLocalFile()
+            if not raw:
+                return ""
+        candidate = Path(raw).expanduser().resolve()
         if candidate.is_file():
             return QUrl.fromLocalFile(str(candidate)).toString()
     except (OSError, RuntimeError, ValueError):
@@ -99,12 +106,23 @@ def _image_source(record):
     local = _file_source(path)
     if local:
         return local
+
     raw_url = record.get("cover_url") or record.get("image_url")
     if not raw_url:
         image = record.get("coverImage") or record.get("image")
         if isinstance(image, dict):
             raw_url = image.get("extraLarge") or image.get("large")
+    if not raw_url:
+        resolved_source = record.get("coverSource") or record.get("imageSource")
+        if isinstance(resolved_source, str) and resolved_source.strip():
+            local = _file_source(resolved_source)
+            if local:
+                return local
+            raw_url = resolved_source.strip()
     if isinstance(raw_url, str):
+        raw_url = raw_url.strip()
+        if raw_url.startswith("//"):
+            raw_url = "https:" + raw_url
         qurl = QUrl(raw_url)
         if qurl.isValid() and qurl.scheme().casefold() in {"https", "http"}:
             return qurl.toString()

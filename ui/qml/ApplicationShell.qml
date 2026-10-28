@@ -17,10 +17,12 @@ Item {
         color: bridge.backgroundColor
     }
 
-    Image {
+    NekoImage {
+
+        imageBridge: root.bridge
         id: backgroundArtwork
         anchors.fill: parent
-        source: bridge.backgroundSource
+        url: bridge.backgroundSource
         visible: bridge.backgroundSource.length > 0
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
@@ -59,13 +61,15 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 72
 
-                    Image {
+                    NekoImage {
+
+                        imageBridge: root.bridge
                         anchors.left: parent.left
                         anchors.leftMargin: 4
                         anchors.verticalCenter: parent.verticalCenter
                         width: 222
                         height: 58
-                        source: bridge.brandWordmarkSource
+                        url: bridge.brandWordmarkSource
                         fillMode: Image.PreserveAspectFit
                         smooth: true
                         cache: true
@@ -960,7 +964,8 @@ Item {
                                     model: ["Any licensing", "Licensed only", "Unlicensed only"]
                                     enabled: searchPage.providerFiltersEnabled
                                 }
-                                CheckBox {
+                                NekoCheckBox {
+                                    bridge: root.bridge
                                     id: fastSearch
                                     text: "Fast Search (skip franchise grouping)"
                                     Layout.columnSpan: 2
@@ -1247,9 +1252,10 @@ Item {
                                         radius: 9
                                         color: bridge.accentSoftColor
                                         clip: true
-                                        Image {
+                                        NekoImage {
+                                            imageBridge: root.bridge
                                             anchors.fill: parent
-                                            source: modelData.imageSource || ""
+                                            url: modelData.imageSource || ""
                                             fillMode: Image.PreserveAspectCrop
                                             asynchronous: true
                                             cache: true
@@ -1399,12 +1405,14 @@ Item {
                                     font.pixelSize: 16
                                     font.weight: Font.Bold
                                 }
-                                CheckBox {
+                                NekoCheckBox {
+                                    bridge: root.bridge
                                     text: "Open maximized"
                                     checked: bridge.maximized
                                     onToggled: bridge.setPreference("maximized", checked)
                                 }
-                                CheckBox {
+                                NekoCheckBox {
+                                    bridge: root.bridge
                                     text: "Check for updates at startup"
                                     checked: bridge.autoCheckUpdates
                                     onToggled: bridge.setPreference("auto_check_updates", checked)
@@ -1529,7 +1537,8 @@ Item {
                                         }
                                     }
                                 }
-                                CheckBox {
+                                NekoCheckBox {
+                                    bridge: root.bridge
                                     text: "White mode"
                                     checked: bridge.lightMode
                                     onToggled: bridge.setPreference("light_mode", checked)
@@ -1680,12 +1689,14 @@ Item {
                                     font.pixelSize: 16
                                     font.weight: Font.Bold
                                 }
-                                CheckBox {
+                                NekoCheckBox {
+                                    bridge: root.bridge
                                     text: "Hover highlighting"
                                     checked: bridge.hoverHighlight
                                     onToggled: bridge.setPreference("hover_highlight", checked)
                                 }
-                                CheckBox {
+                                NekoCheckBox {
+                                    bridge: root.bridge
                                     text: "Smooth resize animation"
                                     checked: bridge.resizeAnimation
                                     onToggled: bridge.setPreference("resize_animation", checked)
@@ -2146,10 +2157,12 @@ Item {
                                         border.width: 1
                                         border.color: bridge.borderColor
 
-                                        Image {
+                                        NekoImage {
+
+                                            imageBridge: root.bridge
                                             id: detailHeroCover
                                             anchors.fill: parent
-                                            source: bridge.selectedWork.coverSource || ""
+                                            url: bridge.selectedWork.coverSource || ""
                                             fillMode: Image.PreserveAspectCrop
                                             asynchronous: true
                                             cache: true
@@ -2436,7 +2449,8 @@ Item {
                                                             font.pixelSize: 11
                                                             wrapMode: Text.WordWrap
                                                         }
-                                                        SpinBox {
+                                                        NekoSpinBox {
+                                                            bridge: root.bridge
                                                             id: chapterProgressSpin
                                                             Layout.preferredWidth: 110
                                                             from: 0
@@ -2508,7 +2522,8 @@ Item {
                                                             font.pixelSize: 11
                                                             wrapMode: Text.WordWrap
                                                         }
-                                                        SpinBox {
+                                                        NekoSpinBox {
+                                                            bridge: root.bridge
                                                             id: volumeProgressSpin
                                                             Layout.preferredWidth: 110
                                                             from: 0
@@ -2622,7 +2637,8 @@ Item {
                                             font.pixelSize: 13
                                             font.weight: Font.DemiBold
                                         }
-                                        SpinBox {
+                                        NekoSpinBox {
+                                            bridge: root.bridge
                                             id: episodeProgressSpin
                                             from: 0
                                             to: bridge.episodeItems.length
@@ -2699,10 +2715,11 @@ Item {
                                                     radius: 8
                                                     clip: true
                                                     color: bridge.backgroundColor
-                                                    Image {
+                                                    NekoImage {
+                                                        imageBridge: root.bridge
                                                         id: episodeArtwork
                                                         anchors.fill: parent
-                                                        source: modelData.coverSource || ""
+                                                        url: modelData.coverSource || ""
                                                         fillMode: Image.PreserveAspectCrop
                                                         asynchronous: true
                                                         cache: true
@@ -2764,7 +2781,8 @@ Item {
                                                         font.pixelSize: 9
                                                         elide: Text.ElideRight
                                                     }
-                                                    CheckBox {
+                                                    NekoCheckBox {
+                                                        bridge: root.bridge
                                                         text: "Watched"
                                                         checked: modelData.watched
                                                         enabled: bridge.selectedWork.isInLibrary || false
@@ -3022,10 +3040,11 @@ Item {
                                                 Item {
                                                     Layout.preferredWidth: 88
                                                     Layout.preferredHeight: 116
-                                                    Image {
+                                                    NekoImage {
+                                                        imageBridge: root.bridge
                                                         id: characterPicture
                                                         anchors.fill: parent
-                                                        source: modelData.coverSource || ""
+                                                        url: modelData.coverSource || ""
                                                         fillMode: Image.PreserveAspectCrop
                                                         asynchronous: true
                                                         cache: true
@@ -3111,11 +3130,12 @@ Item {
                                                 Item {
                                                     Layout.preferredWidth: 88
                                                     Layout.preferredHeight: 116
-                                                    Image {
+                                                    NekoImage {
+                                                        imageBridge: root.bridge
                                                         id: voiceActorPicture
                                                         anchors.fill: parent
                                                         visible: String(modelData.voiceActorName || "").length > 0
-                                                        source: modelData.voiceActorCoverSource || ""
+                                                        url: modelData.voiceActorCoverSource || ""
                                                         fillMode: Image.PreserveAspectCrop
                                                         asynchronous: true
                                                         cache: true
@@ -3211,10 +3231,11 @@ Item {
                                                     Layout.preferredWidth: 120
                                                     Layout.preferredHeight: 120
                                                     Layout.alignment: Qt.AlignHCenter
-                                                    Image {
+                                                    NekoImage {
+                                                        imageBridge: root.bridge
                                                         id: staffPicture
                                                         anchors.fill: parent
-                                                        source: modelData.coverSource || ""
+                                                        url: modelData.coverSource || ""
                                                         fillMode: Image.PreserveAspectCrop
                                                         asynchronous: true
                                                         cache: true
@@ -3332,11 +3353,12 @@ Item {
                                                 anchors.fill: parent
                                                 anchors.margins: 2
                                                 spacing: 8
-                                                Image {
+                                                NekoImage {
+                                                    imageBridge: root.bridge
                                                     Layout.preferredWidth: bridge.cardSize
                                                     Layout.preferredHeight: bridge.coverHeight
                                                     Layout.alignment: Qt.AlignHCenter
-                                                    source: modelData.coverSource || ""
+                                                    url: modelData.coverSource || ""
                                                     fillMode: Image.PreserveAspectCrop
                                                     asynchronous: true
                                                     cache: true
@@ -3473,10 +3495,11 @@ Item {
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 18
-                                Image {
+                                NekoImage {
+                                    imageBridge: root.bridge
                                     Layout.preferredWidth: 180
                                     Layout.preferredHeight: 240
-                                    source: bridge.selectedProfile.imageSource || ""
+                                    url: bridge.selectedProfile.imageSource || ""
                                     fillMode: Image.PreserveAspectCrop
                                     asynchronous: true
                                     cache: true
@@ -3649,11 +3672,12 @@ Item {
                                             anchors.fill: parent
                                             anchors.margins: 8
                                             spacing: 9
-                                            Image {
+                                            NekoImage {
+                                                imageBridge: root.bridge
                                                 Layout.preferredWidth: 48
                                                 Layout.preferredHeight: 64
                                                 visible: !!modelData.imageSource
-                                                source: modelData.imageSource || ""
+                                                url: modelData.imageSource || ""
                                                 fillMode: Image.PreserveAspectCrop
                                                 asynchronous: true
                                                 cache: true

@@ -54,8 +54,6 @@ with patch.object(preferences, "QSettings", MemorySettings):
         pending_relation_sync_ids,
     )
     from ui.pages.home_page import HomePage
-    from ui.pages.calendar_page import CalendarPage
-    from ui.pages.favorites_page import FavoritesPage
     from ui.pages.settings_page import SettingsPage
     from ui.pages.work_detail_page import WorkDetailPage
     from ui.setup_wizard import SetupWizard

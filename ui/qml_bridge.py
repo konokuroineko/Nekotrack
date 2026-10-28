@@ -1,4 +1,6 @@
 """Read-only model and narrow host bridge for NekoTrack's QML Library view."""
+import hashlib
+import os
 import re
 import shutil
 from pathlib import Path
@@ -136,22 +138,47 @@ def _display_title(value, group=None):
 def _resolved_path(path):
     if not isinstance(path, str) or not path.strip():
         return None
-    candidate = Path(path).expanduser()
+    raw = path.strip()
+    if raw.casefold().startswith(("http://", "https://")):
+        return None
+    if raw.casefold().startswith("file:"):
+        raw = QUrl(raw).toLocalFile()
+        if not raw:
+            return None
+    candidate = Path(raw).expanduser()
     if not candidate.is_absolute():
         candidate = Path.cwd() / candidate
     try:
         return candidate.resolve() if candidate.is_file() else None
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
         return None
 
 
 def _remote_image_url(value):
     if not isinstance(value, str) or not value.strip():
         return ""
-    url = QUrl(value.strip())
+    raw = value.strip()
+    if raw.startswith("//"):
+        raw = "https:" + raw
+    url = QUrl(raw)
     if url.scheme().casefold() not in {"http", "https"} or not url.isValid():
         return ""
     return url.toString()
+
+
+def _qml_image_cache_directory():
+    configured = os.environ.get("NEKOTRACK_DATA_DIR")
+    if configured:
+        data_root = Path(configured).expanduser()
+    else:
+        roaming = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming"))
+        data_root = roaming / "NekoTrack"
+    return data_root / "images" / "qml-cache"
+
+
+def _qml_image_cache_path(url):
+    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return _qml_image_cache_directory() / (key + ".png")
 
 
 def _local_or_remote_cover(group, members, single_override=None):
@@ -428,6 +455,7 @@ class QmlApplicationBridge(QObject):
     filterChanged = Signal(str)
     errorOccurred = Signal(str)
     themeChanged = Signal()
+    imageCached = Signal(str, str)
 
     def __init__(self, parent=None, library_loader=None, auto_refresh=True):
         super().__init__(parent)
@@ -438,6 +466,8 @@ class QmlApplicationBridge(QObject):
         self._cover_urls_inflight = set()
         self._cover_waiters = {}
         self._cover_cache_paths = {}
+        self._image_urls_inflight = set()
+        self._image_cache_paths = {}
         self._theme_values = {}
         self._sync_theme_values()
         if auto_refresh:
@@ -615,6 +645,56 @@ class QmlApplicationBridge(QObject):
         normalized_id = _optional_int(work_id)
         if normalized_id is not None and normalized_id != 0:
             self.deleteWorkRequested.emit(normalized_id)
+
+    @Slot(str)
+    def requestImageCache(self, raw_url):
+        """Provide a persistent local fallback when Qt Quick cannot load a remote image."""
+        url = _remote_image_url(raw_url)
+        if not url:
+            return
+        path = self._image_cache_paths.get(url) or _qml_image_cache_path(url)
+        try:
+            if path.is_file():
+                self._image_cache_paths[url] = path
+                self.imageCached.emit(url, QUrl.fromLocalFile(str(path.resolve())).toString())
+                return
+        except (OSError, RuntimeError, ValueError):
+            pass
+        if url in self._image_urls_inflight:
+            return
+        self._image_urls_inflight.add(url)
+        if self._cover_network is None:
+            self._cover_network = QNetworkAccessManager(self)
+        reply = self._cover_network.get(QNetworkRequest(QUrl(url)))
+        reply.finished.connect(
+            lambda current=reply, source=url: self._image_download_finished(current, source)
+        )
+
+    def _image_download_finished(self, reply, url):
+        self._image_urls_inflight.discard(url)
+        try:
+            if reply.error() != QNetworkReply.NetworkError.NoError:
+                log_event(
+                    "qml_bridge.image_cache_failed",
+                    url_host=QUrl(url).host(),
+                    network_error=int(reply.error()),
+                )
+                return
+            pixmap = QPixmap()
+            if not pixmap.loadFromData(bytes(reply.readAll())) or pixmap.isNull():
+                log_event("qml_bridge.image_cache_decode_failed", url_host=QUrl(url).host())
+                return
+            path = _qml_image_cache_path(url)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not pixmap.save(str(path), "PNG", 100):
+                log_event("qml_bridge.image_cache_save_failed", url_host=QUrl(url).host())
+                return
+            self._image_cache_paths[url] = path
+            self.imageCached.emit(url, QUrl.fromLocalFile(str(path.resolve())).toString())
+        except Exception as error:
+            log_exception("qml_bridge.image_cache_failed", error, url_host=QUrl(url).host())
+        finally:
+            reply.deleteLater()
 
     @Slot(int, str)
     def requestCoverCache(self, work_id, raw_url):
