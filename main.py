@@ -1,4 +1,6 @@
 import os
+# Use the palette-aware Qt Quick Controls style so QML controls respect NekoTrack's theme.
+os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 import shutil
 import sys
 import time
