@@ -82,6 +82,16 @@ class QmlLibraryViewSmokeTests(unittest.TestCase):
         self.assertNotIn("\n                                        CheckBox {", source)
         self.assertNotIn("\n                                        SpinBox {", source)
 
+    def test_detail_images_use_the_same_independent_mask_pattern_as_work_cards(self):
+        source = (ROOT / "ui" / "qml" / "ApplicationShell.qml").read_text(encoding="utf-8")
+        component = (ROOT / "ui" / "qml" / "NekoRoundedImage.qml").read_text(encoding="utf-8")
+        self.assertIn("NekoRoundedImage {", source)
+        self.assertNotIn("layer.effect: MultiEffect", source)
+        self.assertIn("source: image", component)
+        self.assertIn("maskSource: mask", component)
+        self.assertIn("layer.enabled: true", component)
+        self.assertIn("metadataRefreshing", source)
+
     def test_qml_cover_mask_keeps_legacy_crop_insets_and_separate_effect(self):
         source = (ROOT / "ui" / "qml" / "PosterCard.qml").read_text(encoding="utf-8")
         self.assertIn("fillMode: Image.PreserveAspectCrop", source)

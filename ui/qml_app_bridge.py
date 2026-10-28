@@ -11,11 +11,12 @@ from PySide6.QtCore import QObject, Property, QRunnable, QThread, QThreadPool, Q
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QFileDialog
 
-from api import get_entity_profile
+from api import get_entity_profile, get_media_details
 from catalog_search import search_combined_media
 from database import (
     get_all_library,
     get_bundle_characters,
+    get_bundle_detail_readiness,
     get_bundle_relations,
     get_bundle_staff,
     get_entity_favorites,
@@ -28,6 +29,9 @@ from database import (
     record_recommendation_impressions,
     is_entity_favorite,
     set_entity_favorite,
+    save_anime,
+    save_characters,
+    save_staff,
     set_episode_progress,
     set_reading_progress_count,
     set_recommendation_feedback,
@@ -360,11 +364,31 @@ class _DetailSnapshotWorker(QRunnable):
                     # Provider-only metadata must never prevent the core detail page from loading.
                     pass
 
+            try:
+                detail_readiness = get_bundle_detail_readiness(member_ids) or {}
+                metadata_needs_refresh_ids = [
+                    member_id
+                    for member_id in member_ids
+                    if not (
+                        isinstance(detail_readiness.get(member_id), dict)
+                        and detail_readiness[member_id].get("work_exists")
+                        and detail_readiness[member_id].get("characters_loaded")
+                    )
+                ]
+            except Exception as error:
+                log_exception(
+                    "qml_bridge.detail_metadata_readiness_failed",
+                    error,
+                    work_id=self.work_id,
+                )
+                metadata_needs_refresh_ids = []
+
             payload = {
                 "episodes": episodes,
                 "characters": characters,
                 "staff": staff,
                 "relations": relations,
+                "metadataNeedsRefreshIds": metadata_needs_refresh_ids,
                 "localWork": local_row,
                 "progressEpisodes": progress_episodes,
                 "episodeTotal": episode_total,
@@ -406,6 +430,108 @@ class _ProfileWorker(QRunnable):
                 None,
                 f"{type(error).__name__}: {error}",
             )
+
+
+
+class _DetailMetadataSignals(QObject):
+    finished = Signal(int, object, object)
+
+
+class _DetailMetadataWorker(QRunnable):
+    """Fetch absent cast/crew/relations away from the UI thread, then read the updated cache."""
+
+    def __init__(self, generation, work_ids):
+        super().__init__()
+        self.generation = int(generation)
+        self.work_ids = tuple(dict.fromkeys(
+            int(value) for value in (work_ids or ())
+            if _optional_int(value) not in (None, 0)
+        ))
+        self.signals = _DetailMetadataSignals()
+
+    @Slot()
+    def run(self):
+        errors = []
+        try:
+            readiness = get_bundle_detail_readiness(self.work_ids) or {}
+        except Exception as error:
+            readiness = {}
+            log_exception(
+                "qml_bridge.detail_metadata_readiness_failed",
+                error,
+                work_ids=list(self.work_ids),
+            )
+
+        for work_id in self.work_ids:
+            state = readiness.get(work_id)
+            if (
+                isinstance(state, dict)
+                and state.get("work_exists")
+                and state.get("characters_loaded")
+            ):
+                continue
+            try:
+                details = get_media_details(work_id)
+                if not isinstance(details, dict) or _optional_int(details.get("id")) != work_id:
+                    raise RuntimeError("The detail provider returned a mismatched work ID.")
+
+                save_anime(details)
+
+                character_connection = details.get("characters")
+                character_edges = (
+                    character_connection.get("edges")
+                    if isinstance(character_connection, dict)
+                    else None
+                )
+                if details.get("_characters_snapshot_valid", True) is False:
+                    save_characters(work_id, None)
+                else:
+                    save_characters(work_id, character_edges)
+
+                staff_connection = details.get("staff")
+                staff_edges = (
+                    staff_connection.get("edges")
+                    if isinstance(staff_connection, dict)
+                    else None
+                )
+                if details.get("_staff_snapshot_valid", True) is False:
+                    save_staff(work_id, None)
+                else:
+                    save_staff(work_id, staff_edges)
+            except Exception as error:
+                errors.append(f"{work_id}: {type(error).__name__}: {error}")
+                log_exception(
+                    "qml_bridge.detail_metadata_refresh_failed",
+                    error,
+                    work_id=work_id,
+                    generation=self.generation,
+                )
+
+        try:
+            payload = {
+                "characters": [
+                    _plain(dict(row)) for row in (get_bundle_characters(self.work_ids) or [])
+                ],
+                "staff": [
+                    _plain(dict(row)) for row in (get_bundle_staff(self.work_ids) or [])
+                ],
+                "relations": [
+                    _plain(dict(row)) for row in (get_bundle_relations(self.work_ids) or [])
+                ],
+                "refreshedWorkIds": list(self.work_ids),
+            }
+        except Exception as error:
+            log_exception(
+                "qml_bridge.detail_metadata_snapshot_failed",
+                error,
+                work_ids=list(self.work_ids),
+                generation=self.generation,
+            )
+            self.signals.finished.emit(self.generation, None, f"{type(error).__name__}: {error}"[:1000])
+            return
+
+        message = "; ".join(errors)[:1000] if errors else None
+        self.signals.finished.emit(self.generation, payload, message)
 
 
 class ApplicationBridge(LibraryBridge):
@@ -495,6 +621,7 @@ class ApplicationBridge(LibraryBridge):
         self._episode_items = []
         self._detail_generation = 0
         self._detail_workers = {}
+        self._detail_metadata_workers = {}
         self._selected_profile = {}
         self._profile_history = []
         self._restoring_profile_history = False
@@ -2175,6 +2302,8 @@ class ApplicationBridge(LibraryBridge):
             "staff": [],
             "relations": [],
             "detailsLoading": True,
+            "metadataRefreshing": False,
+            "metadataError": "",
         }
         self._selected_work_raw = raw
         self._selected_work = detail_data
@@ -2263,9 +2392,17 @@ class ApplicationBridge(LibraryBridge):
         if isinstance(news, list):
             self._selected_work["mangabakaNews"] = news
         self._selected_work["detailsLoading"] = False
+        metadata_work_ids = payload.get("metadataNeedsRefreshIds") or []
+        self._selected_work["metadataRefreshing"] = bool(metadata_work_ids)
+        self._selected_work["metadataError"] = ""
         self._episode_items = payload.get("episodes") or []
         self.selectedWorkChanged.emit()
         self.episodesChanged.emit()
+        if metadata_work_ids and not self._recommendation_shutting_down:
+            metadata_worker = _DetailMetadataWorker(generation, metadata_work_ids)
+            metadata_worker.signals.finished.connect(self._detail_metadata_ready)
+            self._detail_metadata_workers[generation] = metadata_worker
+            QThreadPool.globalInstance().start(metadata_worker)
         log_event(
             "qml_bridge.detail_snapshot_ready",
             work_id=self._selected_work.get("id"),
@@ -2273,6 +2410,34 @@ class ApplicationBridge(LibraryBridge):
             character_count=len(self._selected_work["characters"]),
             staff_count=len(self._selected_work["staff"]),
             relation_count=len(self._selected_work["relations"]),
+        )
+
+    @Slot(int, object, object)
+    def _detail_metadata_ready(self, generation, payload, error):
+        self._detail_metadata_workers.pop(generation, None)
+        if (
+            generation != self._detail_generation
+            or self._current_page not in {"work_detail", "relation"}
+            or self._recommendation_shutting_down
+        ):
+            return
+
+        if isinstance(payload, dict):
+            self._selected_work["characters"] = payload.get("characters") or []
+            self._selected_work["staff"] = payload.get("staff") or []
+            self._selected_work["relations"] = payload.get("relations") or []
+        self._selected_work["metadataRefreshing"] = False
+        self._selected_work["metadataError"] = str(error or "")[:1000]
+        self.selectedWorkChanged.emit()
+        log_event(
+            "qml_bridge.detail_metadata_refresh_completed" if not error
+            else "qml_bridge.detail_metadata_refresh_partial",
+            work_id=self._selected_work.get("id"),
+            generation=generation,
+            character_count=len(self._selected_work.get("characters") or []),
+            staff_count=len(self._selected_work.get("staff") or []),
+            relation_count=len(self._selected_work.get("relations") or []),
+            error=str(error or "")[:1000],
         )
 
     @Slot(int)

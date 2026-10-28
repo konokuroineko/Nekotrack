@@ -372,6 +372,7 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         worker.signals.finished.connect(lambda generation, payload, error: results.append((generation, payload, error)))
 
         with patch("ui.qml_app_bridge.get_episode_section_snapshot", side_effect=lambda work_id: snapshots[work_id]), \
+             patch("ui.qml_app_bridge.get_bundle_detail_readiness", return_value={101: {"work_exists": True, "characters_loaded": True}, 202: {"work_exists": True, "characters_loaded": True}}), \
              patch("ui.qml_app_bridge.get_bundle_characters", return_value=[]), \
              patch("ui.qml_app_bridge.get_bundle_staff", return_value=[]), \
              patch("ui.qml_app_bridge.get_bundle_relations", return_value=[]), \
@@ -382,6 +383,7 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         generation, payload, error = results[0]
         self.assertEqual(generation, 7)
         self.assertIsNone(error)
+        self.assertEqual(payload["metadataNeedsRefreshIds"], [])
         self.assertEqual([item["workId"] for item in payload["episodes"]], [202])
         self.assertEqual([item["workTitle"] for item in payload["episodes"]], ["Season Two"])
         self.assertEqual(payload["progressEpisodes"], 6)
@@ -393,6 +395,69 @@ class QmlApplicationBridgeTests(unittest.TestCase):
         self.assertEqual(payload["readingProgressByWork"]["101"]["chapters"], 3)
         self.assertEqual(payload["readingProgressByWork"]["202"]["volumes"], 2)
 
+
+    def test_detail_metadata_worker_fetches_and_persists_missing_cast_and_relations(self):
+        from unittest.mock import patch
+
+        from ui.qml_app_bridge import _DetailMetadataWorker
+
+        character_edges = [{
+            "node": {
+                "id": 501,
+                "name": {"full": "Example Character"},
+                "image": {"large": "https://images.example.invalid/character.jpg"},
+            },
+            "role": "MAIN",
+            "voiceActors": [],
+        }]
+        staff_edges = [{
+            "node": {
+                "id": 601,
+                "name": {"full": "Example Director"},
+                "image": {"large": "https://images.example.invalid/staff.jpg"},
+            },
+            "role": "Director",
+        }]
+        details = {
+            "id": 101,
+            "characters": {"edges": character_edges},
+            "staff": {"edges": staff_edges},
+            "relations": {"edges": []},
+        }
+        cached_characters = [{
+            "id": 501,
+            "character_name": "Example Character",
+            "character_role": "MAIN",
+            "character_image_url": "https://images.example.invalid/character.jpg",
+        }]
+        results = []
+        worker = _DetailMetadataWorker(9, [101])
+        worker.signals.finished.connect(
+            lambda generation, payload, error: results.append((generation, payload, error))
+        )
+
+        with patch(
+            "ui.qml_app_bridge.get_bundle_detail_readiness",
+            return_value={101: {"work_exists": False, "characters_loaded": False}},
+        ), patch("ui.qml_app_bridge.get_media_details", return_value=details) as fetch_details, \
+             patch("ui.qml_app_bridge.save_anime") as save_anime, \
+             patch("ui.qml_app_bridge.save_characters") as save_characters, \
+             patch("ui.qml_app_bridge.save_staff") as save_staff, \
+             patch("ui.qml_app_bridge.get_bundle_characters", return_value=cached_characters), \
+             patch("ui.qml_app_bridge.get_bundle_staff", return_value=[]), \
+             patch("ui.qml_app_bridge.get_bundle_relations", return_value=[]):
+            worker.run()
+
+        self.assertEqual(len(results), 1)
+        generation, payload, error = results[0]
+        self.assertEqual(generation, 9)
+        self.assertIsNone(error)
+        fetch_details.assert_called_once_with(101)
+        save_anime.assert_called_once_with(details)
+        save_characters.assert_called_once_with(101, character_edges)
+        save_staff.assert_called_once_with(101, staff_edges)
+        self.assertEqual(payload["characters"][0]["character_name"], "Example Character")
+        self.assertEqual(payload["relations"], [])
 
     def test_active_ui_scale_requires_restart_after_scale_preference_changes(self):
         from unittest.mock import patch

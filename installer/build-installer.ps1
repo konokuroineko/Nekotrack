@@ -39,7 +39,7 @@ try {
     }
 
     $qmlSourceDirectory = Join-Path $repoRoot "ui\qml"
-    foreach ($qmlFile in @("LibraryView.qml", "ApplicationShell.qml", "PosterCard.qml", "NekoImage.qml", "NekoCheckBox.qml", "NekoSpinBox.qml")) {
+    foreach ($qmlFile in @("LibraryView.qml", "ApplicationShell.qml", "PosterCard.qml", "NekoImage.qml", "NekoCheckBox.qml", "NekoSpinBox.qml", "NekoRoundedImage.qml")) {
         if (-not (Test-Path -LiteralPath (Join-Path $qmlSourceDirectory $qmlFile) -PathType Leaf)) {
             throw "A required production QML file is missing from ui\qml: $qmlFile"
         }

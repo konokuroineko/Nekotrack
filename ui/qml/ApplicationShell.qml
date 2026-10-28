@@ -2157,8 +2157,7 @@ Item {
                                         border.width: 1
                                         border.color: bridge.borderColor
 
-                                        NekoImage {
-
+                                        NekoRoundedImage {
                                             imageBridge: root.bridge
                                             id: detailHeroCover
                                             anchors.fill: parent
@@ -2166,18 +2165,7 @@ Item {
                                             fillMode: Image.PreserveAspectCrop
                                             asynchronous: true
                                             cache: true
-                                            layer.enabled: true
-                                            layer.effect: MultiEffect {
-                                                maskEnabled: true
-                                                autoPaddingEnabled: false
-                                                maskSource: Rectangle {
-                                                    width: 235
-                                                    height: 335
-                                                    radius: 14
-                                                    color: "white"
-                                                    layer.enabled: true
-                                                }
-                                            }
+                                            radius: 14
                                         }
                                         Text {
                                             anchors.centerIn: parent
@@ -2799,7 +2787,7 @@ Item {
                                     }
 
                                     Text {
-                                        visible: bridge.episodeItems.length === 0 && !(bridge.selectedWork.detailsLoading || false)
+                                        visible: bridge.episodeItems.length === 0 && !(bridge.selectedWork.detailsLoading || bridge.selectedWork.metadataRefreshing || false)
                                         Layout.fillWidth: true
                                         text: "No episode data is available for this season."
                                         color: bridge.mutedColor
@@ -3040,7 +3028,7 @@ Item {
                                                 Item {
                                                     Layout.preferredWidth: 88
                                                     Layout.preferredHeight: 116
-                                                    NekoImage {
+                                                    NekoRoundedImage {
                                                         imageBridge: root.bridge
                                                         id: characterPicture
                                                         anchors.fill: parent
@@ -3048,18 +3036,7 @@ Item {
                                                         fillMode: Image.PreserveAspectCrop
                                                         asynchronous: true
                                                         cache: true
-                                                        layer.enabled: true
-                                                        layer.effect: MultiEffect {
-                                                            maskEnabled: true
-                                                            autoPaddingEnabled: false
-                                                            maskSource: Rectangle {
-                                                                width: 88
-                                                                height: 116
-                                                                radius: 14
-                                                                color: "white"
-                                                                layer.enabled: true
-                                                            }
-                                                        }
+                                                        radius: 14
                                                     }
                                                     Rectangle {
                                                         anchors.fill: parent
@@ -3130,7 +3107,7 @@ Item {
                                                 Item {
                                                     Layout.preferredWidth: 88
                                                     Layout.preferredHeight: 116
-                                                    NekoImage {
+                                                    NekoRoundedImage {
                                                         imageBridge: root.bridge
                                                         id: voiceActorPicture
                                                         anchors.fill: parent
@@ -3139,18 +3116,7 @@ Item {
                                                         fillMode: Image.PreserveAspectCrop
                                                         asynchronous: true
                                                         cache: true
-                                                        layer.enabled: true
-                                                        layer.effect: MultiEffect {
-                                                            maskEnabled: true
-                                                            autoPaddingEnabled: false
-                                                            maskSource: Rectangle {
-                                                                width: 88
-                                                                height: 116
-                                                                radius: 14
-                                                                color: "white"
-                                                                layer.enabled: true
-                                                            }
-                                                        }
+                                                        radius: 14
                                                     }
                                                     Rectangle {
                                                         anchors.fill: parent
@@ -3231,7 +3197,7 @@ Item {
                                                     Layout.preferredWidth: 120
                                                     Layout.preferredHeight: 120
                                                     Layout.alignment: Qt.AlignHCenter
-                                                    NekoImage {
+                                                    NekoRoundedImage {
                                                         imageBridge: root.bridge
                                                         id: staffPicture
                                                         anchors.fill: parent
@@ -3239,18 +3205,7 @@ Item {
                                                         fillMode: Image.PreserveAspectCrop
                                                         asynchronous: true
                                                         cache: true
-                                                        layer.enabled: true
-                                                        layer.effect: MultiEffect {
-                                                            maskEnabled: true
-                                                            autoPaddingEnabled: false
-                                                            maskSource: Rectangle {
-                                                                width: 120
-                                                                height: 120
-                                                                radius: 14
-                                                                color: "white"
-                                                                layer.enabled: true
-                                                            }
-                                                        }
+                                                        radius: 14
                                                     }
                                                     Rectangle {
                                                         anchors.fill: parent
@@ -3353,7 +3308,7 @@ Item {
                                                 anchors.fill: parent
                                                 anchors.margins: 2
                                                 spacing: 8
-                                                NekoImage {
+                                                NekoRoundedImage {
                                                     imageBridge: root.bridge
                                                     Layout.preferredWidth: bridge.cardSize
                                                     Layout.preferredHeight: bridge.coverHeight
@@ -3362,18 +3317,7 @@ Item {
                                                     fillMode: Image.PreserveAspectCrop
                                                     asynchronous: true
                                                     cache: true
-                                                    layer.enabled: true
-                                                    layer.effect: MultiEffect {
-                                                        maskEnabled: true
-                                                        autoPaddingEnabled: false
-                                                        maskSource: Rectangle {
-                                                            width: bridge.cardSize
-                                                            height: bridge.coverHeight
-                                                            radius: bridge.cornerRadius
-                                                            color: "white"
-                                                            layer.enabled: true
-                                                        }
-                                                    }
+                                                    radius: bridge.cornerRadius
                                                 }
                                                 Text {
                                                     Layout.fillWidth: true
@@ -3495,7 +3439,7 @@ Item {
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 18
-                                NekoImage {
+                                NekoRoundedImage {
                                     imageBridge: root.bridge
                                     Layout.preferredWidth: 180
                                     Layout.preferredHeight: 240
@@ -3503,18 +3447,7 @@ Item {
                                     fillMode: Image.PreserveAspectCrop
                                     asynchronous: true
                                     cache: true
-                                    layer.enabled: true
-                                    layer.effect: MultiEffect {
-                                        maskEnabled: true
-                                        autoPaddingEnabled: false
-                                        maskSource: Rectangle {
-                                            width: 180
-                                            height: 240
-                                            radius: bridge.cornerRadius
-                                            color: "white"
-                                            layer.enabled: true
-                                        }
-                                    }
+                                    radius: bridge.cornerRadius
                                 }
 
                                 ColumnLayout {
