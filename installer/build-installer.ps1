@@ -38,7 +38,26 @@ try {
         throw "Could not generate the NekoTrack Windows icon."
     }
 
-    python -m PyInstaller --noconfirm --clean --onefile --windowed --name NekoTrack --icon "assets\NekoTrack.ico" --add-data "assets;assets" --add-data "$versionSource;." --add-data "installer\safe_update.ps1;installer" main.py
+    $qmlSourceDirectory = Join-Path $repoRoot "ui\qml"
+    foreach ($qmlFile in @("LibraryView.qml", "ApplicationShell.qml", "PosterCard.qml", "NekoImage.qml", "NekoCheckBox.qml", "NekoSpinBox.qml", "NekoRoundedImage.qml")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $qmlSourceDirectory $qmlFile) -PathType Leaf)) {
+            throw "A required production QML file is missing from ui\qml: $qmlFile"
+        }
+    }
+
+    # PyInstaller does not reliably collect Qt's QML import modules by itself.
+    # Bundle both the app's QML view and QtQuick/QtQuick.Controls modules so the
+    # installed executable can load the same Library UI as a source checkout.
+    $qtQmlDirectory = python -c "import PySide6; from pathlib import Path; print(Path(PySide6.__file__).resolve().parent / 'Qt' / 'qml')"
+    if ($LASTEXITCODE -ne 0 -or -not $qtQmlDirectory) {
+        throw "Could not locate PySide6's Qt QML import directory."
+    }
+    $qtQmlDirectory = $qtQmlDirectory.Trim()
+    if (-not (Test-Path -LiteralPath $qtQmlDirectory -PathType Container)) {
+        throw "PySide6's Qt QML import directory does not exist: $qtQmlDirectory"
+    }
+
+    python -m PyInstaller --noconfirm --clean --onefile --windowed --name NekoTrack --icon "assets\NekoTrack.ico" --add-data "assets;assets" --add-data "ui\qml;ui\qml" --add-data "$qtQmlDirectory;PySide6/Qt/qml" --add-data "$versionSource;." --add-data "installer\safe_update.ps1;installer" main.py
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed to build NekoTrack."
     }

@@ -15,6 +15,20 @@ class FakeClock:
         self.now += max(0.0, float(seconds))
 
 
+class FakeCancellationEvent:
+    """Advance the test clock instead of blocking on a real Event wait."""
+
+    def __init__(self, clock):
+        self.clock = clock
+
+    def is_set(self):
+        return False
+
+    def wait(self, seconds=None):
+        self.clock.sleep(0.0 if seconds is None else seconds)
+        return False
+
+
 class AniListRateLimitTests(unittest.TestCase):
     def setUp(self):
         self.clock = FakeClock()
@@ -25,7 +39,7 @@ class AniListRateLimitTests(unittest.TestCase):
     def test_requests_are_paced(self):
         with patch.object(api.time, "monotonic", self.clock.monotonic), patch.object(
             api.time, "sleep", self.clock.sleep
-        ):
+        ), patch.object(api, "_api_shutdown_event", FakeCancellationEvent(self.clock)):
             api._wait_for_anilist_slot()
             first_slot = api._anilist_next_request_at
             api._wait_for_anilist_slot()
@@ -39,7 +53,7 @@ class AniListRateLimitTests(unittest.TestCase):
     def test_rate_limit_extends_shared_cooldown(self):
         with patch.object(api.time, "monotonic", self.clock.monotonic), patch.object(
             api.time, "sleep", self.clock.sleep
-        ):
+        ), patch.object(api, "_api_shutdown_event", FakeCancellationEvent(self.clock)):
             api._extend_anilist_cooldown(3)
             expected_cooldown = self.clock.now + 3
             self.assertEqual(api._anilist_cooldown_until, expected_cooldown)
@@ -49,7 +63,6 @@ class AniListRateLimitTests(unittest.TestCase):
                 api._anilist_next_request_at,
                 expected_cooldown + api.ANILIST_MIN_REQUEST_INTERVAL,
             )
-
 
     def test_http_429_honors_retry_after_before_retrying(self):
         class FakeResponse:
@@ -79,8 +92,8 @@ class AniListRateLimitTests(unittest.TestCase):
         with patch.object(api.time, "monotonic", self.clock.monotonic), patch.object(
             api.time, "sleep", self.clock.sleep
         ), patch.object(api, "_retry_sleep", self.clock.sleep), patch.object(
-            api.requests, "post", side_effect=fake_post
-        ):
+            api, "_api_shutdown_event", FakeCancellationEvent(self.clock)
+        ), patch.object(api.requests, "post", side_effect=fake_post):
             result = api.anilist_request("query { Media(id: 42) { id } }")
 
         self.assertEqual(result, {"Media": {"id": 42}})
@@ -99,6 +112,7 @@ class AniListRateLimitTests(unittest.TestCase):
         self.assertEqual(api._retry_after_delay(header, fallback=2, now=now), 7.0)
         self.assertEqual(api._retry_after_delay("nonsense", fallback=2, now=now), 2.0)
         self.assertEqual(api._retry_after_delay("999", fallback=2, now=now), 60.0)
+
 
 if __name__ == "__main__":
     unittest.main()

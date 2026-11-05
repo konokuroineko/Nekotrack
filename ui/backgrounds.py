@@ -201,6 +201,27 @@ class BackgroundManager(QObject):
     def _persist_paths(self):
         set_value("background_image_paths_json", json.dumps(self._paths))
 
+    def select_image(self, stored_path):
+        if stored_path not in self._paths:
+            return False
+        index = self._paths.index(stored_path)
+        if index == self._index:
+            return True
+        self._index = index
+        self._refresh_pixmap()
+        self.images_changed.emit()
+        self._restart_timer()
+        return True
+
+    def reload_preferences(self):
+        """Reload persisted appearance settings after restoring default preferences."""
+        self._interval = self._valid_interval(get("background_slideshow_interval"))
+        self._overlay_opacity = self._valid_opacity(get("background_overlay_opacity"))
+        self._load_saved_paths()
+        self._refresh_pixmap()
+        self._restart_timer()
+        self.images_changed.emit()
+
     def _refresh_pixmap(self):
         if not self._paths:
             self._index = 0

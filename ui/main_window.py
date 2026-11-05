@@ -13,7 +13,9 @@ from api import (
     get_mangabaka_series_news,
     get_mangabaka_volume_records,
 )
-from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer, QSize, QProcess
+from PySide6.QtCore import QObject, Signal, QThread, Qt, QTimer, QSize, QProcess, QUrl
+from PySide6.QtGui import QColor
+from PySide6.QtQuickWidgets import QQuickWidget
 
 from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QMainWindow, QMessageBox, QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout
 
@@ -48,6 +50,17 @@ from ui.backgrounds import BackgroundCanvas, BackgroundManager
 from ui.branding import application_icon, navigation_icon, WordmarkLabel
 from ui.navigation import NavigationController
 from ui.preferences import get
+try:
+    from ui.qml_app_bridge import ApplicationBridge
+except Exception as qml_bridge_import_error:
+    # The QML migration must not stop the established Widgets UI from launching.
+    ApplicationBridge = None
+    _QML_BRIDGE_IMPORT_ERROR = (
+        f"{type(qml_bridge_import_error).__name__}: {qml_bridge_import_error}"
+    )
+    log_event("qml_shell.bridge_import_failed", error=_QML_BRIDGE_IMPORT_ERROR)
+else:
+    _QML_BRIDGE_IMPORT_ERROR = ""
 from ui.setup_wizard import SetupWizard
 from ui.theme import COLORS, application_stylesheet, refresh_theme, surface_rgba
 from ui.pages.calendar_page import CalendarPage
@@ -722,6 +735,11 @@ class MainWindow(QMainWindow):
         self._library_episode_preload_thread = None
         self._library_episode_preload_worker = None
         self._ui_root_stack = None
+        self._legacy_root_stack = None
+        self._qml_shell_enabled = False
+        self._qml_shell_widget = None
+        self.qml_bridge = None
+        self._qml_navigation_sync = False
         self.background_manager = BackgroundManager(self)
         self._release_reminder_tray = QSystemTrayIcon(application_icon(), self)
         self._release_reminder_tray.setToolTip("NekoTrack release reminders")
@@ -841,6 +859,7 @@ class MainWindow(QMainWindow):
             lambda: self.navigation.show("search")
         )
         self.library_page.work_selected.connect(self.show_work_details)
+        self.library_page.relation_sync_completed.connect(self._refresh_library_after_bundle_change)
         self.search_page.anime_selected.connect(self.show_search_work)
         self.work_detail_page.back_requested.connect(self._back_from_work_detail)
         self.work_detail_page.bundle_edit_requested.connect(self.library_page._edit_bundle)
@@ -883,12 +902,12 @@ class MainWindow(QMainWindow):
             QPushButton[navButton="true"]:checked {{ background:{surface_rgba('accent_soft')}; border-color:{COLORS['nav_selected_frame']}; color:{COLORS['nav_selected_text']}; }}
         """
         )
-        self.navigation.show(initial_page, record_history=False)
-
-        # Keep the currently visible UI root on screen while this complete
-        # replacement is being built. Only switch once the new tree exists.
+        # Keep the old page tree alive for backend compatibility, but use one
+        # QML root for the entire visible application.
         self._ui_root_stack.addWidget(root)
         self._ui_root_stack.setCurrentWidget(root)
+        self._install_qml_shell(initial_page)
+        self.navigation.show(initial_page, record_history=False)
         if self.isVisible():
             QTimer.singleShot(150, self.start_initial_background_work)
 
@@ -896,23 +915,264 @@ class MainWindow(QMainWindow):
         # entry on the GUI thread. Detail views are rendered when selected and
         # episode cards are created in bounded event-loop batches.
 
+    def _install_qml_shell(self, initial_page="home"):
+        """Make one QML root responsible for the visible shell and every main route."""
+        if ApplicationBridge is None:
+            log_event(
+                "qml_shell.bridge_unavailable",
+                error=_QML_BRIDGE_IMPORT_ERROR or "The QML bridge could not be imported.",
+            )
+            return False
+        try:
+            bridge = ApplicationBridge(
+                parent=self,
+                background_manager=self.background_manager,
+            )
+        except Exception as error:
+            log_event(
+                "qml_shell.bridge_initialization_failed",
+                error=f"{type(error).__name__}: {error}",
+            )
+            return False
+        quick = QQuickWidget(self)
+        quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+        quick.setClearColor(QColor(COLORS["background"]))
+        quick.rootContext().setContextProperty("appBridge", bridge)
+        quick.rootContext().setContextProperty("qmlBridge", bridge)
+        quick.statusChanged.connect(self._qml_shell_status_changed)
+        scene_graph_error = getattr(quick, "sceneGraphError", None)
+        if scene_graph_error is not None:
+            scene_graph_error.connect(self._qml_shell_scene_graph_error)
+
+        bridge.navigationRequested.connect(self._qml_navigation_requested)
+        bridge.openWorkRequested.connect(self._qml_open_library_work)
+        bridge.editBundleRequested.connect(self._qml_edit_bundle)
+        bridge.deleteWorkRequested.connect(self._qml_delete_work)
+        bridge.detailActionRequested.connect(self._qml_detail_action)
+        bridge.libraryChanged.connect(self._qml_library_refreshed)
+        bridge.addToLibraryRequested.connect(lambda work: self.add_to_library(work, None))
+        bridge.searchWorkRequested.connect(self.show_search_work)
+        bridge.profileRequested.connect(self._qml_profile_requested)
+        bridge.setupRequested.connect(self.open_setup_wizard)
+        bridge.updateRequested.connect(self.check_updates_requested.emit)
+        bridge.diagnosticsExportRequested.connect(self._qml_export_diagnostics)
+        bridge.settingsChanged.connect(self.apply_settings)
+        bridge.rollbackRequested.connect(self.rollback_requested.emit)
+        bridge.restartRequested.connect(self._restart_application)
+
+        qml_path = Path(__file__).resolve().parent / "qml" / "ApplicationShell.qml"
+        quick.setSource(QUrl.fromLocalFile(str(qml_path)))
+        if quick.status() == QQuickWidget.Status.Error:
+            log_event(
+                "qml_shell.load_failed",
+                errors=[error.toString() for error in quick.errors()][:30],
+            )
+            quick.deleteLater()
+            bridge.deleteLater()
+            self._qml_shell_enabled = False
+            self.qml_bridge = None
+            return False
+
+        old_central = self.takeCentralWidget()
+        if old_central is not None:
+            old_central.setParent(self)
+            old_central.hide()
+            self._legacy_root_stack = old_central
+
+        self.qml_bridge = bridge
+        self._qml_shell_widget = quick
+        self.setCentralWidget(quick)
+        self._qml_shell_enabled = True
+        bridge.initializePage(initial_page)
+        log_event("qml_shell.loaded", source=str(qml_path))
+        return True
+
+    def _qml_navigation_requested(self, page_name):
+        if not self._qml_shell_enabled:
+            return
+        if page_name not in getattr(self.navigation, "pages", {}):
+            return
+
+        # QML owns visible navigation. Don't activate the hidden Qt Widgets
+        # stack whenever a QML route changes; that stack is only a compatibility
+        # host for legacy dialogs and the fallback UI.
+        self._last_navigation_page = page_name
+        if page_name == "collections":
+            QTimer.singleShot(0, self._start_qml_library_relation_sync)
+
+    def _qml_open_library_work(self, work_id):
+        if not self._qml_shell_enabled or self.qml_bridge is None:
+            return
+        group = self.qml_bridge._group_for_id(int(work_id))
+        if group is not None:
+            self.show_work_details(group)
+
+    def _qml_edit_bundle(self, work_id):
+        bridge = self.qml_bridge
+        if bridge is None:
+            return
+        group = bridge._group_for_id(int(work_id))
+        if group is not None:
+            # Reuse the editor without refreshing the hidden embedded Library.
+            self.library_page._edit_bundle(group, refresh=False)
+            bridge.forceRefreshAll()
+
+    def _qml_delete_work(self, work_id):
+        bridge = self.qml_bridge
+        if bridge is None:
+            return
+        group = bridge._group_for_id(int(work_id))
+        if group is None:
+            return
+        deleted = self.library_page._delete_item(group, refresh=False)
+        if deleted:
+            QTimer.singleShot(0, bridge.forceRefreshAll)
+
+    def _qml_detail_action(self, action, work_id):
+        """Reuse existing bundle/identity dialogs only when the user requests them."""
+        if not self._qml_shell_enabled or self.qml_bridge is None:
+            return
+        try:
+            normalized_id = int(work_id)
+        except (TypeError, ValueError, OverflowError):
+            return
+
+        bridge = self.qml_bridge
+        group = bridge._group_for_id(normalized_id)
+        raw_work = group or bridge._selected_work_raw
+        if not isinstance(raw_work, dict):
+            return
+
+        # Keep the old detail widget available as a dialog/action host only.
+        # Assign the selected record without eagerly building its hidden detail UI.
+        legacy_detail = self.work_detail_page
+        legacy_detail.work = raw_work
+        try:
+            if action == "auto_bundle":
+                legacy_detail._start_auto_bundle()
+                return
+            if action == "add_to_bundle":
+                legacy_detail._open_add_bundle_dialog()
+            elif action == "remove_from_bundle":
+                legacy_detail._open_remove_bundle_dialog()
+            elif action == "customize_identity":
+                legacy_detail._open_display_identity_editor()
+            else:
+                return
+        except Exception as error:
+            log_exception(
+                "qml_shell.detail_action_failed",
+                error,
+                action=action,
+                work_id=normalized_id,
+            )
+            return
+
+        # Bundle membership changes refresh the selected QML detail when the
+        # async Library snapshot is ready. Avoid starting a second detail worker.
+        # A non-Library item has no refreshed group signal to trigger that path,
+        # so reload its detail snapshot explicitly after a display override.
+        bridge.forceRefreshAll()
+        if action == "customize_identity" and group is None:
+            bridge.refreshSelectedWork()
+
+    def _qml_library_refreshed(self, _item_count=0):
+        bridge = self.qml_bridge
+        if not self._qml_shell_enabled or bridge is None:
+            return
+        if bridge.currentPage not in {"work_detail", "relation"}:
+            return
+
+        selected = bridge.selectedWork
+        selected_id = selected.get("id")
+        group = bridge._group_for_id(selected_id)
+        if group is not None:
+            bridge.setSelectedWork(group)
+        elif selected.get("isInLibrary"):
+            # Do not leave the detail route showing a record that was deleted.
+            bridge.navigate("collections")
+
+    def _qml_profile_requested(self, profile):
+        if not isinstance(profile, dict):
+            return
+        self.show_entity_profile(profile.get("entity_type"), profile, from_favorites=True)
+
+    def _qml_export_diagnostics(self):
+        exporter = getattr(self.settings_page, "_export_diagnostics", None)
+        if callable(exporter):
+            exporter(False)
+
+    def _qml_shell_status_changed(self, status):
+        if status != QQuickWidget.Status.Error:
+            return
+        errors = []
+        if self._qml_shell_widget is not None:
+            errors = [error.toString() for error in self._qml_shell_widget.errors()]
+        log_event("qml_shell.load_failed", errors=errors[:30])
+        self._fallback_to_legacy_shell()
+
+    def _qml_shell_scene_graph_error(self, error, message):
+        log_event("qml_shell.scene_graph_error", error=str(error), message=str(message)[:1000])
+        self._fallback_to_legacy_shell()
+
+    def _unload_qml_scene(self, quick):
+        """Destroy QML bindings before releasing their Python bridge during teardown."""
+        if quick is None:
+            return
+        try:
+            # An empty URL synchronously unloads the QML root. Keeping the bridge
+            # alive through this step prevents thousands of "property of null"
+            # binding warnings as every page is destroyed.
+            quick.setSource(QUrl())
+        except (RuntimeError, TypeError) as error:
+            log_exception("qml_shell.unload_failed", error)
+
+    def _fallback_to_legacy_shell(self):
+        quick = self._qml_shell_widget
+        if self.qml_bridge is not None:
+            self.qml_bridge.requestShutdown()
+        self._unload_qml_scene(quick)
+        self._qml_shell_enabled = False
+        self.qml_bridge = None
+        self._qml_shell_widget = None
+        if quick is not None:
+            self.takeCentralWidget()
+            quick.deleteLater()
+        if self._legacy_root_stack is not None:
+            self.setCentralWidget(self._legacy_root_stack)
+            self._legacy_root_stack.show()
+        log_event("qml_shell.legacy_fallback")
+
     def start_initial_background_work(self):
         """Start optional API work after Home has had a chance to paint."""
         if self._shutdown_requested or self._shutdown_event.is_set():
             return
         home = getattr(self, "home_page", None)
-        if home is not None:
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            # Recommendations start only after the first frame; the local
+            # Library snapshot is already loading off-thread.
+            self.qml_bridge.markStartupReady()
+        elif home is not None:
             home.start_initial_recommendations_load()
         if not self._startup_preload_scheduled:
             self._startup_preload_scheduled = True
             QTimer.singleShot(1_000, self._start_existing_library_episode_preload)
 
     def _refresh_library_after_bundle_change(self):
-        # Wait until the detail-page deletion/link change has fully returned to
-        # the event loop, then rebuild the Library from the current database state.
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            QTimer.singleShot(0, self.qml_bridge.refreshAll)
+            return
         QTimer.singleShot(0, self.library_page.refresh)
 
     def _page_changed(self, page_name):
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            if self._qml_navigation_sync:
+                self._last_navigation_page = page_name
+                return
+            self.qml_bridge.setCurrentPage(page_name)
+            self.qml_bridge.refreshVisiblePage()
+            self._last_navigation_page = page_name
+            return
         if page_name == "settings":
             self.settings_page.ensure_built()
         previous_page = self._last_navigation_page
@@ -936,6 +1196,15 @@ class MainWindow(QMainWindow):
             # can be retried through the normal page refresh path.
             self.library_page.refresh()
         self._last_navigation_page = page_name
+
+    def _start_qml_library_relation_sync(self):
+        if not self._qml_shell_enabled or self._shutdown_requested:
+            return
+        page = self.library_page
+        # Revisiting Library is also the explicit retry path for failed relation
+        # requests in the legacy page; successful IDs remain memoized.
+        page._sync_failed_ids.clear()
+        page._start_relation_sync()
 
     def open_setup_wizard(self):
         wizard = SetupWizard(self)
@@ -967,6 +1236,10 @@ class MainWindow(QMainWindow):
         refresh_theme()
         if hasattr(self, "background_manager"):
             self.background_manager.refresh_theme()
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            self.qml_bridge.refreshTheme()
+            self.qml_bridge.refreshVisiblePage()
+            return
 
         self.setStyleSheet(
             application_stylesheet()
@@ -1054,6 +1327,12 @@ class MainWindow(QMainWindow):
 
     def _rebuild_for_settings(self, changed_key):
         self._settings_rebuild_pending = False
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            self.qml_bridge.refreshTheme()
+            self.qml_bridge.refreshVisiblePage()
+            if changed_key in {"maximized", "reset"}:
+                self.showMaximized() if get("maximized") else self.showNormal()
+            return
         current_page = "home"
         if hasattr(self, "navigation"):
             current_widget = self.stack.currentWidget()
@@ -1255,7 +1534,10 @@ class MainWindow(QMainWindow):
             member_count=len(members),
         )
 
-        self.work_detail_page.set_work(work)
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            self.qml_bridge.setSelectedWork(work)
+        else:
+            self.work_detail_page.set_work(work)
         log_event(
             "work_details.page_build_returned",
             work_id=work_id,
@@ -1448,6 +1730,31 @@ class MainWindow(QMainWindow):
         if not entity:
             return
         kind = str(entity_type or "").strip().lower()
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            try:
+                record = dict(entity)
+            except (TypeError, ValueError):
+                record = {"name": str(entity)}
+            record["entity_type"] = kind
+            detail_work_ids = []
+            voice_actors = None
+            if kind == "character" and not from_favorites:
+                try:
+                    detail_work_ids = self.work_detail_page._detail_work_ids()
+                    character_id = record.get("id")
+                    voice_actors = (
+                        get_bundle_character_voice_actors(detail_work_ids, character_id)
+                        if character_id is not None else []
+                    ) or []
+                except (KeyError, TypeError, ValueError, OverflowError) as error:
+                    log_exception("character.voice_actor_profile_load_failed", error)
+                    voice_actors = []
+                record["voice_actors"] = voice_actors
+            self.qml_bridge.setSelectedProfile(record)
+            self.qml_bridge.navigate("entity_profile")
+            if kind == "character" and not voice_actors and not from_favorites:
+                self._queue_missing_character_voice_actor_refresh(record, detail_work_ids)
+            return
         # Preserve whichever profile launched this one, including character
         # links opened from a voice actor's voice-acting credits. Back returns
         # through the same profile path in either direction.
@@ -1640,6 +1947,8 @@ class MainWindow(QMainWindow):
             dict(actor) for actor in (voice_actors or [])
             if isinstance(actor, dict) or hasattr(actor, "keys")
         ]
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            self.qml_bridge.setCharacterVoiceActors(character_id, actors)
 
         def matches(state):
             if not isinstance(state, dict) or state.get("entity_type") != "character":
@@ -1774,21 +2083,29 @@ class MainWindow(QMainWindow):
             )
             self._queue_library_imports(membership_ids)
 
-            button.setText("Added")
-            button.setEnabled(False)
-            self.library_page.refresh()
+            if button is not None:
+                button.setText("Added")
+                button.setEnabled(False)
+            if self._qml_shell_enabled and self.qml_bridge is not None:
+                self.qml_bridge.forceRefreshAll()
+                self.qml_bridge.refreshVisiblePage()
+            else:
+                self.library_page.refresh()
 
-            # Covers will be loaded/cached normally by the Library cards.
-            # Start the representative cover download as before.
-            self.start_cover_download(
-                primary_id,
-                (anime.get("coverImage") or {}).get("large"),
-                button,
-            )
+            # The QML poster cache handles artwork for the visible interface.
+            if button is not None:
+                self.start_cover_download(
+                    primary_id,
+                    (anime.get("coverImage") or {}).get("large"),
+                    button,
+                )
         except Exception as error:
             log_exception("library.add_failed", error,
                           work_id=anime.get("id") if hasattr(anime, "get") else None)
-            button.setText("Error")
+            if button is not None:
+                button.setText("Error")
+            if self._qml_shell_enabled and self.qml_bridge is not None:
+                self.qml_bridge.reportSearchError(f"Could not save: {error}")
             self.search_page.results_title.setText(f"Could not save: {error}")
 
 
@@ -1816,6 +2133,36 @@ class MainWindow(QMainWindow):
     def _refresh_open_detail_after_import(self, work_id):
         """Refresh an open bundle once its required member imports have settled."""
         if self._shutdown_event.is_set():
+            return
+
+        if self._qml_shell_enabled and self.qml_bridge is not None:
+            selected = self.qml_bridge.selectedWork
+            current_ids = {
+                int(value)
+                for value in (selected.get("memberIds") or [selected.get("id")])
+                if value is not None
+            }
+            if int(work_id) not in current_ids:
+                return
+            pending_ids = current_ids.intersection(self._detail_enrichment_ids)
+            if pending_ids:
+                log_event(
+                    "library.import.qml_detail_refresh_deferred",
+                    work_id=work_id,
+                    pending_member_ids=sorted(pending_ids),
+                )
+                return
+            raw_work = self.qml_bridge._selected_work_raw
+            QTimer.singleShot(
+                0,
+                lambda current=raw_work, bridge=self.qml_bridge:
+                    bridge.setSelectedWork(current) if bridge is not None else None,
+            )
+            log_event(
+                "library.import.qml_detail_refresh_queued",
+                work_id=work_id,
+                member_count=len(current_ids),
+            )
             return
 
         current_work = getattr(self.work_detail_page, "work", None)
@@ -1988,6 +2335,8 @@ class MainWindow(QMainWindow):
 
         self._shutdown_requested = True
         self._shutdown_event.set()
+        if self.qml_bridge is not None:
+            self.qml_bridge.requestShutdown()
         request_api_shutdown()
         self._library_import_queue.close()
 
@@ -2041,6 +2390,11 @@ class MainWindow(QMainWindow):
             return
 
         self._shutdown_timer.stop()
+        # Unload the QML tree after workers have stopped but before Qt destroys
+        # the window-owned bridge. This prevents shutdown-time null-property spam.
+        self._qml_shell_enabled = False
+        self._unload_qml_scene(self._qml_shell_widget)
+        self._qml_shell_widget = None
         elapsed_ms = (
             round((time.monotonic() - self._shutdown_started_at) * 1000, 2)
             if self._shutdown_started_at is not None else 0.0

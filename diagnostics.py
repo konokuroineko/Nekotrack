@@ -41,6 +41,32 @@ _CONFIGURED = False
 _CONFIGURED_DATA_DIR: Path | None = None
 _FILE_HANDLER: RotatingFileHandler | None = None
 _QT_MESSAGE_HANDLER = None
+
+
+class _ResilientRotatingFileHandler(RotatingFileHandler):
+    """Avoid a logging-error storm when another process temporarily locks a log."""
+
+    RETRY_SECONDS = 30
+
+    def __init__(self, *args, **kwargs):
+        self._rollover_retry_after = 0.0
+        super().__init__(*args, **kwargs)
+
+    def shouldRollover(self, record):
+        if time.monotonic() < self._rollover_retry_after:
+            return False
+        return super().shouldRollover(record)
+
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except PermissionError:
+            # Windows can reject rename when another running app instance has
+            # the current file open. Resume appending, then retry rotation later.
+            self._rollover_retry_after = time.monotonic() + self.RETRY_SECONDS
+            if self.stream is None:
+                self.stream = self._open()
+
 _ORIGINAL_SYS_EXCEPTHOOK = sys.excepthook
 _ORIGINAL_THREAD_EXCEPTHOOK = getattr(threading, "excepthook", None)
 _ORIGINAL_UNRAISABLEHOOK = getattr(sys, "unraisablehook", None)
@@ -290,7 +316,7 @@ def configure_logging(app_data_dir: str | os.PathLike[str] | None = None) -> Pat
                 except Exception:
                     pass
 
-        handler = RotatingFileHandler(
+        handler = _ResilientRotatingFileHandler(
             target_log_dir / LOG_FILE_NAME,
             maxBytes=MAX_LOG_BYTES,
             backupCount=LOG_BACKUP_COUNT,

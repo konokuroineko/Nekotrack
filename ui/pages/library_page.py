@@ -2,7 +2,9 @@ import shutil
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, Signal, QEvent, QTimer, QPropertyAnimation, QEasingCurve, QThread
+from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, Signal, QEvent, QTimer, QPropertyAnimation, QEasingCurve, QThread, QUrl
+from PySide6.QtGui import QColor
+from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLayout
 
 from api import get_media_relations_batch
@@ -18,6 +20,7 @@ from database import (
     save_bundle_override,
 )
 from series import get_library_series, group_media_results
+from ui.qml_bridge import QmlApplicationBridge
 from ui.preferences import get
 from ui.theme import COLORS, surface_rgba
 from ui.widgets.work_card import WorkCard
@@ -248,6 +251,7 @@ class FlowLayout(QLayout):
 
 class LibraryPage(QWidget):
     work_selected = Signal(object)
+    relation_sync_completed = Signal()
 
     def __init__(self, defer_initial_refresh=False):
         super().__init__()
@@ -255,7 +259,17 @@ class LibraryPage(QWidget):
         self._sync_thread = None; self._sync_worker = None; self._sync_done_ids = set(); self._sync_failed_ids = set()
         self._sync_threads = []; self._shutdown_event = threading.Event(); self._closing = False
         self._resize_timer = QTimer(self); self._resize_timer.setSingleShot(True); self._resize_timer.setInterval(140); self._resize_timer.timeout.connect(self._finish_resize)
-        self._resize_layout_was_enabled = True; self._last_target_positions = None; self._animations = []; self._build_shell()
+        self._resize_layout_was_enabled = True; self._last_target_positions = None; self._animations = []
+        # The app-level QML shell owns the visible Library route. Keep this
+        # QWidget page only as a compatibility controller for bundle dialogs,
+        # relation sync and the original interface fallback.
+        self._defer_qml_load = False
+        self._qml_disabled = True
+        self._qml_failure_queued = False
+        self.qml_bridge = None
+        self.qml_widget = None
+        self._using_qml = False
+        self._build_legacy_shell()
         if defer_initial_refresh:
             # MainWindow opens on Home. Do not query/group the entire Library or
             # create all its cards before the first frame; _page_changed refreshes
@@ -266,7 +280,92 @@ class LibraryPage(QWidget):
             self.refresh()
 
     def _build_shell(self):
-        root = QVBoxLayout(self); root.setContentsMargins(38, 32, 38, 30); root.setSpacing(18)
+        self.qml_bridge = None
+        self.qml_widget = None
+        self._using_qml = False
+        if self._qml_disabled:
+            self._build_legacy_shell()
+            return
+
+        bridge = None
+        quick = None
+        try:
+            bridge = QmlApplicationBridge(
+                parent=self,
+                library_loader=lambda: self.all_anime,
+                auto_refresh=False,
+            )
+            quick = QQuickWidget(self)
+            quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+            quick.setClearColor(QColor(0, 0, 0, 0))
+            quick.rootContext().setContextProperty("qmlBridge", bridge)
+
+            # Connect this before loading QML; Qt Quick may terminate the host
+            # process on a scene-graph failure without an explicit handler.
+            quick.statusChanged.connect(self._qml_status_changed)
+            scene_graph_error = getattr(quick, "sceneGraphError", None)
+            if scene_graph_error is not None:
+                scene_graph_error.connect(self._qml_scene_graph_error)
+
+            self.qml_bridge = bridge
+            self.qml_widget = quick
+            self._using_qml = True
+            bridge.openWorkRequested.connect(self._open_qml_work)
+            bridge.editBundleRequested.connect(self._edit_qml_bundle)
+            bridge.deleteWorkRequested.connect(self._delete_qml_work)
+            bridge.filterChanged.connect(self._on_qml_filter_changed)
+
+            root = self.layout()
+            if root is None:
+                root = QVBoxLayout(self)
+            else:
+                while root.count():
+                    item = root.takeAt(0)
+                    widget = item.widget()
+                    if widget is not None:
+                        widget.setParent(None)
+                        widget.deleteLater()
+            root.setContentsMargins(0, 0, 0, 0)
+            root.setSpacing(0)
+            root.addWidget(quick)
+
+            qml_path = Path(__file__).resolve().parents[1] / "qml" / "LibraryView.qml"
+            quick.setSource(QUrl.fromLocalFile(str(qml_path)))
+            if self._qml_disabled or quick.status() == QQuickWidget.Status.Error:
+                self._queue_qml_fallback(
+                    "QML Library view failed while loading: "
+                    + "; ".join(error.toString() for error in quick.errors())
+                )
+                return
+
+            log_event("qml_bridge.library_view_loaded")
+            return
+        except Exception as error:
+            self._qml_disabled = True
+            self._using_qml = False
+            self.qml_widget = None
+            self.qml_bridge = None
+            if quick is not None:
+                quick.deleteLater()
+            if bridge is not None:
+                bridge.deleteLater()
+            log_exception("qml_bridge.library_view_unavailable", error)
+
+        self._build_legacy_shell()
+
+    def _build_legacy_shell(self):
+        root = self.layout()
+        if root is None:
+            root = QVBoxLayout(self)
+        else:
+            while root.count():
+                item = root.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.setParent(None)
+                    widget.deleteLater()
+        root.setContentsMargins(38, 32, 38, 30)
+        root.setSpacing(18)
         header = QHBoxLayout(); title_box = QVBoxLayout(); title_box.setSpacing(2)
         title = QLabel("Library")
         self.title_label = title
@@ -295,6 +394,97 @@ class LibraryPage(QWidget):
         self.container = QWidget(); self.container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum); self.container.installEventFilter(self); self.flow_layout = FlowLayout(self.container)
         self.scroll_area.setWidget(self.container); root.addWidget(self.scroll_area, 1); self._set_filter("All")
 
+    def _group_for_qml_work(self, work_id):
+        def numeric_id(value):
+            if isinstance(value, bool):
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+
+        target = numeric_id(work_id)
+        if target is None or target == 0:
+            return None
+        for group in self.all_anime:
+            if numeric_id(group.get("id")) == target:
+                return group
+        for group in self.all_anime:
+            for member in group.get("_series_members") or []:
+                if numeric_id(member.get("id")) == target:
+                    return group
+        return None
+
+    def _open_qml_work(self, work_id):
+        group = self._group_for_qml_work(work_id)
+        if group is not None:
+            self.work_selected.emit(group)
+
+    def _edit_qml_bundle(self, work_id):
+        group = self._group_for_qml_work(work_id)
+        if group is not None and len(group.get("_series_members") or []) > 1:
+            self._edit_bundle(group)
+
+    def _delete_qml_work(self, work_id):
+        group = self._group_for_qml_work(work_id)
+        if group is not None:
+            self._delete_item(group)
+
+    def _on_qml_filter_changed(self, value):
+        self.current_filter = value
+
+    def _queue_qml_fallback(self, reason, *, scene_graph_error=False):
+        """Queue one safe fallback rather than allowing Qt Quick to exit the process."""
+        if self._qml_failure_queued or (self._qml_disabled and self.qml_widget is None):
+            return
+        self._qml_failure_queued = True
+        self._qml_disabled = True
+        log_event(
+            "qml_bridge.library_view_fallback_queued",
+            reason=str(reason or "")[:2000],
+            scene_graph_error=bool(scene_graph_error),
+        )
+        QTimer.singleShot(0, self._fallback_to_legacy)
+
+    def _qml_scene_graph_error(self, error, message):
+        """Handle Qt Quick renderer errors before Qt's fatal default is invoked."""
+        self._queue_qml_fallback(
+            f"Qt Quick scene-graph error {error}: {message}",
+            scene_graph_error=True,
+        )
+
+    def _qml_status_changed(self, status):
+        if status != QQuickWidget.Status.Error:
+            return
+        errors = []
+        if self.qml_widget is not None:
+            errors = [error.toString() for error in self.qml_widget.errors()]
+        self._queue_qml_fallback(
+            "QML Library view load failed: " + "; ".join(errors[:20])
+        )
+
+    def _fallback_to_legacy(self):
+        previous_filter = self.current_filter
+        layout = self.layout()
+        if layout is not None and self.qml_widget is not None:
+            layout.removeWidget(self.qml_widget)
+            self.qml_widget.setParent(None)
+            self.qml_widget.deleteLater()
+        if self.qml_bridge is not None:
+            self.qml_bridge.deleteLater()
+        self.qml_widget = None
+        self.qml_bridge = None
+        self._using_qml = False
+        self._qml_failure_queued = False
+        self._build_legacy_shell()
+        self._set_filter(
+            previous_filter
+            if previous_filter in ("All", "Watching", "Completed", "Planned")
+            else "All"
+        )
+        self._apply_filter()
+        self._populate()
+
     def eventFilter(self, watched, event):
         if watched is self.container and event.type() == QEvent.Resize and self._cards:
             if self.flow_layout.isEnabled(): self._resize_layout_was_enabled = True; self.flow_layout.setEnabled(False)
@@ -313,7 +503,8 @@ class LibraryPage(QWidget):
         log_event("library.refresh.started", retry_failed=bool(retry_failed))
         if retry_failed:
             self._sync_failed_ids.clear()
-        self._cancel_resize_animation()
+        if not self._using_qml:
+            self._cancel_resize_animation()
         self.all_anime = get_library_series()
         group_summary = []
         library_member_count = 0
@@ -438,12 +629,30 @@ class LibraryPage(QWidget):
         self._sync_worker = None
         if self._closing:
             return
+
+        # In the unified application shell, this hidden widget only hosts the
+        # relation-sync worker. Refresh the visible QML model instead of doing
+        # another synchronous grouping query in this hidden page.
+        try:
+            qml_shell_active = bool(
+                getattr(self.window(), "_qml_shell_enabled", False)
+            )
+        except RuntimeError:
+            qml_shell_active = False
+        if qml_shell_active:
+            self.relation_sync_completed.emit()
+            return
         self.refresh(retry_failed=False)
 
-    def _delete_item(self, group):
+    def _delete_item(self, group, refresh=True):
+        """Confirm and delete selected Library member(s).
+
+        The unified QML shell can reuse the confirmation flow without
+        rebuilding this hidden embedded Library view a second time.
+        """
         members = list(group.get("_series_members") or [])
         if not members:
-            return
+            return False
 
         if len(members) == 1:
             selected_ids = [int(members[0]["id"])]
@@ -462,7 +671,7 @@ class LibraryPage(QWidget):
                 False,
             )
             if not ok:
-                return
+                return False
             if choice == options[0]:
                 selected_ids = [int(member["id"]) for member in members]
                 selected_title = None
@@ -490,15 +699,16 @@ class LibraryPage(QWidget):
             QMessageBox.No,
         )
         if answer != QMessageBox.Yes:
-            return
+            return False
 
         deleted = False
         for work_id in selected_ids:
             deleted = delete_work_data(work_id) or deleted
-        if deleted:
+        if deleted and refresh:
             self.refresh()
+        return deleted
 
-    def _edit_bundle(self, group):
+    def _edit_bundle(self, group, refresh=True):
         members = list(group.get("_series_members") or [])
         if len(members) < 2:
             return
@@ -643,7 +853,8 @@ class LibraryPage(QWidget):
         def reset_appearance():
             clear_bundle_override(member_ids)
             dialog.reject()
-            self.refresh()
+            if refresh:
+                self.refresh()
 
         reset.clicked.connect(reset_appearance)
         root.addWidget(buttons)
@@ -681,7 +892,8 @@ class LibraryPage(QWidget):
             cover_work_id=cover_work_id,
             custom_cover_path=custom_cover_path,
         ):
-            self.refresh()
+            if refresh:
+                self.refresh()
 
     @staticmethod
     def _member_title(member):

@@ -1,66 +1,103 @@
 # NekoTrack
 
-Your personal anime, manga, and novel tracker.
+A local-first Windows desktop tracker for anime, manga, and light novels.
 
-Track what you watch and read, manage your library, and keep your collection organized — all from a desktop app.
+NekoTrack brings your watch/read library, progress, franchise bundles, discovery, and work details into one desktop app. Your saved library and progress live in a local SQLite database; online catalogs supply search results and optional metadata.
 
-## Features
+**Current stable release:** [v1.0.0](https://github.com/konokuroineko/Nekotrack/releases/tag/v1.0.0)
 
-- Search AniList and MangaBaka together in one unified result list, with linked titles deduplicated
-- Anime, manga, manhwa, manhua, one-shot, and light-novel searches with provider-aware filters
-- AniList anime catalog, relationships, characters, staff, voice actors, and franchise grouping
-- MangaBaka-backed manga and novel titles, including English, native Japanese, and romanized titles
-- MangaBaka publisher, tag, author, artist, status, licensing, and publication metadata when present; publisher/licensing filters require matching MangaBaka metadata
-- Published volume records (including titles, ISBNs, and dates) when MangaBaka has matching collection data
-- Local SQLite library and offline watch/read progress
-- Chapter and volume checklists; missing upstream item details remain trackable using local placeholders
-- Episode progress and watched-state tracking for anime only
-- Local cover caching
-- Work relationships and franchise connections shown in work details
-- Character, voice-actor, and staff information shown in work details
-- Configurable desktop interface with theme-preserving dark and white modes, built with PySide6
-- Library card sizing, spacing, hover, and resize animation preferences
-- Maximized startup preference and scrollable settings page
+## What it does
 
-## Catalogs and fallbacks
+### Library and tracking
+- Keep anime, manga, manhwa, manhua, one-shots, and light novels in one local library.
+- Track anime episode progress and watched states.
+- Track manga chapters and light-novel/manga volumes. Local placeholders keep progress usable when a provider has no item-level catalog.
+- Save ratings, notes, favorites, and custom display titles/covers.
+- Group related entries into series bundles, with manual links, exclusions, custom bundle identity, and member controls.
 
-AniList remains NekoTrack's primary catalog, especially for anime and relationship data. Search includes a catalog selector for MangaBaka search and browsing. MangaBaka can also enrich AniList manga/novel entries with alternate title variants and other provider metadata when a cautious ID/title match is available.
+### Catalogs and work details
+- Search AniList and MangaBaka through a combined search flow.
+- Filter by media type/format, year, season, score, genres/tags, and provider metadata where available.
+- View AniList characters, voice actors, staff, studios, and related works.
+- Use TMDB as an optional source of episode metadata and artwork.
+- Keep provider payloads and local progress separate so an upstream refresh does not become the source of truth for your progress.
 
-MangaBaka-only results use separate local identifiers so they are not accidentally sent to AniList as if their IDs were AniList IDs. MangaBaka lookup failures are non-fatal: AniList results and locally saved reading progress should continue to work when MangaBaka is unavailable. Its API is not yet declared stable and its schema may change without notice, so NekoTrack preserves provider payloads and treats optional enrichment as best-effort.
+### Discovery and desktop experience
+- Get personalized recommendations and give feedback that influences future suggestions.
+- View upcoming episodes and manage release reminders.
+- Browse character, voice-actor, and production-staff profiles and save profile favorites.
+- Choose a theme and light mode; customize poster size, spacing, text size, corner radius, animations, and startup behavior.
+- Export your saved titles and tracking progress to UTF-8 CSV, and export a redacted diagnostics report when troubleshooting.
+- Use the Windows installer or portable executable, with stable/preview update channels and rollback support.
 
-No external provider can guarantee complete chapter or volume records for every title. NekoTrack keeps local progress as the source of truth and falls back to placeholders when actual item records are unavailable.
+## Install
 
+1. Open the [v1.0.0 release page](https://github.com/konokuroineko/Nekotrack/releases/tag/v1.0.0).
+2. Download **NekoTrack-Setup-1.0.0.exe** for a normal installation, or **NekoTrack.exe** for the portable build.
+3. Launch NekoTrack and complete the setup wizard.
+
+The installer keeps application files separate from your user data. Updating or reinstalling should not remove your library.
+
+## Run from source
+
+NekoTrack is a Python/PySide6 application. The CI test matrix currently exercises Python 3.11, 3.12, and 3.14 on Windows and Ubuntu.
+
+From the repository root:
+
+~~~powershell
+python -m pip install -r requirements.txt
+python main.py
+~~~
+
+To run the regression suite:
+
+~~~powershell
+python -m unittest discover -s tests -v
+~~~
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full validation commands and development notes.
+
+## Data, privacy, and network use
+
+By default, NekoTrack keeps its application data under **%APPDATA%\NekoTrack**. This includes the SQLite file **anime_tracker.db**, cached artwork under **data/images**, logs, and update-recovery files. Older source/portable data is migrated into the per-user location on startup when applicable. The **NEKOTRACK_DATA_DIR** environment variable can override the data directory for isolated testing.
+
+Your library and watch/read progress are local. Online search and fresh metadata requests contact the selected catalog providers; NekoTrack does not currently sign in to an AniList account or synchronize a private AniList/MAL list. It does not currently provide multi-device cloud sync.
+
+The app's diagnostics export is for troubleshooting logs. It deliberately excludes the library database and artwork; it is **not** a library backup.
 
 ## Known limitations
 
-- Online search and metadata enrichment require network access to the selected catalog.
-- MangaBaka coverage and its volume collections vary by title; not every light novel has separately listed published volumes.
-- MangaBaka relationships can be incomplete, so bundling may not be possible for every entry until provider relationships are available.
-- Voice-actor and character metadata depend on the fields available from AniList.
-- Some planned media, tracking, metadata, and filtering features are still being developed.
+- Windows is the supported desktop distribution target. CI also tests on Ubuntu, but that does not mean a supported Linux desktop package exists.
+- AniList is the primary source for anime and relationship data. MangaBaka enrichment and volume collections vary by title, and MangaBaka's API/schema may change.
+- Chapter and volume catalogs are not complete for every work. NekoTrack keeps local progress and uses placeholders when provider item records are missing.
+- Characters, voice actors, and staff depend on the metadata AniList provides.
+- CSV export is available, but there is no full library backup/restore or general-purpose import workflow yet. The updater's rollback snapshot protects an application update; it is not a portable user-data backup.
+- There is no account-based cloud sync, social feed, plugin system, or mobile companion today.
+- The interface is English-only at present.
 
-
-## Data and privacy
-
-NekoTrack stores its local SQLite database as `anime_tracker.db`. Cover images are cached under `data/images/`. These generated/local files are intentionally ignored by Git.
-
-NekoTrack does not currently require an AniList API token for its public GraphQL requests, nor an account token for the public MangaBaka catalogue endpoints used by the app. NekoTrack does not call MangaBaka private-account or moderation routes.
+See [the roadmap](docs/ROADMAP.md) for the prioritized work list and [the user guide](docs/USER_GUIDE.md) for current workflows.
 
 ## Data attribution and terms
 
 NekoTrack's source code is MIT-licensed. That license does not grant ownership of catalog data, artwork, or other third-party content.
 
-MangaBaka asks API users to attribute both MangaBaka and the upstream metadata providers. MangaBaka says its original data is licensed under CC BY-NC-SA 4.0 (personal/non-commercial use with attribution); data from AniList, Kitsu, MyAnimeList, MangaUpdates, Anime-Planet, Shikimori, and other providers remains subject to each provider's own terms. Review these conditions before distributing data or using it commercially.
+MangaBaka asks API users to attribute MangaBaka and upstream metadata providers. MangaBaka states that its original data is licensed under CC BY-NC-SA 4.0 for personal/non-commercial use with attribution; data from AniList, Kitsu, MyAnimeList, MangaUpdates, Anime-Planet, Shikimori, and other providers remains subject to each provider's own terms. Review those terms before redistributing data or using it commercially.
 
 - [MangaBaka API documentation and rate limits](https://mangabaka.org/data/api)
-- [MangaBaka database, providers, data licensing, and attribution](https://mangabaka.org/data/database)
-- [MangaBaka title variants (English, native, romanized, and alternative titles)](https://mangabaka.org/pages/announcements/15-titles-v2)
+- [MangaBaka database, providers, licensing, and attribution](https://mangabaka.org/data/database)
+- [MangaBaka title variants](https://mangabaka.org/pages/announcements/15-titles-v2)
 - [AniList API documentation](https://docs.anilist.co/)
+- [TMDB API documentation](https://developer.themoviedb.org/docs)
 
-## License
+## Project documentation
 
-NekoTrack's source code is released under the MIT License. See [LICENSE](LICENSE).
+- [User guide](docs/USER_GUIDE.md)
+- [Architecture and refactoring plan](docs/ARCHITECTURE.md)
+- [Prioritized roadmap](docs/ROADMAP.md)
+- [Contributing and test instructions](CONTRIBUTING.md)
 
-## AI-assisted development
+## License and development
 
-NekoTrack has been developed with assistance from AI coding tools, including GitHub Copilot and OpenAI ChatGPT. The project is still maintained and reviewed by me.
+NekoTrack's source code is released under the MIT License; see [LICENSE](LICENSE).
+
+NekoTrack has been developed with assistance from AI coding tools, including GitHub Copilot and OpenAI ChatGPT. The project is maintained and reviewed by its owner.
