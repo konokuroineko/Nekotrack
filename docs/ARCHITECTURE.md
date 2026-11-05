@@ -17,6 +17,7 @@ NekoTrack is a Python/PySide6 desktop application backed by SQLite. External met
 | series.py | Series identity normalization, relation grouping, bundle membership, manual overrides, and exclusions |
 | recommendation_engine.py | Candidate ranking and recommendation scoring |
 | image_cache.py | Shared artwork caching support |
+| library_export.py | UTF-8 CSV export of saved works and local progress |
 | updater.py and installer/ | Release checks, staging, verification, rollback, and Windows packaging |
 | ui/main_window.py | Existing Qt Widgets host and application navigation |
 | ui/pages/ | Existing feature pages, including the large Work Details implementation |

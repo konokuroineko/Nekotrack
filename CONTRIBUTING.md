@@ -28,7 +28,7 @@ Run the same core checks used by GitHub Actions before opening a pull request:
 
 ~~~powershell
 ruff check --select F .
-python -m compileall -q main.py api.py native_acceleration.py catalog_search.py debug_tools.py database.py image_cache.py series.py updater.py stress_test.py installer ui tests
+python -m compileall -q main.py api.py native_acceleration.py catalog_search.py debug_tools.py database.py image_cache.py library_export.py series.py updater.py stress_test.py installer ui tests
 python -m unittest discover -s tests -v
 python stress_test.py --seconds 1 --seed 17 --report stress-smoke.json
 ~~~
