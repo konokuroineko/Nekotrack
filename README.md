@@ -27,7 +27,7 @@ NekoTrack brings your watch/read library, progress, franchise bundles, discovery
 - View upcoming episodes and manage release reminders.
 - Browse character, voice-actor, and production-staff profiles and save profile favorites.
 - Choose a theme and light mode; customize poster size, spacing, text size, corner radius, animations, and startup behavior.
-- Export a redacted diagnostics report when troubleshooting.
+- Export your saved titles and tracking progress to UTF-8 CSV, and export a redacted diagnostics report when troubleshooting.
 - Use the Windows installer or portable executable, with stable/preview update channels and rollback support.
 
 ## Install
@@ -71,7 +71,7 @@ The app's diagnostics export is for troubleshooting logs. It deliberately exclud
 - AniList is the primary source for anime and relationship data. MangaBaka enrichment and volume collections vary by title, and MangaBaka's API/schema may change.
 - Chapter and volume catalogs are not complete for every work. NekoTrack keeps local progress and uses placeholders when provider item records are missing.
 - Characters, voice actors, and staff depend on the metadata AniList provides.
-- There is no full library backup/restore or general-purpose library import/export workflow yet. The updater's rollback snapshot protects an application update; it is not a portable user-data backup.
+- CSV export is available, but there is no full library backup/restore or general-purpose import workflow yet. The updater's rollback snapshot protects an application update; it is not a portable user-data backup.
 - There is no account-based cloud sync, social feed, plugin system, or mobile companion today.
 - The interface is English-only at present.
 

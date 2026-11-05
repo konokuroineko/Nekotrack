@@ -2005,7 +2005,7 @@ Item {
                         }
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 360
+                            Layout.preferredHeight: 460
                             visible: settingsPage.settingsCategory === "Data & Storage"
                             radius: 13
                             color: bridge.surfaceFillColor
@@ -2054,6 +2054,34 @@ Item {
                                             Layout.fillWidth: true
                                         }
                                     }
+                                }
+                                Text {
+                                    text: "Library export"
+                                    color: bridge.primaryColor
+                                    font.pixelSize: 13
+                                    font.weight: Font.Bold
+                                }
+                                Text {
+                                    text: "Save your titles and tracking progress as a UTF-8 CSV file for spreadsheets or migration."
+                                    color: bridge.secondaryColor
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Button {
+                                        text: "Export library CSV"
+                                        onClicked: bridge.exportLibraryCsv()
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                }
+                                Text {
+                                    text: "Includes titles, formats, list status, progress, ratings, notes, and dates. Artwork and preferences are not included."
+                                    color: bridge.mutedColor
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
                                 }
                                 Rectangle {
                                     Layout.fillWidth: true

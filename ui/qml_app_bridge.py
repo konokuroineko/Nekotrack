@@ -9,10 +9,11 @@ from urllib.parse import quote
 
 from PySide6.QtCore import QObject, Property, QRunnable, QThread, QThreadPool, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from api import get_entity_profile, get_media_details
 from catalog_search import search_combined_media
+from library_export import export_library_csv
 from database import (
     get_all_library,
     get_bundle_characters,
@@ -929,6 +930,44 @@ class ApplicationBridge(LibraryBridge):
     @Slot()
     def requestDiagnosticsExport(self):
         self.diagnosticsExportRequested.emit()
+
+    @Slot()
+    def exportLibraryCsv(self):
+        filename, _ = QFileDialog.getSaveFileName(
+            None,
+            "Export NekoTrack library",
+            "NekoTrack-Library.csv",
+            "CSV files (*.csv)",
+        )
+        if not filename:
+            return
+
+        destination = Path(filename).expanduser()
+        if destination.suffix.casefold() != ".csv":
+            destination = Path(f"{destination}.csv")
+        try:
+            exported_count = export_library_csv(destination)
+            log_event(
+                "library.export_csv_completed",
+                item_count=exported_count,
+                filename=destination.name,
+            )
+            QMessageBox.information(
+                None,
+                "Library export complete",
+                f"Exported {exported_count} saved title(s) to:\n{destination}",
+            )
+        except Exception as error:
+            log_exception(
+                "library.export_csv_failed",
+                error,
+                filename=destination.name,
+            )
+            QMessageBox.critical(
+                None,
+                "Library export failed",
+                f"NekoTrack could not export the library.\n\n{error}",
+            )
 
     @Slot(str, "QVariant")
     def setPreference(self, key, value):

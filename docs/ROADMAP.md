@@ -14,7 +14,7 @@ This is a priority order, not a promise of release dates. The guiding product de
 - [ ] Add a versioned, portable full-profile backup containing a consistent SQLite snapshot, cached/custom artwork, and exportable application preferences.
 - [ ] Add restore preview and validation before touching the live profile; automatically preserve the current profile before restore.
 - [ ] Add a lossless NekoTrack JSON export/import for migration between installs.
-- [ ] Add CSV export for spreadsheet use.
+- [x] Add CSV export for spreadsheet use (Settings → Data & Storage).
 - [ ] Add optional AniList and MyAnimeList import/export paths, with explicit duplicate matching and conflict previews.
 - [ ] Document exactly what is included in every export format. Diagnostics export must remain separate from library backup.
 

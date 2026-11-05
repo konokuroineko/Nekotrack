@@ -4,6 +4,9 @@ Notable user-facing changes to NekoTrack are documented here. Dates use YYYY-MM-
 
 ## [Unreleased]
 
+### Added
+- Export saved works and local tracking progress to a UTF-8 CSV file from Settings → Data & Storage.
+
 ### Changed
 - Continue the staged QML interface migration while keeping the Python, SQLite, and provider layers as the data/backend implementation.
 

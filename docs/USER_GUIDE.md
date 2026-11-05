@@ -39,6 +39,12 @@ Work details can show characters, voice actors, production staff, and related wo
 
 These sections depend on provider metadata and network access when information has not yet been cached. A missing record may mean that the provider has not supplied it, not that the person or relationship does not exist.
 
+## Export your library to CSV
+
+Open **Settings → Data & Storage → Export library CSV** and choose where to save the file. The UTF-8 CSV includes work IDs, titles, media type/format, catalog totals when available, your list status, episode/chapter/volume progress, personal rating, notes, and added/updated dates. Text is escaped to reduce spreadsheet formula-injection risk.
+
+CSV is useful for spreadsheets and basic migration, but it is not a full backup or a direct restore format. It does not include artwork, provider payloads, bundle relationships, entity favorites, recommendation history, or application preferences.
+
 ## Updates and troubleshooting
 
 Stable updates are checked through the GitHub release feed. Preview updates are intended for testing, not normal use. The updater saves recovery material before replacing an installed executable and Settings can restore the previous application version.
@@ -71,7 +77,7 @@ This copies the app-data files, including the database and artwork. Qt-managed a
 
 ## Current limitations
 
-- There is no general AniList/MAL list import or export, CSV library export, or one-click full-profile backup/restore yet.
+- There is no general AniList/MAL list import or one-click full-profile backup/restore yet. CSV export is available but does not recreate a full NekoTrack profile.
 - There is no account-based multi-device synchronization.
 - MangaBaka volume and relationship coverage varies by work; local placeholders cover missing item-level tracking but do not create real publisher catalog metadata.
 - The supported desktop distribution is Windows. An Ubuntu CI job is for automated validation, not a supported Linux package.
